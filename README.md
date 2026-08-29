@@ -29,16 +29,25 @@ at `<data dir>/panel.db`.
 Ticket 02 adds the install bootstrap: a `docker-compose.yml` that brings up
 the panel, Traefik, and the shared `relist-public` network together.
 
+`relist-public` is declared `external: true` — it must outlive this install
+stack's own lifecycle, since every Compose deployed through the panel later
+attaches to it too, so `docker compose down` on this stack must never be able
+to delete it out from under a running deployment (ADR-0002). Create it once,
+then bring up the stack:
+
 ```sh
+docker network create relist-public   # one-time, safe to re-run
 docker compose up -d
 ```
 
 This builds the panel image (Go binary + embedded frontend, per the
-`Dockerfile`), starts it alongside Traefik, and attaches both to the
-`relist-public` network — the same network the panel later joins every
-deployed Compose to, so Traefik can route to it without extra setup
-(ADR-0002). The panel also ensures this network exists on every startup, so
-it stays correct even if it's ever removed outside of Compose.
+`Dockerfile`) and starts it alongside Traefik, both attached to
+`relist-public`. The panel is reachable two ways out of the box:
+
+- Directly, via its published port: `http://<host>:8080/`
+- Through Traefik, via `Host` routing: `http://panel.localhost/` (resolves to
+  loopback on most systems without any DNS setup) — override the hostname
+  with `RELIST_DOMAIN` for a real domain
 
 Override the defaults via environment variables (or a `.env` file next to
 `docker-compose.yml`):
@@ -47,10 +56,13 @@ Override the defaults via environment variables (or a `.env` file next to
   container
 - `RELIST_DATA_DIR` (default `/var/lib/relist-panel`) — bind-mounted at the
   **same path** on the host and inside the panel container, per ADR-0002
+- `RELIST_DOMAIN` (default `panel.localhost`) — the Host rule Traefik routes
+  to the panel on
 - `TRAEFIK_HTTP_PORT` (default `80`) — the host port Traefik's HTTP
   entrypoint is published on
 
 Traefik ships with a minimal default (`--providers.docker`, HTTP entrypoint
 only, `exposedbydefault=false`); TLS/ACME and additional entrypoints are left
-to the operator to configure — routing is controlled entirely by Traefik
-labels written directly in each deployed Compose's YAML, per the v1 scope.
+to the operator to configure — routing for anything deployed through the
+panel is controlled entirely by Traefik labels written directly in that
+Compose's YAML, per the v1 scope.

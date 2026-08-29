@@ -12,6 +12,10 @@ services:
       - ${RELIST_DATA_DIR:-/var/lib/relist-panel}:${RELIST_DATA_DIR:-/var/lib/relist-panel}
     networks:
       - relist-public
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.panel.rule=Host(`${RELIST_DOMAIN:-panel.localhost}`)
+      - traefik.http.services.panel.loadbalancer.server.port=${RELIST_PORT:-8080}
 
   traefik:
     image: traefik:v3.7
@@ -27,9 +31,13 @@ services:
     networks:
       - relist-public
 
-# Owned by this compose project (not external) so a clean `docker compose up`
-# needs no manual pre-setup. The panel also ensures this network exists on
-# every startup (ADR-0002) so deploys stay correct even if it's ever removed.
+# relist-public is external: it must outlive this install stack's own
+# lifecycle, since every deployed Compose (ticket 08+) also attaches to it,
+# so `docker compose down` here must never be able to tear it down. Create it
+# once before the first `docker compose up` (see README) — the panel also
+# ensures it exists on its own startup as a best-effort self-heal, per
+# ADR-0002, for runs that don't go through this compose file at all.
 networks:
   relist-public:
+    external: true
     name: relist-public
