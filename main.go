@@ -34,7 +34,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:    cfg.Address(),
-		Handler: httpapi.NewHandler(),
+		Handler: httpapi.NewHandler(db),
 	}
 
 	log.Printf("relist-panel listening on %s", cfg.Address())

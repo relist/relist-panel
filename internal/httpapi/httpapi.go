@@ -2,19 +2,23 @@
 package httpapi
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
 
+	"relist-panel/internal/auth"
 	"relist-panel/internal/webassets"
 )
 
 // NewHandler builds the top-level HTTP handler for the panel.
-func NewHandler() http.Handler {
+func NewHandler(db *sql.DB) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
+	authService := auth.New(db)
+	authService.RegisterRoutes(mux)
 	mux.Handle("/", webassets.Handler())
-	return mux
+	return authService.Middleware(mux)
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
