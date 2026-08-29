@@ -1,17 +1,23 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 
 	"relist-panel/internal/config"
 	"relist-panel/internal/database"
+	"relist-panel/internal/dockernet"
 	"relist-panel/internal/httpapi"
 )
 
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := dockernet.EnsureNetwork(context.Background(), config.NetworkName); err != nil {
 		log.Fatal(err)
 	}
 

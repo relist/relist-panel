@@ -1,0 +1,35 @@
+services:
+  panel:
+    build: .
+    restart: unless-stopped
+    environment:
+      RELIST_PORT: ${RELIST_PORT:-8080}
+      RELIST_DATA_DIR: ${RELIST_DATA_DIR:-/var/lib/relist-panel}
+    ports:
+      - "${RELIST_PORT:-8080}:${RELIST_PORT:-8080}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${RELIST_DATA_DIR:-/var/lib/relist-panel}:${RELIST_DATA_DIR:-/var/lib/relist-panel}
+    networks:
+      - relist-public
+
+  traefik:
+    image: traefik:v3.7
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - "${TRAEFIK_HTTP_PORT:-80}:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - relist-public
+
+# Owned by this compose project (not external) so a clean `docker compose up`
+# needs no manual pre-setup. The panel also ensures this network exists on
+# every startup (ADR-0002) so deploys stay correct even if it's ever removed.
+networks:
+  relist-public:
+    name: relist-public

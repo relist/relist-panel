@@ -10,6 +10,12 @@ import (
 const (
 	defaultPort    = 8080
 	defaultDataDir = "/var/lib/relist-panel"
+
+	// NetworkName is the Docker network shared by the panel, Traefik, and
+	// every deployed Compose, per ADR-0002. It is a fixed name, not
+	// configurable, because docker-compose.yml (the install bootstrap)
+	// references it by this exact literal.
+	NetworkName = "relist-public"
 )
 
 // Config contains the small set of process-level settings needed by the

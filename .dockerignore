@@ -1,0 +1,12 @@
+.git
+.scratch
+.data
+docs
+DESIGN.md
+CONTEXT.md
+AGENTS.md
+README.md
+relist-panel
+web/node_modules
+web/dist
+internal/webassets/dist
