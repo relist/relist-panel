@@ -1,0 +1,11 @@
+# Frontend UI library: Ant Design over shadcn/ui
+
+ADR-0001 fixed the frontend stack as Vite + React + TypeScript + Tailwind, but not a component library. shadcn/ui was floated first as the modern minimal default for admin panels, but Ant Design was chosen instead — it's a mature, batteries-included library purpose-built for dense back-office consoles (`Layout`+`Sider`+`Menu` for navigation, `Table`, `Tabs`, `Badge`/`Tag` for status, `Form`, `Descriptions`) that maps directly onto Relist Panel's CRUD-heavy screens, at the cost of a larger, more opinionated dependency than shadcn/ui's copy-in-primitives approach.
+
+**Coexisting with Tailwind** (still used for custom layout/spacing): antd's CSS-in-JS is wrapped in `<StyleProvider layer>` + `<ConfigProvider>`, and the global stylesheet declares an explicit `@layer` order so Tailwind utilities can override antd component styles without specificity fights — `@layer tailwind-base, antd;` (Tailwind v3, with `@tailwind base` inside the `tailwind-base` layer and `components`/`utilities` left unlayered after it) or `@layer theme, base, antd, components, utilities;` (Tailwind v4). This is the officially documented "compatible-style" pattern (ant.design/docs/react/compatible-style).
+
+**Theming**: dark/light mode is driven by antd's `ConfigProvider` `theme.algorithm` (`defaultAlgorithm` / `darkAlgorithm`), which re-derives every token (surfaces, borders, shadows) consistently — a much cheaper way to support both themes than a hand-rolled CSS-variable system would have been.
+
+**`DESIGN.md`** at the repo root documents Ant Design's default v6 light-theme tokens as the design system's starting point. The previously-present `opencode.ai-DESIGN.md` (an unrelated marketing-site design analysis, left over from other work) was removed — it may return later purely as visual inspiration for a custom re-skin of the antd tokens, once the default functional UI is validated.
+
+**v1 ships light theme only**, deliberately, even though `darkAlgorithm` makes a dark mode toggle cheap to add — this keeps the initial build scope tight. Adding the toggle later is a small, additive change (swap the algorithm behind a UI control), not a rewrite, precisely because theming already goes through `ConfigProvider` tokens rather than hard-coded colors.
