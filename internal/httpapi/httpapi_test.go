@@ -138,7 +138,7 @@ func TestAuthenticatedAdminCanCreateAndListProjects(t *testing.T) {
 	if created.ID <= 0 || created.Name != "Storefront" || created.Description != "The customer-facing application" {
 		t.Fatalf("created project = %+v", created)
 	}
-	if created.EnvironmentCount != 0 || created.CreatedAt == "" || created.LastUpdated == "" {
+	if created.EnvironmentCount != 1 || created.CreatedAt == "" || created.LastUpdated == "" {
 		t.Fatalf("created project metadata = %+v", created)
 	}
 
@@ -180,7 +180,7 @@ func TestAuthenticatedAdminCanEditProject(t *testing.T) {
 	if updated.ID != first.ID || updated.Name != "Storefront API" || updated.Description != "Updated customer-facing application" {
 		t.Fatalf("updated project = %+v", updated)
 	}
-	if updated.EnvironmentCount != 0 || updated.CreatedAt == "" || updated.LastUpdated == "" {
+	if updated.EnvironmentCount != 1 || updated.CreatedAt == "" || updated.LastUpdated == "" {
 		t.Fatalf("updated project metadata = %+v", updated)
 	}
 	createdAt, err := time.Parse(time.RFC3339Nano, updated.CreatedAt)
@@ -288,6 +288,130 @@ func TestProjectNamesAreUniqueAndNamesAreRequired(t *testing.T) {
 	}
 }
 
+func TestProjectCreationProvisionsProductionEnvironment(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Storefront", "Customer-facing application")
+
+	response := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("list environments status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+
+	var environments []environmentResponse
+	if err := json.NewDecoder(response.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+	if len(environments) != 1 {
+		t.Fatalf("environments = %+v, want one default environment", environments)
+	}
+	if environments[0].ID <= 0 || environments[0].ProjectID != project.ID || environments[0].Name != "production" || environments[0].CreatedAt == "" {
+		t.Fatalf("default environment = %+v", environments[0])
+	}
+}
+
+func TestAuthenticatedAdminCanCreateAndDeleteEnvironments(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Storefront", "Customer-facing application")
+
+	createResponse := postJSON(t, server, projectEnvironmentsPath(project.ID), map[string]string{"name": "staging"})
+	defer createResponse.Body.Close()
+	if createResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("create environment status = %d, want %d", createResponse.StatusCode, http.StatusCreated)
+	}
+
+	var staging environmentResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&staging); err != nil {
+		t.Fatalf("decode created environment: %v", err)
+	}
+	if staging.ID <= 0 || staging.ProjectID != project.ID || staging.Name != "staging" || staging.CreatedAt == "" {
+		t.Fatalf("created environment = %+v", staging)
+	}
+
+	listResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer listResponse.Body.Close()
+	if listResponse.StatusCode != http.StatusOK {
+		t.Fatalf("list environments status = %d, want %d", listResponse.StatusCode, http.StatusOK)
+	}
+	var environments []environmentResponse
+	if err := json.NewDecoder(listResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environment list: %v", err)
+	}
+	if len(environments) != 2 || environments[0].Name != "production" || environments[1].Name != "staging" {
+		t.Fatalf("environment list = %+v, want production and staging", environments)
+	}
+
+	duplicateResponse := postJSON(t, server, projectEnvironmentsPath(project.ID), map[string]string{"name": " STAGING "})
+	defer duplicateResponse.Body.Close()
+	if duplicateResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate environment status = %d, want %d", duplicateResponse.StatusCode, http.StatusConflict)
+	}
+
+	otherProject := createProject(t, server, "Operations", "Internal tooling")
+	otherProjectResponse := postJSON(t, server, projectEnvironmentsPath(otherProject.ID), map[string]string{"name": "staging"})
+	defer otherProjectResponse.Body.Close()
+	if otherProjectResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("same environment name in another project status = %d, want %d", otherProjectResponse.StatusCode, http.StatusCreated)
+	}
+
+	deleteResponse := server.request(t, http.MethodDelete, environmentPath(project.ID, staging.ID), nil)
+	defer deleteResponse.Body.Close()
+	if deleteResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete environment status = %d, want %d", deleteResponse.StatusCode, http.StatusNoContent)
+	}
+
+	remainingResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer remainingResponse.Body.Close()
+	if remainingResponse.StatusCode != http.StatusOK {
+		t.Fatalf("list environments after delete status = %d, want %d", remainingResponse.StatusCode, http.StatusOK)
+	}
+	var remaining []environmentResponse
+	if err := json.NewDecoder(remainingResponse.Body).Decode(&remaining); err != nil {
+		t.Fatalf("decode environments after delete: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].Name != "production" {
+		t.Fatalf("environments after delete = %+v, want production only", remaining)
+	}
+
+	deleteAgainResponse := server.request(t, http.MethodDelete, environmentPath(project.ID, staging.ID), nil)
+	defer deleteAgainResponse.Body.Close()
+	if deleteAgainResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("deleting missing environment status = %d, want %d", deleteAgainResponse.StatusCode, http.StatusNotFound)
+	}
+
+	deleteLastResponse := server.request(t, http.MethodDelete, environmentPath(project.ID, remaining[0].ID), nil)
+	defer deleteLastResponse.Body.Close()
+	if deleteLastResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete last environment status = %d, want %d", deleteLastResponse.StatusCode, http.StatusNoContent)
+	}
+}
+
+func TestEnvironmentNamesAreRequiredAndProjectsMustExist(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	createProject(t, server, "Storefront", "Customer-facing application")
+
+	missingNameResponse := postJSON(t, server, "/api/projects/1/environments", map[string]string{"name": "  "})
+	defer missingNameResponse.Body.Close()
+	if missingNameResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing environment name status = %d, want %d", missingNameResponse.StatusCode, http.StatusBadRequest)
+	}
+
+	missingProjectResponse := postJSON(t, server, "/api/projects/999/environments", map[string]string{"name": "staging"})
+	defer missingProjectResponse.Body.Close()
+	if missingProjectResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing project environment status = %d, want %d", missingProjectResponse.StatusCode, http.StatusNotFound)
+	}
+
+	listResponse := server.request(t, http.MethodGet, "/api/projects/999/environments", nil)
+	defer listResponse.Body.Close()
+	if listResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing project environment list status = %d, want %d", listResponse.StatusCode, http.StatusNotFound)
+	}
+}
+
 func TestAuthenticatedProjectsListStartsEmpty(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
@@ -384,6 +508,13 @@ type projectResponse struct {
 	EnvironmentCount int    `json:"environmentCount"`
 	CreatedAt        string `json:"createdAt"`
 	LastUpdated      string `json:"lastUpdated"`
+}
+
+type environmentResponse struct {
+	ID        int64  `json:"id"`
+	ProjectID int64  `json:"projectId"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"createdAt"`
 }
 
 type testServer struct {
@@ -493,4 +624,12 @@ func createProject(t *testing.T, server *testServer, name, description string) p
 		t.Fatalf("decode created project: %v", err)
 	}
 	return project
+}
+
+func projectEnvironmentsPath(projectID int64) string {
+	return "/api/projects/" + strconv.FormatInt(projectID, 10) + "/environments"
+}
+
+func environmentPath(projectID, environmentID int64) string {
+	return projectEnvironmentsPath(projectID) + "/" + strconv.FormatInt(environmentID, 10)
 }

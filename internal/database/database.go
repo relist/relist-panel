@@ -39,6 +39,9 @@ func OpenAndMigrate(databasePath string) (*sql.DB, error) {
 }
 
 func Migrate(db *sql.DB) error {
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		return fmt.Errorf("enable SQLite foreign keys: %w", err)
+	}
 	goose.SetBaseFS(migrations.FS)
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		return fmt.Errorf("configure goose SQLite dialect: %w", err)

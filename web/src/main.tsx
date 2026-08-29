@@ -15,10 +15,11 @@ import {
   Row,
   Space,
   Spin,
+  Tabs,
   Typography,
   theme,
 } from 'antd';
-import { StrictMode, useEffect, useState } from 'react';
+import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import './index.css';
@@ -49,6 +50,17 @@ type Project = {
 type ProjectInput = {
   name: string;
   description: string;
+};
+
+type Environment = {
+  id: number;
+  projectId: number;
+  name: string;
+  createdAt: string;
+};
+
+type EnvironmentInput = {
+  name: string;
 };
 
 type ErrorResponse = {
@@ -526,41 +538,113 @@ function ProjectsScreen({ onOpenProject }: { onOpenProject: (id: number) => void
 }
 
 function ProjectDetailScreen({ projectID, onBack }: { projectID: number; onBack: () => void }) {
+  const [environmentForm] = Form.useForm<EnvironmentInput>();
   const [project, setProject] = useState<Project>();
+  const [environments, setEnvironments] = useState<Environment[]>([]);
+  const [activeEnvironmentID, setActiveEnvironmentID] = useState<number>();
   const [loading, setLoading] = useState(true);
+  const [savingEnvironment, setSavingEnvironment] = useState(false);
+  const [deletingEnvironmentID, setDeletingEnvironmentID] = useState<number>();
+  const [environmentModalOpen, setEnvironmentModalOpen] = useState(false);
   const [error, setError] = useState<string>();
+  const detailRequestID = useRef(0);
 
-  useEffect(() => {
-    let active = true;
+  const loadDetail = async (preferredEnvironmentID?: number) => {
+    const requestID = ++detailRequestID.current;
     setLoading(true);
     setError(undefined);
-    void fetch(`/api/projects/${projectID}`, { credentials: 'same-origin' })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(await responseError(response));
-        }
-        return (await response.json()) as Project;
-      })
-      .then((value) => {
-        if (active) {
-          setProject(value);
-        }
-      })
-      .catch((reason: unknown) => {
-        if (active) {
-          setError(errorMessage(reason));
-        }
-      })
-      .finally(() => {
-        if (active) {
-          setLoading(false);
-        }
-      });
+    try {
+      const [projectResponse, environmentsResponse] = await Promise.all([
+        fetch(`/api/projects/${projectID}`, { credentials: 'same-origin' }),
+        fetch(`/api/projects/${projectID}/environments`, { credentials: 'same-origin' }),
+      ]);
+      if (!projectResponse.ok) {
+        throw new Error(await responseError(projectResponse));
+      }
+      if (!environmentsResponse.ok) {
+        throw new Error(await responseError(environmentsResponse));
+      }
 
+      const nextProject = (await projectResponse.json()) as Project;
+      const nextEnvironments = (await environmentsResponse.json()) as Environment[];
+      if (requestID !== detailRequestID.current) {
+        return;
+      }
+      setProject(nextProject);
+      setEnvironments(nextEnvironments);
+      setActiveEnvironmentID(selectEnvironmentID(nextEnvironments, preferredEnvironmentID));
+    } catch (reason: unknown) {
+      if (requestID === detailRequestID.current) {
+        setError(errorMessage(reason));
+      }
+    } finally {
+      if (requestID === detailRequestID.current) {
+        setLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    void loadDetail();
     return () => {
-      active = false;
+      detailRequestID.current += 1;
     };
   }, [projectID]);
+
+  const openEnvironmentModal = () => {
+    environmentForm.resetFields();
+    setEnvironmentModalOpen(true);
+  };
+
+  const closeEnvironmentModal = () => {
+    if (!savingEnvironment) {
+      setEnvironmentModalOpen(false);
+      environmentForm.resetFields();
+    }
+  };
+
+  const createEnvironment = async (values: EnvironmentInput) => {
+    setSavingEnvironment(true);
+    setError(undefined);
+    try {
+      const response = await fetch(`/api/projects/${projectID}/environments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(values),
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      const created = (await response.json()) as Environment;
+      setEnvironmentModalOpen(false);
+      environmentForm.resetFields();
+      await loadDetail(created.id);
+    } catch (reason: unknown) {
+      setError(errorMessage(reason));
+    } finally {
+      setSavingEnvironment(false);
+    }
+  };
+
+  const deleteEnvironment = async (environmentID: number) => {
+    setDeletingEnvironmentID(environmentID);
+    setError(undefined);
+    try {
+      const response = await fetch(`/api/projects/${projectID}/environments/${environmentID}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      await loadDetail(activeEnvironmentID === environmentID ? undefined : activeEnvironmentID);
+    } catch (reason: unknown) {
+      setError(errorMessage(reason));
+    } finally {
+      setDeletingEnvironmentID(undefined);
+    }
+  };
 
   if (loading) {
     return (
@@ -588,6 +672,7 @@ function ProjectDetailScreen({ projectID, onBack }: { projectID: number; onBack:
       <Button className="!mb-6" onClick={onBack}>
         Back to Projects
       </Button>
+      {error && <Alert className="mb-6" type="error" showIcon message={error} />}
       <Card title={project.name}>
         <Typography.Paragraph type={project.description ? undefined : 'secondary'}>
           {project.description || 'No description provided.'}
@@ -599,8 +684,90 @@ function ProjectDetailScreen({ projectID, onBack }: { projectID: number; onBack:
           </Typography.Text>
         </Space>
       </Card>
+
+      <Card className="mt-6" title="Environments">
+        {environments.length === 0 ? (
+          <Empty description="No Environments yet">
+            <Button type="primary" onClick={openEnvironmentModal}>
+              Create an Environment
+            </Button>
+          </Empty>
+        ) : (
+          <Tabs
+            activeKey={activeEnvironmentID === undefined ? undefined : String(activeEnvironmentID)}
+            onChange={(key) => setActiveEnvironmentID(Number(key))}
+            tabBarExtraContent={
+              <Button type="primary" onClick={openEnvironmentModal}>
+                New Environment
+              </Button>
+            }
+            items={environments.map((environment) => ({
+              key: String(environment.id),
+              label: environment.name,
+              children: (
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <Typography.Title className="!mb-1" level={4}>
+                      {environment.name}
+                    </Typography.Title>
+                    <Typography.Text type="secondary">
+                      Created {formatProjectDate(environment.createdAt)}
+                    </Typography.Text>
+                  </div>
+                  <Popconfirm
+                    title="Delete this Environment?"
+                    description="Any Composes in it will be handled by a later ticket."
+                    okText="Delete"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => void deleteEnvironment(environment.id)}
+                  >
+                    <Button danger loading={deletingEnvironmentID === environment.id}>
+                      Delete Environment
+                    </Button>
+                  </Popconfirm>
+                </div>
+              ),
+            }))}
+          />
+        )}
+      </Card>
+
+      <Modal
+        title="New Environment"
+        open={environmentModalOpen}
+        okText="Create Environment"
+        confirmLoading={savingEnvironment}
+        onCancel={closeEnvironmentModal}
+        onOk={() => environmentForm.submit()}
+        destroyOnClose
+      >
+        <Form
+          form={environmentForm}
+          layout="vertical"
+          requiredMark={false}
+          onFinish={(values) => void createEnvironment(values)}
+        >
+          <Form.Item
+            label="Name"
+            name="name"
+            rules={[
+              { required: true, message: 'Enter an Environment name' },
+              { max: 255, message: 'Use 255 characters or fewer' },
+            ]}
+          >
+            <Input autoFocus placeholder="e.g. staging" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </>
   );
+}
+
+function selectEnvironmentID(environments: Environment[], preferredID?: number): number | undefined {
+  if (preferredID !== undefined && environments.some((environment) => environment.id === preferredID)) {
+    return preferredID;
+  }
+  return environments.find((environment) => environment.name.toLowerCase() === 'production')?.id ?? environments[0]?.id;
 }
 
 function formatProjectDate(value: string): string {

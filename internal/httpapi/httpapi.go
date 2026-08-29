@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"relist-panel/internal/auth"
+	"relist-panel/internal/environments"
 	"relist-panel/internal/projects"
 	"relist-panel/internal/webassets"
 )
@@ -20,6 +21,8 @@ func NewHandler(db *sql.DB) http.Handler {
 	authService.RegisterRoutes(mux)
 	projectsService := projects.New(db)
 	projectsService.RegisterRoutes(mux)
+	environmentsService := environments.New(db)
+	environmentsService.RegisterRoutes(mux)
 	mux.Handle("/", webassets.Handler())
 	return authService.Middleware(mux)
 }

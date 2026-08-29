@@ -116,15 +116,15 @@ erDiagram
     ENVIRONMENT ||--o{ COMPOSE : has
 
     PROJECT {
-        string id PK
+        int id PK
         string name
         string description
         datetime created_at
         datetime updated_at
     }
     ENVIRONMENT {
-        string id PK
-        string project_id FK
+        int id PK
+        int project_id FK
         string name
         datetime created_at
     }
@@ -215,7 +215,7 @@ Illustrative — the goose migration files (ADR-0003) are the authoritative sche
 
 | Field | Type | Constraint | Description |
 |---|---|---|---|
-| id | TEXT | PK | Unique project identifier |
+| id | INTEGER | PK | Unique project identifier |
 | name | TEXT | NOT NULL, UNIQUE | Project name |
 | description | TEXT | NULL | Free-text description |
 | created_at | DATETIME | NOT NULL | Creation timestamp |
@@ -225,8 +225,8 @@ Illustrative — the goose migration files (ADR-0003) are the authoritative sche
 
 | Field | Type | Constraint | Description |
 |---|---|---|---|
-| id | TEXT | PK | Unique environment identifier |
-| project_id | TEXT | FK → `projects.id`, NOT NULL | Owning project |
+| id | INTEGER | PK | Unique environment identifier |
+| project_id | INTEGER | FK → `projects.id`, NOT NULL | Owning project |
 | name | TEXT | NOT NULL | e.g. "production" |
 | created_at | DATETIME | NOT NULL | Creation timestamp |
 

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"relist-panel/internal/environments"
 )
 
 const (
@@ -204,9 +206,10 @@ func (s *Service) available() bool {
 
 func (r *repository) list(ctx context.Context) ([]Project, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, name, description, created_at, updated_at
-		FROM projects
-		ORDER BY id ASC
+		SELECT p.id, p.name, p.description, p.created_at, p.updated_at,
+			(SELECT COUNT(*) FROM environments WHERE project_id = p.id)
+		FROM projects AS p
+		ORDER BY p.id ASC
 	`)
 	if err != nil {
 		return nil, err
@@ -216,15 +219,28 @@ func (r *repository) list(ctx context.Context) ([]Project, error) {
 }
 
 func (r *repository) create(ctx context.Context, name, description string, createdAt time.Time) (Project, error) {
-	result, err := r.db.ExecContext(ctx, `
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Project{}, err
+	}
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO projects (name, description, created_at, updated_at)
 		VALUES (?, ?, ?, ?)
 	`, name, description, createdAt.Unix(), createdAt.Unix())
 	if err != nil {
+		_ = tx.Rollback()
 		return Project{}, err
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
+		_ = tx.Rollback()
+		return Project{}, err
+	}
+	if err := environments.ProvisionDefault(ctx, tx, id, createdAt); err != nil {
+		_ = tx.Rollback()
+		return Project{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return Project{}, err
 	}
 	return r.findByID(ctx, id)
@@ -232,9 +248,10 @@ func (r *repository) create(ctx context.Context, name, description string, creat
 
 func (r *repository) findByID(ctx context.Context, id int64) (Project, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, name, description, created_at, updated_at
-		FROM projects
-		WHERE id = ?
+		SELECT p.id, p.name, p.description, p.created_at, p.updated_at,
+			(SELECT COUNT(*) FROM environments WHERE project_id = p.id)
+		FROM projects AS p
+		WHERE p.id = ?
 	`, id)
 	return scanProjectRow(row)
 }
@@ -278,16 +295,17 @@ func scanProjectRow(row *sql.Row) (Project, error) {
 
 func scanProjectValues(scan func(...any) error) (Project, error) {
 	var (
-		project     Project
-		description sql.NullString
-		createdAt   int64
-		updatedAt   int64
+		project          Project
+		description      sql.NullString
+		createdAt        int64
+		updatedAt        int64
+		environmentCount int
 	)
-	if err := scan(&project.ID, &project.Name, &description, &createdAt, &updatedAt); err != nil {
+	if err := scan(&project.ID, &project.Name, &description, &createdAt, &updatedAt, &environmentCount); err != nil {
 		return Project{}, err
 	}
 	project.Description = description.String
-	project.EnvironmentCount = 0
+	project.EnvironmentCount = environmentCount
 	project.CreatedAt = time.Unix(createdAt, 0).UTC()
 	project.LastUpdated = time.Unix(updatedAt, 0).UTC()
 	return project, nil
