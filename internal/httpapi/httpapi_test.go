@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -111,8 +113,200 @@ func TestAuthSetupAndLogin(t *testing.T) {
 
 	protectedResponse := server.request(t, http.MethodGet, "/api/projects", nil)
 	protectedResponse.Body.Close()
-	if protectedResponse.StatusCode != http.StatusNotFound {
-		t.Fatalf("protected route with session status = %d, want %d after middleware", protectedResponse.StatusCode, http.StatusNotFound)
+	if protectedResponse.StatusCode != http.StatusOK {
+		t.Fatalf("protected route with session status = %d, want %d", protectedResponse.StatusCode, http.StatusOK)
+	}
+}
+
+func TestAuthenticatedAdminCanCreateAndListProjects(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+
+	createResponse := postJSON(t, server, "/api/projects", map[string]string{
+		"name":        "Storefront",
+		"description": "The customer-facing application",
+	})
+	defer createResponse.Body.Close()
+	if createResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("create project status = %d, want %d", createResponse.StatusCode, http.StatusCreated)
+	}
+
+	var created projectResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created project: %v", err)
+	}
+	if created.ID <= 0 || created.Name != "Storefront" || created.Description != "The customer-facing application" {
+		t.Fatalf("created project = %+v", created)
+	}
+	if created.EnvironmentCount != 0 || created.CreatedAt == "" || created.LastUpdated == "" {
+		t.Fatalf("created project metadata = %+v", created)
+	}
+
+	listResponse := server.request(t, http.MethodGet, "/api/projects", nil)
+	defer listResponse.Body.Close()
+	if listResponse.StatusCode != http.StatusOK {
+		t.Fatalf("list projects status = %d, want %d", listResponse.StatusCode, http.StatusOK)
+	}
+	var projects []projectResponse
+	if err := json.NewDecoder(listResponse.Body).Decode(&projects); err != nil {
+		t.Fatalf("decode projects list: %v", err)
+	}
+	if len(projects) != 1 || projects[0].ID != created.ID || projects[0].Name != "Storefront" {
+		t.Fatalf("projects list = %+v, want the created project", projects)
+	}
+}
+
+func TestAuthenticatedAdminCanEditProject(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+
+	first := createProject(t, server, "Storefront", "Customer-facing application")
+	second := createProject(t, server, "Operations", "Internal tooling")
+
+	path := "/api/projects/" + strconv.FormatInt(first.ID, 10)
+	updateResponse := server.request(t, http.MethodPut, path, map[string]string{
+		"name":        "Storefront API",
+		"description": "Updated customer-facing application",
+	})
+	defer updateResponse.Body.Close()
+	if updateResponse.StatusCode != http.StatusOK {
+		t.Fatalf("update project status = %d, want %d", updateResponse.StatusCode, http.StatusOK)
+	}
+
+	var updated projectResponse
+	if err := json.NewDecoder(updateResponse.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode updated project: %v", err)
+	}
+	if updated.ID != first.ID || updated.Name != "Storefront API" || updated.Description != "Updated customer-facing application" {
+		t.Fatalf("updated project = %+v", updated)
+	}
+	if updated.EnvironmentCount != 0 || updated.CreatedAt == "" || updated.LastUpdated == "" {
+		t.Fatalf("updated project metadata = %+v", updated)
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, updated.CreatedAt)
+	if err != nil {
+		t.Fatalf("parse project creation time: %v", err)
+	}
+	lastUpdated, err := time.Parse(time.RFC3339Nano, updated.LastUpdated)
+	if err != nil {
+		t.Fatalf("parse project update time: %v", err)
+	}
+	if !lastUpdated.After(createdAt) {
+		t.Fatalf("project last updated = %s, want after created at %s", lastUpdated, createdAt)
+	}
+
+	sameResponse := server.request(t, http.MethodPut, path, map[string]string{
+		"name":        "Storefront API",
+		"description": "Updated customer-facing application",
+	})
+	sameResponse.Body.Close()
+	if sameResponse.StatusCode != http.StatusOK {
+		t.Fatalf("idempotent project update status = %d, want %d", sameResponse.StatusCode, http.StatusOK)
+	}
+
+	getResponse := server.request(t, http.MethodGet, path, nil)
+	defer getResponse.Body.Close()
+	if getResponse.StatusCode != http.StatusOK {
+		t.Fatalf("get updated project status = %d, want %d", getResponse.StatusCode, http.StatusOK)
+	}
+	var fetched projectResponse
+	if err := json.NewDecoder(getResponse.Body).Decode(&fetched); err != nil {
+		t.Fatalf("decode fetched project: %v", err)
+	}
+	if fetched.ID != updated.ID || fetched.Name != updated.Name || fetched.Description != updated.Description {
+		t.Fatalf("fetched project = %+v, want %+v", fetched, updated)
+	}
+
+	duplicateResponse := server.request(t, http.MethodPut, "/api/projects/"+strconv.FormatInt(second.ID, 10), map[string]string{
+		"name":        "Storefront API",
+		"description": "Duplicate names are rejected",
+	})
+	defer duplicateResponse.Body.Close()
+	if duplicateResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate project update status = %d, want %d", duplicateResponse.StatusCode, http.StatusConflict)
+	}
+}
+
+func TestAuthenticatedAdminCanDeleteProject(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Temporary", "Will be removed")
+	path := "/api/projects/" + strconv.FormatInt(project.ID, 10)
+
+	deleteResponse := server.request(t, http.MethodDelete, path, nil)
+	defer deleteResponse.Body.Close()
+	if deleteResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete project status = %d, want %d", deleteResponse.StatusCode, http.StatusNoContent)
+	}
+
+	getResponse := server.request(t, http.MethodGet, path, nil)
+	defer getResponse.Body.Close()
+	if getResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("deleted project status = %d, want %d", getResponse.StatusCode, http.StatusNotFound)
+	}
+
+	deleteAgainResponse := server.request(t, http.MethodDelete, path, nil)
+	defer deleteAgainResponse.Body.Close()
+	if deleteAgainResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("deleting missing project status = %d, want %d", deleteAgainResponse.StatusCode, http.StatusNotFound)
+	}
+
+	listResponse := server.request(t, http.MethodGet, "/api/projects", nil)
+	defer listResponse.Body.Close()
+	if listResponse.StatusCode != http.StatusOK {
+		t.Fatalf("list after delete status = %d, want %d", listResponse.StatusCode, http.StatusOK)
+	}
+	var projects []projectResponse
+	if err := json.NewDecoder(listResponse.Body).Decode(&projects); err != nil {
+		t.Fatalf("decode projects after delete: %v", err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("projects after delete = %+v, want empty list", projects)
+	}
+}
+
+func TestProjectNamesAreUniqueAndNamesAreRequired(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	createProject(t, server, "Storefront", "First project")
+
+	duplicateResponse := postJSON(t, server, "/api/projects", map[string]string{
+		"name":        " storefront ",
+		"description": "Duplicate project",
+	})
+	defer duplicateResponse.Body.Close()
+	if duplicateResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate project status = %d, want %d", duplicateResponse.StatusCode, http.StatusConflict)
+	}
+
+	missingNameResponse := postJSON(t, server, "/api/projects", map[string]string{
+		"description": "Missing name",
+	})
+	defer missingNameResponse.Body.Close()
+	if missingNameResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing project name status = %d, want %d", missingNameResponse.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func TestAuthenticatedProjectsListStartsEmpty(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+
+	response := server.request(t, http.MethodGet, "/api/projects", nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("projects list status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+
+	var projects []struct {
+		ID   int64  `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&projects); err != nil {
+		t.Fatalf("decode projects list: %v", err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("projects list = %+v, want empty list", projects)
 	}
 }
 
@@ -183,6 +377,15 @@ type authStatus struct {
 	Authenticated bool `json:"authenticated"`
 }
 
+type projectResponse struct {
+	ID               int64  `json:"id"`
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	EnvironmentCount int    `json:"environmentCount"`
+	CreatedAt        string `json:"createdAt"`
+	LastUpdated      string `json:"lastUpdated"`
+}
+
 type testServer struct {
 	handler http.Handler
 	db      *sql.DB
@@ -251,4 +454,43 @@ func getAuthStatus(t *testing.T, server *testServer) authStatus {
 func postJSON(t *testing.T, server *testServer, path string, value any) *http.Response {
 	t.Helper()
 	return server.request(t, http.MethodPost, path, value)
+}
+
+func setupAndLogin(t *testing.T, server *testServer) {
+	t.Helper()
+	setupResponse := postJSON(t, server, "/api/auth/setup", map[string]string{
+		"email":    "admin@example.com",
+		"password": "correct horse battery staple",
+	})
+	setupResponse.Body.Close()
+	if setupResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("setup status = %d, want %d", setupResponse.StatusCode, http.StatusCreated)
+	}
+
+	loginResponse := postJSON(t, server, "/api/auth/login", map[string]string{
+		"email":    "admin@example.com",
+		"password": "correct horse battery staple",
+	})
+	loginResponse.Body.Close()
+	if loginResponse.StatusCode != http.StatusOK {
+		t.Fatalf("login status = %d, want %d", loginResponse.StatusCode, http.StatusOK)
+	}
+}
+
+func createProject(t *testing.T, server *testServer, name, description string) projectResponse {
+	t.Helper()
+	response := postJSON(t, server, "/api/projects", map[string]string{
+		"name":        name,
+		"description": description,
+	})
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create project status = %d, want %d", response.StatusCode, http.StatusCreated)
+	}
+
+	var project projectResponse
+	if err := json.NewDecoder(response.Body).Decode(&project); err != nil {
+		t.Fatalf("decode created project: %v", err)
+	}
+	return project
 }

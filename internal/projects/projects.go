@@ -1,0 +1,341 @@
+// Package projects owns Project metadata and its HTTP API.
+package projects
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
+
+const (
+	maxRequestBody = 1 << 20
+	maxProjectName = 255
+)
+
+type Service struct {
+	repository *repository
+	now        func() time.Time
+}
+
+type repository struct {
+	db *sql.DB
+}
+
+// Project is the API representation of a Project.
+type Project struct {
+	ID               int64     `json:"id"`
+	Name             string    `json:"name"`
+	Description      string    `json:"description"`
+	EnvironmentCount int       `json:"environmentCount"`
+	CreatedAt        time.Time `json:"createdAt"`
+	LastUpdated      time.Time `json:"lastUpdated"`
+}
+
+type projectInput struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// New constructs the Project service over the application's migrated SQLite
+// database.
+func New(db *sql.DB) *Service {
+	return &Service{repository: &repository{db: db}, now: time.Now}
+}
+
+// RegisterRoutes adds the authenticated Project endpoints to mux.
+func (s *Service) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/projects", s.list)
+	mux.HandleFunc("POST /api/projects", s.create)
+	mux.HandleFunc("GET /api/projects/{id}", s.get)
+	mux.HandleFunc("PUT /api/projects/{id}", s.update)
+	mux.HandleFunc("DELETE /api/projects/{id}", s.delete)
+}
+
+func (s *Service) list(w http.ResponseWriter, r *http.Request) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "projects are temporarily unavailable")
+		return
+	}
+
+	projects, err := s.repository.list(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load projects")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, projects)
+}
+
+func (s *Service) create(w http.ResponseWriter, r *http.Request) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "projects are temporarily unavailable")
+		return
+	}
+
+	input, err := decodeProjectInput(w, r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateProjectName(input.Name); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	createdAt := s.now().UTC()
+	project, err := s.repository.create(r.Context(), strings.TrimSpace(input.Name), input.Description, createdAt)
+	if err != nil {
+		if isUniqueConstraint(err) {
+			writeError(w, http.StatusConflict, "a project with that name already exists")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "could not create project")
+		return
+	}
+	writeJSON(w, http.StatusCreated, project)
+}
+
+func (s *Service) get(w http.ResponseWriter, r *http.Request) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "projects are temporarily unavailable")
+		return
+	}
+
+	id, err := projectID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "project id must be a positive integer")
+		return
+	}
+	project, err := s.repository.findByID(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	writeJSON(w, http.StatusOK, project)
+}
+
+func (s *Service) update(w http.ResponseWriter, r *http.Request) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "projects are temporarily unavailable")
+		return
+	}
+
+	id, err := projectID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "project id must be a positive integer")
+		return
+	}
+	input, err := decodeProjectInput(w, r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateProjectName(input.Name); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	existing, err := s.repository.findByID(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	updatedAt := s.now().UTC().Truncate(time.Second)
+	if !updatedAt.After(existing.LastUpdated) {
+		updatedAt = existing.LastUpdated.Add(time.Second)
+	}
+
+	if err := s.repository.update(r.Context(), id, strings.TrimSpace(input.Name), input.Description, updatedAt); err != nil {
+		if isUniqueConstraint(err) {
+			writeError(w, http.StatusConflict, "a project with that name already exists")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "could not update project")
+		return
+	}
+
+	project, err := s.repository.findByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load updated project")
+		return
+	}
+	writeJSON(w, http.StatusOK, project)
+}
+
+func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "projects are temporarily unavailable")
+		return
+	}
+
+	id, err := projectID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "project id must be a positive integer")
+		return
+	}
+	deleted, err := s.repository.delete(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not delete project")
+		return
+	}
+	if !deleted {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Service) available() bool {
+	return s != nil && s.repository != nil && s.repository.db != nil
+}
+
+func (r *repository) list(ctx context.Context) ([]Project, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, name, description, created_at, updated_at
+		FROM projects
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanProjects(rows)
+}
+
+func (r *repository) create(ctx context.Context, name, description string, createdAt time.Time) (Project, error) {
+	result, err := r.db.ExecContext(ctx, `
+		INSERT INTO projects (name, description, created_at, updated_at)
+		VALUES (?, ?, ?, ?)
+	`, name, description, createdAt.Unix(), createdAt.Unix())
+	if err != nil {
+		return Project{}, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return Project{}, err
+	}
+	return r.findByID(ctx, id)
+}
+
+func (r *repository) findByID(ctx context.Context, id int64) (Project, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, name, description, created_at, updated_at
+		FROM projects
+		WHERE id = ?
+	`, id)
+	return scanProjectRow(row)
+}
+
+func (r *repository) update(ctx context.Context, id int64, name, description string, updatedAt time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE projects
+		SET name = ?, description = ?, updated_at = ?
+		WHERE id = ?
+	`, name, description, updatedAt.Unix(), id)
+	return err
+}
+
+func (r *repository) delete(ctx context.Context, id int64) (bool, error) {
+	result, err := r.db.ExecContext(ctx, "DELETE FROM projects WHERE id = ?", id)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected > 0, err
+}
+
+func scanProjects(rows *sql.Rows) ([]Project, error) {
+	projects := make([]Project, 0)
+	for rows.Next() {
+		project, err := scanProjectValues(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		projects = append(projects, project)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return projects, nil
+}
+
+func scanProjectRow(row *sql.Row) (Project, error) {
+	return scanProjectValues(row.Scan)
+}
+
+func scanProjectValues(scan func(...any) error) (Project, error) {
+	var (
+		project     Project
+		description sql.NullString
+		createdAt   int64
+		updatedAt   int64
+	)
+	if err := scan(&project.ID, &project.Name, &description, &createdAt, &updatedAt); err != nil {
+		return Project{}, err
+	}
+	project.Description = description.String
+	project.EnvironmentCount = 0
+	project.CreatedAt = time.Unix(createdAt, 0).UTC()
+	project.LastUpdated = time.Unix(updatedAt, 0).UTC()
+	return project, nil
+}
+
+func projectID(r *http.Request) (int64, error) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		return 0, errors.New("invalid project id")
+	}
+	return id, nil
+}
+
+func validateProjectName(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return errors.New("project name is required")
+	}
+	if utf8.RuneCountInString(trimmed) > maxProjectName {
+		return errors.New("project name must be 255 characters or fewer")
+	}
+	return nil
+}
+
+func decodeProjectInput(w http.ResponseWriter, r *http.Request) (projectInput, error) {
+	var input projectInput
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return projectInput{}, errors.New("request must contain a valid JSON object")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return projectInput{}, errors.New("request must contain one JSON object")
+	}
+	return input, nil
+}
+
+func isUniqueConstraint(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "unique constraint")
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
+}

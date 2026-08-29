@@ -120,6 +120,7 @@ erDiagram
         string name
         string description
         datetime created_at
+        datetime updated_at
     }
     ENVIRONMENT {
         string id PK
@@ -218,6 +219,7 @@ Illustrative — the goose migration files (ADR-0003) are the authoritative sche
 | name | TEXT | NOT NULL, UNIQUE | Project name |
 | description | TEXT | NULL | Free-text description |
 | created_at | DATETIME | NOT NULL | Creation timestamp |
+| updated_at | DATETIME | NOT NULL | Last edit timestamp |
 
 ### `environments`
 

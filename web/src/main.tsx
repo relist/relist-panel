@@ -1,5 +1,23 @@
 import { StyleProvider } from '@ant-design/cssinjs';
-import { Alert, Button, Card, ConfigProvider, Form, Input, Layout, Spin, Typography, theme } from 'antd';
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  ConfigProvider,
+  Empty,
+  Form,
+  Input,
+  Layout,
+  Menu,
+  Modal,
+  Popconfirm,
+  Row,
+  Space,
+  Spin,
+  Typography,
+  theme,
+} from 'antd';
 import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
@@ -17,6 +35,20 @@ type Credentials = {
 type AuthStatus = {
   setupRequired: boolean;
   authenticated: boolean;
+};
+
+type Project = {
+  id: number;
+  name: string;
+  description: string;
+  environmentCount: number;
+  createdAt: string;
+  lastUpdated: string;
+};
+
+type ProjectInput = {
+  name: string;
+  description: string;
 };
 
 type ErrorResponse = {
@@ -244,27 +276,339 @@ function AuthScreen({
 }
 
 function AuthenticatedScreen({ onLogout, error }: { onLogout: () => void; error?: string }) {
+  const [selectedProjectID, setSelectedProjectID] = useState<number>();
+  const { token } = theme.useToken();
+
   return (
-    <Layout className="min-h-screen bg-[#f5f5f5]">
-      <Layout.Header className="!flex !h-16 !items-center !justify-between !border-b !border-[#f0f0f0] !bg-white !px-6">
-        <Typography.Text className="!text-[#1f1f1f]" strong>
-          Relist Panel
-        </Typography.Text>
-        <Button onClick={onLogout}>Log out</Button>
-      </Layout.Header>
-      <Layout.Content className="flex items-center justify-center px-4 py-12">
-        <Card className="w-full max-w-[440px]">
-          <Typography.Title className="!mb-2" level={2}>
-            Welcome back
+    <Layout className="min-h-screen" style={{ background: token.colorBgLayout }}>
+      <Layout.Sider
+        breakpoint="lg"
+        collapsedWidth={0}
+        theme="light"
+        style={{ background: token.colorBgContainer, borderInlineEnd: `1px solid ${token.colorBorderSecondary}` }}
+      >
+        <div
+          className="flex h-16 items-center px-6"
+          style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}
+        >
+          <Typography.Text strong>
+            Relist Panel
+          </Typography.Text>
+        </div>
+        <Menu
+          style={{ borderInlineEnd: 0, paddingTop: token.padding }}
+          selectedKeys={selectedProjectID ? [] : ['projects']}
+          items={[{ key: 'projects', label: 'Projects' }]}
+          onClick={() => setSelectedProjectID(undefined)}
+        />
+      </Layout.Sider>
+      <Layout>
+        <Layout.Header
+          className="!flex !h-16 !items-center !justify-between !px-6"
+          style={{ background: token.colorBgContainer, borderBottom: `1px solid ${token.colorBorderSecondary}` }}
+        >
+          <Typography.Title className="!mb-0" level={4}>
+            {selectedProjectID ? 'Project' : 'Projects'}
           </Typography.Title>
-          <Typography.Paragraph type="secondary">
-            Your admin session is active. Project management will appear here next.
-          </Typography.Paragraph>
-          {error && <Alert type="error" showIcon message={error} />}
-        </Card>
-      </Layout.Content>
+          <Button onClick={onLogout}>Log out</Button>
+        </Layout.Header>
+        <Layout.Content className="px-6 py-8">
+          <div className="mx-auto w-full max-w-6xl">
+            {error && <Alert className="mb-6" type="error" showIcon message={error} />}
+            {selectedProjectID ? (
+              <ProjectDetailScreen projectID={selectedProjectID} onBack={() => setSelectedProjectID(undefined)} />
+            ) : (
+              <ProjectsScreen onOpenProject={setSelectedProjectID} />
+            )}
+          </div>
+        </Layout.Content>
+      </Layout>
     </Layout>
   );
+}
+
+function ProjectsScreen({ onOpenProject }: { onOpenProject: (id: number) => void }) {
+  const [form] = Form.useForm<ProjectInput>();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deletingID, setDeletingID] = useState<number>();
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project>();
+  const [error, setError] = useState<string>();
+
+  const loadProjects = async () => {
+    setLoading(true);
+    setError(undefined);
+    try {
+      const response = await fetch('/api/projects', { credentials: 'same-origin' });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      setProjects((await response.json()) as Project[]);
+    } catch (reason: unknown) {
+      setError(errorMessage(reason));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadProjects();
+  }, []);
+
+  const openCreateModal = () => {
+    setEditingProject(undefined);
+    form.resetFields();
+    setModalOpen(true);
+  };
+
+  const openEditModal = (project: Project) => {
+    setEditingProject(project);
+    form.setFieldsValue({ name: project.name, description: project.description });
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    if (!saving) {
+      setModalOpen(false);
+      form.resetFields();
+    }
+  };
+
+  const saveProject = async (values: ProjectInput) => {
+    setSaving(true);
+    setError(undefined);
+    try {
+      const response = await fetch(editingProject ? `/api/projects/${editingProject.id}` : '/api/projects', {
+        method: editingProject ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(values),
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      setModalOpen(false);
+      form.resetFields();
+      await loadProjects();
+    } catch (reason: unknown) {
+      setError(errorMessage(reason));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteProject = async (id: number) => {
+    setDeletingID(id);
+    setError(undefined);
+    try {
+      const response = await fetch(`/api/projects/${id}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      await loadProjects();
+    } catch (reason: unknown) {
+      setError(errorMessage(reason));
+    } finally {
+      setDeletingID(undefined);
+    }
+  };
+
+  return (
+    <>
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <Typography.Title className="!mb-1" level={2}>
+            Projects
+          </Typography.Title>
+          <Typography.Text type="secondary">Group the Environments that belong to each application.</Typography.Text>
+        </div>
+        <Button type="primary" onClick={openCreateModal}>
+          New Project
+        </Button>
+      </div>
+
+      {error && (
+        <Alert
+          className="mb-6"
+          type="error"
+          showIcon
+          message={error}
+          action={<Button onClick={() => void loadProjects()}>Retry</Button>}
+        />
+      )}
+
+      <Spin spinning={loading}>
+        {projects.length === 0 && !loading ? (
+          <Card>
+            <Empty description="No Projects yet">
+              <Button type="primary" onClick={openCreateModal}>
+                Create your first Project
+              </Button>
+            </Empty>
+          </Card>
+        ) : (
+          <Row gutter={[16, 16]}>
+            {projects.map((project) => (
+              <Col key={project.id} xs={24} md={12} xl={8}>
+                <Card
+                  title={<Typography.Text strong>{project.name}</Typography.Text>}
+                  actions={[
+                    <Button key="open" type="link" onClick={() => onOpenProject(project.id)}>
+                      Open
+                    </Button>,
+                    <Button key="edit" type="link" onClick={() => openEditModal(project)}>
+                      Edit
+                    </Button>,
+                    <Popconfirm
+                      key="delete"
+                      title="Delete this Project?"
+                      description="This action cannot be undone."
+                      okText="Delete"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => void deleteProject(project.id)}
+                    >
+                      <Button type="link" danger loading={deletingID === project.id}>
+                        Delete
+                      </Button>
+                    </Popconfirm>,
+                  ]}
+                >
+                  <Typography.Paragraph type={project.description ? undefined : 'secondary'} ellipsis={{ rows: 3 }}>
+                    {project.description || 'No description provided.'}
+                  </Typography.Paragraph>
+                  <Space direction="vertical" size={4}>
+                    <Typography.Text type="secondary">
+                      Environments: {project.environmentCount}
+                    </Typography.Text>
+                    <Typography.Text type="secondary">
+                      Last updated: {formatProjectDate(project.lastUpdated)}
+                    </Typography.Text>
+                  </Space>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        )}
+      </Spin>
+
+      <Modal
+        title={editingProject ? 'Edit Project' : 'New Project'}
+        open={modalOpen}
+        okText={editingProject ? 'Save changes' : 'Create Project'}
+        confirmLoading={saving}
+        onCancel={closeModal}
+        onOk={() => form.submit()}
+        destroyOnClose
+      >
+        <Form form={form} layout="vertical" requiredMark={false} onFinish={(values) => void saveProject(values)}>
+          <Form.Item
+            label="Name"
+            name="name"
+            rules={[
+              { required: true, message: 'Enter a Project name' },
+              { max: 255, message: 'Use 255 characters or fewer' },
+            ]}
+          >
+            <Input autoFocus placeholder="e.g. my-saas" />
+          </Form.Item>
+          <Form.Item label="Description" name="description">
+            <Input.TextArea rows={4} placeholder="What does this Project contain?" />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </>
+  );
+}
+
+function ProjectDetailScreen({ projectID, onBack }: { projectID: number; onBack: () => void }) {
+  const [project, setProject] = useState<Project>();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError(undefined);
+    void fetch(`/api/projects/${projectID}`, { credentials: 'same-origin' })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(await responseError(response));
+        }
+        return (await response.json()) as Project;
+      })
+      .then((value) => {
+        if (active) {
+          setProject(value);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (active) {
+          setError(errorMessage(reason));
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [projectID]);
+
+  if (loading) {
+    return (
+      <Card>
+        <div className="flex justify-center py-12">
+          <Spin size="large" />
+        </div>
+      </Card>
+    );
+  }
+
+  if (error || !project) {
+    return (
+      <Card>
+        <Button className="!mb-6" onClick={onBack}>
+          Back to Projects
+        </Button>
+        <Alert type="error" showIcon message={error ?? 'Project not found'} />
+      </Card>
+    );
+  }
+
+  return (
+    <>
+      <Button className="!mb-6" onClick={onBack}>
+        Back to Projects
+      </Button>
+      <Card title={project.name}>
+        <Typography.Paragraph type={project.description ? undefined : 'secondary'}>
+          {project.description || 'No description provided.'}
+        </Typography.Paragraph>
+        <Space direction="vertical" size={4}>
+          <Typography.Text type="secondary">Environments: {project.environmentCount}</Typography.Text>
+          <Typography.Text type="secondary">
+            Last updated: {formatProjectDate(project.lastUpdated)}
+          </Typography.Text>
+        </Space>
+      </Card>
+    </>
+  );
+}
+
+function formatProjectDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'Unknown';
+  }
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 }
 
 createRoot(document.getElementById('root')!).render(
