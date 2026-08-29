@@ -1,4 +1,4 @@
-package main
+package httpapi_test
 
 import (
 	"io"
@@ -6,13 +6,15 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"relist-panel/internal/httpapi"
 )
 
 func TestHealthz(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 
-	newHandler().ServeHTTP(response, request)
+	httpapi.NewHandler().ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
@@ -26,7 +28,7 @@ func TestRootServesEmbeddedFrontend(t *testing.T) {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 
-	newHandler().ServeHTTP(response, request)
+	httpapi.NewHandler().ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)

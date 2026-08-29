@@ -4,7 +4,7 @@ build: build-web
 	go build -o relist-panel .
 
 build-web:
-	pnpm --dir web build
+	go generate ./internal/webassets/...
 
 test: build-web
 	go test ./...
