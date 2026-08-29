@@ -129,8 +129,8 @@ erDiagram
         datetime created_at
     }
     ENVIRONMENT_VARIABLE {
-        string id PK
-        string environment_id FK
+        int id PK
+        int environment_id FK
         string key
         string value
     }
@@ -236,8 +236,8 @@ Unique constraint: (`project_id`, `name`)
 
 | Field | Type | Constraint | Description |
 |---|---|---|---|
-| id | TEXT | PK | Unique identifier |
-| environment_id | TEXT | FK → `environments.id`, NOT NULL | Owning environment |
+| id | INTEGER | PK | Unique identifier |
+| environment_id | INTEGER | FK → `environments.id`, NOT NULL | Owning environment |
 | key | TEXT | NOT NULL | Variable name |
 | value | TEXT | NOT NULL | Variable value |
 

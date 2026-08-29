@@ -412,6 +412,184 @@ func TestEnvironmentNamesAreRequiredAndProjectsMustExist(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedAdminCanManageEnvironmentVariables(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Storefront", "Customer-facing application")
+
+	environmentsResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer environmentsResponse.Body.Close()
+	if environmentsResponse.StatusCode != http.StatusOK {
+		t.Fatalf("list environments status = %d, want %d", environmentsResponse.StatusCode, http.StatusOK)
+	}
+	var environments []environmentResponse
+	if err := json.NewDecoder(environmentsResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+	if len(environments) != 1 {
+		t.Fatalf("environments = %+v, want one default environment", environments)
+	}
+	production := environments[0]
+
+	stagingResponse := postJSON(t, server, projectEnvironmentsPath(project.ID), map[string]string{"name": "staging"})
+	defer stagingResponse.Body.Close()
+	if stagingResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("create staging environment status = %d, want %d", stagingResponse.StatusCode, http.StatusCreated)
+	}
+	var staging environmentResponse
+	if err := json.NewDecoder(stagingResponse.Body).Decode(&staging); err != nil {
+		t.Fatalf("decode staging environment: %v", err)
+	}
+
+	createResponse := postJSON(t, server, environmentVariablesPath(project.ID, production.ID), map[string]string{
+		"key":   "DATABASE_URL",
+		"value": "postgres://production",
+	})
+	defer createResponse.Body.Close()
+	if createResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("create environment variable status = %d, want %d", createResponse.StatusCode, http.StatusCreated)
+	}
+	var variable environmentVariableResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&variable); err != nil {
+		t.Fatalf("decode created environment variable: %v", err)
+	}
+	if variable.ID <= 0 || variable.EnvironmentID != production.ID || variable.Key != "DATABASE_URL" || variable.Value != "postgres://production" {
+		t.Fatalf("created environment variable = %+v", variable)
+	}
+
+	sameKeyInOtherEnvironment := postJSON(t, server, environmentVariablesPath(project.ID, staging.ID), map[string]string{
+		"key":   "DATABASE_URL",
+		"value": "postgres://staging",
+	})
+	defer sameKeyInOtherEnvironment.Body.Close()
+	if sameKeyInOtherEnvironment.StatusCode != http.StatusCreated {
+		t.Fatalf("same key in another environment status = %d, want %d", sameKeyInOtherEnvironment.StatusCode, http.StatusCreated)
+	}
+
+	listResponse := server.request(t, http.MethodGet, environmentVariablesPath(project.ID, production.ID), nil)
+	defer listResponse.Body.Close()
+	if listResponse.StatusCode != http.StatusOK {
+		t.Fatalf("list environment variables status = %d, want %d", listResponse.StatusCode, http.StatusOK)
+	}
+	var variables []environmentVariableResponse
+	if err := json.NewDecoder(listResponse.Body).Decode(&variables); err != nil {
+		t.Fatalf("decode environment variables: %v", err)
+	}
+	if len(variables) != 1 || variables[0] != variable {
+		t.Fatalf("environment variables = %+v, want %+v", variables, []environmentVariableResponse{variable})
+	}
+
+	secondCreateResponse := postJSON(t, server, environmentVariablesPath(project.ID, production.ID), map[string]string{
+		"key":   "PORT",
+		"value": "8080",
+	})
+	defer secondCreateResponse.Body.Close()
+	if secondCreateResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("create second environment variable status = %d, want %d", secondCreateResponse.StatusCode, http.StatusCreated)
+	}
+	var secondVariable environmentVariableResponse
+	if err := json.NewDecoder(secondCreateResponse.Body).Decode(&secondVariable); err != nil {
+		t.Fatalf("decode second environment variable: %v", err)
+	}
+
+	duplicateResponse := postJSON(t, server, environmentVariablesPath(project.ID, production.ID), map[string]string{
+		"key":   "DATABASE_URL",
+		"value": "another value",
+	})
+	defer duplicateResponse.Body.Close()
+	if duplicateResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate environment variable status = %d, want %d", duplicateResponse.StatusCode, http.StatusConflict)
+	}
+
+	duplicateUpdateResponse := server.request(t, http.MethodPut, variablePath(project.ID, production.ID, variable.ID), map[string]string{
+		"key":   "PORT",
+		"value": "another value",
+	})
+	defer duplicateUpdateResponse.Body.Close()
+	if duplicateUpdateResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate environment variable update status = %d, want %d", duplicateUpdateResponse.StatusCode, http.StatusConflict)
+	}
+
+	updateResponse := server.request(t, http.MethodPut, variablePath(project.ID, production.ID, variable.ID), map[string]string{
+		"key":   "DATABASE_URL_ROTATED",
+		"value": "postgres://rotated",
+	})
+	defer updateResponse.Body.Close()
+	if updateResponse.StatusCode != http.StatusOK {
+		t.Fatalf("update environment variable status = %d, want %d", updateResponse.StatusCode, http.StatusOK)
+	}
+	var updated environmentVariableResponse
+	if err := json.NewDecoder(updateResponse.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode updated environment variable: %v", err)
+	}
+	if updated.ID != variable.ID || updated.EnvironmentID != production.ID || updated.Key != "DATABASE_URL_ROTATED" || updated.Value != "postgres://rotated" {
+		t.Fatalf("updated environment variable = %+v", updated)
+	}
+
+	deleteResponse := server.request(t, http.MethodDelete, variablePath(project.ID, production.ID, variable.ID), nil)
+	defer deleteResponse.Body.Close()
+	if deleteResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete environment variable status = %d, want %d", deleteResponse.StatusCode, http.StatusNoContent)
+	}
+
+	deleteSecondResponse := server.request(t, http.MethodDelete, variablePath(project.ID, production.ID, secondVariable.ID), nil)
+	defer deleteSecondResponse.Body.Close()
+	if deleteSecondResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete second environment variable status = %d, want %d", deleteSecondResponse.StatusCode, http.StatusNoContent)
+	}
+
+	remainingResponse := server.request(t, http.MethodGet, environmentVariablesPath(project.ID, production.ID), nil)
+	defer remainingResponse.Body.Close()
+	if remainingResponse.StatusCode != http.StatusOK {
+		t.Fatalf("list environment variables after delete status = %d, want %d", remainingResponse.StatusCode, http.StatusOK)
+	}
+	var remaining []environmentVariableResponse
+	if err := json.NewDecoder(remainingResponse.Body).Decode(&remaining); err != nil {
+		t.Fatalf("decode environment variables after delete: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("environment variables after delete = %+v, want empty list", remaining)
+	}
+
+	deleteAgainResponse := server.request(t, http.MethodDelete, variablePath(project.ID, production.ID, variable.ID), nil)
+	defer deleteAgainResponse.Body.Close()
+	if deleteAgainResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("deleting missing environment variable status = %d, want %d", deleteAgainResponse.StatusCode, http.StatusNotFound)
+	}
+}
+
+func TestEnvironmentVariablesRequireExistingProjectAndEnvironment(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+
+	missingProjectResponse := server.request(t, http.MethodGet, environmentVariablesPath(999, 1), nil)
+	defer missingProjectResponse.Body.Close()
+	if missingProjectResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing project environment variables status = %d, want %d", missingProjectResponse.StatusCode, http.StatusNotFound)
+	}
+
+	project := createProject(t, server, "Storefront", "Customer-facing application")
+	environmentsResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer environmentsResponse.Body.Close()
+	var environments []environmentResponse
+	if err := json.NewDecoder(environmentsResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+
+	missingEnvironmentResponse := server.request(t, http.MethodGet, environmentVariablesPath(project.ID, 999), nil)
+	defer missingEnvironmentResponse.Body.Close()
+	if missingEnvironmentResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing environment variables status = %d, want %d", missingEnvironmentResponse.StatusCode, http.StatusNotFound)
+	}
+
+	otherProject := createProject(t, server, "Operations", "Internal tooling")
+	wrongProjectResponse := server.request(t, http.MethodGet, environmentVariablesPath(otherProject.ID, environments[0].ID), nil)
+	defer wrongProjectResponse.Body.Close()
+	if wrongProjectResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("environment under another project status = %d, want %d", wrongProjectResponse.StatusCode, http.StatusNotFound)
+	}
+}
+
 func TestAuthenticatedProjectsListStartsEmpty(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
@@ -515,6 +693,13 @@ type environmentResponse struct {
 	ProjectID int64  `json:"projectId"`
 	Name      string `json:"name"`
 	CreatedAt string `json:"createdAt"`
+}
+
+type environmentVariableResponse struct {
+	ID            int64  `json:"id"`
+	EnvironmentID int64  `json:"environmentId"`
+	Key           string `json:"key"`
+	Value         string `json:"value"`
 }
 
 type testServer struct {
@@ -632,4 +817,12 @@ func projectEnvironmentsPath(projectID int64) string {
 
 func environmentPath(projectID, environmentID int64) string {
 	return projectEnvironmentsPath(projectID) + "/" + strconv.FormatInt(environmentID, 10)
+}
+
+func environmentVariablesPath(projectID, environmentID int64) string {
+	return environmentPath(projectID, environmentID) + "/variables"
+}
+
+func variablePath(projectID, environmentID, variableID int64) string {
+	return environmentVariablesPath(projectID, environmentID) + "/" + strconv.FormatInt(variableID, 10)
 }

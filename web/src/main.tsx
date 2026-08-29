@@ -15,6 +15,7 @@ import {
   Row,
   Space,
   Spin,
+  Table,
   Tabs,
   Typography,
   theme,
@@ -61,6 +62,18 @@ type Environment = {
 
 type EnvironmentInput = {
   name: string;
+};
+
+type EnvironmentVariable = {
+  id: number;
+  environmentId: number;
+  key: string;
+  value: string;
+};
+
+type EnvironmentVariableInput = {
+  key: string;
+  value: string;
 };
 
 type ErrorResponse = {
@@ -705,27 +718,44 @@ function ProjectDetailScreen({ projectID, onBack }: { projectID: number; onBack:
               key: String(environment.id),
               label: environment.name,
               children: (
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <Typography.Title className="!mb-1" level={4}>
-                      {environment.name}
-                    </Typography.Title>
-                    <Typography.Text type="secondary">
-                      Created {formatProjectDate(environment.createdAt)}
-                    </Typography.Text>
-                  </div>
-                  <Popconfirm
-                    title="Delete this Environment?"
-                    description="Any Composes in it will be handled by a later ticket."
-                    okText="Delete"
-                    okButtonProps={{ danger: true }}
-                    onConfirm={() => void deleteEnvironment(environment.id)}
-                  >
-                    <Button danger loading={deletingEnvironmentID === environment.id}>
-                      Delete Environment
-                    </Button>
-                  </Popconfirm>
-                </div>
+                <Tabs
+                  items={[
+                    {
+                      key: 'overview',
+                      label: 'Overview',
+                      children: (
+                        <div className="flex flex-wrap items-start justify-between gap-4">
+                          <div>
+                            <Typography.Title className="!mb-1" level={4}>
+                              {environment.name}
+                            </Typography.Title>
+                            <Typography.Text type="secondary">
+                              Created {formatProjectDate(environment.createdAt)}
+                            </Typography.Text>
+                          </div>
+                          <Popconfirm
+                            title="Delete this Environment?"
+                            description="Any Composes in it will be handled by a later ticket."
+                            okText="Delete"
+                            okButtonProps={{ danger: true }}
+                            onConfirm={() => void deleteEnvironment(environment.id)}
+                          >
+                            <Button danger loading={deletingEnvironmentID === environment.id}>
+                              Delete Environment
+                            </Button>
+                          </Popconfirm>
+                        </div>
+                      ),
+                    },
+                    {
+                      key: 'variables',
+                      label: 'Environment Variables',
+                      children: (
+                        <EnvironmentVariablesPanel projectID={projectID} environmentID={environment.id} />
+                      ),
+                    },
+                  ]}
+                />
               ),
             }))}
           />
@@ -756,6 +786,221 @@ function ProjectDetailScreen({ projectID, onBack }: { projectID: number; onBack:
             ]}
           >
             <Input autoFocus placeholder="e.g. staging" />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </>
+  );
+}
+
+function EnvironmentVariablesPanel({
+  projectID,
+  environmentID,
+}: {
+  projectID: number;
+  environmentID: number;
+}) {
+  const [form] = Form.useForm<EnvironmentVariableInput>();
+  const [variables, setVariables] = useState<EnvironmentVariable[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deletingID, setDeletingID] = useState<number>();
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingVariable, setEditingVariable] = useState<EnvironmentVariable>();
+  const [error, setError] = useState<string>();
+  const requestID = useRef(0);
+
+  const variablesPath = `/api/projects/${projectID}/environments/${environmentID}/variables`;
+
+  const loadVariables = async () => {
+    const currentRequestID = ++requestID.current;
+    setLoading(true);
+    setError(undefined);
+    try {
+      const response = await fetch(variablesPath, { credentials: 'same-origin' });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      const nextVariables = (await response.json()) as EnvironmentVariable[];
+      if (currentRequestID === requestID.current) {
+        setVariables(nextVariables);
+      }
+    } catch (reason: unknown) {
+      if (currentRequestID === requestID.current) {
+        setError(errorMessage(reason));
+      }
+    } finally {
+      if (currentRequestID === requestID.current) {
+        setLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    void loadVariables();
+    return () => {
+      requestID.current += 1;
+    };
+  }, [variablesPath]);
+
+  const openCreateModal = () => {
+    setEditingVariable(undefined);
+    form.resetFields();
+    setModalOpen(true);
+  };
+
+  const openEditModal = (variable: EnvironmentVariable) => {
+    setEditingVariable(variable);
+    form.setFieldsValue({ key: variable.key, value: variable.value });
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    if (!saving) {
+      setModalOpen(false);
+      form.resetFields();
+    }
+  };
+
+  const saveVariable = async (values: EnvironmentVariableInput) => {
+    setSaving(true);
+    setError(undefined);
+    try {
+      const response = await fetch(editingVariable ? `${variablesPath}/${editingVariable.id}` : variablesPath, {
+        method: editingVariable ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(values),
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      setModalOpen(false);
+      form.resetFields();
+      await loadVariables();
+    } catch (reason: unknown) {
+      setError(errorMessage(reason));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteVariable = async (id: number) => {
+    setDeletingID(id);
+    setError(undefined);
+    try {
+      const response = await fetch(`${variablesPath}/${id}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      await loadVariables();
+    } catch (reason: unknown) {
+      setError(errorMessage(reason));
+    } finally {
+      setDeletingID(undefined);
+    }
+  };
+
+  return (
+    <>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <Typography.Title className="!mb-1" level={4}>
+            Environment Variables
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            Shared key-value configuration for every Compose in this Environment.
+          </Typography.Text>
+        </div>
+        <Button type="primary" onClick={openCreateModal}>
+          New Variable
+        </Button>
+      </div>
+
+      {error && <Alert className="mb-4" type="error" showIcon message={error} />}
+
+      <Spin spinning={loading}>
+        {variables.length === 0 && !loading ? (
+          <Empty description="No Environment Variables yet">
+            <Button type="primary" onClick={openCreateModal}>
+              Add your first Variable
+            </Button>
+          </Empty>
+        ) : (
+          <Table<EnvironmentVariable>
+            rowKey="id"
+            dataSource={variables}
+            pagination={false}
+            columns={[
+              {
+                title: 'Key',
+                dataIndex: 'key',
+                key: 'key',
+                width: '30%',
+              },
+              {
+                title: 'Value',
+                dataIndex: 'value',
+                key: 'value',
+                render: (value: string) => value || <Typography.Text type="secondary">Empty</Typography.Text>,
+              },
+              {
+                title: 'Actions',
+                key: 'actions',
+                width: 160,
+                render: (_value: unknown, variable: EnvironmentVariable) => (
+                  <Space size="small">
+                    <Button type="link" onClick={() => openEditModal(variable)}>
+                      Edit
+                    </Button>
+                    <Popconfirm
+                      title="Delete this Variable?"
+                      description="This action cannot be undone."
+                      okText="Delete"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => void deleteVariable(variable.id)}
+                    >
+                      <Button type="link" danger loading={deletingID === variable.id}>
+                        Delete
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        )}
+      </Spin>
+
+      <Modal
+        title={editingVariable ? 'Edit Environment Variable' : 'New Environment Variable'}
+        open={modalOpen}
+        okText={editingVariable ? 'Save changes' : 'Create Variable'}
+        confirmLoading={saving}
+        onCancel={closeModal}
+        onOk={() => form.submit()}
+        destroyOnClose
+      >
+        <Form form={form} layout="vertical" requiredMark={false} onFinish={(values) => void saveVariable(values)}>
+          <Form.Item
+            label="Key"
+            name="key"
+            rules={[
+              { required: true, message: 'Enter an Environment Variable key' },
+              { max: 255, message: 'Use 255 characters or fewer' },
+            ]}
+          >
+            <Input autoFocus placeholder="e.g. DATABASE_URL" />
+          </Form.Item>
+          <Form.Item
+            label="Value"
+            name="value"
+            rules={[{ required: true, message: 'Enter an Environment Variable value' }]}
+          >
+            <Input placeholder="e.g. postgres://db/app" />
           </Form.Item>
         </Form>
       </Modal>

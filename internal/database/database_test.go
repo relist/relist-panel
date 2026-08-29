@@ -18,8 +18,8 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 4 {
-		t.Fatalf("migration version = %d, want 4", version)
+	if version != 5 {
+		t.Fatalf("migration version = %d, want 5", version)
 	}
 
 	var one int
