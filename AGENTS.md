@@ -11,3 +11,7 @@ Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `
 ### Domain docs
 
 Single-context — `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Commit messages
+
+Conventional Commits, no scope (`feat: ...`, `fix: ...`, `chore: ...`); no `Co-Authored-By`/`Claude-Session` trailers. See `docs/agents/commit-conventions.md`.
