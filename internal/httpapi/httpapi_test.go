@@ -694,6 +694,12 @@ func TestAuthenticatedAdminCanManageComposes(t *testing.T) {
 	if missingUpdateResponse.StatusCode != http.StatusNotFound {
 		t.Fatalf("update missing compose status = %d, want %d", missingUpdateResponse.StatusCode, http.StatusNotFound)
 	}
+
+	wrongEnvironmentResponse := server.request(t, http.MethodGet, composePath(project.ID, staging.ID, compose.ID), nil)
+	defer wrongEnvironmentResponse.Body.Close()
+	if wrongEnvironmentResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("compose fetched via sibling environment status = %d, want %d", wrongEnvironmentResponse.StatusCode, http.StatusNotFound)
+	}
 }
 
 func TestComposesRequireExistingProjectAndEnvironment(t *testing.T) {
