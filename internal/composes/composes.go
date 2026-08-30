@@ -357,22 +357,8 @@ func (s *Service) stop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	compose, err := s.repository.findByID(r.Context(), environmentID, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "compose not found")
-		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return
-	}
-
-	req, err := s.runRequestForCompose(r.Context(), projectID, environmentID, compose)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return
-	}
-	if _, err := os.Stat(req.ComposeFilePath); err != nil {
-		writeError(w, http.StatusBadRequest, "compose has not been deployed")
+	compose, req, ok := s.resolveDeployedCompose(w, r, projectID, environmentID, id)
+	if !ok {
 		return
 	}
 
@@ -405,22 +391,8 @@ func (s *Service) restart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	compose, err := s.repository.findByID(r.Context(), environmentID, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "compose not found")
-		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return
-	}
-
-	req, err := s.runRequestForCompose(r.Context(), projectID, environmentID, compose)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return
-	}
-	if _, err := os.Stat(req.ComposeFilePath); err != nil {
-		writeError(w, http.StatusBadRequest, "compose has not been deployed")
+	compose, req, ok := s.resolveDeployedCompose(w, r, projectID, environmentID, id)
+	if !ok {
 		return
 	}
 
@@ -442,9 +414,36 @@ func (s *Service) runRequestForCompose(ctx context.Context, projectID, environme
 	return runRequestFor(s.dataDir, projectName, environmentName, compose), nil
 }
 
+// resolveDeployedCompose loads a Compose and its run identity, gated on it
+// already being deployed (its resolved compose file exists on disk) — shared
+// by mutating actions (stop/restart) that are meaningless on an undeployed
+// Compose. It writes any error response itself; the caller should return
+// immediately when ok is false.
+func (s *Service) resolveDeployedCompose(w http.ResponseWriter, r *http.Request, projectID, environmentID, id int64) (compose Compose, req RunRequest, ok bool) {
+	compose, err := s.repository.findByID(r.Context(), environmentID, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "compose not found")
+		return Compose{}, RunRequest{}, false
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return Compose{}, RunRequest{}, false
+	}
+
+	req, err = s.runRequestForCompose(r.Context(), projectID, environmentID, compose)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return Compose{}, RunRequest{}, false
+	}
+	if _, err := os.Stat(req.ComposeFilePath); err != nil {
+		writeError(w, http.StatusBadRequest, "compose has not been deployed")
+		return Compose{}, RunRequest{}, false
+	}
+	return compose, req, true
+}
+
 // withRefreshedStatus re-reads a Compose's live status immediately after a
-// runner action (deploy/stop) so the response reflects the outcome without a
-// separate round-trip; best-effort like withStatus/withStatuses.
+// runner action (deploy/stop/restart) so the response reflects the outcome
+// without a separate round-trip; best-effort like withStatus/withStatuses.
 func (s *Service) withRefreshedStatus(ctx context.Context, req RunRequest, compose Compose) Compose {
 	status, err := s.runner.Status(ctx, req)
 	if err != nil {
