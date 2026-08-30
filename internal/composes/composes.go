@@ -103,6 +103,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.get)
 	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.update)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/deploy", s.deploy)
+	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/stop", s.stop)
 }
 
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
@@ -297,7 +298,7 @@ func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	projectName, environmentName, err := s.repository.parentNames(r.Context(), projectID, environmentID)
+	req, err := s.runRequestForCompose(r.Context(), projectID, environmentID, compose)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load compose")
 		return
@@ -308,7 +309,6 @@ func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := runRequestFor(s.dataDir, projectName, environmentName, compose)
 	if err := os.MkdirAll(filepath.Dir(req.ComposeFilePath), composeDirPerm); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not prepare compose files")
 		return
@@ -338,6 +338,69 @@ func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
 	}
 	compose.Status = status
 	writeJSON(w, http.StatusOK, compose)
+}
+
+func (s *Service) stop(w http.ResponseWriter, r *http.Request) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "composes are temporarily unavailable")
+		return
+	}
+
+	projectID, environmentID, err := routeIDs(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id, err := composeID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
+		return
+	}
+	if err := s.requireEnvironment(r.Context(), projectID, environmentID); err != nil {
+		writeParentError(w, err)
+		return
+	}
+
+	compose, err := s.repository.findByID(r.Context(), environmentID, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "compose not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return
+	}
+
+	req, err := s.runRequestForCompose(r.Context(), projectID, environmentID, compose)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return
+	}
+	if _, err := os.Stat(req.ComposeFilePath); err != nil {
+		writeError(w, http.StatusBadRequest, "compose has not been deployed")
+		return
+	}
+
+	if err := s.runner.Down(r.Context(), req); err != nil {
+		writeError(w, http.StatusBadGateway, "stop failed: "+err.Error())
+		return
+	}
+
+	status, err := s.runner.Status(r.Context(), req)
+	if err != nil {
+		status = ComposeStatus{}
+	}
+	compose.Status = status
+	writeJSON(w, http.StatusOK, compose)
+}
+
+// runRequestForCompose resolves a Compose's deploy identity (ADR-0002) by
+// looking up its parent Project/Environment names.
+func (s *Service) runRequestForCompose(ctx context.Context, projectID, environmentID int64, compose Compose) (RunRequest, error) {
+	projectName, environmentName, err := s.repository.parentNames(ctx, projectID, environmentID)
+	if err != nil {
+		return RunRequest{}, err
+	}
+	return runRequestFor(s.dataDir, projectName, environmentName, compose), nil
 }
 
 // withStatus and withStatuses attach each Compose's live container state.
