@@ -2,11 +2,14 @@ package httpapi_test
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +18,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"relist-panel/internal/composes"
 	"relist-panel/internal/database"
 	"relist-panel/internal/httpapi"
 )
@@ -740,6 +744,171 @@ func TestComposesRequireExistingProjectAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedAdminCanDeployCompose(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Deploy Co", "")
+
+	environmentsResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer environmentsResponse.Body.Close()
+	var environments []environmentResponse
+	if err := json.NewDecoder(environmentsResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+	production := environments[0]
+
+	variableResponse := postJSON(t, server, environmentVariablesPath(project.ID, production.ID), map[string]string{
+		"key": "API_KEY", "value": "secret",
+	})
+	defer variableResponse.Body.Close()
+	if variableResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("create environment variable status = %d, want %d", variableResponse.StatusCode, http.StatusCreated)
+	}
+
+	yamlContent := "services:\n  web:\n    image: nginx\n    networks:\n      - custom\nnetworks:\n  custom:\n    driver: bridge\n"
+	createResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": yamlContent,
+	})
+	defer createResponse.Body.Close()
+	var compose composeResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&compose); err != nil {
+		t.Fatalf("decode created compose: %v", err)
+	}
+	if compose.Status != (composeStatusResponse{}) {
+		t.Fatalf("status before deploy = %+v, want zero value", compose.Status)
+	}
+
+	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
+	defer deployResponse.Body.Close()
+	if deployResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(deployResponse.Body)
+		t.Fatalf("deploy status = %d, want %d, body = %s", deployResponse.StatusCode, http.StatusOK, body)
+	}
+	var deployed composeResponse
+	if err := json.NewDecoder(deployResponse.Body).Decode(&deployed); err != nil {
+		t.Fatalf("decode deployed compose: %v", err)
+	}
+	if deployed.Status.Total == 0 {
+		t.Fatalf("status after deploy = %+v, want a non-zero total", deployed.Status)
+	}
+
+	if len(server.runner.calls) != 2 {
+		t.Fatalf("runner calls = %+v, want exactly an up followed by a status call", server.runner.calls)
+	}
+	upCall := server.runner.calls[0]
+	if upCall.method != "up" {
+		t.Fatalf("first runner call = %q, want %q", upCall.method, "up")
+	}
+	wantProjectName := "deploy-co-production-web"
+	if upCall.request.ProjectName != wantProjectName {
+		t.Fatalf("deploy project name = %q, want %q", upCall.request.ProjectName, wantProjectName)
+	}
+
+	resolvedYAML, err := os.ReadFile(upCall.request.ComposeFilePath)
+	if err != nil {
+		t.Fatalf("read resolved compose file: %v", err)
+	}
+	if !strings.Contains(string(resolvedYAML), "relist-public") {
+		t.Fatalf("resolved compose yaml = %s, want it to contain the shared network", resolvedYAML)
+	}
+	if !strings.Contains(string(resolvedYAML), "custom") {
+		t.Fatalf("resolved compose yaml = %s, want the user's own network preserved", resolvedYAML)
+	}
+
+	envFile, err := os.ReadFile(upCall.request.EnvFilePath)
+	if err != nil {
+		t.Fatalf("read generated env file: %v", err)
+	}
+	if !strings.Contains(string(envFile), "API_KEY=secret") {
+		t.Fatalf("generated env file = %q, want it to contain the environment variable", envFile)
+	}
+
+	// A subsequent GET reflects the live status without redeploying.
+	getResponse := server.request(t, http.MethodGet, composePath(project.ID, production.ID, compose.ID), nil)
+	defer getResponse.Body.Close()
+	var fetched composeResponse
+	if err := json.NewDecoder(getResponse.Body).Decode(&fetched); err != nil {
+		t.Fatalf("decode fetched compose: %v", err)
+	}
+	if fetched.Status != deployed.Status {
+		t.Fatalf("fetched status = %+v, want %+v", fetched.Status, deployed.Status)
+	}
+	if len(server.runner.calls) != 3 || server.runner.calls[2].method != "status" {
+		t.Fatalf("runner calls after GET = %+v, want a third status call", server.runner.calls)
+	}
+}
+
+func TestComposeDeployValidatesInputAndPropagatesRunnerErrors(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Deploy Co", "")
+
+	environmentsResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer environmentsResponse.Body.Close()
+	var environments []environmentResponse
+	if err := json.NewDecoder(environmentsResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+	production := environments[0]
+
+	emptyResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{"name": "empty"})
+	defer emptyResponse.Body.Close()
+	var empty composeResponse
+	if err := json.NewDecoder(emptyResponse.Body).Decode(&empty); err != nil {
+		t.Fatalf("decode empty compose: %v", err)
+	}
+
+	deployEmptyResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, empty.ID), nil)
+	defer deployEmptyResponse.Body.Close()
+	if deployEmptyResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("deploy with no yaml status = %d, want %d", deployEmptyResponse.StatusCode, http.StatusBadRequest)
+	}
+
+	invalidResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "broken",
+		"yamlContent": "services: [this is not valid yaml",
+	})
+	defer invalidResponse.Body.Close()
+	var broken composeResponse
+	if err := json.NewDecoder(invalidResponse.Body).Decode(&broken); err != nil {
+		t.Fatalf("decode broken compose: %v", err)
+	}
+
+	deployInvalidResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, broken.ID), nil)
+	defer deployInvalidResponse.Body.Close()
+	if deployInvalidResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("deploy with invalid yaml status = %d, want %d", deployInvalidResponse.StatusCode, http.StatusBadRequest)
+	}
+
+	if len(server.runner.calls) != 0 {
+		t.Fatalf("runner should not have been called for invalid deploys, got %+v", server.runner.calls)
+	}
+
+	missingComposeResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, 999), nil)
+	defer missingComposeResponse.Body.Close()
+	if missingComposeResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("deploy missing compose status = %d, want %d", missingComposeResponse.StatusCode, http.StatusNotFound)
+	}
+
+	workingResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer workingResponse.Body.Close()
+	var working composeResponse
+	if err := json.NewDecoder(workingResponse.Body).Decode(&working); err != nil {
+		t.Fatalf("decode working compose: %v", err)
+	}
+
+	server.runner.upErr = errors.New("docker daemon unreachable")
+	deployFailureResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, working.ID), nil)
+	defer deployFailureResponse.Body.Close()
+	if deployFailureResponse.StatusCode != http.StatusBadGateway {
+		t.Fatalf("deploy with failing runner status = %d, want %d", deployFailureResponse.StatusCode, http.StatusBadGateway)
+	}
+}
+
 func TestEnvironmentVariablesRequireExistingProjectAndEnvironment(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
@@ -885,17 +1054,25 @@ type environmentVariableResponse struct {
 }
 
 type composeResponse struct {
-	ID            int64  `json:"id"`
-	EnvironmentID int64  `json:"environmentId"`
-	Name          string `json:"name"`
-	YAMLContent   string `json:"yamlContent"`
-	CreatedAt     string `json:"createdAt"`
-	UpdatedAt     string `json:"updatedAt"`
+	ID            int64                 `json:"id"`
+	EnvironmentID int64                 `json:"environmentId"`
+	Name          string                `json:"name"`
+	YAMLContent   string                `json:"yamlContent"`
+	CreatedAt     string                `json:"createdAt"`
+	UpdatedAt     string                `json:"updatedAt"`
+	Status        composeStatusResponse `json:"status"`
+}
+
+type composeStatusResponse struct {
+	Running int `json:"running"`
+	Total   int `json:"total"`
 }
 
 type testServer struct {
 	handler http.Handler
 	db      *sql.DB
+	dataDir string
+	runner  *fakeComposeRunner
 	cookies map[string]*http.Cookie
 }
 
@@ -906,11 +1083,61 @@ func newTestServer(t *testing.T) *testServer {
 		t.Fatalf("open test database: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
+	dataDir := t.TempDir()
+	runner := newFakeComposeRunner()
 	return &testServer{
-		handler: httpapi.NewHandler(db),
+		handler: httpapi.NewHandler(db, runner, dataDir),
 		db:      db,
+		dataDir: dataDir,
+		runner:  runner,
 		cookies: make(map[string]*http.Cookie),
 	}
+}
+
+// fakeComposeRunner is the ComposeRunner fake described by the spec's
+// Testing Decisions: it records what it was asked to do instead of touching
+// a real Docker daemon.
+type fakeComposeRunner struct {
+	calls    []fakeComposeRun
+	statuses map[string]composes.ComposeStatus
+	upErr    error
+}
+
+type fakeComposeRun struct {
+	method  string
+	request composes.RunRequest
+}
+
+func newFakeComposeRunner() *fakeComposeRunner {
+	return &fakeComposeRunner{statuses: make(map[string]composes.ComposeStatus)}
+}
+
+func (f *fakeComposeRunner) Up(_ context.Context, req composes.RunRequest) error {
+	f.calls = append(f.calls, fakeComposeRun{method: "up", request: req})
+	return f.upErr
+}
+
+func (f *fakeComposeRunner) Down(_ context.Context, req composes.RunRequest) error {
+	f.calls = append(f.calls, fakeComposeRun{method: "down", request: req})
+	return nil
+}
+
+func (f *fakeComposeRunner) Restart(_ context.Context, req composes.RunRequest) error {
+	f.calls = append(f.calls, fakeComposeRun{method: "restart", request: req})
+	return nil
+}
+
+func (f *fakeComposeRunner) Status(_ context.Context, req composes.RunRequest) (composes.ComposeStatus, error) {
+	f.calls = append(f.calls, fakeComposeRun{method: "status", request: req})
+	if status, ok := f.statuses[req.ProjectName]; ok {
+		return status, nil
+	}
+	return composes.ComposeStatus{Running: 1, Total: 1}, nil
+}
+
+func (f *fakeComposeRunner) Logs(_ context.Context, req composes.RunRequest) (string, error) {
+	f.calls = append(f.calls, fakeComposeRun{method: "logs", request: req})
+	return "", nil
 }
 
 func (s *testServer) request(t *testing.T, method, path string, value any) *http.Response {
@@ -1024,4 +1251,8 @@ func composesPath(projectID, environmentID int64) string {
 
 func composePath(projectID, environmentID, composeID int64) string {
 	return composesPath(projectID, environmentID) + "/" + strconv.FormatInt(composeID, 10)
+}
+
+func composeDeployPath(projectID, environmentID, composeID int64) string {
+	return composePath(projectID, environmentID, composeID) + "/deploy"
 }

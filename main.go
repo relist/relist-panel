@@ -7,6 +7,7 @@ import (
 
 	"relist-panel/internal/config"
 	"relist-panel/internal/database"
+	"relist-panel/internal/dockerexec"
 	"relist-panel/internal/dockernet"
 	"relist-panel/internal/httpapi"
 )
@@ -34,7 +35,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:    cfg.Address(),
-		Handler: httpapi.NewHandler(db),
+		Handler: httpapi.NewHandler(db, dockerexec.New(), cfg.DataDir),
 	}
 
 	log.Printf("relist-panel listening on %s", cfg.Address())

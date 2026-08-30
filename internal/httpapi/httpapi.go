@@ -9,14 +9,16 @@ import (
 
 	"relist-panel/internal/auth"
 	"relist-panel/internal/composes"
-	"relist-panel/internal/environmentvariables"
 	"relist-panel/internal/environments"
+	"relist-panel/internal/environmentvariables"
 	"relist-panel/internal/projects"
 	"relist-panel/internal/webassets"
 )
 
-// NewHandler builds the top-level HTTP handler for the panel.
-func NewHandler(db *sql.DB) http.Handler {
+// NewHandler builds the top-level HTTP handler for the panel. runner drives
+// Compose deploy lifecycle actions (ADR-0003); dataDir is the root directory
+// Compose files are resolved under (ADR-0002).
+func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
 	authService := auth.New(db)
@@ -27,7 +29,7 @@ func NewHandler(db *sql.DB) http.Handler {
 	environmentsService.RegisterRoutes(mux)
 	environmentVariablesService := environmentvariables.New(db)
 	environmentVariablesService.RegisterRoutes(mux)
-	composesService := composes.New(db)
+	composesService := composes.New(db, runner, dataDir)
 	composesService.RegisterRoutes(mux)
 	mux.Handle("/", webassets.Handler())
 	return authService.Middleware(mux)

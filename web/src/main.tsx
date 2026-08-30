@@ -81,6 +81,11 @@ type EnvironmentVariableInput = {
   value: string;
 };
 
+type ComposeStatus = {
+  running: number;
+  total: number;
+};
+
 type Compose = {
   id: number;
   environmentId: number;
@@ -88,6 +93,7 @@ type Compose = {
   yamlContent: string;
   createdAt: string;
   updatedAt: string;
+  status: ComposeStatus;
 };
 
 type ComposeCreateInput = {
@@ -1039,6 +1045,17 @@ const monacoEditorOptions = {
   scrollBeyondLastLine: false,
 } as const;
 
+function ComposeStatusTag({ status }: { status: ComposeStatus }) {
+  if (status.total === 0) {
+    return <Tag>Stopped</Tag>;
+  }
+  return (
+    <Tag color={status.running === status.total ? 'success' : 'warning'}>
+      {status.running}/{status.total} running
+    </Tag>
+  );
+}
+
 function ComposesPanel({ projectID, environmentID }: { projectID: number; environmentID: number }) {
   const { token } = theme.useToken();
   const [form] = Form.useForm<{ name: string }>();
@@ -1183,7 +1200,7 @@ function ComposesPanel({ projectID, environmentID }: { projectID: number; enviro
                 title: 'Status',
                 key: 'status',
                 width: 160,
-                render: () => <Tag>Not deployed</Tag>,
+                render: (_value: unknown, compose: Compose) => <ComposeStatusTag status={compose.status} />,
               },
               {
                 title: 'Last updated',
@@ -1253,6 +1270,7 @@ function ComposeDetailPanel({
   const [yamlContent, setYamlContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deploying, setDeploying] = useState(false);
   const [error, setError] = useState<string>();
   const requestID = useRef(0);
 
@@ -1313,7 +1331,39 @@ function ComposeDetailPanel({
     }
   };
 
-  if (loading) {
+  // "Save & Deploy" per the spec's Out of Scope note: v1 has no auto-deploy,
+  // so the manual deploy action also persists any pending YAML edits first.
+  const saveAndDeploy = async () => {
+    setDeploying(true);
+    setError(undefined);
+    try {
+      const saveResponse = await fetch(composePath, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ yamlContent }),
+      });
+      if (!saveResponse.ok) {
+        throw new Error(await responseError(saveResponse));
+      }
+      const deployResponse = await fetch(`${composePath}/deploy`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (!deployResponse.ok) {
+        throw new Error(await responseError(deployResponse));
+      }
+      const deployed = (await deployResponse.json()) as Compose;
+      setCompose(deployed);
+      setYamlContent(deployed.yamlContent);
+    } catch (reason: unknown) {
+      setError(errorMessage(reason));
+    } finally {
+      setDeploying(false);
+    }
+  };
+
+  if (loading && !compose) {
     return (
       <div className="flex justify-center py-12">
         <Spin size="large" />
@@ -1321,7 +1371,7 @@ function ComposeDetailPanel({
     );
   }
 
-  if (error || !compose) {
+  if (!compose) {
     return (
       <>
         <Button className="!mb-4" onClick={onBack}>
@@ -1347,7 +1397,12 @@ function ComposeDetailPanel({
           </Typography.Title>
           <Typography.Text type="secondary">Last updated {formatProjectDate(compose.updatedAt)}</Typography.Text>
         </div>
-        <Tag>Not deployed</Tag>
+        <Space>
+          <ComposeStatusTag status={compose.status} />
+          <Button loading={loading} onClick={() => void loadCompose()}>
+            Refresh
+          </Button>
+        </Space>
       </div>
       <Tabs
         items={[
@@ -1356,9 +1411,12 @@ function ComposeDetailPanel({
             label: 'General',
             children: (
               <div>
-                <div className="mb-3 flex justify-end">
-                  <Button type="primary" loading={saving} disabled={!dirty} onClick={() => void saveYAML()}>
+                <div className="mb-3 flex justify-end gap-2">
+                  <Button loading={saving} disabled={!dirty} onClick={() => void saveYAML()}>
                     Save changes
+                  </Button>
+                  <Button type="primary" loading={deploying} onClick={() => void saveAndDeploy()}>
+                    Save & Deploy
                   </Button>
                 </div>
                 <div

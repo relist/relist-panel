@@ -6,21 +6,62 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"gopkg.in/yaml.v3"
+
+	"relist-panel/internal/dockernet"
 )
 
 const (
-	maxRequestBody = 1 << 20
-	maxComposeName = 255
+	maxRequestBody  = 1 << 20
+	maxComposeName  = 255
+	composeFileName = "docker-compose.yml"
+	envFileName     = ".env"
+	composeDirPerm  = 0o750
+	composeFilePerm = 0o644
+	envFilePerm     = 0o600
 )
+
+// RunRequest is what a ComposeRunner needs to act on one Compose: its
+// deterministic project identity and the resolved files already written to
+// disk for it.
+type RunRequest struct {
+	ProjectName     string
+	ComposeFilePath string
+	EnvFilePath     string
+}
+
+// ComposeStatus summarizes a Compose's live container state.
+type ComposeStatus struct {
+	Running int `json:"running"`
+	Total   int `json:"total"`
+}
+
+// ComposeRunner is the one port in the system (ADR-0003): everything needed
+// to drive a Compose's containers via the real `docker compose` CLI. It is
+// declared here, in the consumer, and implemented for real in the leaf
+// package `dockerexec`; tests use a fake.
+type ComposeRunner interface {
+	Up(ctx context.Context, req RunRequest) error
+	Down(ctx context.Context, req RunRequest) error
+	Restart(ctx context.Context, req RunRequest) error
+	Status(ctx context.Context, req RunRequest) (ComposeStatus, error)
+	Logs(ctx context.Context, req RunRequest) (string, error)
+}
 
 type Service struct {
 	repository *repository
+	runner     ComposeRunner
+	dataDir    string
 	now        func() time.Time
 }
 
@@ -30,12 +71,13 @@ type repository struct {
 
 // Compose is the API representation of a Compose.
 type Compose struct {
-	ID            int64     `json:"id"`
-	EnvironmentID int64     `json:"environmentId"`
-	Name          string    `json:"name"`
-	YAMLContent   string    `json:"yamlContent"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	ID            int64         `json:"id"`
+	EnvironmentID int64         `json:"environmentId"`
+	Name          string        `json:"name"`
+	YAMLContent   string        `json:"yamlContent"`
+	CreatedAt     time.Time     `json:"createdAt"`
+	UpdatedAt     time.Time     `json:"updatedAt"`
+	Status        ComposeStatus `json:"status"`
 }
 
 type composeCreateInput struct {
@@ -48,9 +90,10 @@ type composeUpdateInput struct {
 }
 
 // New constructs the Compose service over the application's migrated SQLite
-// database.
-func New(db *sql.DB) *Service {
-	return &Service{repository: &repository{db: db}, now: time.Now}
+// database. runner drives deploy lifecycle actions; dataDir is the root
+// directory Compose files are resolved under (ADR-0002).
+func New(db *sql.DB, runner ComposeRunner, dataDir string) *Service {
+	return &Service{repository: &repository{db: db}, runner: runner, dataDir: dataDir, now: time.Now}
 }
 
 // RegisterRoutes adds the authenticated Compose endpoints to mux.
@@ -59,6 +102,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes", s.create)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.get)
 	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.update)
+	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/deploy", s.deploy)
 }
 
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +126,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load composes")
 		return
 	}
-	writeJSON(w, http.StatusOK, composes)
+	writeJSON(w, http.StatusOK, s.withStatuses(r.Context(), projectID, environmentID, composes))
 }
 
 func (s *Service) create(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +170,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create compose")
 		return
 	}
-	writeJSON(w, http.StatusCreated, compose)
+	writeJSON(w, http.StatusCreated, s.withStatus(r.Context(), projectID, environmentID, compose))
 }
 
 func (s *Service) get(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +202,7 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load compose")
 		return
 	}
-	writeJSON(w, http.StatusOK, compose)
+	writeJSON(w, http.StatusOK, s.withStatus(r.Context(), projectID, environmentID, compose))
 }
 
 func (s *Service) update(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +260,122 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load updated compose")
 		return
 	}
+	writeJSON(w, http.StatusOK, s.withStatus(r.Context(), projectID, environmentID, compose))
+}
+
+func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "composes are temporarily unavailable")
+		return
+	}
+
+	projectID, environmentID, err := routeIDs(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id, err := composeID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
+		return
+	}
+	if err := s.requireEnvironment(r.Context(), projectID, environmentID); err != nil {
+		writeParentError(w, err)
+		return
+	}
+
+	compose, err := s.repository.findByID(r.Context(), environmentID, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "compose not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return
+	}
+	if strings.TrimSpace(compose.YAMLContent) == "" {
+		writeError(w, http.StatusBadRequest, "compose has no YAML content to deploy")
+		return
+	}
+
+	projectName, environmentName, err := s.repository.parentNames(r.Context(), projectID, environmentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return
+	}
+	variables, err := s.repository.listEnvironmentVariables(r.Context(), environmentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load environment variables")
+		return
+	}
+
+	req := runRequestFor(s.dataDir, projectName, environmentName, compose)
+	if err := os.MkdirAll(filepath.Dir(req.ComposeFilePath), composeDirPerm); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not prepare compose files")
+		return
+	}
+	resolvedYAML, err := resolveCompose(compose.YAMLContent, dockernet.NetworkName, req.EnvFilePath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose yaml is invalid: "+err.Error())
+		return
+	}
+	if err := os.WriteFile(req.ComposeFilePath, []byte(resolvedYAML), composeFilePerm); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not write compose file")
+		return
+	}
+	if err := os.WriteFile(req.EnvFilePath, []byte(renderEnvFile(variables)), envFilePerm); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not write environment file")
+		return
+	}
+
+	if err := s.runner.Up(r.Context(), req); err != nil {
+		writeError(w, http.StatusBadGateway, "deploy failed: "+err.Error())
+		return
+	}
+
+	status, err := s.runner.Status(r.Context(), req)
+	if err != nil {
+		status = ComposeStatus{}
+	}
+	compose.Status = status
 	writeJSON(w, http.StatusOK, compose)
+}
+
+// withStatus and withStatuses attach each Compose's live container state.
+// They are best-effort: a runner error (e.g. Docker is unreachable) must not
+// fail an otherwise-successful read, so it degrades to a zero-value status.
+func (s *Service) withStatus(ctx context.Context, projectID, environmentID int64, compose Compose) Compose {
+	projectName, environmentName, err := s.repository.parentNames(ctx, projectID, environmentID)
+	if err != nil {
+		return compose
+	}
+	compose.Status = s.currentStatus(ctx, projectName, environmentName, compose)
+	return compose
+}
+
+func (s *Service) withStatuses(ctx context.Context, projectID, environmentID int64, composes []Compose) []Compose {
+	projectName, environmentName, err := s.repository.parentNames(ctx, projectID, environmentID)
+	if err != nil {
+		return composes
+	}
+	for i := range composes {
+		composes[i].Status = s.currentStatus(ctx, projectName, environmentName, composes[i])
+	}
+	return composes
+}
+
+// currentStatus only queries the runner once a Compose has actually been
+// deployed (its resolved compose file exists on disk); an undeployed Compose
+// always reads as a zero-value status without shelling out.
+func (s *Service) currentStatus(ctx context.Context, projectName, environmentName string, compose Compose) ComposeStatus {
+	req := runRequestFor(s.dataDir, projectName, environmentName, compose)
+	if _, err := os.Stat(req.ComposeFilePath); err != nil {
+		return ComposeStatus{}
+	}
+	status, err := s.runner.Status(ctx, req)
+	if err != nil {
+		return ComposeStatus{}
+	}
+	return status
 }
 
 func (s *Service) requireEnvironment(ctx context.Context, projectID, environmentID int64) error {
@@ -239,7 +398,7 @@ func (s *Service) requireEnvironment(ctx context.Context, projectID, environment
 }
 
 func (s *Service) available() bool {
-	return s != nil && s.repository != nil && s.repository.db != nil
+	return s != nil && s.repository != nil && s.repository.db != nil && s.runner != nil
 }
 
 var (
@@ -278,6 +437,46 @@ func (r *repository) environmentExists(ctx context.Context, projectID, environme
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// parentNames resolves the Project and Environment names a Compose's deploy
+// identity is derived from (ADR-0002).
+func (r *repository) parentNames(ctx context.Context, projectID, environmentID int64) (projectName, environmentName string, err error) {
+	err = r.db.QueryRowContext(ctx, `
+		SELECT p.name, e.name
+		FROM environments e
+		JOIN projects p ON p.id = e.project_id
+		WHERE e.id = ? AND e.project_id = ?
+	`, environmentID, projectID).Scan(&projectName, &environmentName)
+	return projectName, environmentName, err
+}
+
+type environmentVariable struct {
+	Key   string
+	Value string
+}
+
+func (r *repository) listEnvironmentVariables(ctx context.Context, environmentID int64) ([]environmentVariable, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT key, value
+		FROM environment_variables
+		WHERE environment_id = ?
+		ORDER BY id ASC
+	`, environmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	variables := make([]environmentVariable, 0)
+	for rows.Next() {
+		var variable environmentVariable
+		if err := rows.Scan(&variable.Key, &variable.Value); err != nil {
+			return nil, err
+		}
+		variables = append(variables, variable)
+	}
+	return variables, rows.Err()
 }
 
 func (r *repository) list(ctx context.Context, environmentID int64) ([]Compose, error) {
@@ -399,6 +598,131 @@ func validateComposeName(value string) (string, error) {
 		return "", errors.New("compose name must be 255 characters or fewer")
 	}
 	return trimmed, nil
+}
+
+// runRequestFor computes a Compose's deterministic deploy identity: its
+// `docker compose -p` project name and the paths its resolved files live at
+// under dataDir (ADR-0002). It is pure and deterministic so status checks can
+// recompute it without redoing any deploy work.
+func runRequestFor(dataDir, projectName, environmentName string, compose Compose) RunRequest {
+	projectSlug := slugify(projectName)
+	environmentSlug := slugify(environmentName)
+	composeSlug := slugify(compose.Name)
+	dir := filepath.Join(dataDir, projectSlug, environmentSlug, composeSlug)
+	return RunRequest{
+		ProjectName:     projectSlug + "-" + environmentSlug + "-" + composeSlug,
+		ComposeFilePath: filepath.Join(dir, composeFileName),
+		EnvFilePath:     filepath.Join(dir, envFileName),
+	}
+}
+
+// slugify turns a name into a lowercase `[a-z0-9-]` token safe for both a
+// filesystem path segment and a `docker compose -p` project name.
+func slugify(value string) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(value) {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastDash = false
+		case !lastDash && b.Len() > 0:
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	slug := strings.TrimRight(b.String(), "-")
+	if slug == "" {
+		return "x"
+	}
+	return slug
+}
+
+// resolveCompose parses yamlContent and returns it with the shared Traefik
+// network and the generated environment file injected into every service
+// (ADR-0002) — the one place the panel modifies user-authored YAML.
+func resolveCompose(yamlContent, networkName, envFilePath string) (string, error) {
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(yamlContent), &doc); err != nil {
+		return "", fmt.Errorf("parse compose yaml: %w", err)
+	}
+	if doc == nil {
+		doc = map[string]any{}
+	}
+
+	if services, ok := doc["services"].(map[string]any); ok {
+		for name, raw := range services {
+			service, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			service["networks"] = addToNetworks(service["networks"], networkName)
+			service["env_file"] = addToEnvFile(service["env_file"], envFilePath)
+			services[name] = service
+		}
+	}
+
+	networks, ok := doc["networks"].(map[string]any)
+	if !ok {
+		networks = map[string]any{}
+	}
+	networks[networkName] = map[string]any{"external": true}
+	doc["networks"] = networks
+
+	resolved, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("marshal resolved compose yaml: %w", err)
+	}
+	return string(resolved), nil
+}
+
+func addToNetworks(existing any, networkName string) any {
+	switch value := existing.(type) {
+	case []any:
+		for _, item := range value {
+			if name, ok := item.(string); ok && name == networkName {
+				return value
+			}
+		}
+		return append(value, networkName)
+	case map[string]any:
+		if _, ok := value[networkName]; !ok {
+			value[networkName] = nil
+		}
+		return value
+	default:
+		return []any{networkName}
+	}
+}
+
+func addToEnvFile(existing any, envFilePath string) any {
+	switch value := existing.(type) {
+	case []any:
+		for _, item := range value {
+			if path, ok := item.(string); ok && path == envFilePath {
+				return value
+			}
+		}
+		return append(value, envFilePath)
+	case string:
+		if value == envFilePath {
+			return value
+		}
+		return []any{value, envFilePath}
+	default:
+		return []any{envFilePath}
+	}
+}
+
+func renderEnvFile(variables []environmentVariable) string {
+	var b strings.Builder
+	for _, variable := range variables {
+		b.WriteString(variable.Key)
+		b.WriteByte('=')
+		b.WriteString(variable.Value)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func isUniqueConstraint(err error) bool {
