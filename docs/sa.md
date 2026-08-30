@@ -135,8 +135,8 @@ erDiagram
         string value
     }
     COMPOSE {
-        string id PK
-        string environment_id FK
+        int id PK
+        int environment_id FK
         string name
         text yaml_content
         datetime created_at
@@ -247,8 +247,8 @@ Unique constraint: (`environment_id`, `key`)
 
 | Field | Type | Constraint | Description |
 |---|---|---|---|
-| id | TEXT | PK | Unique identifier |
-| environment_id | TEXT | FK → `environments.id`, NOT NULL | Owning environment |
+| id | INTEGER | PK | Unique identifier |
+| environment_id | INTEGER | FK → `environments.id`, NOT NULL | Owning environment |
 | name | TEXT | NOT NULL | Compose name/slug |
 | yaml_content | TEXT | NOT NULL | Raw `docker-compose.yml` content as saved |
 | created_at | DATETIME | NOT NULL | Creation timestamp |

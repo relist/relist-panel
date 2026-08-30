@@ -1,4 +1,5 @@
 import { StyleProvider } from '@ant-design/cssinjs';
+import Editor from '@monaco-editor/react';
 import {
   Alert,
   Button,
@@ -17,6 +18,7 @@ import {
   Spin,
   Table,
   Tabs,
+  Tag,
   Typography,
   theme,
 } from 'antd';
@@ -24,6 +26,9 @@ import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import './index.css';
+import './monaco';
+
+const codeFontFamily = "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace";
 
 type AuthMode = 'setup' | 'login';
 type Screen = AuthMode | 'authenticated' | 'loading' | 'error';
@@ -74,6 +79,20 @@ type EnvironmentVariable = {
 type EnvironmentVariableInput = {
   key: string;
   value: string;
+};
+
+type Compose = {
+  id: number;
+  environmentId: number;
+  name: string;
+  yamlContent: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ComposeCreateInput = {
+  name: string;
+  yamlContent: string;
 };
 
 type ErrorResponse = {
@@ -754,6 +773,11 @@ function ProjectDetailScreen({ projectID, onBack }: { projectID: number; onBack:
                         <EnvironmentVariablesPanel projectID={projectID} environmentID={environment.id} />
                       ),
                     },
+                    {
+                      key: 'composes',
+                      label: 'Composes',
+                      children: <ComposesPanel projectID={projectID} environmentID={environment.id} />,
+                    },
                   ]}
                 />
               ),
@@ -1004,6 +1028,357 @@ function EnvironmentVariablesPanel({
           </Form.Item>
         </Form>
       </Modal>
+    </>
+  );
+}
+
+const monacoEditorOptions = {
+  minimap: { enabled: false },
+  fontSize: 13,
+  fontFamily: codeFontFamily,
+  scrollBeyondLastLine: false,
+} as const;
+
+function ComposesPanel({ projectID, environmentID }: { projectID: number; environmentID: number }) {
+  const { token } = theme.useToken();
+  const [form] = Form.useForm<{ name: string }>();
+  const [composes, setComposes] = useState<Compose[]>([]);
+  const [createYAML, setCreateYAML] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedComposeID, setSelectedComposeID] = useState<number>();
+  const [error, setError] = useState<string>();
+  const requestID = useRef(0);
+
+  const composesPath = `/api/projects/${projectID}/environments/${environmentID}/composes`;
+
+  const loadComposes = async () => {
+    const currentRequestID = ++requestID.current;
+    setLoading(true);
+    setError(undefined);
+    try {
+      const response = await fetch(composesPath, { credentials: 'same-origin' });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      const nextComposes = (await response.json()) as Compose[];
+      if (currentRequestID === requestID.current) {
+        setComposes(nextComposes);
+      }
+    } catch (reason: unknown) {
+      if (currentRequestID === requestID.current) {
+        setError(errorMessage(reason));
+      }
+    } finally {
+      if (currentRequestID === requestID.current) {
+        setLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    void loadComposes();
+    return () => {
+      requestID.current += 1;
+    };
+  }, [composesPath]);
+
+  const openCreateModal = () => {
+    form.resetFields();
+    setCreateYAML('');
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    if (!saving) {
+      setModalOpen(false);
+      form.resetFields();
+      setCreateYAML('');
+    }
+  };
+
+  const createCompose = async (values: { name: string }) => {
+    const input: ComposeCreateInput = { name: values.name, yamlContent: createYAML };
+    setSaving(true);
+    setError(undefined);
+    try {
+      const response = await fetch(composesPath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(input),
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      const created = (await response.json()) as Compose;
+      setModalOpen(false);
+      form.resetFields();
+      setCreateYAML('');
+      await loadComposes();
+      setSelectedComposeID(created.id);
+    } catch (reason: unknown) {
+      setError(errorMessage(reason));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (selectedComposeID !== undefined) {
+    return (
+      <ComposeDetailPanel
+        projectID={projectID}
+        environmentID={environmentID}
+        composeID={selectedComposeID}
+        onBack={() => {
+          setSelectedComposeID(undefined);
+          void loadComposes();
+        }}
+      />
+    );
+  }
+
+  return (
+    <>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <Typography.Title className="!mb-1" level={4}>
+            Composes
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            Docker Compose stacks deployed within this Environment.
+          </Typography.Text>
+        </div>
+        <Button type="primary" onClick={openCreateModal}>
+          New Compose
+        </Button>
+      </div>
+
+      {error && <Alert className="mb-4" type="error" showIcon message={error} />}
+
+      <Spin spinning={loading}>
+        {composes.length === 0 && !loading ? (
+          <Empty description="No Composes yet">
+            <Button type="primary" onClick={openCreateModal}>
+              Create your first Compose
+            </Button>
+          </Empty>
+        ) : (
+          <Table<Compose>
+            rowKey="id"
+            dataSource={composes}
+            pagination={false}
+            onRow={(compose) => ({
+              onClick: () => setSelectedComposeID(compose.id),
+              className: 'cursor-pointer',
+            })}
+            columns={[
+              {
+                title: 'Name',
+                dataIndex: 'name',
+                key: 'name',
+              },
+              {
+                title: 'Status',
+                key: 'status',
+                width: 160,
+                render: () => <Tag>Not deployed</Tag>,
+              },
+              {
+                title: 'Last updated',
+                key: 'updatedAt',
+                width: 200,
+                render: (_value: unknown, compose: Compose) => formatProjectDate(compose.updatedAt),
+              },
+            ]}
+          />
+        )}
+      </Spin>
+
+      <Modal
+        title="New Compose"
+        open={modalOpen}
+        okText="Create Compose"
+        confirmLoading={saving}
+        onCancel={closeModal}
+        onOk={() => form.submit()}
+        width={720}
+        destroyOnClose
+      >
+        <Form form={form} layout="vertical" requiredMark={false} onFinish={(values) => void createCompose(values)}>
+          <Form.Item
+            label="Name"
+            name="name"
+            rules={[
+              { required: true, message: 'Enter a Compose name' },
+              { max: 255, message: 'Use 255 characters or fewer' },
+            ]}
+          >
+            <Input autoFocus placeholder="e.g. web" />
+          </Form.Item>
+        </Form>
+        <Typography.Text type="secondary">docker-compose.yml</Typography.Text>
+        <div
+          className="mt-2 overflow-hidden"
+          style={{ border: `1px solid ${token.colorBorderSecondary}`, borderRadius: token.borderRadius }}
+        >
+          <Editor
+            height="320px"
+            language="yaml"
+            theme="vs"
+            value={createYAML}
+            onChange={(value) => setCreateYAML(value ?? '')}
+            options={monacoEditorOptions}
+          />
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+function ComposeDetailPanel({
+  projectID,
+  environmentID,
+  composeID,
+  onBack,
+}: {
+  projectID: number;
+  environmentID: number;
+  composeID: number;
+  onBack: () => void;
+}) {
+  const { token } = theme.useToken();
+  const [compose, setCompose] = useState<Compose>();
+  const [yamlContent, setYamlContent] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  const requestID = useRef(0);
+
+  const composePath = `/api/projects/${projectID}/environments/${environmentID}/composes/${composeID}`;
+
+  const loadCompose = async () => {
+    const currentRequestID = ++requestID.current;
+    setLoading(true);
+    setError(undefined);
+    try {
+      const response = await fetch(composePath, { credentials: 'same-origin' });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      const loaded = (await response.json()) as Compose;
+      if (currentRequestID === requestID.current) {
+        setCompose(loaded);
+        setYamlContent(loaded.yamlContent);
+      }
+    } catch (reason: unknown) {
+      if (currentRequestID === requestID.current) {
+        setError(errorMessage(reason));
+      }
+    } finally {
+      if (currentRequestID === requestID.current) {
+        setLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    void loadCompose();
+    return () => {
+      requestID.current += 1;
+    };
+  }, [composePath]);
+
+  const saveYAML = async () => {
+    setSaving(true);
+    setError(undefined);
+    try {
+      const response = await fetch(composePath, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ yamlContent }),
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      const updated = (await response.json()) as Compose;
+      setCompose(updated);
+      setYamlContent(updated.yamlContent);
+    } catch (reason: unknown) {
+      setError(errorMessage(reason));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-12">
+        <Spin size="large" />
+      </div>
+    );
+  }
+
+  if (error || !compose) {
+    return (
+      <>
+        <Button className="!mb-4" onClick={onBack}>
+          Back to Composes
+        </Button>
+        <Alert type="error" showIcon message={error ?? 'Compose not found'} />
+      </>
+    );
+  }
+
+  const dirty = yamlContent !== compose.yamlContent;
+
+  return (
+    <>
+      <Button className="!mb-4" onClick={onBack}>
+        Back to Composes
+      </Button>
+      {error && <Alert className="mb-4" type="error" showIcon message={error} />}
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <Typography.Title className="!mb-1" level={4}>
+            {compose.name}
+          </Typography.Title>
+          <Typography.Text type="secondary">Last updated {formatProjectDate(compose.updatedAt)}</Typography.Text>
+        </div>
+        <Tag>Not deployed</Tag>
+      </div>
+      <Tabs
+        items={[
+          {
+            key: 'general',
+            label: 'General',
+            children: (
+              <div>
+                <div className="mb-3 flex justify-end">
+                  <Button type="primary" loading={saving} disabled={!dirty} onClick={() => void saveYAML()}>
+                    Save changes
+                  </Button>
+                </div>
+                <div
+                  className="overflow-hidden"
+                  style={{ border: `1px solid ${token.colorBorderSecondary}`, borderRadius: token.borderRadius }}
+                >
+                  <Editor
+                    height="480px"
+                    language="yaml"
+                    theme="vs"
+                    value={yamlContent}
+                    onChange={(value) => setYamlContent(value ?? '')}
+                    options={monacoEditorOptions}
+                  />
+                </div>
+              </div>
+            ),
+          },
+        ]}
+      />
     </>
   );
 }

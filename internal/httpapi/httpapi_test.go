@@ -558,6 +558,182 @@ func TestAuthenticatedAdminCanManageEnvironmentVariables(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedAdminCanManageComposes(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Storefront", "Customer-facing application")
+
+	environmentsResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer environmentsResponse.Body.Close()
+	var environments []environmentResponse
+	if err := json.NewDecoder(environmentsResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+	production := environments[0]
+
+	stagingResponse := postJSON(t, server, projectEnvironmentsPath(project.ID), map[string]string{"name": "staging"})
+	defer stagingResponse.Body.Close()
+	var staging environmentResponse
+	if err := json.NewDecoder(stagingResponse.Body).Decode(&staging); err != nil {
+		t.Fatalf("decode staging environment: %v", err)
+	}
+
+	emptyListResponse := server.request(t, http.MethodGet, composesPath(project.ID, production.ID), nil)
+	defer emptyListResponse.Body.Close()
+	if emptyListResponse.StatusCode != http.StatusOK {
+		t.Fatalf("list composes status = %d, want %d", emptyListResponse.StatusCode, http.StatusOK)
+	}
+	var emptyComposes []composeResponse
+	if err := json.NewDecoder(emptyListResponse.Body).Decode(&emptyComposes); err != nil {
+		t.Fatalf("decode empty composes: %v", err)
+	}
+	if len(emptyComposes) != 0 {
+		t.Fatalf("composes before creation = %+v, want empty list", emptyComposes)
+	}
+
+	createResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer createResponse.Body.Close()
+	if createResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("create compose status = %d, want %d", createResponse.StatusCode, http.StatusCreated)
+	}
+	var compose composeResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&compose); err != nil {
+		t.Fatalf("decode created compose: %v", err)
+	}
+	if compose.ID <= 0 || compose.EnvironmentID != production.ID || compose.Name != "web" ||
+		compose.YAMLContent != "services:\n  web:\n    image: nginx\n" || compose.CreatedAt == "" || compose.UpdatedAt == "" {
+		t.Fatalf("created compose = %+v", compose)
+	}
+
+	sameNameInOtherEnvironment := postJSON(t, server, composesPath(project.ID, staging.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx:staging\n",
+	})
+	defer sameNameInOtherEnvironment.Body.Close()
+	if sameNameInOtherEnvironment.StatusCode != http.StatusCreated {
+		t.Fatalf("same compose name in another environment status = %d, want %d", sameNameInOtherEnvironment.StatusCode, http.StatusCreated)
+	}
+
+	listResponse := server.request(t, http.MethodGet, composesPath(project.ID, production.ID), nil)
+	defer listResponse.Body.Close()
+	if listResponse.StatusCode != http.StatusOK {
+		t.Fatalf("list composes status = %d, want %d", listResponse.StatusCode, http.StatusOK)
+	}
+	var composesList []composeResponse
+	if err := json.NewDecoder(listResponse.Body).Decode(&composesList); err != nil {
+		t.Fatalf("decode composes list: %v", err)
+	}
+	if len(composesList) != 1 || composesList[0] != compose {
+		t.Fatalf("composes list = %+v, want %+v", composesList, []composeResponse{compose})
+	}
+
+	getResponse := server.request(t, http.MethodGet, composePath(project.ID, production.ID, compose.ID), nil)
+	defer getResponse.Body.Close()
+	if getResponse.StatusCode != http.StatusOK {
+		t.Fatalf("get compose status = %d, want %d", getResponse.StatusCode, http.StatusOK)
+	}
+	var fetched composeResponse
+	if err := json.NewDecoder(getResponse.Body).Decode(&fetched); err != nil {
+		t.Fatalf("decode fetched compose: %v", err)
+	}
+	if fetched != compose {
+		t.Fatalf("fetched compose = %+v, want %+v", fetched, compose)
+	}
+
+	duplicateResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        " WEB ",
+		"yamlContent": "services: {}\n",
+	})
+	defer duplicateResponse.Body.Close()
+	if duplicateResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate compose name status = %d, want %d", duplicateResponse.StatusCode, http.StatusConflict)
+	}
+
+	missingNameResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "  ",
+		"yamlContent": "services: {}\n",
+	})
+	defer missingNameResponse.Body.Close()
+	if missingNameResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing compose name status = %d, want %d", missingNameResponse.StatusCode, http.StatusBadRequest)
+	}
+
+	updateResponse := server.request(t, http.MethodPut, composePath(project.ID, production.ID, compose.ID), map[string]string{
+		"yamlContent": "services:\n  web:\n    image: nginx:1.27\n",
+	})
+	defer updateResponse.Body.Close()
+	if updateResponse.StatusCode != http.StatusOK {
+		t.Fatalf("update compose status = %d, want %d", updateResponse.StatusCode, http.StatusOK)
+	}
+	var updated composeResponse
+	if err := json.NewDecoder(updateResponse.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode updated compose: %v", err)
+	}
+	if updated.ID != compose.ID || updated.Name != compose.Name || updated.YAMLContent != "services:\n  web:\n    image: nginx:1.27\n" {
+		t.Fatalf("updated compose = %+v", updated)
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, updated.CreatedAt)
+	if err != nil {
+		t.Fatalf("parse compose creation time: %v", err)
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, updated.UpdatedAt)
+	if err != nil {
+		t.Fatalf("parse compose update time: %v", err)
+	}
+	if !updatedAt.After(createdAt) {
+		t.Fatalf("compose updated at = %s, want after created at %s", updatedAt, createdAt)
+	}
+
+	missingUpdateResponse := server.request(t, http.MethodPut, composePath(project.ID, production.ID, 999), map[string]string{
+		"yamlContent": "services: {}\n",
+	})
+	defer missingUpdateResponse.Body.Close()
+	if missingUpdateResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("update missing compose status = %d, want %d", missingUpdateResponse.StatusCode, http.StatusNotFound)
+	}
+}
+
+func TestComposesRequireExistingProjectAndEnvironment(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+
+	missingProjectResponse := server.request(t, http.MethodGet, composesPath(999, 1), nil)
+	defer missingProjectResponse.Body.Close()
+	if missingProjectResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing project composes status = %d, want %d", missingProjectResponse.StatusCode, http.StatusNotFound)
+	}
+
+	project := createProject(t, server, "Storefront", "Customer-facing application")
+	environmentsResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer environmentsResponse.Body.Close()
+	var environments []environmentResponse
+	if err := json.NewDecoder(environmentsResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+
+	missingEnvironmentResponse := server.request(t, http.MethodGet, composesPath(project.ID, 999), nil)
+	defer missingEnvironmentResponse.Body.Close()
+	if missingEnvironmentResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing environment composes status = %d, want %d", missingEnvironmentResponse.StatusCode, http.StatusNotFound)
+	}
+
+	otherProject := createProject(t, server, "Operations", "Internal tooling")
+	wrongProjectResponse := server.request(t, http.MethodGet, composesPath(otherProject.ID, environments[0].ID), nil)
+	defer wrongProjectResponse.Body.Close()
+	if wrongProjectResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("environment under another project status = %d, want %d", wrongProjectResponse.StatusCode, http.StatusNotFound)
+	}
+
+	missingComposeResponse := server.request(t, http.MethodGet, composePath(project.ID, environments[0].ID, 999), nil)
+	defer missingComposeResponse.Body.Close()
+	if missingComposeResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("missing compose status = %d, want %d", missingComposeResponse.StatusCode, http.StatusNotFound)
+	}
+}
+
 func TestEnvironmentVariablesRequireExistingProjectAndEnvironment(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
@@ -702,6 +878,15 @@ type environmentVariableResponse struct {
 	Value         string `json:"value"`
 }
 
+type composeResponse struct {
+	ID            int64  `json:"id"`
+	EnvironmentID int64  `json:"environmentId"`
+	Name          string `json:"name"`
+	YAMLContent   string `json:"yamlContent"`
+	CreatedAt     string `json:"createdAt"`
+	UpdatedAt     string `json:"updatedAt"`
+}
+
 type testServer struct {
 	handler http.Handler
 	db      *sql.DB
@@ -825,4 +1010,12 @@ func environmentVariablesPath(projectID, environmentID int64) string {
 
 func variablePath(projectID, environmentID, variableID int64) string {
 	return environmentVariablesPath(projectID, environmentID) + "/" + strconv.FormatInt(variableID, 10)
+}
+
+func composesPath(projectID, environmentID int64) string {
+	return environmentPath(projectID, environmentID) + "/composes"
+}
+
+func composePath(projectID, environmentID, composeID int64) string {
+	return composesPath(projectID, environmentID) + "/" + strconv.FormatInt(composeID, 10)
 }
