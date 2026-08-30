@@ -1272,6 +1272,7 @@ function ComposeDetailPanel({
   const [saving, setSaving] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [restarting, setRestarting] = useState(false);
   const [error, setError] = useState<string>();
   const requestID = useRef(0);
 
@@ -1384,6 +1385,26 @@ function ComposeDetailPanel({
     }
   };
 
+  const restart = async () => {
+    setRestarting(true);
+    setError(undefined);
+    try {
+      const response = await fetch(`${composePath}/restart`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      const restarted = (await response.json()) as Compose;
+      setCompose(restarted);
+    } catch (reason: unknown) {
+      setError(errorMessage(reason));
+    } finally {
+      setRestarting(false);
+    }
+  };
+
   if (loading && !compose) {
     return (
       <div className="flex justify-center py-12">
@@ -1438,6 +1459,9 @@ function ComposeDetailPanel({
                   </Button>
                   <Button type="primary" loading={deploying} onClick={() => void saveAndDeploy()}>
                     Save & Deploy
+                  </Button>
+                  <Button loading={restarting} disabled={compose.status.total === 0} onClick={() => void restart()}>
+                    Restart
                   </Button>
                   <Button danger loading={stopping} disabled={compose.status.total === 0} onClick={() => void stop()}>
                     Stop

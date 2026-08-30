@@ -1040,6 +1040,119 @@ func TestComposeStopValidatesInputAndPropagatesRunnerErrors(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedAdminCanRestartCompose(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Restart Co", "")
+
+	environmentsResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer environmentsResponse.Body.Close()
+	var environments []environmentResponse
+	if err := json.NewDecoder(environmentsResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+	production := environments[0]
+
+	createResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer createResponse.Body.Close()
+	var compose composeResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&compose); err != nil {
+		t.Fatalf("decode created compose: %v", err)
+	}
+
+	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
+	defer deployResponse.Body.Close()
+	if deployResponse.StatusCode != http.StatusOK {
+		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
+	}
+
+	restartResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, compose.ID), nil)
+	defer restartResponse.Body.Close()
+	if restartResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(restartResponse.Body)
+		t.Fatalf("restart status = %d, want %d, body = %s", restartResponse.StatusCode, http.StatusOK, body)
+	}
+	var restarted composeResponse
+	if err := json.NewDecoder(restartResponse.Body).Decode(&restarted); err != nil {
+		t.Fatalf("decode restarted compose: %v", err)
+	}
+	if restarted.Status.Total == 0 {
+		t.Fatalf("status after restart = %+v, want a non-zero total (containers still up)", restarted.Status)
+	}
+
+	lastCall := server.runner.calls[len(server.runner.calls)-1]
+	if lastCall.method != "status" || server.runner.calls[len(server.runner.calls)-2].method != "restart" {
+		t.Fatalf("runner calls = %+v, want a restart followed by a status call", server.runner.calls)
+	}
+	if server.runner.calls[len(server.runner.calls)-2].request.ProjectName != "restart-co-production-web" {
+		t.Fatalf("restart project name = %q, want %q", server.runner.calls[len(server.runner.calls)-2].request.ProjectName, "restart-co-production-web")
+	}
+}
+
+func TestComposeRestartValidatesInputAndPropagatesRunnerErrors(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Restart Co", "")
+
+	environmentsResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer environmentsResponse.Body.Close()
+	var environments []environmentResponse
+	if err := json.NewDecoder(environmentsResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+	production := environments[0]
+
+	undeployedResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "undeployed",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer undeployedResponse.Body.Close()
+	var undeployed composeResponse
+	if err := json.NewDecoder(undeployedResponse.Body).Decode(&undeployed); err != nil {
+		t.Fatalf("decode undeployed compose: %v", err)
+	}
+
+	restartUndeployedResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, undeployed.ID), nil)
+	defer restartUndeployedResponse.Body.Close()
+	if restartUndeployedResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("restart undeployed compose status = %d, want %d", restartUndeployedResponse.StatusCode, http.StatusBadRequest)
+	}
+	if len(server.runner.calls) != 0 {
+		t.Fatalf("runner should not have been called for an undeployed compose, got %+v", server.runner.calls)
+	}
+
+	missingComposeResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, 999), nil)
+	defer missingComposeResponse.Body.Close()
+	if missingComposeResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("restart missing compose status = %d, want %d", missingComposeResponse.StatusCode, http.StatusNotFound)
+	}
+
+	workingResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer workingResponse.Body.Close()
+	var working composeResponse
+	if err := json.NewDecoder(workingResponse.Body).Decode(&working); err != nil {
+		t.Fatalf("decode working compose: %v", err)
+	}
+	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, working.ID), nil)
+	deployResponse.Body.Close()
+	if deployResponse.StatusCode != http.StatusOK {
+		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
+	}
+
+	server.runner.restartErr = errors.New("docker daemon unreachable")
+	restartFailureResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, working.ID), nil)
+	defer restartFailureResponse.Body.Close()
+	if restartFailureResponse.StatusCode != http.StatusBadGateway {
+		t.Fatalf("restart with failing runner status = %d, want %d", restartFailureResponse.StatusCode, http.StatusBadGateway)
+	}
+}
+
 func TestEnvironmentVariablesRequireExistingProjectAndEnvironment(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
@@ -1229,10 +1342,11 @@ func newTestServer(t *testing.T) *testServer {
 // Testing Decisions: it records what it was asked to do instead of touching
 // a real Docker daemon.
 type fakeComposeRunner struct {
-	calls    []fakeComposeRun
-	statuses map[string]composes.ComposeStatus
-	upErr    error
-	downErr  error
+	calls      []fakeComposeRun
+	statuses   map[string]composes.ComposeStatus
+	upErr      error
+	downErr    error
+	restartErr error
 }
 
 type fakeComposeRun struct {
@@ -1260,7 +1374,7 @@ func (f *fakeComposeRunner) Down(_ context.Context, req composes.RunRequest) err
 
 func (f *fakeComposeRunner) Restart(_ context.Context, req composes.RunRequest) error {
 	f.calls = append(f.calls, fakeComposeRun{method: "restart", request: req})
-	return nil
+	return f.restartErr
 }
 
 func (f *fakeComposeRunner) Status(_ context.Context, req composes.RunRequest) (composes.ComposeStatus, error) {
@@ -1395,4 +1509,8 @@ func composeDeployPath(projectID, environmentID, composeID int64) string {
 
 func composeStopPath(projectID, environmentID, composeID int64) string {
 	return composePath(projectID, environmentID, composeID) + "/stop"
+}
+
+func composeRestartPath(projectID, environmentID, composeID int64) string {
+	return composePath(projectID, environmentID, composeID) + "/restart"
 }

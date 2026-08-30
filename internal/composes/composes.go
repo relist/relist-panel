@@ -104,6 +104,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.update)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/deploy", s.deploy)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/stop", s.stop)
+	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/restart", s.restart)
 }
 
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
@@ -377,6 +378,54 @@ func (s *Service) stop(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.runner.Down(r.Context(), req); err != nil {
 		writeError(w, http.StatusBadGateway, "stop failed: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, s.withRefreshedStatus(r.Context(), req, compose))
+}
+
+func (s *Service) restart(w http.ResponseWriter, r *http.Request) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "composes are temporarily unavailable")
+		return
+	}
+
+	projectID, environmentID, err := routeIDs(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id, err := composeID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
+		return
+	}
+	if err := s.requireEnvironment(r.Context(), projectID, environmentID); err != nil {
+		writeParentError(w, err)
+		return
+	}
+
+	compose, err := s.repository.findByID(r.Context(), environmentID, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "compose not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return
+	}
+
+	req, err := s.runRequestForCompose(r.Context(), projectID, environmentID, compose)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return
+	}
+	if _, err := os.Stat(req.ComposeFilePath); err != nil {
+		writeError(w, http.StatusBadRequest, "compose has not been deployed")
+		return
+	}
+
+	if err := s.runner.Restart(r.Context(), req); err != nil {
+		writeError(w, http.StatusBadGateway, "restart failed: "+err.Error())
 		return
 	}
 
