@@ -332,12 +332,7 @@ func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, err := s.runner.Status(r.Context(), req)
-	if err != nil {
-		status = ComposeStatus{}
-	}
-	compose.Status = status
-	writeJSON(w, http.StatusOK, compose)
+	writeJSON(w, http.StatusOK, s.withRefreshedStatus(r.Context(), req, compose))
 }
 
 func (s *Service) stop(w http.ResponseWriter, r *http.Request) {
@@ -385,12 +380,7 @@ func (s *Service) stop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, err := s.runner.Status(r.Context(), req)
-	if err != nil {
-		status = ComposeStatus{}
-	}
-	compose.Status = status
-	writeJSON(w, http.StatusOK, compose)
+	writeJSON(w, http.StatusOK, s.withRefreshedStatus(r.Context(), req, compose))
 }
 
 // runRequestForCompose resolves a Compose's deploy identity (ADR-0002) by
@@ -401,6 +391,18 @@ func (s *Service) runRequestForCompose(ctx context.Context, projectID, environme
 		return RunRequest{}, err
 	}
 	return runRequestFor(s.dataDir, projectName, environmentName, compose), nil
+}
+
+// withRefreshedStatus re-reads a Compose's live status immediately after a
+// runner action (deploy/stop) so the response reflects the outcome without a
+// separate round-trip; best-effort like withStatus/withStatuses.
+func (s *Service) withRefreshedStatus(ctx context.Context, req RunRequest, compose Compose) Compose {
+	status, err := s.runner.Status(ctx, req)
+	if err != nil {
+		status = ComposeStatus{}
+	}
+	compose.Status = status
+	return compose
 }
 
 // withStatus and withStatuses attach each Compose's live container state.
