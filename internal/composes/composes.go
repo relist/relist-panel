@@ -679,12 +679,7 @@ func resolveCompose(yamlContent, networkName, envFilePath string) (string, error
 func addToNetworks(existing any, networkName string) any {
 	switch value := existing.(type) {
 	case []any:
-		for _, item := range value {
-			if name, ok := item.(string); ok && name == networkName {
-				return value
-			}
-		}
-		return append(value, networkName)
+		return appendUnique(value, networkName)
 	case map[string]any:
 		if _, ok := value[networkName]; !ok {
 			value[networkName] = nil
@@ -698,12 +693,7 @@ func addToNetworks(existing any, networkName string) any {
 func addToEnvFile(existing any, envFilePath string) any {
 	switch value := existing.(type) {
 	case []any:
-		for _, item := range value {
-			if path, ok := item.(string); ok && path == envFilePath {
-				return value
-			}
-		}
-		return append(value, envFilePath)
+		return appendUnique(value, envFilePath)
 	case string:
 		if value == envFilePath {
 			return value
@@ -712,6 +702,17 @@ func addToEnvFile(existing any, envFilePath string) any {
 	default:
 		return []any{envFilePath}
 	}
+}
+
+// appendUnique appends value to a YAML flow sequence unless it is already
+// present as a string entry.
+func appendUnique(sequence []any, value string) []any {
+	for _, item := range sequence {
+		if entry, ok := item.(string); ok && entry == value {
+			return sequence
+		}
+	}
+	return append(sequence, value)
 }
 
 func renderEnvFile(variables []environmentVariable) string {
