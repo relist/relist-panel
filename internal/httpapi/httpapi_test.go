@@ -1153,6 +1153,177 @@ func TestComposeRestartValidatesInputAndPropagatesRunnerErrors(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedAdminCanDeleteDeployedCompose(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Delete Co", "")
+
+	environmentsResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer environmentsResponse.Body.Close()
+	var environments []environmentResponse
+	if err := json.NewDecoder(environmentsResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+	production := environments[0]
+
+	createResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer createResponse.Body.Close()
+	var compose composeResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&compose); err != nil {
+		t.Fatalf("decode created compose: %v", err)
+	}
+
+	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
+	deployResponse.Body.Close()
+	if deployResponse.StatusCode != http.StatusOK {
+		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
+	}
+	if len(server.runner.calls) != 2 || server.runner.calls[0].method != "up" || server.runner.calls[1].method != "status" {
+		t.Fatalf("runner calls after deploy = %+v, want up followed by status", server.runner.calls)
+	}
+	composeDir := filepath.Dir(server.runner.calls[0].request.ComposeFilePath)
+	if _, err := os.Stat(filepath.Join(composeDir, "docker-compose.yml")); err != nil {
+		t.Fatalf("deployed compose file: %v", err)
+	}
+
+	deleteResponse := server.request(t, http.MethodDelete, composePath(project.ID, production.ID, compose.ID), nil)
+	defer deleteResponse.Body.Close()
+	if deleteResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want %d", deleteResponse.StatusCode, http.StatusNoContent)
+	}
+	if body, err := io.ReadAll(deleteResponse.Body); err != nil {
+		t.Fatalf("read delete response: %v", err)
+	} else if len(body) != 0 {
+		t.Fatalf("delete response body = %q, want empty", body)
+	}
+
+	if len(server.runner.calls) != 3 || server.runner.calls[2].method != "down-with-volumes" {
+		t.Fatalf("runner calls after delete = %+v, want down-with-volumes only", server.runner.calls)
+	}
+	if server.runner.calls[2].request.ProjectName != "delete-co-production-web" {
+		t.Fatalf("delete project name = %q, want %q", server.runner.calls[2].request.ProjectName, "delete-co-production-web")
+	}
+	if _, err := os.Stat(composeDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("compose directory still exists or returned unexpected error: %v", err)
+	}
+
+	fetchedResponse := server.request(t, http.MethodGet, composePath(project.ID, production.ID, compose.ID), nil)
+	defer fetchedResponse.Body.Close()
+	if fetchedResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("get deleted compose status = %d, want %d", fetchedResponse.StatusCode, http.StatusNotFound)
+	}
+}
+
+func TestAuthenticatedAdminCanDeleteUndeployedCompose(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Delete Co", "")
+
+	environmentsResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer environmentsResponse.Body.Close()
+	var environments []environmentResponse
+	if err := json.NewDecoder(environmentsResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+	production := environments[0]
+
+	createResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer createResponse.Body.Close()
+	var compose composeResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&compose); err != nil {
+		t.Fatalf("decode created compose: %v", err)
+	}
+
+	composeDir := filepath.Join(server.dataDir, "delete-co", "production", "web")
+	if err := os.MkdirAll(composeDir, 0o750); err != nil {
+		t.Fatalf("create compose directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(composeDir, "stale-file"), []byte("stale"), 0o640); err != nil {
+		t.Fatalf("write stale compose file: %v", err)
+	}
+
+	deleteResponse := server.request(t, http.MethodDelete, composePath(project.ID, production.ID, compose.ID), nil)
+	defer deleteResponse.Body.Close()
+	if deleteResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want %d", deleteResponse.StatusCode, http.StatusNoContent)
+	}
+	if len(server.runner.calls) != 0 {
+		t.Fatalf("runner calls for undeployed delete = %+v, want none", server.runner.calls)
+	}
+	if _, err := os.Stat(composeDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("undeployed compose directory still exists or returned unexpected error: %v", err)
+	}
+
+	fetchedResponse := server.request(t, http.MethodGet, composePath(project.ID, production.ID, compose.ID), nil)
+	defer fetchedResponse.Body.Close()
+	if fetchedResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("get deleted undeployed compose status = %d, want %d", fetchedResponse.StatusCode, http.StatusNotFound)
+	}
+}
+
+func TestComposeDeletePreservesComposeWhenRunnerFails(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Delete Co", "")
+
+	environmentsResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer environmentsResponse.Body.Close()
+	var environments []environmentResponse
+	if err := json.NewDecoder(environmentsResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+	production := environments[0]
+
+	createResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer createResponse.Body.Close()
+	var compose composeResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&compose); err != nil {
+		t.Fatalf("decode created compose: %v", err)
+	}
+
+	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
+	deployResponse.Body.Close()
+	if deployResponse.StatusCode != http.StatusOK {
+		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
+	}
+	composeDir := filepath.Dir(server.runner.calls[0].request.ComposeFilePath)
+
+	server.runner.downWithVolumesErr = errors.New("docker daemon unreachable")
+	deleteResponse := server.request(t, http.MethodDelete, composePath(project.ID, production.ID, compose.ID), nil)
+	defer deleteResponse.Body.Close()
+	if deleteResponse.StatusCode != http.StatusBadGateway {
+		t.Fatalf("delete with failing runner status = %d, want %d", deleteResponse.StatusCode, http.StatusBadGateway)
+	}
+	var failure map[string]string
+	if err := json.NewDecoder(deleteResponse.Body).Decode(&failure); err != nil {
+		t.Fatalf("decode delete failure: %v", err)
+	}
+	if failure["error"] != "delete failed: docker daemon unreachable" {
+		t.Fatalf("delete failure = %+v, want the runner error", failure)
+	}
+	if len(server.runner.calls) != 3 || server.runner.calls[2].method != "down-with-volumes" {
+		t.Fatalf("runner calls after failed delete = %+v, want down-with-volumes", server.runner.calls)
+	}
+	if _, err := os.Stat(filepath.Join(composeDir, "docker-compose.yml")); err != nil {
+		t.Fatalf("compose file after failed delete: %v", err)
+	}
+
+	fetchedResponse := server.request(t, http.MethodGet, composePath(project.ID, production.ID, compose.ID), nil)
+	defer fetchedResponse.Body.Close()
+	if fetchedResponse.StatusCode != http.StatusOK {
+		t.Fatalf("get compose after failed delete status = %d, want %d", fetchedResponse.StatusCode, http.StatusOK)
+	}
+}
+
 func TestEnvironmentVariablesRequireExistingProjectAndEnvironment(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
@@ -1342,11 +1513,12 @@ func newTestServer(t *testing.T) *testServer {
 // Testing Decisions: it records what it was asked to do instead of touching
 // a real Docker daemon.
 type fakeComposeRunner struct {
-	calls      []fakeComposeRun
-	statuses   map[string]composes.ComposeStatus
-	upErr      error
-	downErr    error
-	restartErr error
+	calls              []fakeComposeRun
+	statuses           map[string]composes.ComposeStatus
+	upErr              error
+	downErr            error
+	downWithVolumesErr error
+	restartErr         error
 }
 
 type fakeComposeRun struct {
@@ -1367,6 +1539,15 @@ func (f *fakeComposeRunner) Down(_ context.Context, req composes.RunRequest) err
 	f.calls = append(f.calls, fakeComposeRun{method: "down", request: req})
 	if f.downErr != nil {
 		return f.downErr
+	}
+	f.statuses[req.ProjectName] = composes.ComposeStatus{}
+	return nil
+}
+
+func (f *fakeComposeRunner) DownWithVolumes(_ context.Context, req composes.RunRequest) error {
+	f.calls = append(f.calls, fakeComposeRun{method: "down-with-volumes", request: req})
+	if f.downWithVolumesErr != nil {
+		return f.downWithVolumesErr
 	}
 	f.statuses[req.ProjectName] = composes.ComposeStatus{}
 	return nil

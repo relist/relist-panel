@@ -1273,6 +1273,7 @@ function ComposeDetailPanel({
   const [deploying, setDeploying] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string>();
   const requestID = useRef(0);
 
@@ -1405,6 +1406,25 @@ function ComposeDetailPanel({
     }
   };
 
+  const deleteCompose = async () => {
+    setDeleting(true);
+    setError(undefined);
+    try {
+      const response = await fetch(composePath, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      onBack();
+    } catch (reason: unknown) {
+      setError(errorMessage(reason));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   if (loading && !compose) {
     return (
       <div className="flex justify-center py-12">
@@ -1466,6 +1486,17 @@ function ComposeDetailPanel({
                   <Button danger loading={stopping} disabled={compose.status.total === 0} onClick={() => void stop()}>
                     Stop
                   </Button>
+                  <Popconfirm
+                    title="Delete this Compose?"
+                    description="This action cannot be undone."
+                    okText="Delete"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => void deleteCompose()}
+                  >
+                    <Button danger loading={deleting}>
+                      Delete
+                    </Button>
+                  </Popconfirm>
                 </div>
                 <div
                   className="overflow-hidden"

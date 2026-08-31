@@ -47,12 +47,14 @@ type ComposeStatus struct {
 }
 
 // ComposeRunner is the one port in the system (ADR-0003): everything needed
-// to drive a Compose's containers via the real `docker compose` CLI. It is
-// declared here, in the consumer, and implemented for real in the leaf
-// package `dockerexec`; tests use a fake.
+// to drive a Compose's containers via the real `docker compose` CLI. Down
+// preserves volumes for Stop, while DownWithVolumes performs the destructive
+// teardown used by Delete. It is declared here, in the consumer, and
+// implemented for real in the leaf package `dockerexec`; tests use a fake.
 type ComposeRunner interface {
 	Up(ctx context.Context, req RunRequest) error
 	Down(ctx context.Context, req RunRequest) error
+	DownWithVolumes(ctx context.Context, req RunRequest) error
 	Restart(ctx context.Context, req RunRequest) error
 	Status(ctx context.Context, req RunRequest) (ComposeStatus, error)
 	Logs(ctx context.Context, req RunRequest) (string, error)
@@ -105,6 +107,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/deploy", s.deploy)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/stop", s.stop)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/restart", s.restart)
+	mux.HandleFunc("DELETE /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.delete)
 }
 
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
@@ -404,6 +407,70 @@ func (s *Service) restart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.withRefreshedStatus(r.Context(), req, compose))
 }
 
+func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "composes are temporarily unavailable")
+		return
+	}
+
+	projectID, environmentID, err := routeIDs(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id, err := composeID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
+		return
+	}
+	if err := s.requireEnvironment(r.Context(), projectID, environmentID); err != nil {
+		writeParentError(w, err)
+		return
+	}
+
+	compose, err := s.repository.findByID(r.Context(), environmentID, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "compose not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return
+	}
+
+	req, err := s.runRequestForCompose(r.Context(), projectID, environmentID, compose)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return
+	}
+
+	if _, err := os.Stat(req.ComposeFilePath); err == nil {
+		if err := s.runner.DownWithVolumes(r.Context(), req); err != nil {
+			writeError(w, http.StatusBadGateway, "delete failed: "+err.Error())
+			return
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		writeError(w, http.StatusInternalServerError, "could not inspect compose files")
+		return
+	}
+
+	if err := os.RemoveAll(filepath.Dir(req.ComposeFilePath)); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not delete compose files")
+		return
+	}
+
+	deleted, err := s.repository.delete(r.Context(), environmentID, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not delete compose")
+		return
+	}
+	if !deleted {
+		writeError(w, http.StatusNotFound, "compose not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // runRequestForCompose resolves a Compose's deploy identity (ADR-0002) by
 // looking up its parent Project/Environment names.
 func (s *Service) runRequestForCompose(ctx context.Context, projectID, environmentID int64, compose Compose) (RunRequest, error) {
@@ -649,6 +716,18 @@ func (r *repository) update(ctx context.Context, environmentID, id int64, yamlCo
 		WHERE environment_id = ? AND id = ?
 	`, yamlContent, updatedAt.Unix(), environmentID, id)
 	return err
+}
+
+func (r *repository) delete(ctx context.Context, environmentID, id int64) (bool, error) {
+	result, err := r.db.ExecContext(ctx, `
+		DELETE FROM composes
+		WHERE environment_id = ? AND id = ?
+	`, environmentID, id)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected > 0, err
 }
 
 func scanComposeValues(scan func(...any) error) (Compose, error) {

@@ -33,6 +33,11 @@ func (Runner) Down(ctx context.Context, req composes.RunRequest) error {
 	return err
 }
 
+func (Runner) DownWithVolumes(ctx context.Context, req composes.RunRequest) error {
+	_, err := run(ctx, req, "down", "-v")
+	return err
+}
+
 func (Runner) Restart(ctx context.Context, req composes.RunRequest) error {
 	_, err := run(ctx, req, "restart")
 	return err
