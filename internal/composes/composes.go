@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -160,6 +161,18 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	siblings, err := s.repository.list(r.Context(), environmentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create compose")
+		return
+	}
+	slug := slugify(name)
+	for _, sibling := range siblings {
+		if slugify(sibling.Name) == slug {
+			writeError(w, http.StatusConflict, "a compose with a conflicting name already exists")
+			return
+		}
 	}
 	yamlContent := ""
 	if input.YAMLContent != nil {
@@ -429,18 +442,8 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	compose, err := s.repository.findByID(r.Context(), environmentID, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "compose not found")
-		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return
-	}
-
-	req, err := s.runRequestForCompose(r.Context(), projectID, environmentID, compose)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
+	_, req, ok := s.loadComposeAndRunRequest(w, r, projectID, environmentID, id)
+	if !ok {
 		return
 	}
 
@@ -454,11 +457,6 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := os.RemoveAll(filepath.Dir(req.ComposeFilePath)); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not delete compose files")
-		return
-	}
-
 	deleted, err := s.repository.delete(r.Context(), environmentID, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete compose")
@@ -467,6 +465,12 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	if !deleted {
 		writeError(w, http.StatusNotFound, "compose not found")
 		return
+	}
+
+	// Best-effort: the row is already gone, so a leftover directory is a
+	// disk leak, not an inconsistency — don't fail the request over it.
+	if err := os.RemoveAll(filepath.Dir(req.ComposeFilePath)); err != nil {
+		log.Printf("delete compose %d: remove files at %q: %v", id, filepath.Dir(req.ComposeFilePath), err)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -517,12 +521,11 @@ func (s *Service) runRequestForCompose(ctx context.Context, projectID, environme
 	return runRequestFor(s.dataDir, projectName, environmentName, compose), nil
 }
 
-// resolveDeployedCompose loads a Compose and its run identity, gated on it
-// already being deployed (its resolved compose file exists on disk) — shared
-// by actions (stop/restart/logs) that are meaningless on an undeployed
-// Compose. It writes any error response itself; the caller should return
-// immediately when ok is false.
-func (s *Service) resolveDeployedCompose(w http.ResponseWriter, r *http.Request, projectID, environmentID, id int64) (compose Compose, req RunRequest, ok bool) {
+// loadComposeAndRunRequest loads a Compose and resolves its deploy identity
+// (ADR-0002) — shared by every action that needs to locate a Compose's files,
+// deployed or not. It writes any error response itself; the caller should
+// return immediately when ok is false.
+func (s *Service) loadComposeAndRunRequest(w http.ResponseWriter, r *http.Request, projectID, environmentID, id int64) (compose Compose, req RunRequest, ok bool) {
 	compose, err := s.repository.findByID(r.Context(), environmentID, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "compose not found")
@@ -535,6 +538,19 @@ func (s *Service) resolveDeployedCompose(w http.ResponseWriter, r *http.Request,
 	req, err = s.runRequestForCompose(r.Context(), projectID, environmentID, compose)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return Compose{}, RunRequest{}, false
+	}
+	return compose, req, true
+}
+
+// resolveDeployedCompose loads a Compose and its run identity, gated on it
+// already being deployed (its resolved compose file exists on disk) — shared
+// by actions (stop/restart/logs) that are meaningless on an undeployed
+// Compose. It writes any error response itself; the caller should return
+// immediately when ok is false.
+func (s *Service) resolveDeployedCompose(w http.ResponseWriter, r *http.Request, projectID, environmentID, id int64) (compose Compose, req RunRequest, ok bool) {
+	compose, req, ok = s.loadComposeAndRunRequest(w, r, projectID, environmentID, id)
+	if !ok {
 		return Compose{}, RunRequest{}, false
 	}
 	if _, err := os.Stat(req.ComposeFilePath); err != nil {

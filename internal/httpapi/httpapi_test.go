@@ -656,6 +656,15 @@ func TestAuthenticatedAdminCanManageComposes(t *testing.T) {
 		t.Fatalf("duplicate compose name status = %d, want %d", duplicateResponse.StatusCode, http.StatusConflict)
 	}
 
+	slugCollisionResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web!!!",
+		"yamlContent": "services: {}\n",
+	})
+	defer slugCollisionResponse.Body.Close()
+	if slugCollisionResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("slug-colliding compose name status = %d, want %d", slugCollisionResponse.StatusCode, http.StatusConflict)
+	}
+
 	missingNameResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
 		"name":        "  ",
 		"yamlContent": "services: {}\n",
