@@ -108,6 +108,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/stop", s.stop)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/restart", s.restart)
 	mux.HandleFunc("DELETE /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.delete)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/logs", s.logs)
 }
 
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
@@ -471,6 +472,41 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Service) logs(w http.ResponseWriter, r *http.Request) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "composes are temporarily unavailable")
+		return
+	}
+
+	projectID, environmentID, err := routeIDs(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id, err := composeID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
+		return
+	}
+	if err := s.requireEnvironment(r.Context(), projectID, environmentID); err != nil {
+		writeParentError(w, err)
+		return
+	}
+
+	_, req, ok := s.resolveDeployedCompose(w, r, projectID, environmentID, id)
+	if !ok {
+		return
+	}
+
+	logs, err := s.runner.Logs(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "logs failed: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"logs": logs})
+}
+
 // runRequestForCompose resolves a Compose's deploy identity (ADR-0002) by
 // looking up its parent Project/Environment names.
 func (s *Service) runRequestForCompose(ctx context.Context, projectID, environmentID int64, compose Compose) (RunRequest, error) {
@@ -483,7 +519,7 @@ func (s *Service) runRequestForCompose(ctx context.Context, projectID, environme
 
 // resolveDeployedCompose loads a Compose and its run identity, gated on it
 // already being deployed (its resolved compose file exists on disk) — shared
-// by mutating actions (stop/restart) that are meaningless on an undeployed
+// by actions (stop/restart/logs) that are meaningless on an undeployed
 // Compose. It writes any error response itself; the caller should return
 // immediately when ok is false.
 func (s *Service) resolveDeployedCompose(w http.ResponseWriter, r *http.Request, projectID, environmentID, id int64) (compose Compose, req RunRequest, ok bool) {

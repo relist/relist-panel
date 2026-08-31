@@ -1324,6 +1324,125 @@ func TestComposeDeletePreservesComposeWhenRunnerFails(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedAdminCanViewComposeLogs(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Logs Co", "")
+
+	environmentsResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer environmentsResponse.Body.Close()
+	var environments []environmentResponse
+	if err := json.NewDecoder(environmentsResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+	production := environments[0]
+
+	createResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer createResponse.Body.Close()
+	var compose composeResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&compose); err != nil {
+		t.Fatalf("decode created compose: %v", err)
+	}
+
+	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
+	deployResponse.Body.Close()
+	if deployResponse.StatusCode != http.StatusOK {
+		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
+	}
+
+	const wantLogs = "web | ready\nweb | listening\n"
+	server.runner.logsOutput = wantLogs
+	logsResponse := server.request(t, http.MethodGet, composeLogsPath(project.ID, production.ID, compose.ID), nil)
+	defer logsResponse.Body.Close()
+	if logsResponse.StatusCode != http.StatusOK {
+		t.Fatalf("logs status = %d, want %d", logsResponse.StatusCode, http.StatusOK)
+	}
+	var logs struct {
+		Logs string `json:"logs"`
+	}
+	if err := json.NewDecoder(logsResponse.Body).Decode(&logs); err != nil {
+		t.Fatalf("decode logs: %v", err)
+	}
+	if logs.Logs != wantLogs {
+		t.Fatalf("logs = %q, want %q", logs.Logs, wantLogs)
+	}
+
+	if len(server.runner.calls) != 3 || server.runner.calls[2].method != "logs" {
+		t.Fatalf("runner calls = %+v, want deploy calls followed by logs", server.runner.calls)
+	}
+	if server.runner.calls[2].request.ProjectName != "logs-co-production-web" {
+		t.Fatalf("logs project name = %q, want %q", server.runner.calls[2].request.ProjectName, "logs-co-production-web")
+	}
+}
+
+func TestComposeLogsValidatesDeploymentAndPropagatesRunnerErrors(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Logs Co", "")
+
+	environmentsResponse := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer environmentsResponse.Body.Close()
+	var environments []environmentResponse
+	if err := json.NewDecoder(environmentsResponse.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+	production := environments[0]
+
+	undeployedResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "undeployed",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer undeployedResponse.Body.Close()
+	var undeployed composeResponse
+	if err := json.NewDecoder(undeployedResponse.Body).Decode(&undeployed); err != nil {
+		t.Fatalf("decode undeployed compose: %v", err)
+	}
+
+	undeployedLogsResponse := server.request(t, http.MethodGet, composeLogsPath(project.ID, production.ID, undeployed.ID), nil)
+	defer undeployedLogsResponse.Body.Close()
+	if undeployedLogsResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("undeployed logs status = %d, want %d", undeployedLogsResponse.StatusCode, http.StatusBadRequest)
+	}
+	if len(server.runner.calls) != 0 {
+		t.Fatalf("runner calls for undeployed logs = %+v, want none", server.runner.calls)
+	}
+
+	workingResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer workingResponse.Body.Close()
+	var working composeResponse
+	if err := json.NewDecoder(workingResponse.Body).Decode(&working); err != nil {
+		t.Fatalf("decode working compose: %v", err)
+	}
+	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, working.ID), nil)
+	deployResponse.Body.Close()
+	if deployResponse.StatusCode != http.StatusOK {
+		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
+	}
+
+	server.runner.logsErr = errors.New("docker daemon unreachable")
+	logsFailureResponse := server.request(t, http.MethodGet, composeLogsPath(project.ID, production.ID, working.ID), nil)
+	defer logsFailureResponse.Body.Close()
+	if logsFailureResponse.StatusCode != http.StatusBadGateway {
+		t.Fatalf("logs with failing runner status = %d, want %d", logsFailureResponse.StatusCode, http.StatusBadGateway)
+	}
+	var failure map[string]string
+	if err := json.NewDecoder(logsFailureResponse.Body).Decode(&failure); err != nil {
+		t.Fatalf("decode logs failure: %v", err)
+	}
+	if failure["error"] != "logs failed: docker daemon unreachable" {
+		t.Fatalf("logs failure = %+v, want the runner error", failure)
+	}
+	if len(server.runner.calls) != 3 || server.runner.calls[2].method != "logs" {
+		t.Fatalf("runner calls after failed logs = %+v, want logs", server.runner.calls)
+	}
+}
+
 func TestEnvironmentVariablesRequireExistingProjectAndEnvironment(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
@@ -1519,6 +1638,8 @@ type fakeComposeRunner struct {
 	downErr            error
 	downWithVolumesErr error
 	restartErr         error
+	logsOutput         string
+	logsErr            error
 }
 
 type fakeComposeRun struct {
@@ -1568,7 +1689,10 @@ func (f *fakeComposeRunner) Status(_ context.Context, req composes.RunRequest) (
 
 func (f *fakeComposeRunner) Logs(_ context.Context, req composes.RunRequest) (string, error) {
 	f.calls = append(f.calls, fakeComposeRun{method: "logs", request: req})
-	return "", nil
+	if f.logsErr != nil {
+		return "", f.logsErr
+	}
+	return f.logsOutput, nil
 }
 
 func (s *testServer) request(t *testing.T, method, path string, value any) *http.Response {
@@ -1694,4 +1818,8 @@ func composeStopPath(projectID, environmentID, composeID int64) string {
 
 func composeRestartPath(projectID, environmentID, composeID int64) string {
 	return composePath(projectID, environmentID, composeID) + "/restart"
+}
+
+func composeLogsPath(projectID, environmentID, composeID int64) string {
+	return composePath(projectID, environmentID, composeID) + "/logs"
 }

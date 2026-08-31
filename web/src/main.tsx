@@ -1274,8 +1274,11 @@ function ComposeDetailPanel({
   const [stopping, setStopping] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [logs, setLogs] = useState<string>();
+  const [logsLoading, setLogsLoading] = useState(false);
   const [error, setError] = useState<string>();
   const requestID = useRef(0);
+  const logsRequestID = useRef(0);
 
   const composePath = `/api/projects/${projectID}/environments/${environmentID}/composes/${composeID}`;
 
@@ -1305,9 +1308,12 @@ function ComposeDetailPanel({
   };
 
   useEffect(() => {
+    setLogs(undefined);
+    setLogsLoading(false);
     void loadCompose();
     return () => {
       requestID.current += 1;
+      logsRequestID.current += 1;
     };
   }, [composePath]);
 
@@ -1425,6 +1431,30 @@ function ComposeDetailPanel({
     }
   };
 
+  const loadLogs = async () => {
+    const currentRequestID = ++logsRequestID.current;
+    setLogsLoading(true);
+    setError(undefined);
+    try {
+      const response = await fetch(`${composePath}/logs`, { credentials: 'same-origin' });
+      if (!response.ok) {
+        throw new Error(await responseError(response));
+      }
+      const payload = (await response.json()) as { logs: string };
+      if (currentRequestID === logsRequestID.current) {
+        setLogs(payload.logs);
+      }
+    } catch (reason: unknown) {
+      if (currentRequestID === logsRequestID.current) {
+        setError(errorMessage(reason));
+      }
+    } finally {
+      if (currentRequestID === logsRequestID.current) {
+        setLogsLoading(false);
+      }
+    }
+  };
+
   if (loading && !compose) {
     return (
       <div className="flex justify-center py-12">
@@ -1467,6 +1497,11 @@ function ComposeDetailPanel({
         </Space>
       </div>
       <Tabs
+        onChange={(activeKey) => {
+          if (activeKey === 'logs' && logs === undefined && !logsLoading) {
+            void loadLogs();
+          }
+        }}
         items={[
           {
             key: 'general',
@@ -1511,6 +1546,33 @@ function ComposeDetailPanel({
                     options={monacoEditorOptions}
                   />
                 </div>
+              </div>
+            ),
+          },
+          {
+            key: 'logs',
+            label: 'Logs',
+            children: (
+              <div>
+                <div className="mb-3 flex justify-end">
+                  <Button loading={logsLoading} onClick={() => void loadLogs()}>
+                    {logs === undefined ? 'Load logs' : 'Refresh'}
+                  </Button>
+                </div>
+                {logs === undefined ? (
+                  <Empty description="Load this Compose's recent logs on demand." />
+                ) : (
+                  <pre
+                    className="m-0 max-h-[480px] overflow-auto whitespace-pre-wrap rounded p-4 font-mono text-sm"
+                    style={{
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      borderRadius: token.borderRadius,
+                      background: token.colorFillQuaternary,
+                    }}
+                  >
+                    {logs || 'No logs available.'}
+                  </pre>
+                )}
               </div>
             ),
           },
