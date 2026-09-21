@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"relist-panel/internal/dockernet"
+	"relist-panel/internal/slug"
 )
 
 const (
@@ -169,9 +170,9 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create compose")
 		return
 	}
-	slug := slugify(name)
+	composeSlug := slug.Slugify(name)
 	for _, sibling := range siblings {
-		if slugify(sibling.Name) == slug {
+		if slug.Slugify(sibling.Name) == composeSlug {
 			writeError(w, http.StatusConflict, "a compose with a conflicting name already exists")
 			return
 		}
@@ -190,7 +191,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := s.now().UTC().Truncate(time.Second)
-	compose, err := s.repository.create(r.Context(), environmentID, slugify(projectName), slugify(environmentName), name, yamlContent, now)
+	compose, err := s.repository.create(r.Context(), environmentID, slug.Slugify(projectName), slug.Slugify(environmentName), name, yamlContent, now)
 	if err != nil {
 		if isUniqueConstraint(err) {
 			writeError(w, http.StatusConflict, "a compose with that name already exists")
@@ -723,8 +724,8 @@ func BackfillLegacyIdentities(ctx context.Context, db *sql.DB) error {
 			rows.Close()
 			return fmt.Errorf("scan composes without a stored identity: %w", err)
 		}
-		row.projectSlug = slugify(projectName)
-		row.envSlug = slugify(environmentName)
+		row.projectSlug = slug.Slugify(projectName)
+		row.envSlug = slug.Slugify(environmentName)
 		legacyRows = append(legacyRows, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -885,35 +886,13 @@ func validateComposeName(value string) (string, error) {
 // resolved files live at under dataDir (ADR-0002). The compose name slugifies
 // here because the row stores the display name only.
 func runRequestFor(dataDir string, compose Compose) RunRequest {
-	composeSlug := slugify(compose.Name)
+	composeSlug := slug.Slugify(compose.Name)
 	dir := filepath.Join(dataDir, compose.ProjectSlug, compose.EnvSlug, composeSlug)
 	return RunRequest{
 		ProjectName:     compose.ProjectSlug + "-" + compose.EnvSlug + "-" + composeSlug,
 		ComposeFilePath: filepath.Join(dir, composeFileName),
 		EnvFilePath:     filepath.Join(dir, envFileName),
 	}
-}
-
-// slugify turns a name into a lowercase `[a-z0-9-]` token safe for both a
-// filesystem path segment and a `docker compose -p` project name.
-func slugify(value string) string {
-	var b strings.Builder
-	lastDash := false
-	for _, r := range strings.ToLower(value) {
-		switch {
-		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
-			b.WriteRune(r)
-			lastDash = false
-		case !lastDash && b.Len() > 0:
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	slug := strings.TrimRight(b.String(), "-")
-	if slug == "" {
-		return "x"
-	}
-	return slug
 }
 
 // resolveCompose parses yamlContent and returns it with the shared Traefik
