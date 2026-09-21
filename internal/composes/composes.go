@@ -77,6 +77,8 @@ type Compose struct {
 	ID            int64         `json:"id"`
 	EnvironmentID int64         `json:"environmentId"`
 	Name          string        `json:"name"`
+	ProjectSlug   string        `json:"projectSlug"`
+	EnvSlug       string        `json:"envSlug"`
 	YAMLContent   string        `json:"yamlContent"`
 	CreatedAt     time.Time     `json:"createdAt"`
 	UpdatedAt     time.Time     `json:"updatedAt"`
@@ -133,7 +135,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load composes")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.withStatuses(r.Context(), projectID, environmentID, composes))
+	writeJSON(w, http.StatusOK, s.withStatuses(r.Context(), composes))
 }
 
 func (s *Service) create(w http.ResponseWriter, r *http.Request) {
@@ -179,8 +181,16 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		yamlContent = *input.YAMLContent
 	}
 
+	// The deploy identity (ADR-0005) is frozen from the parents' names once,
+	// here; later renames never reach it.
+	projectName, environmentName, err := s.repository.parentNames(r.Context(), projectID, environmentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create compose")
+		return
+	}
+
 	now := s.now().UTC().Truncate(time.Second)
-	compose, err := s.repository.create(r.Context(), environmentID, name, yamlContent, now)
+	compose, err := s.repository.create(r.Context(), environmentID, slugify(projectName), slugify(environmentName), name, yamlContent, now)
 	if err != nil {
 		if isUniqueConstraint(err) {
 			writeError(w, http.StatusConflict, "a compose with that name already exists")
@@ -189,7 +199,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create compose")
 		return
 	}
-	writeJSON(w, http.StatusCreated, s.withStatus(r.Context(), projectID, environmentID, compose))
+	writeJSON(w, http.StatusCreated, s.withStatus(r.Context(), compose))
 }
 
 func (s *Service) get(w http.ResponseWriter, r *http.Request) {
@@ -221,7 +231,7 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load compose")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.withStatus(r.Context(), projectID, environmentID, compose))
+	writeJSON(w, http.StatusOK, s.withStatus(r.Context(), compose))
 }
 
 func (s *Service) update(w http.ResponseWriter, r *http.Request) {
@@ -279,7 +289,7 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load updated compose")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.withStatus(r.Context(), projectID, environmentID, compose))
+	writeJSON(w, http.StatusOK, s.withStatus(r.Context(), compose))
 }
 
 func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
@@ -316,11 +326,7 @@ func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, err := s.runRequestForCompose(r.Context(), projectID, environmentID, compose)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return
-	}
+	req := runRequestFor(s.dataDir, compose)
 	variables, err := s.repository.listEnvironmentVariables(r.Context(), environmentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load environment variables")
@@ -374,7 +380,7 @@ func (s *Service) stop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	compose, req, ok := s.resolveDeployedCompose(w, r, projectID, environmentID, id)
+	compose, req, ok := s.resolveDeployedCompose(w, r, environmentID, id)
 	if !ok {
 		return
 	}
@@ -408,7 +414,7 @@ func (s *Service) restart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	compose, req, ok := s.resolveDeployedCompose(w, r, projectID, environmentID, id)
+	compose, req, ok := s.resolveDeployedCompose(w, r, environmentID, id)
 	if !ok {
 		return
 	}
@@ -442,7 +448,7 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, req, ok := s.loadComposeAndRunRequest(w, r, projectID, environmentID, id)
+	_, req, ok := s.loadComposeAndRunRequest(w, r, environmentID, id)
 	if !ok {
 		return
 	}
@@ -497,7 +503,7 @@ func (s *Service) logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, req, ok := s.resolveDeployedCompose(w, r, projectID, environmentID, id)
+	_, req, ok := s.resolveDeployedCompose(w, r, environmentID, id)
 	if !ok {
 		return
 	}
@@ -511,21 +517,11 @@ func (s *Service) logs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"logs": logs})
 }
 
-// runRequestForCompose resolves a Compose's deploy identity (ADR-0002) by
-// looking up its parent Project/Environment names.
-func (s *Service) runRequestForCompose(ctx context.Context, projectID, environmentID int64, compose Compose) (RunRequest, error) {
-	projectName, environmentName, err := s.repository.parentNames(ctx, projectID, environmentID)
-	if err != nil {
-		return RunRequest{}, err
-	}
-	return runRequestFor(s.dataDir, projectName, environmentName, compose), nil
-}
-
-// loadComposeAndRunRequest loads a Compose and resolves its deploy identity
-// (ADR-0002) — shared by every action that needs to locate a Compose's files,
+// loadComposeAndRunRequest loads a Compose and its stored deploy identity
+// (ADR-0005) — shared by every action that needs to locate a Compose's files,
 // deployed or not. It writes any error response itself; the caller should
 // return immediately when ok is false.
-func (s *Service) loadComposeAndRunRequest(w http.ResponseWriter, r *http.Request, projectID, environmentID, id int64) (compose Compose, req RunRequest, ok bool) {
+func (s *Service) loadComposeAndRunRequest(w http.ResponseWriter, r *http.Request, environmentID, id int64) (compose Compose, req RunRequest, ok bool) {
 	compose, err := s.repository.findByID(r.Context(), environmentID, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "compose not found")
@@ -534,13 +530,7 @@ func (s *Service) loadComposeAndRunRequest(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "could not load compose")
 		return Compose{}, RunRequest{}, false
 	}
-
-	req, err = s.runRequestForCompose(r.Context(), projectID, environmentID, compose)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return Compose{}, RunRequest{}, false
-	}
-	return compose, req, true
+	return compose, runRequestFor(s.dataDir, compose), true
 }
 
 // resolveDeployedCompose loads a Compose and its run identity, gated on it
@@ -548,8 +538,8 @@ func (s *Service) loadComposeAndRunRequest(w http.ResponseWriter, r *http.Reques
 // by actions (stop/restart/logs) that are meaningless on an undeployed
 // Compose. It writes any error response itself; the caller should return
 // immediately when ok is false.
-func (s *Service) resolveDeployedCompose(w http.ResponseWriter, r *http.Request, projectID, environmentID, id int64) (compose Compose, req RunRequest, ok bool) {
-	compose, req, ok = s.loadComposeAndRunRequest(w, r, projectID, environmentID, id)
+func (s *Service) resolveDeployedCompose(w http.ResponseWriter, r *http.Request, environmentID, id int64) (compose Compose, req RunRequest, ok bool) {
+	compose, req, ok = s.loadComposeAndRunRequest(w, r, environmentID, id)
 	if !ok {
 		return Compose{}, RunRequest{}, false
 	}
@@ -575,22 +565,14 @@ func (s *Service) withRefreshedStatus(ctx context.Context, req RunRequest, compo
 // withStatus and withStatuses attach each Compose's live container state.
 // They are best-effort: a runner error (e.g. Docker is unreachable) must not
 // fail an otherwise-successful read, so it degrades to a zero-value status.
-func (s *Service) withStatus(ctx context.Context, projectID, environmentID int64, compose Compose) Compose {
-	projectName, environmentName, err := s.repository.parentNames(ctx, projectID, environmentID)
-	if err != nil {
-		return compose
-	}
-	compose.Status = s.currentStatus(ctx, projectName, environmentName, compose)
+func (s *Service) withStatus(ctx context.Context, compose Compose) Compose {
+	compose.Status = s.currentStatus(ctx, compose)
 	return compose
 }
 
-func (s *Service) withStatuses(ctx context.Context, projectID, environmentID int64, composes []Compose) []Compose {
-	projectName, environmentName, err := s.repository.parentNames(ctx, projectID, environmentID)
-	if err != nil {
-		return composes
-	}
+func (s *Service) withStatuses(ctx context.Context, composes []Compose) []Compose {
 	for i := range composes {
-		composes[i].Status = s.currentStatus(ctx, projectName, environmentName, composes[i])
+		composes[i].Status = s.currentStatus(ctx, composes[i])
 	}
 	return composes
 }
@@ -598,8 +580,8 @@ func (s *Service) withStatuses(ctx context.Context, projectID, environmentID int
 // currentStatus only queries the runner once a Compose has actually been
 // deployed (its resolved compose file exists on disk); an undeployed Compose
 // always reads as a zero-value status without shelling out.
-func (s *Service) currentStatus(ctx context.Context, projectName, environmentName string, compose Compose) ComposeStatus {
-	req := runRequestFor(s.dataDir, projectName, environmentName, compose)
+func (s *Service) currentStatus(ctx context.Context, compose Compose) ComposeStatus {
+	req := runRequestFor(s.dataDir, compose)
 	if _, err := os.Stat(req.ComposeFilePath); err != nil {
 		return ComposeStatus{}
 	}
@@ -672,7 +654,7 @@ func (r *repository) environmentExists(ctx context.Context, projectID, environme
 }
 
 // parentNames resolves the Project and Environment names a Compose's deploy
-// identity is derived from (ADR-0002).
+// identity is frozen from at creation (ADR-0005).
 func (r *repository) parentNames(ctx context.Context, projectID, environmentID int64) (projectName, environmentName string, err error) {
 	err = r.db.QueryRowContext(ctx, `
 		SELECT p.name, e.name
@@ -711,9 +693,63 @@ func (r *repository) listEnvironmentVariables(ctx context.Context, environmentID
 	return variables, rows.Err()
 }
 
+// BackfillLegacyIdentities freezes the deploy identity of composes created
+// before identity was stored on the row (ADR-0005): it fills any empty slugs
+// from the parents' current names, which is what those stacks were deployed
+// under. It only ever fills empty slugs, so it is idempotent and never
+// follows later renames. It runs once at startup, after the migrations.
+func BackfillLegacyIdentities(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `
+		SELECT c.id, p.name, e.name
+		FROM composes c
+		JOIN environments e ON e.id = c.environment_id
+		JOIN projects p ON p.id = e.project_id
+		WHERE c.project_slug = '' OR c.env_slug = ''
+	`)
+	if err != nil {
+		return fmt.Errorf("load composes without a stored identity: %w", err)
+	}
+
+	type legacyRow struct {
+		id          int64
+		projectSlug string
+		envSlug     string
+	}
+	var legacyRows []legacyRow
+	for rows.Next() {
+		var row legacyRow
+		var projectName, environmentName string
+		if err := rows.Scan(&row.id, &projectName, &environmentName); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan composes without a stored identity: %w", err)
+		}
+		row.projectSlug = slugify(projectName)
+		row.envSlug = slugify(environmentName)
+		legacyRows = append(legacyRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate composes without a stored identity: %w", err)
+	}
+	rows.Close()
+
+	// The queries must finish before any write: SQLite runs on a single
+	// connection, so an UPDATE issued while rows are open would deadlock.
+	for _, row := range legacyRows {
+		if _, err := db.ExecContext(ctx, `
+			UPDATE composes
+			SET project_slug = ?, env_slug = ?
+			WHERE id = ?
+		`, row.projectSlug, row.envSlug, row.id); err != nil {
+			return fmt.Errorf("store legacy identity for compose %d: %w", row.id, err)
+		}
+	}
+	return nil
+}
+
 func (r *repository) list(ctx context.Context, environmentID int64) ([]Compose, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, environment_id, name, yaml_content, created_at, updated_at
+		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at
 		FROM composes
 		WHERE environment_id = ?
 		ORDER BY id ASC
@@ -737,11 +773,11 @@ func (r *repository) list(ctx context.Context, environmentID int64) ([]Compose, 
 	return composes, nil
 }
 
-func (r *repository) create(ctx context.Context, environmentID int64, name, yamlContent string, createdAt time.Time) (Compose, error) {
+func (r *repository) create(ctx context.Context, environmentID int64, projectSlug, envSlug, name, yamlContent string, createdAt time.Time) (Compose, error) {
 	result, err := r.db.ExecContext(ctx, `
-		INSERT INTO composes (environment_id, name, yaml_content, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, environmentID, name, yamlContent, createdAt.Unix(), createdAt.Unix())
+		INSERT INTO composes (environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, environmentID, name, projectSlug, envSlug, yamlContent, createdAt.Unix(), createdAt.Unix())
 	if err != nil {
 		return Compose{}, err
 	}
@@ -754,7 +790,7 @@ func (r *repository) create(ctx context.Context, environmentID int64, name, yaml
 
 func (r *repository) findByID(ctx context.Context, environmentID, id int64) (Compose, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, environment_id, name, yaml_content, created_at, updated_at
+		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at
 		FROM composes
 		WHERE environment_id = ? AND id = ?
 	`, environmentID, id)
@@ -788,7 +824,7 @@ func scanComposeValues(scan func(...any) error) (Compose, error) {
 		createdAt int64
 		updatedAt int64
 	)
-	if err := scan(&compose.ID, &compose.EnvironmentID, &compose.Name, &compose.YAMLContent, &createdAt, &updatedAt); err != nil {
+	if err := scan(&compose.ID, &compose.EnvironmentID, &compose.Name, &compose.ProjectSlug, &compose.EnvSlug, &compose.YAMLContent, &createdAt, &updatedAt); err != nil {
 		return Compose{}, err
 	}
 	compose.CreatedAt = time.Unix(createdAt, 0).UTC()
@@ -844,17 +880,15 @@ func validateComposeName(value string) (string, error) {
 	return trimmed, nil
 }
 
-// runRequestFor computes a Compose's deterministic deploy identity: its
-// `docker compose -p` project name and the paths its resolved files live at
-// under dataDir (ADR-0002). It is pure and deterministic so status checks can
-// recompute it without redoing any deploy work.
-func runRequestFor(dataDir, projectName, environmentName string, compose Compose) RunRequest {
-	projectSlug := slugify(projectName)
-	environmentSlug := slugify(environmentName)
+// runRequestFor computes a Compose's deploy identity from the slugs stored on
+// its row (ADR-0005): the `docker compose -p` project name and the paths its
+// resolved files live at under dataDir (ADR-0002). The compose name slugifies
+// here because the row stores the display name only.
+func runRequestFor(dataDir string, compose Compose) RunRequest {
 	composeSlug := slugify(compose.Name)
-	dir := filepath.Join(dataDir, projectSlug, environmentSlug, composeSlug)
+	dir := filepath.Join(dataDir, compose.ProjectSlug, compose.EnvSlug, composeSlug)
 	return RunRequest{
-		ProjectName:     projectSlug + "-" + environmentSlug + "-" + composeSlug,
+		ProjectName:     compose.ProjectSlug + "-" + compose.EnvSlug + "-" + composeSlug,
 		ComposeFilePath: filepath.Join(dir, composeFileName),
 		EnvFilePath:     filepath.Join(dir, envFileName),
 	}

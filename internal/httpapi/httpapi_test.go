@@ -1452,6 +1452,249 @@ func TestComposeLogsValidatesDeploymentAndPropagatesRunnerErrors(t *testing.T) {
 	}
 }
 
+func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Rename Co", "")
+	production := productionEnvironment(t, server, project)
+
+	createResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer createResponse.Body.Close()
+	var compose composeResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&compose); err != nil {
+		t.Fatalf("decode created compose: %v", err)
+	}
+
+	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
+	defer deployResponse.Body.Close()
+	if deployResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(deployResponse.Body)
+		t.Fatalf("deploy status = %d, want %d, body = %s", deployResponse.StatusCode, http.StatusOK, body)
+	}
+	assertRunIdentity(t, "deploy", server.runner.calls[0].request, server.dataDir, "rename-co", "production", "web")
+
+	renameResponse := server.request(t, http.MethodPut, "/api/projects/"+strconv.FormatInt(project.ID, 10), map[string]string{
+		"name":        "Renamed Co",
+		"description": "Renamed after the deploy",
+	})
+	defer renameResponse.Body.Close()
+	if renameResponse.StatusCode != http.StatusOK {
+		t.Fatalf("rename project status = %d, want %d", renameResponse.StatusCode, http.StatusOK)
+	}
+
+	// Status must still be read from the original path: the deployed files
+	// did not move with the rename.
+	listResponse := server.request(t, http.MethodGet, composesPath(project.ID, production.ID), nil)
+	defer listResponse.Body.Close()
+	var composesList []composeResponse
+	if err := json.NewDecoder(listResponse.Body).Decode(&composesList); err != nil {
+		t.Fatalf("decode composes list: %v", err)
+	}
+	if len(composesList) != 1 || composesList[0].Status != (composeStatusResponse{Running: 1, Total: 1}) {
+		t.Fatalf("composes list after rename = %+v, want the running stack found at its original path", composesList)
+	}
+	lastCall := server.runner.calls[len(server.runner.calls)-1]
+	if lastCall.method != "status" {
+		t.Fatalf("last runner call after rename = %q, want %q", lastCall.method, "status")
+	}
+	assertRunIdentity(t, "status after rename", lastCall.request, server.dataDir, "rename-co", "production", "web")
+
+	stopResponse := server.request(t, http.MethodPost, composeStopPath(project.ID, production.ID, compose.ID), nil)
+	defer stopResponse.Body.Close()
+	if stopResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(stopResponse.Body)
+		t.Fatalf("stop after project rename status = %d, want %d, body = %s", stopResponse.StatusCode, http.StatusOK, body)
+	}
+	assertRunIdentity(t, "stop", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, "rename-co", "production", "web")
+
+	restartResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, compose.ID), nil)
+	defer restartResponse.Body.Close()
+	if restartResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(restartResponse.Body)
+		t.Fatalf("restart after project rename status = %d, want %d, body = %s", restartResponse.StatusCode, http.StatusOK, body)
+	}
+	assertRunIdentity(t, "restart", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, "rename-co", "production", "web")
+
+	logsResponse := server.request(t, http.MethodGet, composeLogsPath(project.ID, production.ID, compose.ID), nil)
+	defer logsResponse.Body.Close()
+	if logsResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(logsResponse.Body)
+		t.Fatalf("logs after project rename status = %d, want %d, body = %s", logsResponse.StatusCode, http.StatusOK, body)
+	}
+	assertRunIdentity(t, "logs", server.runner.calls[len(server.runner.calls)-1].request, server.dataDir, "rename-co", "production", "web")
+
+	deleteResponse := server.request(t, http.MethodDelete, composePath(project.ID, production.ID, compose.ID), nil)
+	defer deleteResponse.Body.Close()
+	if deleteResponse.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(deleteResponse.Body)
+		t.Fatalf("delete after project rename status = %d, want %d, body = %s", deleteResponse.StatusCode, http.StatusNoContent, body)
+	}
+	lastCall = server.runner.calls[len(server.runner.calls)-1]
+	if lastCall.method != "down-with-volumes" {
+		t.Fatalf("last runner call after delete = %q, want %q (no orphaned teardown skip)", lastCall.method, "down-with-volumes")
+	}
+	assertRunIdentity(t, "delete", lastCall.request, server.dataDir, "rename-co", "production", "web")
+}
+
+func TestComposeActionsKeepOriginalIdentityAfterEnvironmentRename(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Rename Env Co", "")
+	production := productionEnvironment(t, server, project)
+
+	createResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer createResponse.Body.Close()
+	var compose composeResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&compose); err != nil {
+		t.Fatalf("decode created compose: %v", err)
+	}
+
+	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
+	defer deployResponse.Body.Close()
+	if deployResponse.StatusCode != http.StatusOK {
+		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
+	}
+
+	// Environments have no rename endpoint yet, so the rename is written
+	// directly; the invariant under test is that stored identity does not
+	// follow it.
+	if _, err := server.db.Exec("UPDATE environments SET name = 'canary' WHERE id = ?", production.ID); err != nil {
+		t.Fatalf("rename environment: %v", err)
+	}
+
+	listResponse := server.request(t, http.MethodGet, composesPath(project.ID, production.ID), nil)
+	defer listResponse.Body.Close()
+	var composesList []composeResponse
+	if err := json.NewDecoder(listResponse.Body).Decode(&composesList); err != nil {
+		t.Fatalf("decode composes list: %v", err)
+	}
+	if len(composesList) != 1 || composesList[0].Status != (composeStatusResponse{Running: 1, Total: 1}) {
+		t.Fatalf("composes list after rename = %+v, want the running stack found at its original path", composesList)
+	}
+
+	stopResponse := server.request(t, http.MethodPost, composeStopPath(project.ID, production.ID, compose.ID), nil)
+	defer stopResponse.Body.Close()
+	if stopResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(stopResponse.Body)
+		t.Fatalf("stop after environment rename status = %d, want %d, body = %s", stopResponse.StatusCode, http.StatusOK, body)
+	}
+	assertRunIdentity(t, "stop", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, "rename-env-co", "production", "web")
+
+	restartResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, compose.ID), nil)
+	defer restartResponse.Body.Close()
+	if restartResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(restartResponse.Body)
+		t.Fatalf("restart after environment rename status = %d, want %d, body = %s", restartResponse.StatusCode, http.StatusOK, body)
+	}
+	assertRunIdentity(t, "restart", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, "rename-env-co", "production", "web")
+
+	logsResponse := server.request(t, http.MethodGet, composeLogsPath(project.ID, production.ID, compose.ID), nil)
+	defer logsResponse.Body.Close()
+	if logsResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(logsResponse.Body)
+		t.Fatalf("logs after environment rename status = %d, want %d, body = %s", logsResponse.StatusCode, http.StatusOK, body)
+	}
+	assertRunIdentity(t, "logs", server.runner.calls[len(server.runner.calls)-1].request, server.dataDir, "rename-env-co", "production", "web")
+
+	deleteResponse := server.request(t, http.MethodDelete, composePath(project.ID, production.ID, compose.ID), nil)
+	defer deleteResponse.Body.Close()
+	if deleteResponse.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(deleteResponse.Body)
+		t.Fatalf("delete after environment rename status = %d, want %d, body = %s", deleteResponse.StatusCode, http.StatusNoContent, body)
+	}
+	lastCall := server.runner.calls[len(server.runner.calls)-1]
+	if lastCall.method != "down-with-volumes" {
+		t.Fatalf("last runner call after delete = %q, want %q (no orphaned teardown skip)", lastCall.method, "down-with-volumes")
+	}
+	assertRunIdentity(t, "delete", lastCall.request, server.dataDir, "rename-env-co", "production", "web")
+}
+
+func TestComposeCreateStoresDeployIdentity(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Identity Co", "")
+	production := productionEnvironment(t, server, project)
+
+	createResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer createResponse.Body.Close()
+	if createResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("create compose status = %d, want %d", createResponse.StatusCode, http.StatusCreated)
+	}
+	var compose composeResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&compose); err != nil {
+		t.Fatalf("decode created compose: %v", err)
+	}
+
+	var projectSlug, envSlug string
+	if err := server.db.QueryRow("SELECT project_slug, env_slug FROM composes WHERE id = ?", compose.ID).Scan(&projectSlug, &envSlug); err != nil {
+		t.Fatalf("read stored compose identity: %v", err)
+	}
+	if projectSlug != "identity-co" || envSlug != "production" {
+		t.Fatalf("stored compose identity = (%q, %q), want (%q, %q)", projectSlug, envSlug, "identity-co", "production")
+	}
+}
+
+func TestBackfillLegacyIdentitiesFreezesCurrentParentSlugs(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Legacy Co", "")
+	production := productionEnvironment(t, server, project)
+
+	// A row created before identity was stored: no slugs, exactly what
+	// migration 00007 leaves behind.
+	now := time.Now().UTC().Truncate(time.Second)
+	result, err := server.db.Exec(`
+		INSERT INTO composes (environment_id, name, yaml_content, created_at, updated_at)
+		VALUES (?, 'web', 'services: {}\n', ?, ?)
+	`, production.ID, now.Unix(), now.Unix())
+	if err != nil {
+		t.Fatalf("insert legacy compose: %v", err)
+	}
+	legacyID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read legacy compose id: %v", err)
+	}
+
+	if err := composes.BackfillLegacyIdentities(context.Background(), server.db); err != nil {
+		t.Fatalf("backfill legacy identities: %v", err)
+	}
+	var projectSlug, envSlug string
+	if err := server.db.QueryRow("SELECT project_slug, env_slug FROM composes WHERE id = ?", legacyID).Scan(&projectSlug, &envSlug); err != nil {
+		t.Fatalf("read backfilled compose identity: %v", err)
+	}
+	if projectSlug != "legacy-co" || envSlug != "production" {
+		t.Fatalf("backfilled compose identity = (%q, %q), want (%q, %q)", projectSlug, envSlug, "legacy-co", "production")
+	}
+
+	// Idempotent: once frozen, a later parent rename is never re-derived.
+	renameResponse := server.request(t, http.MethodPut, "/api/projects/"+strconv.FormatInt(project.ID, 10), map[string]string{
+		"name":        "Relocated Co",
+		"description": "Renamed after the backfill",
+	})
+	defer renameResponse.Body.Close()
+	if renameResponse.StatusCode != http.StatusOK {
+		t.Fatalf("rename project status = %d, want %d", renameResponse.StatusCode, http.StatusOK)
+	}
+	if err := composes.BackfillLegacyIdentities(context.Background(), server.db); err != nil {
+		t.Fatalf("second backfill legacy identities: %v", err)
+	}
+	if err := server.db.QueryRow("SELECT project_slug, env_slug FROM composes WHERE id = ?", legacyID).Scan(&projectSlug, &envSlug); err != nil {
+		t.Fatalf("reread backfilled compose identity: %v", err)
+	}
+	if projectSlug != "legacy-co" || envSlug != "production" {
+		t.Fatalf("compose identity after second backfill = (%q, %q), want it unchanged", projectSlug, envSlug)
+	}
+}
+
 func TestEnvironmentVariablesRequireExistingProjectAndEnvironment(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
@@ -1791,6 +2034,38 @@ func createProject(t *testing.T, server *testServer, name, description string) p
 		t.Fatalf("decode created project: %v", err)
 	}
 	return project
+}
+
+func productionEnvironment(t *testing.T, server *testServer, project projectResponse) environmentResponse {
+	t.Helper()
+	response := server.request(t, http.MethodGet, projectEnvironmentsPath(project.ID), nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("list environments status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	var environments []environmentResponse
+	if err := json.NewDecoder(response.Body).Decode(&environments); err != nil {
+		t.Fatalf("decode environments: %v", err)
+	}
+	if len(environments) == 0 {
+		t.Fatalf("environments = %+v, want the default environment", environments)
+	}
+	return environments[0]
+}
+
+// assertRunIdentity checks a runner call targeted the deploy identity derived
+// from the given stored slugs (ADR-0002).
+func assertRunIdentity(t *testing.T, label string, got composes.RunRequest, dataDir, projectSlug, envSlug, composeSlug string) {
+	t.Helper()
+	dir := filepath.Join(dataDir, projectSlug, envSlug, composeSlug)
+	want := composes.RunRequest{
+		ProjectName:     projectSlug + "-" + envSlug + "-" + composeSlug,
+		ComposeFilePath: filepath.Join(dir, "docker-compose.yml"),
+		EnvFilePath:     filepath.Join(dir, ".env"),
+	}
+	if got != want {
+		t.Fatalf("%s run request = %+v, want %+v", label, got, want)
+	}
 }
 
 func projectEnvironmentsPath(projectID int64) string {
