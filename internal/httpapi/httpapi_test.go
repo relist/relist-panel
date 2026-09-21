@@ -292,6 +292,73 @@ func TestProjectNamesAreUniqueAndNamesAreRequired(t *testing.T) {
 	}
 }
 
+func TestProjectCreateRejectsSlugCollisions(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	createProject(t, server, "My App", "First project")
+
+	slugCollisionResponse := postJSON(t, server, "/api/projects", map[string]string{
+		"name":        "my-app",
+		"description": "Slug-colliding project",
+	})
+	defer slugCollisionResponse.Body.Close()
+	if slugCollisionResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("slug-colliding project status = %d, want %d", slugCollisionResponse.StatusCode, http.StatusConflict)
+	}
+	var failure map[string]string
+	if err := json.NewDecoder(slugCollisionResponse.Body).Decode(&failure); err != nil {
+		t.Fatalf("decode slug collision failure: %v", err)
+	}
+	if failure["error"] != "a project with a conflicting name already exists" {
+		t.Fatalf("slug collision failure = %+v, want the slug conflict error", failure)
+	}
+
+	createProject(t, server, "???", "Punctuation-only project")
+	fallbackCollisionResponse := postJSON(t, server, "/api/projects", map[string]string{
+		"name":        "!!!???",
+		"description": "Collides through the slug fallback",
+	})
+	defer fallbackCollisionResponse.Body.Close()
+	if fallbackCollisionResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("punctuation-only slug collision status = %d, want %d", fallbackCollisionResponse.StatusCode, http.StatusConflict)
+	}
+}
+
+func TestProjectRenameRejectsSlugCollisions(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	first := createProject(t, server, "My App", "First project")
+	second := createProject(t, server, "Operations", "Internal tooling")
+	secondPath := "/api/projects/" + strconv.FormatInt(second.ID, 10)
+
+	collisionResponse := server.request(t, http.MethodPut, secondPath, map[string]string{
+		"name":        "my-app",
+		"description": "Renames into a slug collision",
+	})
+	defer collisionResponse.Body.Close()
+	if collisionResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("rename into a slug collision status = %d, want %d", collisionResponse.StatusCode, http.StatusConflict)
+	}
+
+	freeResponse := server.request(t, http.MethodPut, secondPath, map[string]string{
+		"name":        "Operations Hub",
+		"description": "Renames to a free name",
+	})
+	defer freeResponse.Body.Close()
+	if freeResponse.StatusCode != http.StatusOK {
+		t.Fatalf("rename to a free name status = %d, want %d", freeResponse.StatusCode, http.StatusOK)
+	}
+
+	selfResponse := server.request(t, http.MethodPut, "/api/projects/"+strconv.FormatInt(first.ID, 10), map[string]string{
+		"name":        "my-app",
+		"description": "Renames to another spelling of its own slug",
+	})
+	defer selfResponse.Body.Close()
+	if selfResponse.StatusCode != http.StatusOK {
+		t.Fatalf("rename to own slug variant status = %d, want %d", selfResponse.StatusCode, http.StatusOK)
+	}
+}
+
 func TestProjectCreationProvisionsProductionEnvironment(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
@@ -413,6 +480,44 @@ func TestEnvironmentNamesAreRequiredAndProjectsMustExist(t *testing.T) {
 	defer listResponse.Body.Close()
 	if listResponse.StatusCode != http.StatusNotFound {
 		t.Fatalf("missing project environment list status = %d, want %d", listResponse.StatusCode, http.StatusNotFound)
+	}
+}
+
+func TestEnvironmentCreateRejectsSlugCollisionsWithinProject(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Storefront", "Customer-facing application")
+	otherProject := createProject(t, server, "Operations", "Internal tooling")
+
+	defaultCollisionResponse := postJSON(t, server, projectEnvironmentsPath(project.ID), map[string]string{"name": "Production!!!"})
+	defer defaultCollisionResponse.Body.Close()
+	if defaultCollisionResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("slug collision with the default environment status = %d, want %d", defaultCollisionResponse.StatusCode, http.StatusConflict)
+	}
+	var failure map[string]string
+	if err := json.NewDecoder(defaultCollisionResponse.Body).Decode(&failure); err != nil {
+		t.Fatalf("decode slug collision failure: %v", err)
+	}
+	if failure["error"] != "an environment with a conflicting name already exists" {
+		t.Fatalf("slug collision failure = %+v, want the slug conflict error", failure)
+	}
+
+	createResponse := postJSON(t, server, projectEnvironmentsPath(project.ID), map[string]string{"name": "Staging"})
+	defer createResponse.Body.Close()
+	if createResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("create environment status = %d, want %d", createResponse.StatusCode, http.StatusCreated)
+	}
+
+	slugCollisionResponse := postJSON(t, server, projectEnvironmentsPath(project.ID), map[string]string{"name": "staging!!!"})
+	defer slugCollisionResponse.Body.Close()
+	if slugCollisionResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("slug-colliding environment status = %d, want %d", slugCollisionResponse.StatusCode, http.StatusConflict)
+	}
+
+	otherProjectResponse := postJSON(t, server, projectEnvironmentsPath(otherProject.ID), map[string]string{"name": "staging!!!"})
+	defer otherProjectResponse.Body.Close()
+	if otherProjectResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("same environment slug in another project status = %d, want %d", otherProjectResponse.StatusCode, http.StatusCreated)
 	}
 }
 

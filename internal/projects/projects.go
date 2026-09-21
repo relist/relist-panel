@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"relist-panel/internal/environments"
+	"relist-panel/internal/slug"
 )
 
 const (
@@ -91,8 +92,22 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	name := strings.TrimSpace(input.Name)
+	siblings, err := s.repository.list(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create project")
+		return
+	}
+	projectSlug := slug.Slugify(name)
+	for _, sibling := range siblings {
+		if slug.Slugify(sibling.Name) == projectSlug {
+			writeError(w, http.StatusConflict, "a project with a conflicting name already exists")
+			return
+		}
+	}
+
 	createdAt := s.now().UTC()
-	project, err := s.repository.create(r.Context(), strings.TrimSpace(input.Name), input.Description, createdAt)
+	project, err := s.repository.create(r.Context(), name, input.Description, createdAt)
 	if err != nil {
 		if isUniqueConstraint(err) {
 			writeError(w, http.StatusConflict, "a project with that name already exists")
@@ -155,12 +170,26 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load project")
 		return
 	}
+	name := strings.TrimSpace(input.Name)
+	siblings, err := s.repository.list(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not update project")
+		return
+	}
+	projectSlug := slug.Slugify(name)
+	for _, sibling := range siblings {
+		if sibling.ID != id && slug.Slugify(sibling.Name) == projectSlug {
+			writeError(w, http.StatusConflict, "a project with a conflicting name already exists")
+			return
+		}
+	}
+
 	updatedAt := s.now().UTC().Truncate(time.Second)
 	if !updatedAt.After(existing.LastUpdated) {
 		updatedAt = existing.LastUpdated.Add(time.Second)
 	}
 
-	if err := s.repository.update(r.Context(), id, strings.TrimSpace(input.Name), input.Description, updatedAt); err != nil {
+	if err := s.repository.update(r.Context(), id, name, input.Description, updatedAt); err != nil {
 		if isUniqueConstraint(err) {
 			writeError(w, http.StatusConflict, "a project with that name already exists")
 			return
