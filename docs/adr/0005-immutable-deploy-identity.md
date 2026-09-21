@@ -16,3 +16,10 @@ re-pointing running containers — a deploy-time migration feature, not a rename
 deliberately out of v1 scope (ADR-0001) and should stay out unless a user-facing "rename re-home"
 feature is designed on its own. Future architecture reviews should not re-suggest making identity
 name-derived again.
+
+**Known edge, accepted:** the one-time backfill fills a legacy row's empty slugs from the parents'
+*current* names. A Project or Environment that was renamed *before* upgrading to stored identities
+gets its post-rename slug frozen, leaving the stack deployed under the pre-rename name unreachable
+through the panel — the same symptom class this ADR fixes, now permanent for that row. Composes
+created after this change are unaffected, and renames after the backfill are safe because slugs are
+only ever read, never re-derived.
