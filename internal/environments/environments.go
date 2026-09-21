@@ -123,12 +123,9 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create environment")
 		return
 	}
-	environmentSlug := slug.Slugify(name)
-	for _, sibling := range siblings {
-		if slug.Slugify(sibling.Name) == environmentSlug {
-			writeError(w, http.StatusConflict, "an environment with a conflicting name already exists")
-			return
-		}
+	if slug.Conflicts(name, siblings, func(e Environment) string { return e.Name }) {
+		writeError(w, http.StatusConflict, "an environment with a conflicting name already exists")
+		return
 	}
 
 	environment, err := s.repository.create(r.Context(), projectID, name, s.now().UTC())

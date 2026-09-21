@@ -24,3 +24,15 @@ func Slugify(value string) string {
 	}
 	return slug
 }
+
+// Conflicts reports whether candidate's slug matches any sibling's slug —
+// the "My App" vs "my-app" collision that NOCASE name uniqueness lets through.
+func Conflicts[T any](candidate string, siblings []T, nameOf func(T) string) bool {
+	candidateSlug := Slugify(candidate)
+	for _, sibling := range siblings {
+		if Slugify(nameOf(sibling)) == candidateSlug {
+			return true
+		}
+	}
+	return false
+}

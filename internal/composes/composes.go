@@ -170,12 +170,9 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create compose")
 		return
 	}
-	composeSlug := slug.Slugify(name)
-	for _, sibling := range siblings {
-		if slug.Slugify(sibling.Name) == composeSlug {
-			writeError(w, http.StatusConflict, "a compose with a conflicting name already exists")
-			return
-		}
+	if slug.Conflicts(name, siblings, func(c Compose) string { return c.Name }) {
+		writeError(w, http.StatusConflict, "a compose with a conflicting name already exists")
+		return
 	}
 	yamlContent := ""
 	if input.YAMLContent != nil {

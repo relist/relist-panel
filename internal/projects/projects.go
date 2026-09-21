@@ -98,12 +98,9 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create project")
 		return
 	}
-	projectSlug := slug.Slugify(name)
-	for _, sibling := range siblings {
-		if slug.Slugify(sibling.Name) == projectSlug {
-			writeError(w, http.StatusConflict, "a project with a conflicting name already exists")
-			return
-		}
+	if slug.Conflicts(name, siblings, func(p Project) string { return p.Name }) {
+		writeError(w, http.StatusConflict, "a project with a conflicting name already exists")
+		return
 	}
 
 	createdAt := s.now().UTC()
