@@ -160,7 +160,7 @@ flowchart TB
         SOCK["/var/run/docker.sock"]
         DATA["/var/lib/relist-panel (data dir)"]
         DE["dockerd — Docker Engine"]
-        NET(("relist-public network"))
+        NET(("relist-network network"))
         USERCONT["User-deployed containers\n(from Compose stacks)"]
     end
 
@@ -194,7 +194,7 @@ sequenceDiagram
     Op->>UI: Click "Deploy"
     UI->>API: POST /composes/{id}/deploy
     API->>API: Load Compose YAML + Environment's variables
-    API->>API: Inject relist-public network into every service
+    API->>API: Inject relist-network network into every service
     API->>FS: Write resolved docker-compose.yml
     API->>FS: Write .env file with Environment Variables
     API->>Runner: Up(projectName, composeFilePath, envFilePath)

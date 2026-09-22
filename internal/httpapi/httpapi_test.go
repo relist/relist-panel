@@ -923,7 +923,7 @@ func TestAuthenticatedAdminCanDeployCompose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read resolved compose file: %v", err)
 	}
-	if !strings.Contains(string(resolvedYAML), "relist-public") {
+	if !strings.Contains(string(resolvedYAML), "relist-network") {
 		t.Fatalf("resolved compose yaml = %s, want it to contain the shared network", resolvedYAML)
 	}
 	if !strings.Contains(string(resolvedYAML), "custom") {

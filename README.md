@@ -27,22 +27,22 @@ at `<data dir>/panel.db`.
 ## Self-hosted install
 
 Ticket 02 adds the install bootstrap: a `docker-compose.yml` that brings up
-the panel, Traefik, and the shared `relist-public` network together.
+the panel, Traefik, and the shared `relist-network` network together.
 
-`relist-public` is declared `external: true` — it must outlive this install
+`relist-network` is declared `external: true` — it must outlive this install
 stack's own lifecycle, since every Compose deployed through the panel later
 attaches to it too, so `docker compose down` on this stack must never be able
 to delete it out from under a running deployment (ADR-0002). Create it once,
 then bring up the stack:
 
 ```sh
-docker network create relist-public   # one-time, safe to re-run
+docker network create relist-network   # one-time, safe to re-run
 docker compose up -d
 ```
 
 This builds the panel image (Go binary + embedded frontend, per the
 `Dockerfile`) and starts it alongside Traefik, both attached to
-`relist-public`. The panel is reachable two ways out of the box:
+`relist-network`. The panel is reachable two ways out of the box:
 
 - Directly, via its published port: `http://<host>:8080/`
 - Through Traefik, via `Host` routing: `http://panel.localhost/` (resolves to

@@ -11,7 +11,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${RELIST_DATA_DIR:-/var/lib/relist-panel}:${RELIST_DATA_DIR:-/var/lib/relist-panel}
     networks:
-      - relist-public
+      - relist-network
     labels:
       - traefik.enable=true
       - traefik.http.routers.panel.rule=Host(`${RELIST_DOMAIN:-panel.localhost}`)
@@ -29,15 +29,15 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
-      - relist-public
+      - relist-network
 
-# relist-public is external: it must outlive this install stack's own
+# relist-network is external: it must outlive this install stack's own
 # lifecycle, since every deployed Compose (ticket 08+) also attaches to it,
 # so `docker compose down` here must never be able to tear it down. Create it
 # once before the first `docker compose up` (see README) — the panel also
 # ensures it exists on its own startup as a best-effort self-heal, per
 # ADR-0002, for runs that don't go through this compose file at all.
 networks:
-  relist-public:
+  relist-network:
     external: true
-    name: relist-public
+    name: relist-network

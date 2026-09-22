@@ -13,7 +13,7 @@ import (
 // deployed Compose, per ADR-0002. It is a fixed name, not configurable,
 // because docker-compose.yml (the install bootstrap) references it by this
 // exact literal, marked external there — see the ADR for why.
-const NetworkName = "relist-public"
+const NetworkName = "relist-network"
 
 // EnsureNetwork makes sure a Docker network with the given name exists,
 // creating it if it does not. It is idempotent: calling it when the network
