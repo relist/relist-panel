@@ -44,7 +44,7 @@ This builds the panel image (Go binary + embedded frontend, per the
 `Dockerfile`) and starts it alongside Traefik, both attached to
 `relist-network`. The panel is reachable two ways out of the box:
 
-- Directly, via its published port: `http://<host>:8080/`
+- Directly, via its published port: `http://<host>:8888/`
 - Through Traefik, via `Host` routing: `http://panel.localhost/` (resolves to
   loopback on most systems without any DNS setup) — override the hostname
   with `RELIST_DOMAIN` for a real domain
@@ -52,8 +52,9 @@ This builds the panel image (Go binary + embedded frontend, per the
 Override the defaults via environment variables (or a `.env` file next to
 `docker-compose.yml`):
 
-- `RELIST_PORT` (default `8080`) — the panel's port, on both the host and the
-  container
+- `RELIST_PORT` (default `8080`) — the panel's port inside the container; when
+  set it also becomes the published host port, which otherwise defaults to
+  `8888`
 - `RELIST_DATA_DIR` (default `/var/lib/relist-panel`) — bind-mounted at the
   **same path** on the host and inside the panel container, per ADR-0002
 - `RELIST_DOMAIN` (default `panel.localhost`) — the Host rule Traefik routes
