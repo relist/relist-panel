@@ -1,0 +1,29 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Build the embedded frontend and Go binary
+    cmds:
+      - task: build
+
+  build:
+    desc: Build the embedded frontend and Go binary
+    deps: [build-web]
+    cmds:
+      - go build -o relist-panel .
+
+  build-web:
+    desc: Generate the embedded frontend assets
+    cmds:
+      - go generate ./internal/webassets/...
+
+  test:
+    desc: Build the embedded frontend and run the Go tests
+    deps: [build-web]
+    cmds:
+      - go test ./...
+
+  typecheck:
+    desc: Typecheck the web frontend
+    cmds:
+      - pnpm --dir web typecheck

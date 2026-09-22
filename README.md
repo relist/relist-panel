@@ -6,12 +6,12 @@ shell, SQLite database, and goose migrations.
 
 ## Development
 
-Install the frontend dependencies, then build the embedded frontend and Go
-binary:
+Install [go-task](https://taskfile.dev) and the frontend dependencies, then
+build the embedded frontend and Go binary:
 
 ```sh
 pnpm --dir web install
-make build
+task build
 ```
 
 Run the binary with a writable data directory during local development:
