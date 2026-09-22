@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 
+	"relist-panel/internal/composes"
 	"relist-panel/internal/config"
 	"relist-panel/internal/database"
 	"relist-panel/internal/dockerexec"
@@ -32,6 +33,12 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
+
+	// Rows created before identity was stored (ADR-0005) must be frozen to
+	// the identity their stacks run under before any action addresses them.
+	if err := composes.BackfillLegacyIdentities(context.Background(), db); err != nil {
+		log.Fatal(err)
+	}
 
 	server := &http.Server{
 		Addr:    cfg.Address(),

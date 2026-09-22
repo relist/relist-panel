@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"relist-panel/internal/slug"
 )
 
 const (
@@ -115,7 +117,18 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	environment, err := s.repository.create(r.Context(), projectID, strings.TrimSpace(input.Name), s.now().UTC())
+	name := strings.TrimSpace(input.Name)
+	siblings, err := s.repository.list(r.Context(), projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create environment")
+		return
+	}
+	if slug.Conflicts(name, siblings, func(e Environment) string { return e.Name }) {
+		writeError(w, http.StatusConflict, "an environment with a conflicting name already exists")
+		return
+	}
+
+	environment, err := s.repository.create(r.Context(), projectID, name, s.now().UTC())
 	if err != nil {
 		if isUniqueConstraint(err) {
 			writeError(w, http.StatusConflict, "an environment with that name already exists")
