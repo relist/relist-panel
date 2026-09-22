@@ -1,4 +1,4 @@
-FROM node:22-alpine AS web-builder
+FROM node:24-alpine AS web-builder
 WORKDIR /src/web
 COPY web/package.json web/pnpm-lock.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile
