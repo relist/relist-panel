@@ -16,6 +16,7 @@ import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { paths } from '../app/paths';
 import { ComposeStatusTag, EmptyState } from './primitives';
 import { YamlEditor } from './YamlEditor';
+import { isSecret, maskedValue } from './variables-view';
 import type { Compose, Environment, EnvironmentVariable, Project } from '../data/types';
 
 const { Text } = Typography;
@@ -45,7 +46,10 @@ function VariableRow({
   const { token } = theme.useToken();
   const { message } = App.useApp();
   const [revealed, setRevealed] = useState(false);
-  const masked = '•'.repeat(Math.min(16, Math.max(8, variable.value.length)));
+  // The `secret` marking is client-side until the API grows the flag (§11) —
+  // the same source the Variables tab reads.
+  const secret = isSecret(variable);
+  const masked = maskedValue(variable.value);
   const alreadyReferenced = draft.includes(reference(variable.key));
 
   return (
@@ -67,7 +71,7 @@ function VariableRow({
           <Text strong style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }}>
             {variable.key}
           </Text>
-          {variable.secret ? (
+          {secret ? (
             <Tag color="gold" variant="filled">
               secret
             </Tag>
@@ -77,9 +81,9 @@ function VariableRow({
         </Flex>
         <Flex align="center" gap={2} style={{ minWidth: 0 }}>
           <Text ellipsis style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }} type="secondary">
-            {variable.secret && !revealed ? masked : variable.value}
+            {secret && !revealed ? masked : variable.value}
           </Text>
-          {variable.secret && (
+          {secret && (
             <Tooltip title={revealed ? 'Hide value' : 'Reveal value'}>
               <Button
                 aria-label={revealed ? 'Hide value' : 'Reveal value'}

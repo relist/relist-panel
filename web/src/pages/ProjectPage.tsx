@@ -34,6 +34,7 @@ import { useNavigate, useParams } from 'react-router';
 
 import { paths } from '../app/paths';
 import { DangerModal } from '../components/DangerModal';
+import { VariablesPanel } from '../components/VariablesPanel';
 import { YamlEditor } from '../components/YamlEditor';
 import { ComposeStatusInline, ComposeStatusTag, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { usePanel } from '../data/store';
@@ -72,6 +73,7 @@ export function ProjectPage() {
     deleteEnvironment,
     deployCompose,
     isPending,
+    loadVariables,
     projects,
     restartCompose,
     stopCompose,
@@ -99,6 +101,17 @@ export function ProjectPage() {
   useEffect(() => {
     setActionError(undefined);
   }, [projectId]);
+
+  // The Variables tab (and the tab count above) read the Environment's
+  // variables; the tree ships with them unloaded, so the active Environment's
+  // list is fetched here — the panel only renders the wait. A failed load
+  // joins this screen's error Alert, per the ticket-07 pattern.
+  const variablesEnvironmentId = activeEnvironment?.id;
+  useEffect(() => {
+    if (variablesEnvironmentId !== undefined) {
+      loadVariables(variablesEnvironmentId).catch(fail);
+    }
+  }, [loadVariables, variablesEnvironmentId]);
 
   const composes = useMemo(() => (activeEnvironment ? activeEnvironment.composes : []), [activeEnvironment]);
 
@@ -258,15 +271,6 @@ export function ProjectPage() {
       onClick: () => setDeletingEnvironment(environment),
     })),
   ];
-
-  const variablesPlaceholder = (
-    <Card variant="outlined">
-      <EmptyState
-        description="Masking, reveal and copy, the key filter and the bulk .env paste land with ticket 08 of the design port."
-        title="Not ported yet"
-      />
-    </Card>
-  );
 
   const settingsPlaceholder = (
     <Card variant="outlined">
@@ -511,7 +515,7 @@ export function ProjectPage() {
                 label: `Composes (${composes.length})`,
               },
               {
-                children: variablesPlaceholder,
+                children: activeEnvironment ? <VariablesPanel environment={activeEnvironment} onError={fail} /> : null,
                 key: 'variables',
                 label: `Variables (${activeEnvironment?.variables.length ?? 0})`,
               },
