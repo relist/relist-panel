@@ -28,6 +28,8 @@ import { createRoot } from 'react-dom/client';
 import './index.css';
 import './monaco';
 
+import { buildTheme, MONACO_THEME } from './app/theme';
+
 const codeFontFamily = "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace";
 
 type AuthMode = 'setup' | 'login';
@@ -1243,7 +1245,7 @@ function ComposesPanel({ projectID, environmentID }: { projectID: number; enviro
           <Editor
             height="320px"
             language="yaml"
-            theme="vs"
+            theme={MONACO_THEME.light}
             value={createYAML}
             onChange={(value) => setCreateYAML(value ?? '')}
             options={monacoEditorOptions}
@@ -1540,7 +1542,7 @@ function ComposeDetailPanel({
                   <Editor
                     height="480px"
                     language="yaml"
-                    theme="vs"
+                    theme={MONACO_THEME.light}
                     value={yamlContent}
                     onChange={(value) => setYamlContent(value ?? '')}
                     options={monacoEditorOptions}
@@ -1600,7 +1602,7 @@ function formatProjectDate(value: string): string {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <StyleProvider layer>
-      <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm }}>
+      <ConfigProvider theme={buildTheme('light')}>
         <App />
       </ConfigProvider>
     </StyleProvider>

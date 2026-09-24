@@ -11,6 +11,7 @@ import YamlWorker from './yaml.worker.ts?worker';
 // (the schema listed for docker-compose.yml in the SchemaStore catalog). Bundled inline so the
 // editor's completion, hover and validation work fully offline.
 import composeSchema from './schemas/compose-spec.json';
+import { MONACO_THEME, monacoThemeData } from './app/theme';
 
 const createWorkerFor = (_workerID: string, label: string) => {
   if (label === 'yaml') {
@@ -39,6 +40,11 @@ monaco.editor.createWebWorker = ((opts: { label?: string; createData?: unknown; 
 }) as typeof monaco.editor.createWebWorker;
 
 loader.config({ monaco });
+
+// Monaco ships `vs` / `vs-dark`; this theme is the same editor wearing the
+// panel's design tokens (see `app/theme.ts`). Dark mode is out of scope
+// (ADR-0004), so only the light theme is defined.
+monaco.editor.defineTheme(MONACO_THEME.light, monacoThemeData('light'));
 
 configureMonacoYaml(monaco, {
   enableSchemaRequest: false,
