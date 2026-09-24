@@ -5,12 +5,14 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@ant-design/cssinjs": "2.1.2",
     "@monaco-editor/react": "4.7.0",
     "antd": "6.5.1",
+    "dayjs": "1.11.13",
     "monaco-editor": "0.55.0",
     "monaco-yaml": "^5.5.1",
     "react": "19.2.7",
@@ -21,6 +23,7 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.3",
     "typescript": "5.9.3",
-    "vite": "8.1.5"
+    "vite": "8.1.5",
+    "vitest": "^5.0.1"
   }
 }
