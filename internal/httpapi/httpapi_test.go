@@ -1916,6 +1916,85 @@ func TestRootServesEmbeddedFrontend(t *testing.T) {
 	}
 }
 
+// TestDeepLinksServeTheAppShell pins the history-routing contract: the panel
+// serves dist/index.html for any path that is not a real file (the frontend
+// router resolves it client-side), while the API namespace keeps answering
+// 401/404 and real build output keeps coming from /assets/.
+func TestDeepLinksServeTheAppShell(t *testing.T) {
+	server := newTestServer(t)
+
+	healthz := server.request(t, http.MethodGet, "/healthz", nil)
+	healthz.Body.Close()
+	if healthz.StatusCode != http.StatusOK {
+		t.Fatalf("healthz status = %d, want %d", healthz.StatusCode, http.StatusOK)
+	}
+
+	// A fresh load of a deep link while signed out still reaches the app shell,
+	// never a 404 page — the sign-in flow takes over inside the app.
+	deepLink := server.request(t, http.MethodGet, "/projects/1/env/1/compose/1", nil)
+	defer deepLink.Body.Close()
+	if deepLink.StatusCode != http.StatusOK {
+		t.Fatalf("deep link status = %d, want %d", deepLink.StatusCode, http.StatusOK)
+	}
+	if got := deepLink.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Fatalf("deep link content type = %q, want text/html", got)
+	}
+	shell, err := io.ReadAll(deepLink.Body)
+	if err != nil {
+		t.Fatalf("read deep link body: %v", err)
+	}
+	if !strings.Contains(string(shell), "Relist Panel") {
+		t.Fatalf("deep link body does not contain the app shell")
+	}
+
+	// Signed out, an unknown API path is authenticated away, as before.
+	unauthedAPI := server.request(t, http.MethodGet, "/api/unknown", nil)
+	unauthedAPI.Body.Close()
+	if unauthedAPI.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unknown API path while signed out status = %d, want %d", unauthedAPI.StatusCode, http.StatusUnauthorized)
+	}
+
+	setupAndLogin(t, server)
+
+	// Signed in, the same deep link reaches the shell too…
+	authedDeepLink := server.request(t, http.MethodGet, "/projects/1", nil)
+	defer authedDeepLink.Body.Close()
+	if authedDeepLink.StatusCode != http.StatusOK {
+		t.Fatalf("authenticated deep link status = %d, want %d", authedDeepLink.StatusCode, http.StatusOK)
+	}
+
+	// …while an unknown API path still 404s instead of serving HTML.
+	authedAPI := server.request(t, http.MethodGet, "/api/unknown", nil)
+	authedAPI.Body.Close()
+	if authedAPI.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown API path status = %d, want %d", authedAPI.StatusCode, http.StatusNotFound)
+	}
+
+	// A real build asset is still served as a file, discovered from the shell
+	// so the test survives Vite's content hashes.
+	asset := assetPath(t, string(shell))
+	assetResponse := server.request(t, http.MethodGet, asset, nil)
+	defer assetResponse.Body.Close()
+	if assetResponse.StatusCode != http.StatusOK {
+		t.Fatalf("asset %s status = %d, want %d", asset, assetResponse.StatusCode, http.StatusOK)
+	}
+}
+
+// assetPath pulls the first /assets/… reference out of the served shell.
+func assetPath(t *testing.T, shell string) string {
+	t.Helper()
+	const marker = `/assets/`
+	start := strings.Index(shell, marker)
+	if start < 0 {
+		t.Fatalf("shell does not reference any /assets/ file")
+	}
+	end := strings.IndexAny(shell[start:], `"'>`)
+	if end < 0 {
+		t.Fatalf("shell asset reference is not quoted: %s", shell[start:])
+	}
+	return shell[start : start+end]
+}
+
 type authStatus struct {
 	SetupRequired bool `json:"setupRequired"`
 	Authenticated bool `json:"authenticated"`
