@@ -1,0 +1,53 @@
+/*
+ * Deliberately small. The redesign is token-driven (antd CSS-in-JS + ConfigProvider),
+ * so only three things live here: global resets, the code font, and the handful of
+ * interaction affordances antd has no prop for. No Tailwind, no component styles.
+ */
+
+:root {
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.rp-sider-scroll {
+  overflow-y: auto;
+}
+
+.rp-clickable-row {
+  cursor: pointer;
+}
+
+.rp-clickable-tag {
+  cursor: pointer;
+}
+
+.rp-hit {
+  transition: background 0.1s ease;
+}
+
+.rp-hit + .rp-hit {
+  margin-top: 2px;
+}
+
+.rp-logs {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 12px 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.rp-logs > div:hover {
+  background: rgba(0, 0, 0, 0.03);
+}

@@ -1,0 +1,33 @@
+{
+  "name": "relist-panel-web-design",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Mocked, API-free redesign of the Relist Panel UI. Design guideline only.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:single": "vite build --config vite.single.config.ts",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ant-design/cssinjs": "2.1.2",
+    "@ant-design/icons": "6.3.4",
+    "@monaco-editor/react": "4.7.0",
+    "antd": "6.5.1",
+    "dayjs": "1.11.13",
+    "monaco-editor": "0.55.0",
+    "monaco-yaml": "5.5.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "typescript": "5.9.3",
+    "vite": "8.1.5",
+    "vite-plugin-singlefile": "^2.3.3"
+  }
+}
