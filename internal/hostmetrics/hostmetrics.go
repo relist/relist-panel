@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -78,14 +79,17 @@ type Config struct {
 	DataDir  string        // statfs target: the panel's data dir (ADR-0002)
 	Now      func() time.Time
 
-	// SweepContainers, when set, runs every 30 seconds. Ticket 02 wires the
-	// container collector here; its sweep must not block the 10s host tick.
+	// SweepContainers, when set, runs every 30 seconds on its own goroutine
+	// — the ~2s container sweep must never block the 10s host tick — and a
+	// sweep still in flight when its turn comes round again is skipped, not
+	// queued. Ticket 02 wires the container collector here.
 	SweepContainers func(ctx context.Context)
 	// OnMinuteClose, when set, receives a rollup averaged over the samples
 	// the closed minute actually saw (ticket 03 persists it to SQLite).
 	OnMinuteClose func(HostSample)
 	// RefreshDockerDisk, when set, runs every 5 minutes (`docker system df`,
-	// cached — 0.67s per call, too dear for a 10s cadence).
+	// cached — 0.67s per call, too dear for a 10s cadence), on its own
+	// goroutine under the same never-queue rule.
 	RefreshDockerDisk func(ctx context.Context)
 }
 
@@ -112,6 +116,12 @@ type Sampler struct {
 	lastAt    time.Time
 	tickN     uint64
 	lastClose time.Time
+
+	// The sweep and the df refresh run off-loop (a stats sweep takes ~2s of
+	// wall time); at most one of each is ever in flight.
+	sweepInFlight atomic.Bool
+	dfInFlight    atomic.Bool
+	hooks         sync.WaitGroup
 }
 
 type diskTotals struct{ Read, Write uint64 }
@@ -142,18 +152,27 @@ func NewSampler(cfg Config) *Sampler {
 }
 
 // Run drives the sampler until ctx is cancelled: one goroutine, one
-// time.Ticker, for the panel's lifetime.
+// time.Ticker, for the panel's lifetime. Shutdown waits out any hook still
+// in flight (its context is already cancelled).
 func (s *Sampler) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.Interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			s.hooks.Wait()
 			return
 		case <-ticker.C:
 			s.tick(ctx)
 		}
 	}
+}
+
+// waitIdle blocks until every off-loop hook the loop launched has finished.
+// Tests drive ticks directly and settle the async hooks with it — no test
+// sleeps.
+func (s *Sampler) waitIdle() {
+	s.hooks.Wait()
 }
 
 // Window copies the last n samples out of the ring, chronological; the
@@ -192,15 +211,30 @@ func (s *Sampler) tick(ctx context.Context) {
 	s.tickN++
 
 	// The due counters: every job rides this one ticker, when its turn
-	// comes round (spec, "one goroutine, one tick").
-	if s.cfg.SweepContainers != nil && s.tickN%s.ticksPer(30*time.Second) == 0 {
-		s.cfg.SweepContainers(ctx)
+	// comes round (spec, "one goroutine, one tick"). The sweep and the df
+	// refresh are slow by nature (Docker samples a delta window; the daemon
+	// aggregates), so they run off-loop — the next host tick never waits
+	// behind them — and a slow turn is skipped, never queued.
+	if s.cfg.SweepContainers != nil && s.tickN%s.ticksPer(30*time.Second) == 0 &&
+		s.sweepInFlight.CompareAndSwap(false, true) {
+		s.hooks.Add(1)
+		go func() {
+			defer s.hooks.Done()
+			defer s.sweepInFlight.Store(false)
+			s.cfg.SweepContainers(ctx)
+		}()
 	}
 	if s.tickN%s.ticksPer(time.Minute) == 0 {
 		s.closeMinute()
 	}
-	if s.cfg.RefreshDockerDisk != nil && s.tickN%s.ticksPer(5*time.Minute) == 0 {
-		s.cfg.RefreshDockerDisk(ctx)
+	if s.cfg.RefreshDockerDisk != nil && s.tickN%s.ticksPer(5*time.Minute) == 0 &&
+		s.dfInFlight.CompareAndSwap(false, true) {
+		s.hooks.Add(1)
+		go func() {
+			defer s.hooks.Done()
+			defer s.dfInFlight.Store(false)
+			s.cfg.RefreshDockerDisk(ctx)
+		}()
 	}
 }
 

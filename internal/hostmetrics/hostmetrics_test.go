@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -356,6 +357,7 @@ func TestSamplerDueCountersFireWhenTheirTurnComesRound(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		s.tick(context.Background())
 		clock.advance(10 * time.Second)
+		s.waitIdle() // async hooks: let each turn finish before the next
 	}
 
 	if sweeps != 10 {
@@ -366,6 +368,128 @@ func TestSamplerDueCountersFireWhenTheirTurnComesRound(t *testing.T) {
 	}
 	if refreshes != 1 {
 		t.Errorf("docker df refresh fired %d times in 30 ticks, want every 30th (1)", refreshes)
+	}
+}
+
+// The 30s sweep must never block the 10s host tick: it runs on its own
+// goroutine, and a sweep still in flight is skipped when its turn comes
+// round again, not queued up.
+func TestContainerSweepDoesNotBlockHostTick(t *testing.T) {
+	clock := &fakeClock{now: baseTime()}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	source := &blockingSource{onStats: func() {
+		close(entered)
+		<-release
+	}}
+	known := func(context.Context) (map[string]bool, error) { return map[string]bool{"p-e-c": true}, nil }
+	collector := NewServiceCollector(source, known, clock.Now)
+
+	s := newTestSampler(t, clock, func(cfg *Config) {
+		cfg.SweepContainers = collector.Sweep
+	})
+
+	// Ticks 1 and 2 are not the sweep's turn; tick 3 launches it.
+	s.tick(context.Background())
+	clock.advance(10 * time.Second)
+	s.tick(context.Background())
+	clock.advance(10 * time.Second)
+	s.tick(context.Background())
+	<-entered
+
+	// Three more host ticks land in the ring while the sweep is still stuck,
+	// and tick 6 — the sweep's turn again — is skipped, not queued.
+	for i := 0; i < 3; i++ {
+		clock.advance(10 * time.Second)
+		s.tick(context.Background())
+	}
+	if got := len(s.Window(360)); got != 6 {
+		t.Fatalf("ring holds %d samples while a sweep is in flight, want 6 — the host tick blocked", got)
+	}
+	if got := source.statsCalls(); got != 1 {
+		t.Errorf("%d stats calls started while one sweep was in flight, want 1 (skipped, not queued)", got)
+	}
+
+	close(release)
+	s.waitIdle()
+	if got := len(collector.Services()); got != 1 {
+		t.Errorf("Services() returned %d entries after the sweep finished, want 1", got)
+	}
+}
+
+// blockingSource is the minimal fake for the non-blocking test: one known
+// container whose single stats call hangs until the test releases it.
+type blockingSource struct {
+	onStats func()
+	mu      sync.Mutex
+	calls   int
+}
+
+func (b *blockingSource) ListContainers(context.Context) ([]ContainerInfo, error) {
+	return []ContainerInfo{{
+		ID:     "c1",
+		Name:   "p-e-c-web-1",
+		Image:  "nginx:1.27",
+		State:  "running",
+		Status: "Up 2 minutes (healthy)",
+		Labels: map[string]string{LabelComposeProject: "p-e-c", LabelComposeService: "web"},
+	}}, nil
+}
+
+func (b *blockingSource) ContainerStats(context.Context, string) (ContainerStatsSample, error) {
+	b.mu.Lock()
+	b.calls++
+	b.mu.Unlock()
+	b.onStats()
+	return ContainerStatsSample{MemUsageBytes: 100, MemCacheBytes: 10, MemLimitBytes: 1000}, nil
+}
+
+func (b *blockingSource) statsCalls() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.calls
+}
+
+func TestSamplerRunWaitsForInFlightHooksOnShutdown(t *testing.T) {
+	clock := &fakeClock{now: baseTime()}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	s := newTestSampler(t, clock, func(cfg *Config) {
+		cfg.SweepContainers = func(context.Context) {
+			close(started)
+			<-release
+		}
+	})
+
+	// Tick three times so the 30s sweep's turn comes round and its hook is
+	// in flight (blocked on release). The due counters are wall-clock aligned,
+	// so the ticker path itself is not testable at speed — the drain
+	// behaviour below is what needs the real Run.
+	s.tick(context.Background())
+	s.tick(context.Background())
+	s.tick(context.Background())
+	<-started
+
+	// Run on an already-cancelled context goes straight to shutdown; it must
+	// wait out the in-flight sweep rather than leave it behind.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		s.Run(ctx)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("Run returned while its sweep was still in flight")
+	case <-time.After(50 * time.Millisecond):
+		// still waiting on the sweep, as it must
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after the in-flight sweep finished")
 	}
 }
 
