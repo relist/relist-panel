@@ -68,3 +68,10 @@ Implemented in this commit (`feat: build the Overview screen`).
   derivable and leaves the definition open, so the two were not silently aligned; worth one decision
   when the Services endpoint lands. `Last deployed` stays a `—` column until the API returns a
   deploy timestamp.
+
+Merge note (2026-09-25, orchestrator): the Compose Monitor tab (host-monitoring 06) replaced the
+design-only `compose.services` field with the store's Services-endpoint map, so `needsAttention` /
+`degradationNotes` now take the loaded per-Service rows as an argument; OverviewPage loads them
+alongside the tree and the counts decide when a read has not landed. With the Services endpoint
+landed, the unhealthy-Service clause of the attention rule is live — the badge/definition decision
+flagged above is now the only remaining mismatch.

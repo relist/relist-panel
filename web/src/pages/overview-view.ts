@@ -1,4 +1,4 @@
-import type { Compose, Project } from '../data/types';
+import type { Compose, ComposeService, Project } from '../data/types';
 import { composeState } from '../data/types';
 
 /**
@@ -73,28 +73,32 @@ export function overviewStats(projects: Project[]): OverviewStats {
  * prototype's filter additionally required `total > 0` for a stop; that would
  * exclude a deploy later torn down (total 0, deploy timestamp present), which
  * the ticket's own definition counts, so the state alone decides here.
+ *
+ * Per-Service health comes from the Services endpoint via the store's
+ * `services` map — the API's Compose itself carries no services array (§11).
+ * Where the rows have not been loaded, the counts decide on their own.
  */
-export function needsAttention(compose: Compose): boolean {
+export function needsAttention(compose: Compose, services: ComposeService[] = []): boolean {
   const state = composeState(compose.status, compose.lastDeployedAt);
-  // The API omits `services` today (§11) — the counts decide on their own.
-  const services = compose.services ?? [];
   return state === 'partial' || state === 'stopped' || services.some((service) => service.health === 'unhealthy');
 }
 
 /** The attention rows, in tree order (one row per degraded Compose). */
-export function attentionRows(flat: FlatCompose[]): FlatCompose[] {
-  return flat.filter(({ compose }) => needsAttention(compose));
+export function attentionRows(
+  flat: FlatCompose[],
+  servicesByCompose?: Record<number, ComposeService[]>,
+): FlatCompose[] {
+  return flat.filter(({ compose }) => needsAttention(compose, servicesByCompose?.[compose.id] ?? []));
 }
 
 /**
  * The row's notes beside its status tag: which Services dropped out, and the
- * stopped-after-success story. Per-Service notes read the design-only
- * `services` array — today the API returns counts only, so the state's own
- * note is usually all there is.
+ * stopped-after-success story. The Services come from the same store map as
+ * `needsAttention`; when they have not been loaded, the state's own note is
+ * all there is.
  */
-export function degradationNotes(compose: Compose): string[] {
+export function degradationNotes(compose: Compose, services: ComposeService[] = []): string[] {
   const notes: string[] = [];
-  const services = compose.services ?? [];
   const down = services.filter((service) => service.state === 'exited');
   if (down.length > 0) {
     notes.push(`${down.map((service) => service.name).join(', ')} exited`);

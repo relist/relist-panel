@@ -9,7 +9,7 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { Alert, App, Button, Card, Col, Empty, Flex, List, Row, Table, Tag, Tooltip, Typography, theme } from 'antd';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 
 import { paths } from '../app/paths';
@@ -28,7 +28,7 @@ const { Text } = Typography;
  * is deliberately absent (§11: the panel records no events).
  */
 export function OverviewPage() {
-  const { projects, refreshStatus } = usePanel();
+  const { projects, refreshStatus, services, loadServices } = usePanel();
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -36,7 +36,17 @@ export function OverviewPage() {
 
   const flat = useMemo(() => flattenComposes(projects), [projects]);
   const stats = overviewStats(projects);
-  const attention = useMemo(() => attentionRows(flat), [flat]);
+  const attention = useMemo(() => attentionRows(flat, services), [flat, services]);
+
+  // Per-Service health feeds the attention rule and the degrade notes; the
+  // rows come from the Services endpoint (the Compose carries no services
+  // array), so they are loaded alongside the tree and refetched whenever it
+  // changes. A failed read leaves the counts in charge.
+  useEffect(() => {
+    for (const { compose } of flat) {
+      loadServices(compose.id).catch(() => {});
+    }
+  }, [flat, loadServices]);
 
   // Loading belongs to the control that started it (§8): the button carries
   // the spinner, the table keeps showing what it read before.
@@ -159,7 +169,7 @@ export function OverviewPage() {
               <List
                 dataSource={attention}
                 renderItem={({ compose, environmentId, environmentName, projectId, projectName }) => {
-                  const notes = degradationNotes(compose);
+                  const notes = degradationNotes(compose, services[compose.id] ?? []);
                   return (
                     <List.Item
                       actions={[

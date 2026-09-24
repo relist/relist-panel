@@ -22,7 +22,6 @@ const compose = (overrides: Partial<Compose> & { id?: number; name: string }): C
   createdAt: '2026-09-20T10:00:00Z',
   updatedAt: '2026-09-24T10:00:00Z',
   status: { running: 2, total: 2 },
-  services: [],
   ...overrides,
 });
 
@@ -104,17 +103,15 @@ describe('needsAttention', () => {
 
   it('raises an unhealthy service even while the counts look fine', () => {
     expect(
-      needsAttention(
-        compose({ name: 'x', services: [service({ name: 'web', health: 'unhealthy' })] }),
-      ),
+      needsAttention(compose({ name: 'x' }), [service({ name: 'web', health: 'unhealthy' })]),
     ).toBe(true);
   });
 
-  it('decides from the counts when the API omits the services array', () => {
-    const noServices = compose({ name: 'x', status: { running: 1, total: 2 }, services: undefined as unknown as ComposeService[] });
-    expect(needsAttention(noServices)).toBe(true);
-    expect(needsAttention(compose({ name: 'y', status: { running: 2, total: 2 }, services: undefined as unknown as ComposeService[] }))).toBe(false);
-    expect(degradationNotes(noServices)).toEqual([]);
+  it('decides from the counts when no service rows have been loaded', () => {
+    expect(needsAttention(compose({ name: 'x', status: { running: 1, total: 2 } }))).toBe(true);
+    expect(needsAttention(compose({ name: 'y', status: { running: 2, total: 2 } }))).toBe(false);
+    expect(needsAttention(compose({ name: 'y', status: { running: 2, total: 2 } }), [])).toBe(false);
+    expect(degradationNotes(compose({ name: 'x', status: { running: 1, total: 2 } }))).toEqual([]);
   });
 });
 
@@ -123,19 +120,19 @@ describe('attentionRows', () => {
     const flat = flattenComposes(tree);
     expect(attentionRows(flat).map((row) => row.compose.id)).toEqual([2, 3]);
   });
+
+  it('raises a compose whose loaded services name an unhealthy one', () => {
+    const flat = flattenComposes(tree);
+    const services = { 1: [service({ name: 'web', health: 'unhealthy' })] };
+    expect(attentionRows(flat, services).map((row) => row.compose.id)).toEqual([1, 2, 3]);
+  });
 });
 
 describe('degradationNotes', () => {
   it('names exited and unhealthy services, then tells the stopped story', () => {
-    const subject = compose({
-      name: 'web',
-      status: { running: 0, total: 2 },
-      services: [
-        service({ name: 'web', state: 'exited' }),
-        service({ name: 'api', health: 'unhealthy' }),
-      ],
-    });
-    expect(degradationNotes(subject)).toEqual(['web exited', 'api unhealthy', 'Stopped after a successful deploy']);
+    const subject = compose({ name: 'web', status: { running: 0, total: 2 } });
+    const rows = [service({ name: 'web', state: 'exited' }), service({ name: 'api', health: 'unhealthy' })];
+    expect(degradationNotes(subject, rows)).toEqual(['web exited', 'api unhealthy', 'Stopped after a successful deploy']);
   });
 
   it('says nothing extra for a partly running compose with no service detail', () => {
