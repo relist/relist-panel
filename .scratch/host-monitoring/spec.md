@@ -215,19 +215,23 @@ what the panel already uses.
 ## Tickets
 
 Six, in order. 01–04 are Go; 05–06 are the screens, which land after the design port's shell and
-Compose tickets.
+Compose tickets (`.scratch/design-port/spec.md`, tickets 04 and 07).
 
-1. `01-sampler-and-proc-parsers.md` — the new package: `/proc` parsers as pure functions, the ring
-   buffer, the 10s loop with its due-counters, statfs disk space, the `sources` availability map.
-2. `02-container-collector.md` — the `ContainerSource` port and its socket implementation, service →
-   container mapping off the compose labels, cumulative-counter deltas, the 30s cache.
-3. `03-rollups-and-retention.md` — the migration (two tables, indices, `database_test.go`'s version
-   assertion), the minute-close writer, the retention delete.
-4. `04-metrics-endpoints.md` — the three endpoints, window validation, the sampler's lifecycle
-   (started in `main.go`, cancelled on shutdown) and its fake for tests.
-5. `05-monitoring-screen.md` — the host screen (six charts, window control, `partial`/`unavailable`).
-6. `06-compose-monitor-tab.md` — the Compose screen's Monitor tab (service picker, four charts, the
-   deploy marker), which also needs the Services endpoint's data in the status rail.
+- `01-sampler-and-proc-parsers.md` — the new package: `/proc` parsers as pure functions, the ring
+  buffer, the 10s loop with its due-counters, statfs disk space, the `sources` availability map.
+  (No blockers.)
+- `02-container-collector.md` — the `ContainerSource` port and its socket implementation, service →
+  container mapping off the compose labels, cumulative-counter deltas, the 30s cache.
+  (Blocked by 01.)
+- `03-rollups-and-retention.md` — the migration (two tables, indices, `database_test.go`'s version
+  assertion), the minute-close writer, the retention delete. (Blocked by 01, 02.)
+- `04-metrics-endpoints.md` — the three endpoints, window validation, the sampler's lifecycle
+  (started in `main.go`, cancelled on shutdown) and its fake for tests. (Blocked by 01, 02, 03.)
+- `05-monitoring-screen.md` — the host screen (six charts, window control, `partial`/`unavailable`).
+  (Blocked by 04 here, and 04 + 07 of the design port.)
+- `06-compose-monitor-tab.md` — the Compose screen's Monitor tab (service picker, four charts, the
+  deploy marker), plus the status rail's per-Service rows. (Blocked by 04 here, and 07 of the design
+  port.)
 
 ## Testing decisions
 
