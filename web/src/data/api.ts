@@ -6,7 +6,7 @@
  * directly.
  */
 
-import type { Compose, Environment, EnvironmentVariable, HostMetrics, Project } from './types';
+import type { Compose, Environment, EnvironmentVariable, HostMetrics, Project, ServiceFacts, ServiceMetrics } from './types';
 import type { MetricWindow } from './types';
 
 export type AuthStatus = {
@@ -123,6 +123,10 @@ export const api = {
   logs: (location: ComposePath) => request<LogsPayload>(`${composePath(location)}/logs`),
 
   hostMetrics: (window: MetricWindow) => request<HostMetrics>(`/api/host/metrics?window=${window}`),
+  /** The Compose's Services, from the container collector's cache. */
+  listServices: (location: ComposePath) => request<ServiceFacts[]>(`${composePath(location)}/services`),
+  serviceMetrics: (location: ComposePath, service: string, window: MetricWindow) =>
+    request<ServiceMetrics>(`${composePath(location)}/services/${encodeURIComponent(service)}/metrics?window=${window}`),
 };
 
 export type ComposePath = {

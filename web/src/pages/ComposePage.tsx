@@ -37,7 +37,7 @@ import {
   theme,
 } from 'antd';
 import type { MenuProps } from 'antd';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
 import { paths } from '../app/paths';
@@ -53,6 +53,7 @@ import {
   RelativeTime,
   ServiceStateTag,
 } from '../components/primitives';
+import { ServiceMonitor } from '../components/ServiceMonitor';
 import { YamlEditor } from '../components/YamlEditor';
 import { usePanel } from '../data/store';
 import { composeState, findComposeLocation } from '../data/types';
@@ -71,7 +72,9 @@ const { Text, Paragraph, Title } = Typography;
  *
  * The page scrolls as one document. The editor and the rail stretch to the same
  * height, so the editor is as tall as the status rail next to it (never shorter
- * than `LAYOUT.editorMinHeight`); the rail simply continues below the fold.
+ * than `LAYOUT.editorMinHeight`); the rail simply continues below the fold. The
+ * Monitor tab answers the third question — how has this Service been behaving —
+ * fed by the same Services endpoint as the rail's rows.
  */
 export function ComposePage() {
   const { composeId: composeParam, environmentId: environmentParam, projectId: projectParam, tab } = useParams();
@@ -86,10 +89,12 @@ export function ComposePage() {
     isPending,
     loadLogs,
     loadVariables,
+    loadServices,
     projects,
     refreshStatus,
     restartCompose,
     saveCompose,
+    services: servicesByCompose,
     stopCompose,
   } = usePanel();
   const { message } = App.useApp();
@@ -153,10 +158,25 @@ export function ComposePage() {
 
   const dirty = compose ? hasUnsavedChanges(draft, compose.yamlContent) : false;
 
-  // Per-Service rows are a design-only shape today: the API counts containers
-  // per Compose (`running`/`total`) and returns no service list yet — the
-  // host-monitoring feature's Services endpoint fills this in.
-  const services = compose?.services ?? [];
+  // Per-Service rows come from the Services endpoint (the container
+  // collector's cache) — the same rows the Monitor tab's picker reads.
+  const services = servicesByCompose[composeId] ?? [];
+
+  const fetchServices = useCallback(() => {
+    loadServices(composeId).catch((reason: unknown) => {
+      setActionError(reason instanceof Error ? reason.message : 'Something went wrong');
+    });
+  }, [composeId, loadServices]);
+
+  // The rows follow the containers: load once the deep link has resolved its
+  // Compose (the tree ships later than this page on a cold URL — the same gate
+  // the variables load uses), and again whenever the host may have changed.
+  const knownComposeId = compose?.id;
+  useEffect(() => {
+    if (knownComposeId !== undefined) {
+      fetchServices();
+    }
+  }, [fetchServices, knownComposeId]);
   const logsLoading = isPending(`logs:${composeId}`);
   const logLineCount = logsText ? logsText.split('\n').length : 0;
   const visibleLogLines = filterLogLines(logsText, logServices, logLines);
@@ -209,6 +229,8 @@ export function ComposePage() {
         }
       }
       message.success(`Deployed ${compose.name}`);
+      // A deploy mints new containers; the rail's rows follow.
+      fetchServices();
     } catch (reason: unknown) {
       fail(reason);
     }
@@ -425,8 +447,11 @@ export function ComposePage() {
                         <Tooltip title="Re-read container status from the host">
                           <Button
                             icon={<ReloadOutlined />}
-                            loading={isPending(`status:${compose.id}`)}
-                            onClick={() => void refreshStatus(compose.id).catch(fail)}
+                            loading={isPending(`status:${compose.id}`) || isPending(`services:${compose.id}`)}
+                            onClick={() => {
+                              void refreshStatus(compose.id).catch(fail);
+                              fetchServices();
+                            }}
                             size="small"
                             type="text"
                           />
@@ -490,8 +515,8 @@ export function ComposePage() {
                         </Empty>
                       ) : (
                         <Text type="secondary" style={{ fontSize: 12 }}>
-                          Per-Service rows arrive with the panel's Services endpoint; the counts above are what it reads
-                          today.
+                          The collector has not read these containers yet — rows appear at its next sweep, every 30
+                          seconds. The counts above are what it reads today.
                         </Text>
                       )}
 
@@ -580,12 +605,10 @@ export function ComposePage() {
           },
           {
             children: (
-              <Card variant="outlined">
-                <EmptyState
-                  description="One Service of this Compose over the same four windows as the host screen — CPU, memory, network and block I/O with the deploy marker — lands with ticket 06 of the host monitoring feature, on the Services endpoint that feeds it."
-                  title="Not ported yet"
-                />
-              </Card>
+              <ServiceMonitor
+                compose={compose}
+                onOpenEditor={() => navigate(paths.compose(project.id, environment.id, compose.id))}
+              />
             ),
             key: 'monitor',
             label: 'Monitor',

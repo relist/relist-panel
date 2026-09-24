@@ -44,7 +44,7 @@ export type ContainerState = 'created' | 'exited' | 'restarting' | 'running';
 
 export type ServiceHealth = 'healthy' | 'none' | 'starting' | 'unhealthy';
 
-/** @design-only: per-service detail. Today the API only returns running/total. */
+/** One Service of a Compose, as the rail and the Monitor tab render it. */
 export type ComposeService = {
   name: string;
   image: string;
@@ -52,12 +52,63 @@ export type ComposeService = {
   health: ServiceHealth;
   ports: string[];
   /**
-   * The container this service currently maps to (`docker compose ps --format
-   * json`). One container per deploy, so this is identity for a single deploy
-   * and never a history key — the service name is.
+   * The container this service currently maps to (the Services endpoint's
+   * collector cache). One container per deploy, so this is identity for a
+   * single deploy and never a history key — the service name is.
    */
   containerId?: string;
 };
+
+/**
+ * The Services endpoint's per-Service facts (`…/composes/{c}/services`,
+ * straight from the container collector's cache). Field names are the wire's;
+ * `serviceFromFacts` adapts them onto `ComposeService` for the screens.
+ */
+export type ServiceFacts = {
+  service: string;
+  containerId: string;
+  containerName: string;
+  image: string;
+  state: string;
+  health: string;
+  ports: { hostIp: string; hostPort: number; containerPort: number; protocol: string }[];
+};
+
+const CONTAINER_STATES: readonly ContainerState[] = ['created', 'exited', 'restarting', 'running'];
+const SERVICE_HEALTHS: readonly ServiceHealth[] = ['healthy', 'none', 'starting', 'unhealthy'];
+
+function pick<V extends string>(value: string, known: readonly V[], fallback: V): V {
+  return (known as readonly string[]).includes(value) ? (value as V) : fallback;
+}
+
+/** Docker's published port form: `0.0.0.0:8080->80/tcp`, wildcard IP dropped. */
+export function formatPort(port: ServiceFacts['ports'][number]): string {
+  const exposed = `${port.containerPort}/${port.protocol}`;
+  if (!port.hostPort) {
+    return exposed;
+  }
+  // Only IPv6 literals need the brackets; docker prints IPv4 bare.
+  const wildcard = port.hostIp === '' || port.hostIp === '0.0.0.0' || port.hostIp === '::';
+  const host = wildcard ? '' : port.hostIp.includes(':') ? `[${port.hostIp}]` : port.hostIp;
+  return `${host ? `${host}:` : ''}${port.hostPort}->${exposed}`;
+}
+
+/** Docker's short container ID — the form the facts strip shows (and copies). */
+export function shortContainerId(containerId: string): string {
+  return containerId.slice(0, 12);
+}
+
+/** Wire facts → screen row. States the vocabulary doesn't know render as `created`. */
+export function serviceFromFacts(facts: ServiceFacts): ComposeService {
+  return {
+    containerId: facts.containerId || undefined,
+    health: pick(facts.health, SERVICE_HEALTHS, 'none'),
+    image: facts.image,
+    name: facts.service,
+    ports: facts.ports.map(formatPort),
+    state: pick(facts.state, CONTAINER_STATES, 'created'),
+  };
+}
 
 export type ComposeStatus = {
   running: number;
@@ -77,8 +128,6 @@ export type Compose = {
   status: ComposeStatus;
   /** @design-only: the API returns no deploy timestamp; the UI treats it as unknown. */
   lastDeployedAt?: string;
-  /** @design-only */
-  services: ComposeService[];
 };
 
 /** Derived lifecycle state of a Compose. Single source of truth for status colour and copy. */

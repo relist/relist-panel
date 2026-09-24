@@ -22,7 +22,7 @@ Projects.
 
 ## Comments
 
-Implemented in `9adfb83`.
+Implemented in `583db46` (`feat: add the host Monitoring screen`).
 
 - `components/MetricChart.tsx` is the prototype's chart verbatim — inline SVG measured off its own
   box, min/max downsampling, crosshair tooltip, `partial`/`unavailable` states — with the pure rules

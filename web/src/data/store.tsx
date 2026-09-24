@@ -3,8 +3,8 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { Credentials, ProjectInput } from './api';
-import type { Compose, EnvironmentVariable, HostMetrics, MetricWindow, Project } from './types';
-import { findComposeLocation, findEnvironmentLocation } from './types';
+import type { Compose, ComposeService, EnvironmentVariable, HostMetrics, MetricWindow, Project, ServiceMetrics } from './types';
+import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
  * The panel's data layer: the prototype's store shape (`web-design/src/data/store.tsx`)
@@ -17,7 +17,8 @@ import { findComposeLocation, findEnvironmentLocation } from './types';
  *  - Loading is exposed through `isPending(key)` under the prototype's keys
  *    (`save-compose:3`, `deploy:3`, `status:3`, …), plus the data loads
  *    (`projects`, `auth-status`, `variables:<environmentId>`, `logs:<composeId>`,
- *    `metrics:<window>`).
+ *    `metrics:<window>`, `services:<composeId>`,
+ *    `service-metrics:<composeId>:<service>:<window>`).
  *  - Every method is a stable `useCallback`, so an effect that depends on one
  *    never refires when pending or data state changes — the prototype hit an
  *    infinite-update loop with per-render callbacks; do not reintroduce it.
@@ -25,9 +26,13 @@ import { findComposeLocation, findEnvironmentLocation } from './types';
  * Prototype chrome that is deliberately absent: the latency switch and the
  * `track`/`wait` simulation (real latency is the real API's), the activity
  * feed and `host` info (no endpoint — GUIDELINES §11). The metrics loaders
- * arrive with `.scratch/host-monitoring` and return the endpoints' envelope
- * (window, `partial`, `sources`, samples), not the prototype's bare arrays —
- * the screens read `partial` and `sources` off it instead of guessing.
+ * return the endpoints' envelope (window, `partial`, `sources`, samples), not
+ * the prototype's bare arrays — the screens read `partial` and `sources` off
+ * it instead of guessing. Per-Service rows live in a `services` map keyed by
+ * Compose rather than on the Compose object (the API's Compose has no services
+ * key, and tree patches would wipe it), and `deployedAt` is stamped client-side
+ * on a successful deploy — the API records no deploy timestamp (GUIDELINES
+ * §11), and the Monitor tab's deploy marker is only as honest as that stamp.
  */
 
 export type NewVariable = { key: string; value: string };
@@ -57,8 +62,16 @@ type PanelValue = {
   /** The host's metrics for one window — the `/api/host/metrics` envelope. */
   loadMetrics: (metricWindow: MetricWindow) => Promise<HostMetrics>;
   loadProjects: () => Promise<void>;
+  /** One Service's metrics envelope from the Compose's Services endpoint. */
+  loadServiceMetrics: (composeId: number, service: string, metricWindow: MetricWindow) => Promise<ServiceMetrics>;
+  /** The Compose's per-Service rows, from the container collector's cache. */
+  loadServices: (composeId: number) => Promise<void>;
   loadVariables: (environmentId: number) => Promise<void>;
   projects: Project[];
+  /** Client-side deploy stamps (§11: the API records no deploy time). */
+  deployedAt: Record<number, string>;
+  /** Per-Service rows per Compose, from the Services endpoint. */
+  services: Record<number, ComposeService[]>;
   refreshStatus: (composeId: number) => Promise<void>;
   restartCompose: (composeId: number) => Promise<void>;
   saveCompose: (composeId: number, yamlContent: string) => Promise<void>;
@@ -78,12 +91,15 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   const [auth, setAuth] = useState<AuthState>({ checked: false, setupRequired: false, authenticated: false });
   const [projects, setProjects] = useState<Project[]>([]);
   const [checkedAt, setCheckedAt] = useState<Record<number, string>>({});
+  const [deployedAt, setDeployedAt] = useState<Record<number, string>>({});
+  const [services, setServices] = useState<Record<number, ComposeService[]>>({});
   const [pending, setPending] = useState<Record<string, true>>({});
 
   // Mutable mirrors of the tree, read inside the mutation methods. Without
   // them, stable (deps-free) callbacks would close over stale state.
   const projectsRef = useRef<Project[]>([]);
   const checkedAtRef = useRef<Record<number, string>>({});
+  const deployedAtRef = useRef<Record<number, string>>({});
 
   const updateProjects = useCallback((next: Project[]) => {
     projectsRef.current = next;
@@ -101,6 +117,16 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     const next = { ...checkedAtRef.current, [composeId]: new Date().toISOString() };
     checkedAtRef.current = next;
     setCheckedAt(next);
+  }, []);
+
+  // The API records no deploy timestamp (GUIDELINES §11), so a successful
+  // deploy stamps one client-side — the same treatment §11 prescribes for the
+  // status read time. The stamp lives for the session; the deploy marker and
+  // the facts strip are only as honest as it.
+  const stampDeployed = useCallback((composeId: number) => {
+    const next = { ...deployedAtRef.current, [composeId]: new Date().toISOString() };
+    deployedAtRef.current = next;
+    setDeployedAt(next);
   }, []);
 
   const track = useCallback(async <T,>(key: string, work: () => Promise<T>): Promise<T> => {
@@ -468,8 +494,11 @@ export function PanelProvider({ children }: { children: ReactNode }) {
         // The API returns no read timestamp; the rail's "checked N minutes ago"
         // is stamped client-side, as the prototype does (GUIDELINES §11).
         stampChecked(composeId);
+        if (key === 'deploy') {
+          stampDeployed(composeId);
+        }
       }),
-    [patchCompose, stampChecked, track],
+    [patchCompose, stampChecked, stampDeployed, track],
   );
 
   const deployCompose = useCallback((composeId: number) => runComposeAction('deploy', composeId), [runComposeAction]);
@@ -521,6 +550,41 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [track],
   );
 
+  const loadServiceMetrics = useCallback(
+    (composeId: number, service: string, metricWindow: MetricWindow) =>
+      track(`service-metrics:${composeId}:${service}:${metricWindow}`, async () => {
+        const location = findComposeLocation(projectsRef.current, composeId);
+        if (!location) {
+          throw new Error('Compose not found');
+        }
+        return api.serviceMetrics(
+          { projectId: location.project.id, environmentId: location.environment.id, composeId },
+          service,
+          metricWindow,
+        );
+      }),
+    [track],
+  );
+
+  const loadServices = useCallback(
+    async (composeId: number) => {
+      await track(`services:${composeId}`, async () => {
+        const location = findComposeLocation(projectsRef.current, composeId);
+        if (!location) {
+          throw new Error('Compose not found');
+        }
+        const facts = await api.listServices({
+          projectId: location.project.id,
+          environmentId: location.environment.id,
+          composeId,
+        });
+        const rows = facts.map(serviceFromFacts);
+        setServices((current) => ({ ...current, [composeId]: rows }));
+      });
+    },
+    [track],
+  );
+
   const loadVariables = useCallback(
     async (environmentId: number) => {
       await track(`variables:${environmentId}`, async () => {
@@ -548,11 +612,14 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteProject,
       deleteVariable,
       deployCompose,
+      deployedAt,
       isPending,
       loadAuthStatus,
       loadLogs,
       loadMetrics,
       loadProjects,
+      loadServiceMetrics,
+      loadServices,
       loadVariables,
       projects,
       refreshStatus,
@@ -560,6 +627,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       restartCompose,
       saveCompose,
       saveVariable,
+      services,
       signIn,
       signOut,
       signUp,
@@ -577,15 +645,19 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteProject,
       deleteVariable,
       deployCompose,
+      deployedAt,
       isPending,
       loadAuthStatus,
       loadLogs,
       loadMetrics,
       loadProjects,
+      loadServiceMetrics,
+      loadServices,
       loadVariables,
       pending,
       projects,
       refreshStatus,
+      services,
       replaceVariables,
       restartCompose,
       saveCompose,

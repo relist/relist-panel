@@ -5,7 +5,10 @@ import {
   findCompose,
   findComposeLocation,
   findEnvironmentLocation,
+  formatPort,
   projectComposes,
+  serviceFromFacts,
+  shortContainerId,
   summarize,
 } from './types';
 import type { Compose, Project } from './types';
@@ -20,7 +23,6 @@ function compose(overrides: Partial<Compose> & { id: number }): Compose {
     createdAt: '2026-09-01T10:00:00Z',
     updatedAt: '2026-09-24T10:00:00Z',
     status: { running: 0, total: 0 },
-    services: [],
     ...overrides,
   };
 }
@@ -128,5 +130,53 @@ describe('findEnvironmentLocation', () => {
 
   it('returns undefined for an unknown Environment', () => {
     expect(findEnvironmentLocation([nested], 99)).toBeUndefined();
+  });
+});
+
+describe('serviceFromFacts', () => {
+  const facts = {
+    containerId: 'a'.repeat(64),
+    containerName: 'my-saas-web-1',
+    health: 'healthy',
+    image: 'nginx:1.27',
+    ports: [
+      { containerPort: 80, hostIp: '0.0.0.0', hostPort: 8080, protocol: 'tcp' },
+      { containerPort: 443, hostIp: '::', hostPort: 8443, protocol: 'tcp' },
+      { containerPort: 9090, hostIp: '', hostPort: 0, protocol: 'udp' },
+    ],
+    service: 'web',
+    state: 'running',
+  };
+
+  it('adapts the wire facts onto the screen row', () => {
+    expect(serviceFromFacts(facts)).toEqual({
+      containerId: 'a'.repeat(64),
+      health: 'healthy',
+      image: 'nginx:1.27',
+      name: 'web',
+      ports: ['8080->80/tcp', '8443->443/tcp', '9090/udp'],
+      state: 'running',
+    });
+  });
+
+  it('formats published ports in docker compose ps form, wildcard IPs dropped', () => {
+    expect(formatPort({ containerPort: 80, hostIp: '0.0.0.0', hostPort: 8080, protocol: 'tcp' })).toBe('8080->80/tcp');
+    expect(formatPort({ containerPort: 80, hostIp: '127.0.0.1', hostPort: 8080, protocol: 'tcp' })).toBe('127.0.0.1:8080->80/tcp');
+    expect(formatPort({ containerPort: 80, hostIp: '::', hostPort: 8080, protocol: 'tcp' })).toBe('8080->80/tcp');
+    expect(formatPort({ containerPort: 80, hostIp: '', hostPort: 0, protocol: 'tcp' })).toBe('80/tcp');
+  });
+
+  it('falls back on states and healths the vocabulary does not know', () => {
+    expect(serviceFromFacts({ ...facts, state: 'paused', health: '' })).toEqual(
+      expect.objectContaining({ state: 'created', health: 'none' }),
+    );
+    expect(serviceFromFacts({ ...facts, state: 'exited', health: 'unhealthy' })).toEqual(
+      expect.objectContaining({ state: 'exited', health: 'unhealthy' }),
+    );
+  });
+
+  it('drops an empty container ID to undefined, and shortens for display', () => {
+    expect(serviceFromFacts({ ...facts, containerId: '' }).containerId).toBeUndefined();
+    expect(shortContainerId('a'.repeat(64))).toBe('a'.repeat(12));
   });
 });
