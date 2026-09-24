@@ -9,6 +9,10 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${RELIST_DATA_DIR:-/var/lib/relist-panel}:${RELIST_DATA_DIR:-/var/lib/relist-panel}
+      # Read-only host /proc for the metrics sampler (ADR-0006): network
+      # counters are read from /host/proc/1/net/dev because /proc/net/dev is
+      # /proc/self/net/dev and would report the panel's own namespace.
+      - /proc:/host/proc:ro
     networks:
       - relist-network
     labels:
