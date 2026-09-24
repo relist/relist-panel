@@ -59,10 +59,7 @@ func (s *Store) WriteHostRollup(ctx context.Context, rollup hostmetrics.HostSamp
 		nullable(rollup.NetRXBPS),
 		nullable(rollup.NetTXBPS),
 	)
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 // WriteServiceRollups persists one closed minute of per-Service rollups —

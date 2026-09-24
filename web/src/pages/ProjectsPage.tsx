@@ -344,7 +344,7 @@ export function ProjectsPage() {
       >
         <Form form={form} layout="vertical" onFinish={(values) => void submit(values)} requiredMark={false}>
           <Form.Item
-            extra="Used in deploy identities — renaming a Project does not move already-deployed stacks."
+            extra="Used in deploy identities — renaming a Project does not move already-deployed Composes."
             label="Name"
             name="name"
             rules={[
