@@ -52,16 +52,17 @@ var hostSources = []string{SourceCPU, SourceMemory, SourceDiskSpace, SourceBlock
 // reading is never a zero — "the panel cannot read this" must stay
 // distinguishable from "the host is idle".
 type HostSample struct {
-	At             time.Time
-	CPUPercent     float64
-	MemUsedBytes   float64
-	MemTotalBytes  float64
-	DiskFreeBytes  float64
-	DiskTotalBytes float64
-	DiskReadBPS    float64 // bytes per second
-	DiskWriteBPS   float64
-	NetRXBPS       float64
-	NetTXBPS       float64
+	At              time.Time
+	CPUPercent      float64
+	MemUsedBytes    float64
+	MemTotalBytes   float64
+	DiskFreeBytes   float64
+	DiskTotalBytes  float64
+	DockerDiskBytes float64 // docker system df, carried forward between refreshes
+	DiskReadBPS     float64 // bytes per second
+	DiskWriteBPS    float64
+	NetRXBPS        float64
+	NetTXBPS        float64
 }
 
 // SourceStatus says whether a metrics source was readable at the last tick,
@@ -244,16 +245,17 @@ func (s *Sampler) tick(ctx context.Context) {
 func nanSample(at time.Time) HostSample {
 	nan := math.NaN()
 	return HostSample{
-		At:             at,
-		CPUPercent:     nan,
-		MemUsedBytes:   nan,
-		MemTotalBytes:  nan,
-		DiskFreeBytes:  nan,
-		DiskTotalBytes: nan,
-		DiskReadBPS:    nan,
-		DiskWriteBPS:   nan,
-		NetRXBPS:       nan,
-		NetTXBPS:       nan,
+		At:              at,
+		CPUPercent:      nan,
+		MemUsedBytes:    nan,
+		MemTotalBytes:   nan,
+		DiskFreeBytes:   nan,
+		DiskTotalBytes:  nan,
+		DockerDiskBytes: nan,
+		DiskReadBPS:     nan,
+		DiskWriteBPS:    nan,
+		NetRXBPS:        nan,
+		NetTXBPS:        nan,
 	}
 }
 
@@ -438,6 +440,7 @@ func MinuteAverage(samples []HostSample) HostSample {
 	average.MemTotalBytes = averageField(samples, func(s HostSample) float64 { return s.MemTotalBytes })
 	average.DiskFreeBytes = averageField(samples, func(s HostSample) float64 { return s.DiskFreeBytes })
 	average.DiskTotalBytes = averageField(samples, func(s HostSample) float64 { return s.DiskTotalBytes })
+	average.DockerDiskBytes = averageField(samples, func(s HostSample) float64 { return s.DockerDiskBytes })
 	average.DiskReadBPS = averageField(samples, func(s HostSample) float64 { return s.DiskReadBPS })
 	average.DiskWriteBPS = averageField(samples, func(s HostSample) float64 { return s.DiskWriteBPS })
 	average.NetRXBPS = averageField(samples, func(s HostSample) float64 { return s.NetRXBPS })
@@ -445,7 +448,7 @@ func MinuteAverage(samples []HostSample) HostSample {
 	return average
 }
 
-func averageField(samples []HostSample, get func(HostSample) float64) float64 {
+func averageField[T any](samples []T, get func(T) float64) float64 {
 	var (
 		sum float64
 		n   int

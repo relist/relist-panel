@@ -68,6 +68,7 @@ type ContainerStatsSample struct {
 	NetTXBytes      uint64
 	BlockReadBytes  uint64 // summed over io_service_bytes_recursive
 	BlockWriteBytes uint64
+	PidsCurrent     uint64 // pids_stats.current; 0 means the runtime reported none
 }
 
 // ServiceSample is one Service's latest observation: the identity fields the
@@ -93,6 +94,8 @@ type ServiceSample struct {
 	NetTXBPS      float64
 	BlockReadBPS  float64
 	BlockWriteBPS float64
+
+	Pids float64 // pids_stats.current; NaN when the runtime reported none
 }
 
 // KnownProjects reports the Compose project names the panel knows — the
@@ -110,6 +113,7 @@ type ServiceCollector struct {
 
 	mu      sync.Mutex
 	latest  map[serviceKey]serviceObservation
+	minute  []ServiceSample // the sweeps the open minute has seen, for CloseMinute
 	lastErr error
 }
 
@@ -208,6 +212,7 @@ func (c *ServiceCollector) Sweep(ctx context.Context) {
 		// else: this container's first sweep — a start or a redeploy, either
 		// way there is no honest rate yet and the fields stay NaN.
 		c.latest[tgt.key] = observation
+		c.minute = append(c.minute, observation.sample)
 	}
 	// The sweep is the truth about what is running: a Service whose container
 	// left the listing has no current container. Its history lives in the
@@ -239,6 +244,23 @@ func (c *ServiceCollector) Services() []ServiceSample {
 		samples = append(samples, c.latest[key].sample)
 	}
 	return samples
+}
+
+// CloseMinute hands back one rollup per Service, averaged over the samples
+// the closed minute actually saw, and opens the next minute. A minute a
+// restart cut short is still a row — however few samples it saw — because the
+// screens' `partial` state is the honest display for the gap. A minute in
+// which no sweep completed returns nothing: there is nothing to average, and
+// the missing minutes are the gap the rollups should show.
+func (c *ServiceCollector) CloseMinute() []ServiceSample {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.minute) == 0 {
+		return nil
+	}
+	rollups := serviceMinuteAverages(c.minute)
+	c.minute = c.minute[:0]
+	return rollups
 }
 
 // Status reports the last sweep's outcome, for the endpoints' sources block.
@@ -297,6 +319,7 @@ func newObservation(key serviceKey, info ContainerInfo, stats ContainerStatsSamp
 		NetTXBPS:      math.NaN(),
 		BlockReadBPS:  math.NaN(),
 		BlockWriteBPS: math.NaN(),
+		Pids:          pidsSample(stats.PidsCurrent),
 	}
 	return observation
 }
@@ -323,6 +346,16 @@ func memUsedBytes(stats ContainerStatsSample) float64 {
 	return float64(stats.MemUsageBytes - stats.MemCacheBytes)
 }
 
+// pidsSample records pids_stats.current. A live container always holds at
+// least one PID, so a zero means the runtime reported nothing — NaN, never a
+// zero wearing a measurement's clothes.
+func pidsSample(current uint64) float64 {
+	if current == 0 {
+		return math.NaN()
+	}
+	return float64(current)
+}
+
 // containerCPUPercent applies Docker's own arithmetic: the container's CPU
 // delta over the system-wide delta, scaled by the container's online CPUs.
 // It is a percentage of one core and can exceed 100%. A system clock that
@@ -336,6 +369,50 @@ func containerCPUPercent(curTotal, curSystem, curOnline, prevTotal, prevSystem u
 		return 0 // the container's clock ran, the container did nothing
 	}
 	return float64(dCPU) / float64(curSystem-prevSystem) * float64(curOnline) * 100
+}
+
+// serviceMinuteAverages groups one minute's samples by Service and averages
+// each metric field over the samples that carried it — NaN fields (a first
+// sweep with no rates yet, an unreported pid count) drop out instead of
+// poisoning the row, and a field no sample carried stays NaN. The identity
+// fields are not averaged: a rollup describes the Service, and for them the
+// latest sample wins (a redeploy mid-minute leaves the new container's name).
+func serviceMinuteAverages(samples []ServiceSample) []ServiceSample {
+	order := make([]serviceKey, 0, len(samples))
+	grouped := make(map[serviceKey][]ServiceSample, len(samples))
+	for _, sample := range samples {
+		key := serviceKey{Project: sample.Project, Service: sample.Service}
+		if _, seen := grouped[key]; !seen {
+			order = append(order, key)
+		}
+		grouped[key] = append(grouped[key], sample)
+	}
+
+	rollups := make([]ServiceSample, 0, len(order))
+	for _, key := range order {
+		seen := grouped[key]
+		latest := seen[len(seen)-1]
+		rollups = append(rollups, ServiceSample{
+			Project:       key.Project,
+			Service:       key.Service,
+			ContainerID:   latest.ContainerID,
+			Name:          latest.Name,
+			Image:         latest.Image,
+			State:         latest.State,
+			Health:        latest.Health,
+			Ports:         latest.Ports,
+			At:            seen[0].At.Truncate(time.Minute),
+			CPUPercent:    averageField(seen, func(s ServiceSample) float64 { return s.CPUPercent }),
+			MemUsedBytes:  averageField(seen, func(s ServiceSample) float64 { return s.MemUsedBytes }),
+			MemLimitBytes: averageField(seen, func(s ServiceSample) float64 { return s.MemLimitBytes }),
+			NetRXBPS:      averageField(seen, func(s ServiceSample) float64 { return s.NetRXBPS }),
+			NetTXBPS:      averageField(seen, func(s ServiceSample) float64 { return s.NetTXBPS }),
+			BlockReadBPS:  averageField(seen, func(s ServiceSample) float64 { return s.BlockReadBPS }),
+			BlockWriteBPS: averageField(seen, func(s ServiceSample) float64 { return s.BlockWriteBPS }),
+			Pids:          averageField(seen, func(s ServiceSample) float64 { return s.Pids }),
+		})
+	}
+	return rollups
 }
 
 // ParseHealth extracts a container's health from its status text —

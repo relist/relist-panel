@@ -92,6 +92,7 @@ func (s *ContainerSource) ContainerStats(ctx context.Context, id string) (hostme
 		CPUOnline:      api.CPUStats.OnlineCPUs,
 		MemUsageBytes:  api.MemoryStats.Usage,
 		MemLimitBytes:  api.MemoryStats.Limit,
+		PidsCurrent:    api.PidsStats.PidsCurrent,
 	}
 	// cgroup v2 reports inactive_file where v1 reported cache; the daemon
 	// decides which key is there and we follow, like the docker CLI does.
@@ -172,6 +173,9 @@ type apiStats struct {
 		RXBytes uint64 `json:"rx_bytes"`
 		TXBytes uint64 `json:"tx_bytes"`
 	} `json:"networks"`
+	PidsStats struct {
+		PidsCurrent uint64 `json:"current"`
+	} `json:"pids_stats"`
 	BlkioStats struct {
 		IoServiceBytesRecursive []struct {
 			Major uint64 `json:"major"`

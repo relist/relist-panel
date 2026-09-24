@@ -429,3 +429,141 @@ func TestParseHealth(t *testing.T) {
 		}
 	}
 }
+
+// pids_stats.current is a gauge: reported on the first sweep already. A live
+// container always holds at least one PID, so a zero means the runtime
+// reported nothing and reads NaN — never a zeroed line.
+func TestServiceCollectorPidsReportedAndUnreported(t *testing.T) {
+	now := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
+	reported := statsSample(1, 2, 4, 3, 0, 4, 0, 0, 0, 0)
+	reported.PidsCurrent = 7
+	unreported := statsSample(1, 2, 4, 3, 0, 4, 0, 0, 0, 0)
+
+	source := &fakeSource{
+		containers: []hostmetrics.ContainerInfo{containerInfo("c1", "web", nil)},
+		stats:      map[string]hostmetrics.ContainerStatsSample{"c1": reported},
+	}
+	collector := hostmetrics.NewServiceCollector(source, knownOnlyPec, func() time.Time { return now })
+	collector.Sweep(context.Background())
+	if got := collector.Services()[0].Pids; got != 7 {
+		t.Errorf("Pids = %v, want 7", got)
+	}
+
+	source.stats = map[string]hostmetrics.ContainerStatsSample{"c1": unreported}
+	now = now.Add(30 * time.Second)
+	collector.Sweep(context.Background())
+	if got := collector.Services()[0].Pids; !math.IsNaN(got) {
+		t.Errorf("Pids = %v when pids_stats is absent, want NaN", got)
+	}
+}
+
+// CloseMinute averages over the sweeps the minute actually saw — here three
+// sweeps of one Service, whose CPU rate went NaN (first sweep) → 20 → 60, so
+// the average drops the NaN and lands on 40. Identity fields are not averaged:
+// the latest sample's container wins.
+func TestServiceCollectorCloseMinuteAveragesSweeps(t *testing.T) {
+	now := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
+	source := &fakeSource{
+		containers: []hostmetrics.ContainerInfo{containerInfo("c1", "web", nil)},
+		stats: map[string]hostmetrics.ContainerStatsSample{
+			"c1": statsSample(1000, 100000, 4, 5000, 0, 10000, 0, 0, 0, 0),
+		},
+	}
+	collector := hostmetrics.NewServiceCollector(source, knownOnlyPec, func() time.Time { return now })
+
+	collector.Sweep(context.Background())
+	// Two more sweeps, each over a Δsystem of 100000 with 4 online CPUs:
+	// Δcpu 5000 → 20%, then Δcpu 15000 → 60%.
+	for _, sweep := range []struct {
+		cpuTotal  uint64
+		cpuSystem uint64
+	}{{6000, 200000}, {21000, 300000}} {
+		now = now.Add(30 * time.Second)
+		source.stats = map[string]hostmetrics.ContainerStatsSample{
+			"c1": statsSample(sweep.cpuTotal, sweep.cpuSystem, 4, 5000, 0, 10000, 0, 0, 0, 0),
+		}
+		collector.Sweep(context.Background())
+	}
+
+	rollups := collector.CloseMinute()
+	if len(rollups) != 1 {
+		t.Fatalf("CloseMinute() returned %d rows, want 1", len(rollups))
+	}
+	rollup := rollups[0]
+	if rollup.Project != "p-e-c" || rollup.Service != "web" {
+		t.Errorf("rollup keyed (%q, %q), want (p-e-c, web)", rollup.Project, rollup.Service)
+	}
+	if !rollup.At.Equal(time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)) {
+		t.Errorf("rollup bucket = %v, want the minute the samples were seen in", rollup.At)
+	}
+	if rollup.CPUPercent != 40 {
+		t.Errorf("CPUPercent = %v, want 40 (NaN first sweep dropped, (20+60)/2)", rollup.CPUPercent)
+	}
+	if rollup.ContainerID != "c1" || rollup.Image != "nginx:1.27" {
+		t.Errorf("identity fields = %+v, want the latest sample's", rollup)
+	}
+
+	// The next minute opens empty: nothing seen, nothing written.
+	if got := collector.CloseMinute(); got != nil {
+		t.Errorf("second CloseMinute() = %+v, want nil", got)
+	}
+}
+
+// A minute a restart cut short is still a row: one sweep in, one rollup out,
+// averaged over the one sample it saw — the screens' `partial` state is the
+// honest display for the gap.
+func TestServiceCollectorCloseMinuteCutShortStillWritesRow(t *testing.T) {
+	now := time.Date(2026, 9, 24, 10, 30, 15, 0, time.UTC)
+	source := &fakeSource{
+		containers: []hostmetrics.ContainerInfo{containerInfo("c1", "web", nil)},
+		stats: map[string]hostmetrics.ContainerStatsSample{
+			"c1": statsSample(1000, 100000, 4, 5000, 1200, 10000, 0, 0, 0, 0),
+		},
+	}
+	collector := hostmetrics.NewServiceCollector(source, knownOnlyPec, func() time.Time { return now })
+	collector.Sweep(context.Background())
+
+	rollups := collector.CloseMinute()
+	if len(rollups) != 1 {
+		t.Fatalf("CloseMinute() returned %d rows after a single sweep, want 1", len(rollups))
+	}
+	if !rollups[0].At.Equal(time.Date(2026, 9, 24, 10, 30, 0, 0, time.UTC)) {
+		t.Errorf("rollup bucket = %v, want 10:30 — the truncated minute it was seen in", rollups[0].At)
+	}
+	if rollups[0].MemUsedBytes != 3800 {
+		t.Errorf("MemUsedBytes = %v, want 3800", rollups[0].MemUsedBytes)
+	}
+	if !math.IsNaN(rollups[0].CPUPercent) {
+		t.Errorf("CPUPercent = %v, want NaN (the container's first sweep has no rate)", rollups[0].CPUPercent)
+	}
+}
+
+// A Service that stops running mid-hour keeps its series: the sweep that
+// drops its container clears the current sample, not the minute's history.
+func TestServiceCollectorServiceLeavingKeepsMinuteSamples(t *testing.T) {
+	now := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
+	source := &fakeSource{
+		containers: []hostmetrics.ContainerInfo{containerInfo("c1", "web", nil)},
+		stats: map[string]hostmetrics.ContainerStatsSample{
+			"c1": statsSample(1000, 100000, 4, 5000, 0, 10000, 0, 0, 0, 0),
+		},
+	}
+	collector := hostmetrics.NewServiceCollector(source, knownOnlyPec, func() time.Time { return now })
+	collector.Sweep(context.Background())
+
+	// The container left the listing (the Compose was stopped).
+	now = now.Add(30 * time.Second)
+	source.containers = nil
+	collector.Sweep(context.Background())
+	if got := len(collector.Services()); got != 0 {
+		t.Fatalf("Services() = %d entries after the container left, want 0", got)
+	}
+
+	rollups := collector.CloseMinute()
+	if len(rollups) != 1 {
+		t.Fatalf("CloseMinute() returned %d rows, want the sample the stopped Service's sweep saw", len(rollups))
+	}
+	if rollups[0].Service != "web" {
+		t.Errorf("rollup is for %q, want web", rollups[0].Service)
+	}
+}
