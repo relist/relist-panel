@@ -10,7 +10,7 @@ the longest window plus slack and is the panel's first housekeeping job. Bump
 
 **Blocked by: 01, 02**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] Migration follows the repo's idiom (5-digit sequence, goose `Up`/`Down`, `INTEGER` Unix seconds)
       and is idempotent under `goose.Up` on an already-migrated database

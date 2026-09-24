@@ -10,7 +10,7 @@ recorded — §11).
 
 **Blocked by: 01, 02, 03, 04, 06**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] Editor and rail stretch to the same height; no nested scrollers on the page (GUIDELINES §6); the
       tab row's path segment is linkable and the unknown-segment case falls back to Editor

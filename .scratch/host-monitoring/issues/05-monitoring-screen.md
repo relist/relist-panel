@@ -8,7 +8,7 @@ Projects.
 
 **Blocked by: 04 (this feature), and 04 + 07 of the design port (shell and data layer)**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] The six charts render from the real endpoint, with the design's units, fixed 0–100 axes for the
       percent metrics and auto-scaling for the byte rates

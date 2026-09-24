@@ -6,7 +6,7 @@ Replaces the monolith's `AuthScreen`.
 
 **Blocked by: 01, 02, 03, 04**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] `/setup` and `/signin` match the design; setup is reachable only while the API reports
       `setupRequired`

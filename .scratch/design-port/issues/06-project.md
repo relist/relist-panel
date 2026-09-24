@@ -7,7 +7,7 @@ the Environment's Compose list.
 
 **Blocked by: 01, 02, 03, 04**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] The Environment segmented switches environments; the tab is in the URL and survives a reload
 - [ ] The Composes tab lists each Compose with the status vocabulary, last deploy, and the design's

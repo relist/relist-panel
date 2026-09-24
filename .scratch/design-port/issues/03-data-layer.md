@@ -9,7 +9,7 @@ at `:1078`, `:1123`, `:1290`, `:1324`, `:1349`, `:1419`; deploy `:1358`, stop `:
 
 **Blocked by: —**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] Each prototype store method has a real implementation; loading and error state is exposed the way
       the prototype's screens expect to consume it

@@ -11,7 +11,7 @@ cancelled on shutdown.
 
 **Blocked by: 01, 02, 03**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] An invalid window is a 400 with a message, not a silent default
 - [ ] The host response is served from the ring for ≤1h and from rollups for 6h/24h, and says which

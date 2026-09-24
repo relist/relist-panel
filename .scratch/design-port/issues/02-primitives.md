@@ -8,7 +8,7 @@ pure helpers this port introduces.
 
 **Blocked by: —**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] Every component matches the prototype's props and markup, including `PageHeader`'s
       title/tags/description/right-actions/hairline contract (GUIDELINES §6)

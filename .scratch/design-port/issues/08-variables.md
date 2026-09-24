@@ -7,7 +7,7 @@ Replaces the monolith's `EnvironmentVariablesPanel`.
 
 **Blocked by: 01, 02, 03, 04, 06**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] Masking, reveal and copy work per row; the `secret` tag renders as designed
       (the API has no flag yet — §11 — so the tag is client-side for now, and the ticket notes that)

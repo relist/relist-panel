@@ -9,7 +9,7 @@ The status rail also gains its per-Service rows from the same endpoint.
 
 **Blocked by: 04 (this feature), and 07 of the design port (the Compose screen)**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] The service picker lists the Compose's Services with their state; selecting one changes every
       number on the screen

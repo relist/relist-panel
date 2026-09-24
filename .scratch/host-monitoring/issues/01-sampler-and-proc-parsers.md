@@ -10,7 +10,7 @@ reports nothing rather than zero.
 
 **Blocked by: —**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] Parsers are pure functions over fixture text, tested with golden files for `/proc/stat`,
       `/proc/meminfo`, `/proc/diskstats` and `/proc/net/dev`, including counter-wrap and

@@ -10,7 +10,7 @@ those disappear with the monolith in 04, so this ticket only has to keep the old
 
 **Blocked by: —**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] `web/src/app/theme.ts` carries the same tokens as the prototype's, with the same `LAYOUT` keys
       (`siderWidth`, `barHeight`, `gutter`, `contentMaxWidth`, `editorMinHeight`) so screen tickets can

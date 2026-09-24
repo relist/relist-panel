@@ -7,7 +7,7 @@ endpoint is added. The Activity card is deliberately omitted (§11: nothing is r
 
 **Blocked by: 01, 02, 03, 04, 06**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] Stats match the design's definitions (Composes = stacks, Containers = running/total, attention =
       partly running or stopped-after-success)

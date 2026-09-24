@@ -8,7 +8,7 @@ path that is not a real file, and `auth.publicPath` treats anything outside `/ap
 
 **Blocked by: 01, 02, 03**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] `#/` → `/`, `#/projects` → `/projects`, `#/projects/:p`, `#/projects/:p/env/:e/:tab`,
       `#/projects/:p/env/:e/compose/:c`, `#/projects/:p/env/:e/compose/:c/:tab` all resolve, and an

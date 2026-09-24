@@ -11,7 +11,7 @@ Health is parsed from the container's status text, so no `docker compose ps` pro
 
 **Blocked by: 01**
 
-**Status:** open
+**Status:** ready-for-agent
 
 - [ ] A fake `ContainerSource` drives the tests; no test talks to a real daemon
 - [ ] CPU, network and block I/O are stored as deltas; a container's first sweep reports no rate
