@@ -360,11 +360,13 @@ func newSessionToken() (string, error) {
 
 func publicPath(path string) bool {
 	switch path {
-	case "/", "/index.html", "/healthz", "/api/auth/status", "/api/auth/setup", "/api/auth/login", "/api/auth/logout":
+	case "/healthz", "/api/auth/status", "/api/auth/setup", "/api/auth/login", "/api/auth/logout":
 		return true
-	default:
-		return strings.HasPrefix(path, "/assets/")
 	}
+	// The HTML shell is public wherever it is served: the frontend routes with
+	// history URLs (`/projects/1/env/1/compose/1`), so the shell answers under
+	// any non-API path. The API namespace itself stays authenticated.
+	return !strings.HasPrefix(path, "/api/")
 }
 
 func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expiresAt time.Time) {

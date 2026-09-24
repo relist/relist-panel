@@ -56,11 +56,13 @@ Projects                  Overview / Projects                            cards |
   └ landing               … / my-saas / production / web                 editor + status rail
 Design system             Design system / Guidelines                     this document, rendered
 
-Routes (prototype):  #/                                      #/projects
-                     #/monitoring
-                     #/projects/:projectId                    #/projects/:projectId/env/:environmentId/:tab
-                     #/projects/:projectId/env/:environmentId/compose/:composeId
-                     #/design/guidelines  #/design/states  #/signin  #/setup
+Routes (history URLs, as shipped in `web/`):  /                                      /projects
+                     /monitoring
+                     /projects/:projectId                    /projects/:projectId/env/:environmentId/:tab
+                     /projects/:projectId/env/:environmentId/compose/:composeId
+                     /projects/:projectId/env/:environmentId/compose/:composeId/monitor
+                     /signin  /setup
+                     Design-system screens stay prototype-only: #/design/guidelines, #/design/states
 ```
 
 Rules:
@@ -75,7 +77,7 @@ Rules:
 
 ## 4. Screens
 
-### 4.1 Overview (`#/`)
+### 4.1 Overview (`/`)
 
 Host-level dashboard. Purpose: answer "is anything broken?" in one screen.
 
@@ -87,7 +89,7 @@ Host-level dashboard. Purpose: answer "is anything broken?" in one screen.
 - **All Composes** table: flat view across Projects with Project/Environment, container counts and
   last-edited time. This is the operator's index when they do not remember which Project holds what.
 
-### 4.2 Monitoring (`#/monitoring`)
+### 4.2 Monitoring (`/monitoring`)
 
 Host-level metrics: six charts over one selectable window. Purpose: answer "is the host in
 trouble?" without ssh'ing in — and be honest about what the panel can and cannot read.
@@ -148,7 +150,7 @@ trouble?" without ssh'ing in — and be honest about what the panel can and cann
   state above is what the seam looks like. For scale: the panel binary idles at ~3.9 MB RSS, so the
   buffers are about a 5% addition.
 
-### 4.3 Projects (`#/projects`)
+### 4.3 Projects (`/projects`)
 
 - Filter by name/description, sort (recently updated / name / size), and a **Cards ⇄ Table** toggle —
   cards for a handful of Projects, the table once the list is long.
@@ -156,7 +158,7 @@ trouble?" without ssh'ing in — and be honest about what the panel can and cann
   never requires drilling in.
 - Row menu: Open, Edit details, Delete.
 
-### 4.4 Project (`#/projects/:projectId`)
+### 4.4 Project (`/projects/:projectId`)
 
 - Header: name, status rollup, Environment and Compose counts, description, `Edit details`.
 - Environment switcher with per-Environment Compose counts; the active Environment's container
@@ -242,7 +244,7 @@ tag stay above the tabs, because they belong to the Compose rather than to eithe
   simply stops drawing at the point it stopped.
 - The page scrolls with the document; the charts are fixed-height boxes. No nested scrollers.
 
-### 4.7 Auth (`#/signin`, `#/setup`)
+### 4.7 Auth (`/signin`, `/setup`)
 
 Split layout: what the panel is on the left (in `colorPrimaryBg`), the form on the right. Setup is a
 two-step flow (Account → Ready) ending in a `Result` with the Project → Environment → Compose

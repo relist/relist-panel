@@ -205,10 +205,10 @@ Projects                 Overview / Projects                            cards | 
   └ landing              … / my-saas / production / web                 editor + status rail
 Design system            Design system / Guidelines                     this page
 
-URLs (hash, mock):  #/projects/:projectId/env/:environmentId/:tab
-                    #/projects/:projectId/env/:environmentId/compose/:composeId
-                    #/projects/:projectId/env/:environmentId/compose/:composeId/monitor
-                    #/design/guidelines | #/design/states | #/signin | #/setup`}</pre>
+URLs (history, as shipped in web/):  /projects/:projectId/env/:environmentId/:tab
+                    /projects/:projectId/env/:environmentId/compose/:composeId
+                    /projects/:projectId/env/:environmentId/compose/:composeId/monitor
+                    /signin | /setup — design system stays prototype-only: #/design/guidelines | #/design/states`}</pre>
       </Section>
 
       <Section
@@ -398,7 +398,7 @@ URLs (hash, mock):  #/projects/:projectId/env/:environmentId/:tab
 
       <Section
         id="service-metrics"
-        intro="Host metrics live on #/monitoring; one service of one Compose lives on the Compose screen’s Monitor tab (#/projects/:p/env/:e/compose/:c/monitor). Same chart, same windows, same control family — a different question."
+        intro="Host metrics live on /monitoring; one service of one Compose lives on the Compose screen’s Monitor tab (/projects/:p/env/:e/compose/:c/monitor). Same chart, same windows, same control family — a different question."
         title="Per-service metrics (Compose → Monitor)"
       >
         <ul style={{ margin: 0, paddingInlineStart: 20 }}>
@@ -578,12 +578,12 @@ URLs (hash, mock):  #/projects/:projectId/env/:environmentId/:tab
         </ul>
         <Divider />
         <Text type="secondary">
-          Screens: <Link href="#/">Overview</Link> · <Link href="#/monitoring">Monitoring</Link> ·{' '}
-          <Link href="#/projects">Projects</Link> · <Link href="#/projects/1">Project</Link> ·{' '}
-          <Link href="#/projects/1/env/1/compose/1">Compose</Link> ·{' '}
-          <Link href="#/projects/1/env/1/compose/1/monitor">Compose Monitor</Link> ·{' '}
-          <Link href="#/design/states">States gallery</Link> · <Link href="#/signin">Sign in</Link> ·{' '}
-          <Link href="#/setup">Setup</Link>
+          Screens: <Link href="/">Overview</Link> · <Link href="/monitoring">Monitoring</Link> ·{' '}
+          <Link href="/projects">Projects</Link> · <Link href="/projects/1">Project</Link> ·{' '}
+          <Link href="/projects/1/env/1/compose/1">Compose</Link> ·{' '}
+          <Link href="/projects/1/env/1/compose/1/monitor">Compose Monitor</Link> ·{' '}
+          <Link href="/signin">Sign in</Link> · <Link href="/setup">Setup</Link> ·{' '}
+          <Link href="#/design/states">States gallery (prototype only)</Link>
         </Text>
       </Section>
     </>
