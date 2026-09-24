@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { Credentials, ProjectInput } from './api';
-import type { Compose, EnvironmentVariable, Project } from './types';
+import type { Compose, EnvironmentVariable, HostMetrics, MetricWindow, Project } from './types';
 import { findComposeLocation, findEnvironmentLocation } from './types';
 
 /**
@@ -16,15 +16,18 @@ import { findComposeLocation, findEnvironmentLocation } from './types';
  *    reject with an `Error` carrying the API's message, for the caller's Alert.
  *  - Loading is exposed through `isPending(key)` under the prototype's keys
  *    (`save-compose:3`, `deploy:3`, `status:3`, …), plus the data loads
- *    (`projects`, `auth-status`, `variables:<environmentId>`, `logs:<composeId>`).
+ *    (`projects`, `auth-status`, `variables:<environmentId>`, `logs:<composeId>`,
+ *    `metrics:<window>`).
  *  - Every method is a stable `useCallback`, so an effect that depends on one
  *    never refires when pending or data state changes — the prototype hit an
  *    infinite-update loop with per-render callbacks; do not reintroduce it.
  *
  * Prototype chrome that is deliberately absent: the latency switch and the
  * `track`/`wait` simulation (real latency is the real API's), the activity
- * feed and `host` info (no endpoint — GUIDELINES §11), and the metrics loaders
- * (they arrive with `.scratch/host-monitoring`).
+ * feed and `host` info (no endpoint — GUIDELINES §11). The metrics loaders
+ * arrive with `.scratch/host-monitoring` and return the endpoints' envelope
+ * (window, `partial`, `sources`, samples), not the prototype's bare arrays —
+ * the screens read `partial` and `sources` off it instead of guessing.
  */
 
 export type NewVariable = { key: string; value: string };
@@ -51,6 +54,8 @@ type PanelValue = {
   isPending: (key: string) => boolean;
   loadAuthStatus: () => Promise<void>;
   loadLogs: (composeId: number) => Promise<string>;
+  /** The host's metrics for one window — the `/api/host/metrics` envelope. */
+  loadMetrics: (metricWindow: MetricWindow) => Promise<HostMetrics>;
   loadProjects: () => Promise<void>;
   loadVariables: (environmentId: number) => Promise<void>;
   projects: Project[];
@@ -508,6 +513,14 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [track],
   );
 
+  // The metrics reads carry no tree state — the envelope is screen-local data,
+  // refetched per window — so the method only contributes its pending key.
+  const loadMetrics = useCallback(
+    (metricWindow: MetricWindow) =>
+      track(`metrics:${metricWindow}`, () => api.hostMetrics(metricWindow)),
+    [track],
+  );
+
   const loadVariables = useCallback(
     async (environmentId: number) => {
       await track(`variables:${environmentId}`, async () => {
@@ -538,6 +551,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       isPending,
       loadAuthStatus,
       loadLogs,
+      loadMetrics,
       loadProjects,
       loadVariables,
       projects,
@@ -566,6 +580,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       isPending,
       loadAuthStatus,
       loadLogs,
+      loadMetrics,
       loadProjects,
       loadVariables,
       pending,

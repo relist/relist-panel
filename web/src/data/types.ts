@@ -5,10 +5,9 @@
  * `@design-only` is a proposal from the prototype: it has no API backing yet
  * and is called out in GUIDELINES.md under "API gaps".
  *
- * Deliberately not ported from the prototype's `types.ts`: the monitoring
- * pieces (`MetricSample`, `ServiceSample`, `MetricWindow`, the window tables)
- * and the activity feed — they belong to `.scratch/host-monitoring` and to the
- * omitted Activity cards, and no endpoint returns them yet.
+ * Deliberately not ported from the prototype's `types.ts`: the activity feed
+ * (the API records no events — the Activity cards stay omitted). The monitoring
+ * pieces arrive with `.scratch/host-monitoring`, below.
  */
 
 export type EnvironmentVariable = {
@@ -155,3 +154,103 @@ export function findEnvironmentLocation(
   }
   return undefined;
 }
+
+// ---- Metrics (.scratch/host-monitoring) --------------------------------------
+//
+// The endpoints serve an envelope naming the window, which store answered it
+// (`ring` or `rollups`), the samples' resolution, whether the data covers the
+// window (`partial` — still collecting after a restart), the `sources`
+// availability block, and the samples at the window's natural resolution;
+// downsampling is the chart's job.
+
+/** Windows the Monitoring screen offers — exactly what the endpoint validates. */
+export type MetricWindow = '15m' | '1h' | '6h' | '24h';
+
+/**
+ * Resolution is part of the design contract, not an implementation detail: 10s
+ * inside the hour is what makes a 30-second spike visible, and a 24-hour window
+ * at that resolution is 8,640 points of noise. Beyond the hour the panel rolls
+ * the samples up to one minute.
+ */
+export const METRIC_WINDOWS = {
+  '15m': { intervalSeconds: 10, windowSeconds: 900 },
+  '1h': { intervalSeconds: 10, windowSeconds: 3_600 },
+  '6h': { intervalSeconds: 60, windowSeconds: 21_600 },
+  '24h': { intervalSeconds: 60, windowSeconds: 86_400 },
+} as const satisfies Record<MetricWindow, { intervalSeconds: number; windowSeconds: number }>;
+
+/**
+ * Per-container sampling is deliberately slower than the host's 10s: a host
+ * reads four /proc files, a container is a `docker stats` call per service, and
+ * an operator reads a service's shape in minutes, not seconds. Inside the hour
+ * 30s still shows a restart; beyond it the 1-minute rollups are enough.
+ */
+export const SERVICE_METRIC_WINDOWS = {
+  '15m': { intervalSeconds: 30, windowSeconds: 900 },
+  '1h': { intervalSeconds: 30, windowSeconds: 3_600 },
+  '6h': { intervalSeconds: 60, windowSeconds: 21_600 },
+  '24h': { intervalSeconds: 60, windowSeconds: 86_400 },
+} as const satisfies Record<MetricWindow, { intervalSeconds: number; windowSeconds: number }>;
+
+/**
+ * One host sample. `at` is epoch ms, the `*Used` / `*Total` fields are bytes,
+ * and the I/O fields are already rates (bytes/s) — no counter deltas to keep.
+ * A field reads `null` when the sampler had no honest reading for it (an
+ * unreadable source, a rateless first tick): the API encodes NaN as JSON null,
+ * and an absent reading must never be plotted as a zero.
+ */
+export type MetricSample = {
+  at: number;
+  cpu: number | null;
+  memUsed: number | null;
+  memTotal: number | null;
+  diskUsed: number | null;
+  diskTotal: number | null;
+  dockerUsed: number | null;
+  dockerTotal: number | null;
+  blkRead: number | null;
+  blkWrite: number | null;
+  netRx: number | null;
+  netTx: number | null;
+};
+
+/**
+ * One container sample, keyed by (Compose, service) rather than by container:
+ * a deploy mints a new container, the service name does not change, and history
+ * that reset on every deploy could never show what a deploy did. `null` means
+ * no honest reading, as on the host sample. `cpu` is percent of one core and
+ * can exceed 100; `memUsed` is usage minus page cache.
+ */
+export type ServiceSample = {
+  at: number;
+  cpu: number | null;
+  memUsed: number | null;
+  memLimit: number | null;
+  netRx: number | null;
+  netTx: number | null;
+  blkRead: number | null;
+  blkWrite: number | null;
+  pids: number | null;
+};
+
+/** Whether a metrics source was readable at the last tick, and why not when not. */
+export type SourceStatus = {
+  available: boolean;
+  reason?: string;
+};
+
+export type MetricsEnvelope<Sample> = {
+  window: MetricWindow;
+  /** Which store served the window: the in-memory ring or the SQLite rollups. */
+  from: 'ring' | 'rollups';
+  intervalSeconds: number;
+  /** True when the samples cover less than the window — the restart seam. */
+  partial: boolean;
+  sources: Record<string, SourceStatus>;
+  samples: Sample[];
+};
+
+export type HostMetrics = MetricsEnvelope<MetricSample>;
+
+/** The Service envelope's one source is the Docker stats API sweep. */
+export type ServiceMetrics = MetricsEnvelope<ServiceSample>;

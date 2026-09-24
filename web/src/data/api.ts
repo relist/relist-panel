@@ -6,7 +6,8 @@
  * directly.
  */
 
-import type { Compose, Environment, EnvironmentVariable, Project } from './types';
+import type { Compose, Environment, EnvironmentVariable, HostMetrics, Project } from './types';
+import type { MetricWindow } from './types';
 
 export type AuthStatus = {
   setupRequired: boolean;
@@ -120,6 +121,8 @@ export const api = {
   stopCompose: (location: ComposePath) => request<Compose>(`${composePath(location)}/stop`, { method: 'POST' }),
   restartCompose: (location: ComposePath) => request<Compose>(`${composePath(location)}/restart`, { method: 'POST' }),
   logs: (location: ComposePath) => request<LogsPayload>(`${composePath(location)}/logs`),
+
+  hostMetrics: (window: MetricWindow) => request<HostMetrics>(`/api/host/metrics?window=${window}`),
 };
 
 export type ComposePath = {
