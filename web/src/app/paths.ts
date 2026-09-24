@@ -18,9 +18,16 @@ export const paths = {
   overview: '/',
   project: (projectId: number | string) => `/projects/${projectId}`,
   projects: '/projects',
+  setup: '/setup',
+  signIn: '/signin',
 } as const;
 
-/** The route grammar, as react-router matcher patterns (no elements). */
+/**
+ * The route grammar of the shell's screens, as react-router matcher patterns
+ * (no elements). The auth screens (`/signin`, `/setup`) sit outside the shell —
+ * the signed-out visitor must not see the sider — so they are routed in
+ * `app/routes.tsx` without being part of this grammar.
+ */
 export const routePaths = [
   { path: paths.overview },
   { path: 'monitoring' },
