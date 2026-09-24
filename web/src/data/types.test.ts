@@ -4,6 +4,7 @@ import {
   composeState,
   findCompose,
   findComposeLocation,
+  findEnvironmentLocation,
   projectComposes,
   summarize,
 } from './types';
@@ -105,5 +106,27 @@ describe('findCompose / findComposeLocation', () => {
   it('returns undefined for an unknown Compose', () => {
     expect(findComposeLocation([nested], 99)).toBeUndefined();
     expect(findCompose([nested], 99)).toBeUndefined();
+  });
+});
+
+describe('findEnvironmentLocation', () => {
+  const first = compose({ id: 1 });
+  const nested = project({
+    id: 7,
+    composes: [first],
+    environments: [
+      { id: 1, projectId: 7, name: 'production', createdAt: '', variables: [], composes: [first] },
+      { id: 2, projectId: 7, name: 'staging', createdAt: '', variables: [], composes: [] },
+    ],
+  });
+
+  it('finds an Environment and its Project', () => {
+    const location = findEnvironmentLocation([nested], 2);
+    expect(location?.project.id).toBe(7);
+    expect(location?.environment.name).toBe('staging');
+  });
+
+  it('returns undefined for an unknown Environment', () => {
+    expect(findEnvironmentLocation([nested], 99)).toBeUndefined();
   });
 });

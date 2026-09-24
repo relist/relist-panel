@@ -137,3 +137,21 @@ export function findComposeLocation(projects: Project[], composeId: number): Com
   }
   return undefined;
 }
+
+export type EnvironmentLocation = {
+  project: Project;
+  environment: Environment;
+};
+
+export function findEnvironmentLocation(
+  projects: Project[],
+  environmentId: number,
+): EnvironmentLocation | undefined {
+  for (const project of projects) {
+    const environment = project.environments.find((candidate) => candidate.id === environmentId);
+    if (environment) {
+      return { project, environment };
+    }
+  }
+  return undefined;
+}
