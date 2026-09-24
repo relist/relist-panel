@@ -15,7 +15,7 @@ import { useNavigate } from 'react-router';
 import { paths } from '../app/paths';
 import { ComposeStatusInline, ComposeStatusTag, EmptyState, PageHeader, RelativeTime, StatCard } from '../components/primitives';
 import { usePanel } from '../data/store';
-import { attentionRows, composeComparators, degradationNotes, flattenComposes, overviewStats } from './overview-view';
+import { attentionRows, composeComparators, degradationNotes, flattenComposes, overviewStats, withDeployStamps } from './overview-view';
 import type { FlatCompose } from './overview-view';
 
 const { Text } = Typography;
@@ -28,13 +28,13 @@ const { Text } = Typography;
  * is deliberately absent (§11: the panel records no events).
  */
 export function OverviewPage() {
-  const { projects, refreshStatus, services, loadServices } = usePanel();
+  const { deployedAt, loadServices, projects, refreshStatus, services } = usePanel();
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const [refreshing, setRefreshing] = useState(false);
 
-  const flat = useMemo(() => flattenComposes(projects), [projects]);
+  const flat = useMemo(() => flattenComposes(withDeployStamps(projects, deployedAt)), [projects, deployedAt]);
   const stats = overviewStats(projects);
   const attention = useMemo(() => attentionRows(flat, services), [flat, services]);
 
