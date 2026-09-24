@@ -2,6 +2,7 @@ package hostmetrics
 
 import (
 	"context"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -509,5 +510,94 @@ func TestSamplerRunStopsWhenContextIsCancelled(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after the context was cancelled")
+	}
+}
+
+// The docker df reading is carried forward between refreshes — the series is
+// a step, not a 10-second sample — and a failed refresh marks the source
+// unavailable with its reason while the last reading stays on the chart.
+func TestSamplerSetDockerDiskCarriesReadingForward(t *testing.T) {
+	clock := &fakeClock{now: baseTime()}
+	s := newTestSampler(t, clock, nil)
+
+	// Before the first refresh succeeds there is no reading at all.
+	s.tick(context.Background())
+	sample := s.Window(1)[0]
+	if !math.IsNaN(sample.DockerDiskBytes) {
+		t.Fatalf("DockerDiskBytes = %v before any refresh, want NaN", sample.DockerDiskBytes)
+	}
+	if status := s.Sources()[SourceDockerDisk]; status.Available || status.Reason == "" {
+		t.Fatalf("sources[%q] = %+v before any refresh, want unavailable with a reason", SourceDockerDisk, status)
+	}
+
+	s.SetDockerDisk(3.2e9, nil)
+	clock.advance(10 * time.Second)
+	s.tick(context.Background())
+	clock.advance(10 * time.Second)
+	s.tick(context.Background())
+	// The first sample predates the refresh and is honestly NaN; every tick
+	// after it carries the reading forward.
+	if got := s.Window(3)[0].DockerDiskBytes; !math.IsNaN(got) {
+		t.Errorf("pre-refresh DockerDiskBytes = %v, want NaN", got)
+	}
+	for i, sample := range s.Window(3)[1:] {
+		if sample.DockerDiskBytes != 3.2e9 {
+			t.Errorf("sample %d DockerDiskBytes = %v, want the carried-forward 3.2e9", i+1, sample.DockerDiskBytes)
+		}
+	}
+	if status := s.Sources()[SourceDockerDisk]; !status.Available {
+		t.Errorf("sources[%q] = %+v after a good refresh, want available", SourceDockerDisk, status)
+	}
+
+	// A failed refresh: the source goes unavailable, the step keeps its last
+	// honest value (the sources block says why it is stale).
+	s.SetDockerDisk(0, errors.New("docker api /system/df: 500"))
+	clock.advance(10 * time.Second)
+	s.tick(context.Background())
+	if got := s.Window(1)[0].DockerDiskBytes; got != 3.2e9 {
+		t.Errorf("DockerDiskBytes = %v after a failed refresh, want the last reading 3.2e9", got)
+	}
+	if status := s.Sources()[SourceDockerDisk]; status.Available || status.Reason != "docker api /system/df: 500" {
+		t.Errorf("sources[%q] = %+v after a failed refresh, want unavailable with that reason", SourceDockerDisk, status)
+	}
+
+	// The rollup average sees the carried reading too.
+	rollup := MinuteAverage(s.ring.AppendLast(nil, len(s.ring.buf)+1))
+	if rollup.DockerDiskBytes != 3.2e9 {
+		t.Errorf("MinuteAverage DockerDiskBytes = %v, want 3.2e9", rollup.DockerDiskBytes)
+	}
+}
+
+// Start launches the loop exactly once for the panel's lifetime: a second
+// call is refused rather than growing a duplicate goroutine, and Wait
+// returns once the cancelled loop has drained.
+func TestSamplerStartsOnceAndWaitsForShutdown(t *testing.T) {
+	s := newTestSampler(t, &fakeClock{now: baseTime()}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := s.Start(ctx); err != nil {
+		t.Fatalf("first Start() error = %v", err)
+	}
+	if err := s.Start(ctx); err == nil {
+		t.Fatal("second Start() = nil error, want a refusal (no duplicate loops)")
+	}
+
+	cancel()
+	select {
+	case <-s.done:
+		// the loop returned; Wait below is instant
+	case <-time.After(5 * time.Second):
+		t.Fatal("sampler loop did not return after its context was cancelled")
+	}
+
+	waited := make(chan struct{})
+	go func() {
+		s.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait did not return after the loop finished")
 	}
 }

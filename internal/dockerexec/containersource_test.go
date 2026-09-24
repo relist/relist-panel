@@ -198,6 +198,41 @@ func TestContainerSourceSurfacesDaemonErrors(t *testing.T) {
 	}
 }
 
+// SystemDf sums the daemon's own disk footprint the way `docker system df`
+// does: deduplicated image layers, containers' writable layers, volumes and
+// build-cache records.
+func TestContainerSourceSumsSystemDf(t *testing.T) {
+	record := &recording{}
+	socket := newFakeDaemon(t, record.handler(`{
+		"LayersSize": 1000,
+		"Containers": [
+			{"SizeRw": 100},
+			{"SizeRw": 200}
+		],
+		"Volumes": [
+			{"UsageData": {"Size": 300, "RefCount": 1}},
+			{"UsageData": null}
+		],
+		"BuildCache": [
+			{"Size": 400},
+			{"Size": 500}
+		]
+	}`))
+	source := dockerexec.NewContainerSource(socket)
+
+	total, err := source.SystemDf(context.Background())
+	if err != nil {
+		t.Fatalf("SystemDf() error = %v", err)
+	}
+
+	if method, path, _ := record.snapshot(); method != http.MethodGet || path != "/system/df" {
+		t.Errorf("request was %s %s, want GET /system/df", method, path)
+	}
+	if total != 2500 {
+		t.Errorf("SystemDf() = %d, want 2500 (1000 + 100 + 200 + 300 + 400 + 500)", total)
+	}
+}
+
 // The full path over the real adapter: daemon JSON in, keyed Service samples
 // out — the port the collector consumes and main.go will wire (ticket 04).
 func TestServiceCollectorOverTheRealAdapter(t *testing.T) {

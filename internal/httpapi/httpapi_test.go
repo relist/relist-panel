@@ -1964,6 +1964,8 @@ type testServer struct {
 	db      *sql.DB
 	dataDir string
 	runner  *fakeComposeRunner
+	history *fakeHostHistory
+	facts   *fakeServiceFacts
 	cookies map[string]*http.Cookie
 }
 
@@ -1976,11 +1978,15 @@ func newTestServer(t *testing.T) *testServer {
 	t.Cleanup(func() { db.Close() })
 	dataDir := t.TempDir()
 	runner := newFakeComposeRunner()
+	history := newFakeHostHistory()
+	facts := newFakeServiceFacts()
 	return &testServer{
-		handler: httpapi.NewHandler(db, runner, dataDir),
+		handler: httpapi.NewHandler(db, runner, dataDir, history, facts),
 		db:      db,
 		dataDir: dataDir,
 		runner:  runner,
+		history: history,
+		facts:   facts,
 		cookies: make(map[string]*http.Cookie),
 	}
 }

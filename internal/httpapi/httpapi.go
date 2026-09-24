@@ -11,14 +11,19 @@ import (
 	"relist-panel/internal/composes"
 	"relist-panel/internal/environments"
 	"relist-panel/internal/environmentvariables"
+	"relist-panel/internal/metrics"
 	"relist-panel/internal/projects"
 	"relist-panel/internal/webassets"
 )
 
 // NewHandler builds the top-level HTTP handler for the panel. runner drives
 // Compose deploy lifecycle actions (ADR-0003); dataDir is the root directory
-// Compose files are resolved under (ADR-0002).
-func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string) http.Handler {
+// Compose files are resolved under (ADR-0002). history and services are the
+// running sampler's read sides (metrics.HostHistory and ServiceFacts —
+// *hostmetrics.Sampler and *hostmetrics.ServiceCollector in production,
+// fakes at the HTTP seam); they may be nil, in which case the metrics
+// endpoints stay unregistered (an unwired panel has nothing to serve).
+func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
 	authService := auth.New(db)
@@ -31,6 +36,10 @@ func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string) http.
 	environmentVariablesService.RegisterRoutes(mux)
 	composesService := composes.New(db, runner, dataDir)
 	composesService.RegisterRoutes(mux)
+	if history != nil && services != nil {
+		metricsService := metrics.New(metrics.NewStore(db), history, services)
+		metricsService.RegisterRoutes(mux)
+	}
 	mux.Handle("/", webassets.Handler())
 	return authService.Middleware(mux)
 }

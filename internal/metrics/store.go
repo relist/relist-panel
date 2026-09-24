@@ -11,6 +11,7 @@ import (
 	"math"
 	"time"
 
+	"relist-panel/internal/composes"
 	"relist-panel/internal/hostmetrics"
 )
 
@@ -111,6 +112,120 @@ func (s *Store) DeleteRollupsBefore(ctx context.Context, cutoff time.Time) error
 	return err
 }
 
+// HostRollups returns the host rollups from `from` onward, chronological —
+// the six- and 24-hour windows' one-minute resolution. Columns the minute
+// never honestly measured come back NaN, their NULL reading preserved.
+func (s *Store) HostRollups(ctx context.Context, from time.Time) ([]hostmetrics.HostSample, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT bucket_at, cpu_percent, mem_used_bytes, mem_total_bytes,
+		       disk_free_bytes, disk_total_bytes, docker_disk_bytes,
+		       disk_read_bps, disk_write_bps, net_rx_bps, net_tx_bps
+		FROM host_metric_rollups
+		WHERE bucket_at >= ?
+		ORDER BY bucket_at ASC
+	`, from.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	rollups := make([]hostmetrics.HostSample, 0)
+	for rows.Next() {
+		var (
+			bucketAt int64
+			rollup   hostmetrics.HostSample
+			cpu, memUsed, memTotal, diskFree, diskTotal,
+			dockerDisk, diskRead, diskWrite, netRX, netTX sql.NullFloat64
+		)
+		if err := rows.Scan(&bucketAt, &cpu, &memUsed, &memTotal, &diskFree, &diskTotal,
+			&dockerDisk, &diskRead, &diskWrite, &netRX, &netTX); err != nil {
+			return nil, err
+		}
+		rollup = hostmetrics.HostSample{
+			At:              time.Unix(bucketAt, 0).UTC(),
+			CPUPercent:      value(cpu),
+			MemUsedBytes:    value(memUsed),
+			MemTotalBytes:   value(memTotal),
+			DiskFreeBytes:   value(diskFree),
+			DiskTotalBytes:  value(diskTotal),
+			DockerDiskBytes: value(dockerDisk),
+			DiskReadBPS:     value(diskRead),
+			DiskWriteBPS:    value(diskWrite),
+			NetRXBPS:        value(netRX),
+			NetTXBPS:        value(netTX),
+		}
+		rollups = append(rollups, rollup)
+	}
+	return rollups, rows.Err()
+}
+
+// ServiceRollups returns one Service's rollups from `from` onward,
+// chronological — a Service's six- and 24-hour windows.
+func (s *Store) ServiceRollups(ctx context.Context, project, service string, from time.Time) ([]hostmetrics.ServiceSample, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT bucket_at, cpu_percent, mem_used_bytes, mem_limit_bytes,
+		       net_rx_bps, net_tx_bps, block_read_bps, block_write_bps, pids
+		FROM service_metric_rollups
+		WHERE compose_project = ? AND service = ? AND bucket_at >= ?
+		ORDER BY bucket_at ASC
+	`, project, service, from.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	rollups := make([]hostmetrics.ServiceSample, 0)
+	for rows.Next() {
+		var (
+			bucketAt int64
+			rollup   hostmetrics.ServiceSample
+			cpu, memUsed, memLimit, netRX, netTX,
+			blockRead, blockWrite, pids sql.NullFloat64
+		)
+		if err := rows.Scan(&bucketAt, &cpu, &memUsed, &memLimit,
+			&netRX, &netTX, &blockRead, &blockWrite, &pids); err != nil {
+			return nil, err
+		}
+		rollup = hostmetrics.ServiceSample{
+			Project:       project,
+			Service:       service,
+			At:            time.Unix(bucketAt, 0).UTC(),
+			CPUPercent:    value(cpu),
+			MemUsedBytes:  value(memUsed),
+			MemLimitBytes: value(memLimit),
+			NetRXBPS:      value(netRX),
+			NetTXBPS:      value(netTX),
+			BlockReadBPS:  value(blockRead),
+			BlockWriteBPS: value(blockWrite),
+			Pids:          value(pids),
+		}
+		rollups = append(rollups, rollup)
+	}
+	return rollups, rows.Err()
+}
+
+// ComposeProjectName resolves a request path's (project, environment,
+// compose) ids to the Compose's frozen `docker compose -p` project name —
+// the key the collector attributes containers by. sql.ErrNoRows means no
+// such Compose under that path.
+func (s *Store) ComposeProjectName(ctx context.Context, projectID, environmentID, composeID int64) (string, error) {
+	var (
+		projectSlug string
+		envSlug     string
+		name        string
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT c.project_slug, c.env_slug, c.name
+		FROM composes c
+		JOIN environments e ON e.id = c.environment_id
+		WHERE e.project_id = ? AND c.environment_id = ? AND c.id = ?
+	`, projectID, environmentID, composeID).Scan(&projectSlug, &envSlug, &name)
+	if err != nil {
+		return "", err
+	}
+	return composes.Compose{ProjectSlug: projectSlug, EnvSlug: envSlug, Name: name}.DeployProjectName(), nil
+}
+
 // nullable maps NaN to SQL NULL: a field that was never honestly measured has
 // no average, and a NULL column says so where a zero would lie.
 func nullable(value float64) any {
@@ -118,4 +233,13 @@ func nullable(value float64) any {
 		return nil
 	}
 	return value
+}
+
+// value is nullable's inverse, restoring a NULL column to the NaN that means
+// "no honest reading here" downstream.
+func value(field sql.NullFloat64) float64 {
+	if !field.Valid {
+		return math.NaN()
+	}
+	return field.Float64
 }

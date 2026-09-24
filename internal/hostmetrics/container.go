@@ -103,6 +103,12 @@ type ServiceSample struct {
 // project label is not in the set are ignored, not invented.
 type KnownProjects func(ctx context.Context) (map[string]bool, error)
 
+// serviceHistoryCapacity is how many sweeps one Service's history keeps: an
+// hour at the sweep cadence, the window the endpoints serve from the ring
+// before the rollups take over (~170 KB for 20 Services, per the spec's
+// budget).
+const serviceHistoryCapacity = int(time.Hour / SweepInterval)
+
 // ServiceCollector turns daemon sweeps into per-Service samples. Its cache
 // is keyed by (compose project, service) — never by container ID (CONTEXT.md):
 // a deploy mints a new container, and the series must survive it.
@@ -114,6 +120,8 @@ type ServiceCollector struct {
 	mu      sync.Mutex
 	latest  map[serviceKey]serviceObservation
 	minute  []ServiceSample // the sweeps the open minute has seen, for CloseMinute
+	history map[serviceKey][]ServiceSample
+	swept   bool
 	lastErr error
 }
 
@@ -142,10 +150,11 @@ func NewServiceCollector(source ContainerSource, known KnownProjects, now func()
 		now = time.Now
 	}
 	return &ServiceCollector{
-		source: source,
-		known:  known,
-		now:    now,
-		latest: make(map[serviceKey]serviceObservation),
+		source:  source,
+		known:   known,
+		now:     now,
+		latest:  make(map[serviceKey]serviceObservation),
+		history: make(map[serviceKey][]ServiceSample),
 	}
 }
 
@@ -195,6 +204,7 @@ func (c *ServiceCollector) Sweep(ctx context.Context) {
 	seen := make(map[serviceKey]bool, len(targets))
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.swept = true
 	c.lastErr = nil // a sweep that got this far gives the port another chance
 	for i, tgt := range targets {
 		seen[tgt.key] = true
@@ -213,6 +223,11 @@ func (c *ServiceCollector) Sweep(ctx context.Context) {
 		// way there is no honest rate yet and the fields stay NaN.
 		c.latest[tgt.key] = observation
 		c.minute = append(c.minute, observation.sample)
+		// History keeps going across redeploys (one series per Service) and
+		// outlives a container that left the listing — a stopped Service's
+		// last hour is still its history, and the rollups continue the story
+		// beyond it.
+		c.history[tgt.key] = appendServiceSample(c.history[tgt.key], observation.sample)
 	}
 	// The sweep is the truth about what is running: a Service whose container
 	// left the listing has no current container. Its history lives in the
@@ -263,10 +278,34 @@ func (c *ServiceCollector) CloseMinute() []ServiceSample {
 	return rollups
 }
 
+// ServiceWindow copies the Service's last n sweeps, chronological; the
+// endpoints serve sub-hour windows from it. A Service with no sweep history
+// returns nothing — the rollups are the past for a Service whose container
+// has moved on.
+func (c *ServiceCollector) ServiceWindow(project, service string, n int) []ServiceSample {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	history := c.history[serviceKey{Project: project, Service: service}]
+	if n > len(history) {
+		n = len(history)
+	}
+	if n <= 0 {
+		return nil
+	}
+	out := make([]ServiceSample, n)
+	copy(out, history[len(history)-n:])
+	return out
+}
+
 // Status reports the last sweep's outcome, for the endpoints' sources block.
+// Before the first sweep there is no outcome to report: unavailable with a
+// reason, like any source that has not spoken yet.
 func (c *ServiceCollector) Status() SourceStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.swept {
+		return SourceStatus{Reason: "not swept yet"}
+	}
 	if c.lastErr == nil {
 		return SourceStatus{Available: true}
 	}
@@ -276,6 +315,7 @@ func (c *ServiceCollector) Status() SourceStatus {
 func (c *ServiceCollector) fail(err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.swept = true
 	c.lastErr = err
 }
 
@@ -354,6 +394,17 @@ func pidsSample(current uint64) float64 {
 		return math.NaN()
 	}
 	return float64(current)
+}
+
+// appendServiceSample appends to a Service's history and trims it to the
+// fixed capacity, so a long-lived panel's history stays a bounded ring
+// however long a Service keeps running.
+func appendServiceSample(history []ServiceSample, sample ServiceSample) []ServiceSample {
+	history = append(history, sample)
+	if len(history) > serviceHistoryCapacity {
+		history = history[len(history)-serviceHistoryCapacity:]
+	}
+	return history
 }
 
 // containerCPUPercent applies Docker's own arithmetic: the container's CPU

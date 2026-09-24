@@ -32,18 +32,26 @@ const (
 
 	// DefaultInterval is the host sampling cadence.
 	DefaultInterval = 10 * time.Second
+
+	// SweepInterval is the container sweep cadence (spec: 30–60s is plenty
+	// for a panel; the 2s wall time of a stats sweep is Docker sampling a
+	// delta window, not work). The loop offers SweepContainers on it, the
+	// collector sizes its history by it, and the endpoints' window table
+	// counts Service samples with it.
+	SweepInterval = 30 * time.Second
 )
 
 // Source names used in the availability map.
 const (
-	SourceCPU       = "cpu"
-	SourceMemory    = "memory"
-	SourceDiskSpace = "disk_space"
-	SourceBlockIO   = "block_io"
-	SourceNetwork   = "network"
+	SourceCPU        = "cpu"
+	SourceMemory     = "memory"
+	SourceDiskSpace  = "disk_space"
+	SourceBlockIO    = "block_io"
+	SourceNetwork    = "network"
+	SourceDockerDisk = "docker_disk"
 )
 
-var hostSources = []string{SourceCPU, SourceMemory, SourceDiskSpace, SourceBlockIO, SourceNetwork}
+var hostSources = []string{SourceCPU, SourceMemory, SourceDiskSpace, SourceBlockIO, SourceNetwork, SourceDockerDisk}
 
 // HostSample is one 10-second host observation. Gauge fields (memory, disk
 // space) are NaN when their source could not be read. Rate fields are NaN
@@ -69,8 +77,8 @@ type HostSample struct {
 // and why not when it was not; screens render unavailable-with-a-reason
 // instead of a zeroed line.
 type SourceStatus struct {
-	Available bool
-	Reason    string
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 // Config wires a Sampler to its environment.
@@ -80,7 +88,7 @@ type Config struct {
 	DataDir  string        // statfs target: the panel's data dir (ADR-0002)
 	Now      func() time.Time
 
-	// SweepContainers, when set, runs every 30 seconds on its own goroutine
+	// SweepContainers, when set, runs every SweepInterval on its own goroutine
 	// — the ~2s container sweep must never block the 10s host tick — and a
 	// sweep still in flight when its turn comes round again is skipped, not
 	// queued. Ticket 02 wires the container collector here.
@@ -90,7 +98,8 @@ type Config struct {
 	OnMinuteClose func(HostSample)
 	// RefreshDockerDisk, when set, runs every 5 minutes (`docker system df`,
 	// cached — 0.67s per call, too dear for a 10s cadence), on its own
-	// goroutine under the same never-queue rule.
+	// goroutine under the same never-queue rule. Its outcome belongs in
+	// SetDockerDisk.
 	RefreshDockerDisk func(ctx context.Context)
 }
 
@@ -105,6 +114,15 @@ type Sampler struct {
 
 	mu      sync.RWMutex
 	sources map[string]SourceStatus
+	// dockerDisk is the last successful `docker system df` reading, carried
+	// forward into every tick between refreshes — the series is a step, not
+	// a 10-second sample. NaN until the first refresh succeeds.
+	dockerDisk float64
+
+	// started guards the one sampling loop: Start is a compare-and-swap, so
+	// no wiring mistake can grow a second goroutine doubling every counter.
+	started atomic.Bool
+	done    chan struct{}
 
 	// Loop-owned state: only tick touches these, and tick runs on one
 	// goroutine.
@@ -145,11 +163,34 @@ func NewSampler(cfg Config) *Sampler {
 		sources[name] = SourceStatus{Reason: "not sampled yet"}
 	}
 	return &Sampler{
-		cfg:     cfg,
-		ring:    NewRing(int(time.Hour / cfg.Interval)),
-		now:     cfg.Now,
-		sources: sources,
+		cfg:        cfg,
+		ring:       NewRing(int(time.Hour / cfg.Interval)),
+		now:        cfg.Now,
+		sources:    sources,
+		dockerDisk: math.NaN(),
+		done:       make(chan struct{}),
 	}
+}
+
+// Start launches the sampling loop on its own goroutine — once for the
+// panel's lifetime. A second call on an already-started sampler is an error,
+// so no wiring mistake can grow a duplicate loop.
+func (s *Sampler) Start(ctx context.Context) error {
+	if !s.started.CompareAndSwap(false, true) {
+		return fmt.Errorf("sampler already started")
+	}
+	go func() {
+		defer close(s.done)
+		s.Run(ctx)
+	}()
+	return nil
+}
+
+// Wait blocks until the started sampler's loop has returned and its in-flight
+// hooks have drained — the shutdown order for main: cancel the context, wait,
+// then exit. It blocks forever on a sampler that was never started.
+func (s *Sampler) Wait() {
+	<-s.done
 }
 
 // Run drives the sampler until ctx is cancelled: one goroutine, one
@@ -194,6 +235,29 @@ func (s *Sampler) Sources() map[string]SourceStatus {
 	return out
 }
 
+// SetDockerDisk records a `docker system df` refresh's outcome, however it
+// was scheduled. On success the reading is carried forward into every tick
+// until the next one — the Docker disk series is a step. On failure the
+// source is marked unavailable with the reason while the last reading stays
+// on the chart (it is minutes old, and the sources block says so); before
+// the first success there is no reading at all and the field stays NaN.
+func (s *Sampler) SetDockerDisk(usedBytes float64, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		s.sources[SourceDockerDisk] = SourceStatus{Reason: err.Error()}
+		return
+	}
+	s.dockerDisk = usedBytes
+	s.sources[SourceDockerDisk] = SourceStatus{Available: true}
+}
+
+func (s *Sampler) carriedDockerDisk() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.dockerDisk
+}
+
 // tick performs one sampling pass. Unexported so tests drive it directly —
 // no test sleeps through a real ticker.
 func (s *Sampler) tick(ctx context.Context) {
@@ -206,6 +270,7 @@ func (s *Sampler) tick(ctx context.Context) {
 	s.sampleDiskSpace(&sample)
 	s.sampleBlockIO(&sample, dt)
 	s.sampleNetwork(&sample, dt)
+	sample.DockerDiskBytes = s.carriedDockerDisk()
 
 	s.ring.Push(sample)
 	s.lastAt = at
@@ -216,7 +281,7 @@ func (s *Sampler) tick(ctx context.Context) {
 	// refresh are slow by nature (Docker samples a delta window; the daemon
 	// aggregates), so they run off-loop — the next host tick never waits
 	// behind them — and a slow turn is skipped, never queued.
-	if s.cfg.SweepContainers != nil && s.tickN%s.ticksPer(30*time.Second) == 0 &&
+	if s.cfg.SweepContainers != nil && s.tickN%s.ticksPer(SweepInterval) == 0 &&
 		s.sweepInFlight.CompareAndSwap(false, true) {
 		s.hooks.Add(1)
 		go func() {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -414,6 +415,23 @@ func TestServiceCollectorFailedSweepKeepsPreviousData(t *testing.T) {
 	}
 }
 
+// Before the first sweep there is no outcome to report — unavailable with a
+// reason, like any source that has not spoken yet. A failed first sweep
+// reports that failure's reason.
+func TestServiceCollectorStatusBeforeFirstSweep(t *testing.T) {
+	source := &fakeSource{}
+	collector := hostmetrics.NewServiceCollector(source, knownOnlyPec, time.Now)
+	if status := collector.Status(); status.Available || status.Reason == "" {
+		t.Fatalf("Status() = %+v before any sweep, want unavailable with a reason", status)
+	}
+
+	source.listErr = errors.New("dockerd is restarting")
+	collector.Sweep(context.Background())
+	if status := collector.Status(); status.Available || !strings.Contains(status.Reason, "dockerd is restarting") {
+		t.Errorf("Status() = %+v after a failed first sweep, want that reason", status)
+	}
+}
+
 func TestParseHealth(t *testing.T) {
 	for status, want := range map[string]string{
 		"Up 2 minutes (healthy)":          "healthy",
@@ -565,5 +583,76 @@ func TestServiceCollectorServiceLeavingKeepsMinuteSamples(t *testing.T) {
 	}
 	if rollups[0].Service != "web" {
 		t.Errorf("rollup is for %q, want web", rollups[0].Service)
+	}
+}
+
+// ServiceWindow serves the sub-hour Monitor tab windows straight from the
+// collector: the Service's last n sweeps, chronological, one series across
+// a redeploy, still there after the container leaves the listing, and empty
+// for a Service the collector never swept.
+func TestServiceCollectorServiceWindow(t *testing.T) {
+	now := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
+	source := &fakeSource{
+		containers: []hostmetrics.ContainerInfo{containerInfo("c1", "web", nil)},
+		stats: map[string]hostmetrics.ContainerStatsSample{
+			"c1": statsSample(1000, 100000, 4, 5000, 0, 10000, 0, 0, 0, 0),
+		},
+	}
+	collector := hostmetrics.NewServiceCollector(source, knownOnlyPec, func() time.Time { return now })
+
+	// Three sweeps, thirty seconds apart, the middle one a redeploy to c2.
+	collector.Sweep(context.Background())
+	now = now.Add(30 * time.Second)
+	source.containers = []hostmetrics.ContainerInfo{containerInfo("c2", "web", nil)}
+	source.stats = map[string]hostmetrics.ContainerStatsSample{
+		"c2": statsSample(1000, 100000, 4, 400, 0, 8000, 0, 0, 0, 0),
+	}
+	collector.Sweep(context.Background())
+	now = now.Add(30 * time.Second)
+	source.stats = map[string]hostmetrics.ContainerStatsSample{
+		"c2": statsSample(6000, 200000, 4, 400, 0, 8000, 0, 0, 0, 0),
+	}
+	collector.Sweep(context.Background())
+
+	window := collector.ServiceWindow("p-e-c", "web", 3)
+	if len(window) != 3 {
+		t.Fatalf("ServiceWindow(3) = %d samples, want 3", len(window))
+	}
+	base := now.Add(-60 * time.Second) // the first sweep's clock reading
+	for i, sample := range window {
+		if want := base.Add(time.Duration(i) * 30 * time.Second); !sample.At.Equal(want) {
+			t.Errorf("sample %d At = %v, want %v (chronological)", i, sample.At, want)
+		}
+	}
+	// One series across the redeploy: the middle sample is c2's first sweep,
+	// which reports gauges but no rate; the third sweep's delta over its own
+	// baseline is Δcpu 5000 / Δsystem 100000 × 4 × 100 = 20%.
+	if window[1].ContainerID != "c2" || !math.IsNaN(window[1].CPUPercent) {
+		t.Errorf("middle sample = %+v, want the redeployed c2's rateless first sweep", window[1])
+	}
+	if window[2].CPUPercent != 20 {
+		t.Errorf("third sample CPUPercent = %v, want 20", window[2].CPUPercent)
+	}
+
+	// A smaller window takes the newest sweeps; n larger than history takes
+	// everything.
+	if got := len(collector.ServiceWindow("p-e-c", "web", 2)); got != 2 {
+		t.Errorf("ServiceWindow(2) = %d samples, want 2", got)
+	}
+	if got := len(collector.ServiceWindow("p-e-c", "web", 50)); got != 3 {
+		t.Errorf("ServiceWindow(50) = %d samples, want all 3", got)
+	}
+
+	// The container leaving the listing does not erase the history.
+	now = now.Add(30 * time.Second)
+	source.containers = nil
+	collector.Sweep(context.Background())
+	if got := len(collector.ServiceWindow("p-e-c", "web", 10)); got != 3 {
+		t.Errorf("history after the container left = %d samples, want 3", got)
+	}
+
+	// A Service never swept has no history at all.
+	if got := collector.ServiceWindow("p-e-c", "ghost", 5); got != nil {
+		t.Errorf("ghost Service window = %+v, want nil", got)
 	}
 }

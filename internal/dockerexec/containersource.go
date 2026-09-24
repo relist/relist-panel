@@ -116,6 +116,30 @@ func (s *ContainerSource) ContainerStats(ctx context.Context, id string) (hostme
 	return stats, nil
 }
 
+// SystemDf reads GET /system/df — Docker's own disk footprint, summed the
+// way `docker system df` sums it: image layers (deduplicated by the daemon's
+// content store), containers' writable layers (their root fs is already
+// counted in the images), volumes, and build cache. ~0.67s wall per call,
+// which is why the sampler refreshes it every few minutes and carries it
+// forward between refreshes.
+func (s *ContainerSource) SystemDf(ctx context.Context) (uint64, error) {
+	var api apiSystemDf
+	if err := s.get(ctx, "/system/df", &api); err != nil {
+		return 0, err
+	}
+	total := api.LayersSize
+	for _, container := range api.Containers {
+		total += container.SizeRw
+	}
+	for _, volume := range api.Volumes {
+		total += volume.UsageData.Size
+	}
+	for _, record := range api.BuildCache {
+		total += record.Size
+	}
+	return total, nil
+}
+
 func (s *ContainerSource) get(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+path, nil)
 	if err != nil {
@@ -134,6 +158,23 @@ func (s *ContainerSource) get(ctx context.Context, path string, out any) error {
 		return fmt.Errorf("docker api %s: decode: %w", path, err)
 	}
 	return nil
+}
+
+// apiSystemDf is GET /system/df's object shape, reduced to the four sizes
+// the aggregate sums.
+type apiSystemDf struct {
+	LayersSize uint64 `json:"LayersSize"`
+	Containers []struct {
+		SizeRw uint64 `json:"SizeRw"`
+	} `json:"Containers"`
+	Volumes []struct {
+		UsageData struct {
+			Size uint64 `json:"Size"`
+		} `json:"UsageData"`
+	} `json:"Volumes"`
+	BuildCache []struct {
+		Size uint64 `json:"Size"`
+	} `json:"BuildCache"`
 }
 
 // apiContainer is GET /containers/json's row shape.

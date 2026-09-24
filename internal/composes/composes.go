@@ -878,6 +878,13 @@ func validateComposeName(value string) (string, error) {
 	return trimmed, nil
 }
 
+// DeployProjectName is the Compose's frozen `docker compose -p` project name
+// (ADR-0005), formed from the slugs stored on its row — the identity metrics
+// collection also uses to attribute containers to Composes.
+func (c Compose) DeployProjectName() string {
+	return c.ProjectSlug + "-" + c.EnvSlug + "-" + slug.Slugify(c.Name)
+}
+
 // runRequestFor computes a Compose's deploy identity from the slugs stored on
 // its row (ADR-0005): the `docker compose -p` project name and the paths its
 // resolved files live at under dataDir (ADR-0002). The compose name slugifies
@@ -886,7 +893,7 @@ func runRequestFor(dataDir string, compose Compose) RunRequest {
 	composeSlug := slug.Slugify(compose.Name)
 	dir := filepath.Join(dataDir, compose.ProjectSlug, compose.EnvSlug, composeSlug)
 	return RunRequest{
-		ProjectName:     compose.ProjectSlug + "-" + compose.EnvSlug + "-" + composeSlug,
+		ProjectName:     compose.DeployProjectName(),
 		ComposeFilePath: filepath.Join(dir, composeFileName),
 		EnvFilePath:     filepath.Join(dir, envFileName),
 	}
