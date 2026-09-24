@@ -1947,11 +1947,18 @@ func TestDeepLinksServeTheAppShell(t *testing.T) {
 		t.Fatalf("deep link body does not contain the app shell")
 	}
 
-	// Signed out, an unknown API path is authenticated away, as before.
+	// Signed out, an unknown API path is authenticated away, as before —
+	// including the namespace root itself, which must not fall through to the
+	// public shell.
 	unauthedAPI := server.request(t, http.MethodGet, "/api/unknown", nil)
 	unauthedAPI.Body.Close()
 	if unauthedAPI.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unknown API path while signed out status = %d, want %d", unauthedAPI.StatusCode, http.StatusUnauthorized)
+	}
+	unauthedRoot := server.request(t, http.MethodGet, "/api", nil)
+	unauthedRoot.Body.Close()
+	if unauthedRoot.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("bare /api while signed out status = %d, want %d", unauthedRoot.StatusCode, http.StatusUnauthorized)
 	}
 
 	setupAndLogin(t, server)
