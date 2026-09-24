@@ -23,4 +23,22 @@ reports nothing rather than zero.
       (`/host/proc` in production, a `t.TempDir()` fixture in tests) so no test touches the host
 - [ ] `go test ./...`, `go vet ./...`, `gofmt` clean
 
+## Parser decisions
+
+Settled while starting this ticket (2026-09-24), so they are not re-derived from scratch:
+
+- **CPU** is busy/total jiffies from the aggregate `cpu` line of `/proc/stat`, with idle + iowait as
+  idle and `guest`/`guest_nice` left out — the kernel already counts them inside `user` and `nice`.
+- **Memory** is `MemTotal − MemAvailable`, not `MemTotal − MemFree`: availability is what makes the
+  number agree with `free` and `htop`, because reclaimable page cache is not memory in use.
+- **Block I/O** totals whole physical devices only (`sdX`, `vdX`, `hdX`, `nvmeXnY`, `mmcblkX`, and
+  never their partitions), skipping `loop`, `ram`, `zram` and device-mapper. A partition and the disk
+  under it, plus the dm layers above them, each report the same bytes; summing everything would
+  multiply the rate. Sector counts are 512 bytes by definition, whatever the device's logical sector
+  size is.
+- **Network** totals every interface except `lo`, so local traffic is not counted twice.
+- Every parser **errors rather than returning zeros** when its file is unreadable or nothing matched.
+  That is what keeps "the panel cannot read this source" distinguishable from "the host is idle", and
+  it is what the `sources` map is built from.
+
 ## Comments
