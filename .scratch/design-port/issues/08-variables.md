@@ -73,3 +73,7 @@ Implemented in this commit (`feat: rebuild the Variables tab`).
 - For a human: the server-side key pattern and the API's `secret` flag are the two §11 gaps —
   until they land, the pattern is client-side only and the tag/masking is the key-shape heuristic
   described above.
+
+Follow-up (2026-09-25, orchestrator): the flagged server gap is closed — `validateInput` now
+enforces `[A-Za-z_][A-Za-z0-9_]*` (unit-tested), so the client-side rule this ticket shipped is the
+server's rule, not a substitute for it.

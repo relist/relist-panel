@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -17,6 +18,9 @@ const (
 	maxRequestBody    = 1 << 20
 	maxEnvironmentKey = 255
 )
+
+// The key shape the design and the tickets state as the server's rule.
+var environmentKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type Service struct {
 	repository *repository
@@ -386,6 +390,12 @@ func validateInput(input environmentVariableInput) (string, string, error) {
 	}
 	if utf8.RuneCountInString(key) > maxEnvironmentKey {
 		return "", "", errors.New("environment variable key must be 255 characters or fewer")
+	}
+	// Keys are interpolated into Compose files as ${KEY}, so anything the
+	// shell-parameter character set rejects would create a variable no
+	// reference could reach.
+	if !environmentKeyPattern.MatchString(key) {
+		return "", "", errors.New("environment variable key must match [A-Za-z_][A-Za-z0-9_]*")
 	}
 	if input.Value == nil {
 		return "", "", errors.New("environment variable value is required")
