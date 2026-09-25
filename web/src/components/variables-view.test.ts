@@ -81,8 +81,8 @@ describe('key validation', () => {
   });
 });
 
-describe('isSecret', () => {
-  it('guesses from the key while the API carries no flag', () => {
+describe('isSecretKey', () => {
+  it('suggests the create-form default from the key shape, and nothing else', () => {
     expect(isSecretKey('JWT_SECRET')).toBe(true);
     expect(isSecretKey('SMTP_PASSWORD')).toBe(true);
     expect(isSecretKey('API_KEY')).toBe(true);
@@ -91,13 +91,13 @@ describe('isSecret', () => {
     expect(isSecretKey('TZ')).toBe(false);
     expect(isSecretKey('MONKEY_PATCH')).toBe(false); // 'key' only counts on its own or at an underscore boundary
     expect(isSecretKey('HONEYPOT_KEY')).toBe(true);
-    expect(isSecret({ key: 'JWT_SECRET' })).toBe(true);
-    expect(isSecret({ key: 'TZ' })).toBe(false);
   });
+});
 
-  it('lets an explicit flag from the API win over the guess, both ways', () => {
-    expect(isSecret({ key: 'JWT_SECRET', secret: false })).toBe(false);
-    expect(isSecret({ key: 'TZ', secret: true })).toBe(true);
+describe('isSecret', () => {
+  it('reads the stored flag alone — the guess has no seat at render time', () => {
+    expect(isSecret({ secret: true })).toBe(true);
+    expect(isSecret({ secret: false })).toBe(false);
   });
 });
 
@@ -112,9 +112,9 @@ describe('maskedValue', () => {
 
 describe('visibleVariables', () => {
   const variables = [
-    { id: 3, environmentId: 1, key: 'TZ', secret: undefined, updatedAt: '', value: 'x' },
-    { id: 1, environmentId: 1, key: 'DATABASE_URL', secret: undefined, updatedAt: '', value: 'y' },
-    { id: 2, environmentId: 1, key: 'JWT_SECRET', secret: undefined, updatedAt: '', value: 'z' },
+    { id: 3, environmentId: 1, key: 'TZ', secret: false, updatedAt: '', value: 'x' },
+    { id: 1, environmentId: 1, key: 'DATABASE_URL', secret: true, updatedAt: '', value: 'y' },
+    { id: 2, environmentId: 1, key: 'JWT_SECRET', secret: true, updatedAt: '', value: 'z' },
   ] as Parameters<typeof visibleVariables>[0];
 
   it('sorts by key', () => {

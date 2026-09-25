@@ -1,12 +1,12 @@
 import { DeleteOutlined, EditOutlined, EyeInvisibleOutlined, EyeOutlined, PlusOutlined, SearchOutlined, SnippetsOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Flex, Form, Input, Modal, Popconfirm, Space, Spin, Table, Tag, Tooltip, Typography, theme } from 'antd';
-import { useMemo, useState } from 'react';
+import { Alert, App, Button, Card, Flex, Form, Input, Modal, Popconfirm, Space, Spin, Switch, Table, Tag, Tooltip, Typography, theme } from 'antd';
+import { useMemo, useRef, useState } from 'react';
 
 import { CODE_FONT_STACK } from '../app/theme';
 import { usePanel } from '../data/store';
 import type { Environment, EnvironmentVariable } from '../data/types';
 import { EmptyState, RelativeTime } from './primitives';
-import { duplicateKeys, invalidKeys, isSecret, maskedValue, parseDotEnv, replacePlan, VARIABLE_KEY_PATTERN, visibleVariables } from './variables-view';
+import { duplicateKeys, invalidKeys, isSecret, isSecretKey, maskedValue, parseDotEnv, replacePlan, VARIABLE_KEY_PATTERN, visibleVariables } from './variables-view';
 
 const { Text, Paragraph } = Typography;
 
@@ -47,7 +47,7 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
   const { deleteVariable, isPending, replaceVariables, saveVariable } = usePanel();
   const { message } = App.useApp();
   const { token } = theme.useToken();
-  const [form] = Form.useForm<{ key: string; value: string }>();
+  const [form] = Form.useForm<{ key: string; value: string; secret: boolean }>();
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<EnvironmentVariable>();
   const [modalOpen, setModalOpen] = useState(false);
@@ -57,6 +57,10 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState('');
   const [bulkError, setBulkError] = useState<string>();
+  // Whether the user has answered the secret toggle themselves this modal
+  // session — until then, while creating, the toggle follows the heuristic's
+  // answer for the typed key.
+  const secretTouched = useRef(false);
 
   const loading = isPending(`variables:${environment.id}`);
   const visible = useMemo(() => visibleVariables(environment.variables, query), [environment.variables, query]);
@@ -70,6 +74,7 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
   const openCreate = () => {
     setEditing(undefined);
     setFormError(undefined);
+    secretTouched.current = false;
     form.resetFields();
     setModalOpen(true);
   };
@@ -77,11 +82,11 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
   const openEdit = (variable: EnvironmentVariable) => {
     setEditing(variable);
     setFormError(undefined);
-    form.setFieldsValue({ key: variable.key, value: variable.value });
+    form.setFieldsValue({ key: variable.key, value: variable.value, secret: variable.secret });
     setModalOpen(true);
   };
 
-  const submit = async (values: { key: string; value: string }) => {
+  const submit = async (values: { key: string; value: string; secret: boolean }) => {
     setFormError(undefined);
     try {
       await saveVariable(environment.id, values, editing?.id);
@@ -112,7 +117,9 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
     // A keyed notification (GUIDELINES §8): the waiting line is replaced by the
     // outcome rather than stacked on top of it.
     message.open({ content: 'Replacing Environment Variables…', key: 'bulk-variables', type: 'loading' });
-    replaceVariables(environment.id, parsed)
+    // The paste format carries no flag, so every row lands plain — a per-row
+    // toggle afterwards is the correction path.
+    replaceVariables(environment.id, parsed.map((row) => ({ ...row, secret: false })))
       .then(() => {
         setBulkOpen(false);
         message.open({
@@ -266,7 +273,25 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
         {formError && (
           <Alert message={formError} showIcon style={{ marginBottom: 16 }} type="error" />
         )}
-        <Form form={form} layout="vertical" onFinish={(values) => void submit(values)} requiredMark={false}>
+        <Form
+          form={form}
+          initialValues={{ secret: false }}
+          layout="vertical"
+          onFinish={(values) => void submit(values)}
+          onValuesChange={(changed) => {
+            if (changed.secret !== undefined) {
+              secretTouched.current = true;
+            }
+            // While creating, the toggle defaults to the heuristic's answer
+            // for the typed key — the guess's only job — until the user
+            // answers it themselves. Editing starts from the stored flag and
+            // the key cannot re-suggest.
+            if (!editing && changed.key !== undefined && !secretTouched.current) {
+              form.setFieldsValue({ secret: isSecretKey(changed.key) });
+            }
+          }}
+          requiredMark={false}
+        >
           <Form.Item
             extra="Uppercase with underscores, as your Compose files reference it: ${KEY}"
             label="Key"
@@ -281,6 +306,14 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
           </Form.Item>
           <Form.Item label="Value" name="value" rules={[{ message: 'Enter a value', required: true }]}>
             <Input placeholder="postgres://user:pass@db:5432/app" style={{ fontFamily: CODE_FONT_STACK }} />
+          </Form.Item>
+          <Form.Item
+            extra="Masks the value on screen — a display tier, not encryption. The value is stored and served as any other."
+            label="Secret"
+            name="secret"
+            valuePropName="checked"
+          >
+            <Switch checkedChildren="secret" unCheckedChildren="plain" />
           </Form.Item>
         </Form>
       </Modal>

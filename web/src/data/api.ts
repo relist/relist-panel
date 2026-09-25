@@ -31,6 +31,8 @@ export type EnvironmentInput = {
 export type EnvironmentVariableInput = {
   key: string;
   value: string;
+  /** Absent on the wire means false; the client always sends its answer. */
+  secret: boolean;
 };
 
 export type ComposeCreateInput = {
