@@ -19,6 +19,8 @@ services:
       - traefik.enable=true
       - traefik.http.routers.panel.rule=Host(`${RELIST_DOMAIN:-panel.localhost}`)
       - traefik.http.services.panel.loadbalancer.server.port=${RELIST_PORT:-8080}
+    cpus: 0.25
+    mem_limit: 256M
     restart: unless-stopped
 
   traefik:
@@ -33,6 +35,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - relist-network
+    cpus: 1
+    mem_limit: 512M
     restart: unless-stopped
 
 # relist-network is external: it must outlive this install stack's own
