@@ -90,7 +90,9 @@ func TestDeployTimestampsMigrationBackfillsExistingRowsToNull(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 9 {
-		t.Fatalf("migration version = %d, want 9", version)
+	// Later migrations exist independently of this one; the backfill only
+	// needs 00009 itself to have been applied on the way to latest.
+	if version < 9 {
+		t.Fatalf("migration version = %d, want at least 9", version)
 	}
 }
