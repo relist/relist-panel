@@ -75,3 +75,10 @@ design-only `compose.services` field with the store's Services-endpoint map, so 
 alongside the tree and the counts decide when a read has not landed. With the Services endpoint
 landed, the unhealthy-Service clause of the attention rule is live — the badge/definition decision
 flagged above is now the only remaining mismatch.
+
+Definition settled 2026-09-25 (grill): the badge and this screen share the state-based rule
+(partly running, stopped-after-success) and read the same deploy timestamps; they differ only in
+Service health, which this screen sees (it already loads the per-Service rows) and the header
+badge does not (fetching them per shell load costs one request per Compose for a badge). The
+badge is the light signal, the Overview is the answer. Once deploy timestamps land server-side
+(`.scratch/deploy-timestamps/`), both read the API field and the session stamps retire.
