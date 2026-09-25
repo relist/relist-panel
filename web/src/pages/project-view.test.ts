@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Compose, Project } from '../data/types';
-import { activeTab, selectEnvironment, visibleProjects } from './project-view';
+import type { Compose, Environment, Project } from '../data/types';
+import { activeTab, environmentDeleteFacts, projectDeleteFacts, selectEnvironment, visibleProjects } from './project-view';
 
 const project = (overrides: Partial<Project> & { id: number }): Project => ({
   name: `project-${overrides.id}`,
@@ -10,6 +10,27 @@ const project = (overrides: Partial<Project> & { id: number }): Project => ({
   createdAt: '2026-09-01T10:00:00Z',
   lastUpdated: '2026-09-01T10:00:00Z',
   environments: [],
+  ...overrides,
+});
+
+const compose = (overrides: Partial<Compose> & { id: number }): Compose => ({
+  environmentId: 1,
+  name: `compose-${overrides.id}`,
+  projectSlug: 'my-saas',
+  envSlug: 'production',
+  yamlContent: '',
+  createdAt: '2026-09-01T10:00:00Z',
+  updatedAt: '2026-09-01T10:00:00Z',
+  status: { running: 0, total: 0 },
+  ...overrides,
+});
+
+const environment = (overrides: Partial<Environment> & { id: number }): Environment => ({
+  projectId: 1,
+  name: `environment-${overrides.id}`,
+  createdAt: '2026-09-01T10:00:00Z',
+  variables: [],
+  composes: [],
   ...overrides,
 });
 
@@ -77,5 +98,44 @@ describe('visibleProjects', () => {
   it('trims the query and yields everything for a blank one', () => {
     expect(visibleProjects(list, '   ', 'updated')).toHaveLength(3);
     expect(visibleProjects(list, ' relay ', 'updated').map((p) => p.id)).toEqual([2]);
+  });
+});
+
+describe('environmentDeleteFacts', () => {
+  it('counts the Composes and names the on-disk path from the first Compose’s frozen slugs', () => {
+    const subject = environment({
+      id: 1,
+      composes: [
+        compose({ id: 11, projectSlug: 'my-saas', envSlug: 'production' }),
+        compose({ id: 12, projectSlug: 'renamed-slug-is-ignored', envSlug: 'production' }),
+      ],
+    });
+    expect(environmentDeleteFacts(subject)).toEqual({ composes: 2, dataDir: 'dataDir/my-saas/production/' });
+  });
+
+  it('carries no path for an Environment without Composes', () => {
+    expect(environmentDeleteFacts(environment({ id: 1 }))).toEqual({ composes: 0, dataDir: undefined });
+  });
+});
+
+describe('projectDeleteFacts', () => {
+  const subject = project({
+    id: 1,
+    environments: [
+      environment({ id: 1, composes: [compose({ id: 11, envSlug: 'production' })] }),
+      environment({ id: 2, composes: [compose({ id: 21, envSlug: 'staging' }), compose({ id: 22, envSlug: 'staging' })] }),
+    ],
+  });
+
+  it('counts Environments and Composes across the whole tree', () => {
+    expect(projectDeleteFacts(subject)).toEqual({ composes: 3, dataDir: 'dataDir/my-saas/', environments: 2 });
+  });
+
+  it('carries no path for a Project without Composes', () => {
+    expect(projectDeleteFacts(project({ id: 2, environments: [environment({ id: 3 })] }))).toEqual({
+      composes: 0,
+      dataDir: undefined,
+      environments: 1,
+    });
   });
 });
