@@ -41,7 +41,7 @@ export function AppShell() {
   const { message } = App.useApp();
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const { auth, deployedAt, loadProjects, projects, refreshStatus, signOut } = usePanel();
+  const { auth, loadProjects, projects, refreshStatus, signOut } = usePanel();
   const [loadError, setLoadError] = useState<string>();
   const [refreshing, setRefreshing] = useState(false);
 
@@ -78,19 +78,19 @@ export function AppShell() {
     : undefined;
 
   // The badge counts state-based degrades — partly running, or stopped after
-  // a successful deploy, dated by the store's session deploy stamps where the
-  // API has none (§11). Service health refines this on the Overview, whose
-  // list loads the per-Service rows the header does not fetch; the definition
+  // a successful deploy, dated by the API's `lastDeployedAt` (written on
+  // deploy success). Service health refines this on the Overview, whose list
+  // loads the per-Service rows the header does not fetch; the definition
   // question stays open in design-port ticket 09.
   const attention = useMemo(
     () =>
       projects.flatMap((project) =>
         projectComposes(project).filter((compose) => {
-          const state = composeState(compose.status, compose.lastDeployedAt ?? deployedAt[compose.id]);
+          const state = composeState(compose.status, compose.lastDeployedAt);
           return state === 'partial' || state === 'stopped';
         }),
       ).length,
-    [projects, deployedAt],
+    [projects],
   );
 
   const menuItems: MenuProps['items'] = [

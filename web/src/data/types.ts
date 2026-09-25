@@ -126,14 +126,18 @@ export type Compose = {
   createdAt: string;
   updatedAt: string;
   status: ComposeStatus;
-  /** @design-only: the API returns no deploy timestamp; the UI treats it as unknown. */
-  lastDeployedAt?: string;
+  /**
+   * When the API last deployed this Compose, written only on deploy success —
+   * `null` (or absent) means never deployed. Composes deployed before the
+   * panel recorded stamps also read `null`.
+   */
+  lastDeployedAt?: string | null;
 };
 
 /** Derived lifecycle state of a Compose. Single source of truth for status colour and copy. */
 export type ComposeState = 'not-deployed' | 'partial' | 'running' | 'stopped';
 
-export function composeState(status: ComposeStatus, lastDeployedAt?: string): ComposeState {
+export function composeState(status: ComposeStatus, lastDeployedAt?: string | null): ComposeState {
   if (status.total === 0) {
     return lastDeployedAt ? 'stopped' : 'not-deployed';
   }

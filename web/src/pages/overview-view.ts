@@ -20,6 +20,8 @@ export type FlatCompose = {
 /**
  * Every Compose on the host, flattened from the Project tree — the same
  * client-side loop the mock runs; no flat endpoint exists or is needed.
+ * The tree's `lastDeployedAt` is the API's own (written on deploy success),
+ * so the values pass through here unchanged.
  */
 export function flattenComposes(projects: Project[]): FlatCompose[] {
   return projects.flatMap((project) =>
@@ -33,26 +35,6 @@ export function flattenComposes(projects: Project[]): FlatCompose[] {
       })),
     ),
   );
-}
-
-/**
- * The tree as this screen reads it: the API has no deploy timestamp yet (§11),
- * so the store's session deploy stamps fill `lastDeployedAt` in — which is
- * what makes the stopped-after-success rule and the `Last deployed` column
- * fire at all. A timestamp the API does return always wins; a Compose with
- * neither stays undeployed.
- */
-export function withDeployStamps(projects: Project[], deployedAt: Record<number, string>): Project[] {
-  return projects.map((project) => ({
-    ...project,
-    environments: project.environments.map((environment) => ({
-      ...environment,
-      composes: environment.composes.map((compose) => ({
-        ...compose,
-        lastDeployedAt: compose.lastDeployedAt ?? deployedAt[compose.id],
-      })),
-    })),
-  }));
 }
 
 export type OverviewStats = {

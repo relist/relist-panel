@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Compose, ComposeService, Project } from '../data/types';
-import { attentionRows, composeComparators, degradationNotes, flattenComposes, needsAttention, overviewStats, withDeployStamps } from './overview-view';
+import { attentionRows, composeComparators, degradationNotes, flattenComposes, needsAttention, overviewStats } from './overview-view';
 
 let nextId = 1;
 
@@ -66,23 +66,6 @@ describe('flattenComposes', () => {
 
   it('is empty when there are no Projects', () => {
     expect(flattenComposes([])).toEqual([]);
-  });
-});
-
-describe('withDeployStamps', () => {
-  it('fills an absent lastDeployedAt from the store stamp and lets the API win', () => {
-    const stamped = withDeployStamps(tree, { 4: '2026-09-25T08:00:00Z' });
-    const apiDated = stamped[0].environments[0].composes.find((compose) => compose.id === 1);
-    const sessionDated = stamped[1].environments[0].composes.find((compose) => compose.id === 4);
-    const untouched = stamped[0].environments[0].composes.find((compose) => compose.id === 2);
-    expect(apiDated?.lastDeployedAt).toBe('2026-09-25T07:30:00Z');
-    expect(sessionDated?.lastDeployedAt).toBe('2026-09-25T08:00:00Z');
-    expect(untouched?.lastDeployedAt).toBeUndefined();
-  });
-
-  it('raises a compose stopped after a session-stamped deploy onto the attention list', () => {
-    const flat = flattenComposes(withDeployStamps(tree, { 3: '2026-09-25T08:00:00Z' }));
-    expect(attentionRows(flat).map((row) => row.compose.id)).toEqual([2, 3]);
   });
 });
 

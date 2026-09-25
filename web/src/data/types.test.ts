@@ -53,6 +53,8 @@ function project(input: { id: number; composes: Compose[]; environments?: Projec
 describe('composeState', () => {
   it.each([
     [{ running: 0, total: 0 }, undefined, 'not-deployed'],
+    // The API writes the wire key as JSON null for a never-deployed Compose.
+    [{ running: 0, total: 0 }, null, 'not-deployed'],
     [{ running: 0, total: 0 }, '2026-01-01T00:00:00Z', 'stopped'],
     [{ running: 0, total: 2 }, undefined, 'stopped'],
     [{ running: 2, total: 2 }, undefined, 'running'],

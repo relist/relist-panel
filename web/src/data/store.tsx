@@ -30,9 +30,9 @@ import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from '
  * the prototype's bare arrays — the screens read `partial` and `sources` off
  * it instead of guessing. Per-Service rows live in a `services` map keyed by
  * Compose rather than on the Compose object (the API's Compose has no services
- * key, and tree patches would wipe it), and `deployedAt` is stamped client-side
- * on a successful deploy — the API records no deploy timestamp (GUIDELINES
- * §11), and the Monitor tab's deploy marker is only as honest as that stamp.
+ * key, and tree patches would wipe it), and a Compose's `lastDeployedAt` is
+ * the API's — written on deploy success — so the tree patch a deploy returns
+ * carries the fresh timestamp; nothing is stamped client-side.
  */
 
 export type NewVariable = { key: string; value: string };
@@ -68,8 +68,6 @@ type PanelValue = {
   loadServices: (composeId: number) => Promise<void>;
   loadVariables: (environmentId: number) => Promise<void>;
   projects: Project[];
-  /** Client-side deploy stamps (§11: the API records no deploy time). */
-  deployedAt: Record<number, string>;
   /** Per-Service rows per Compose, from the Services endpoint. */
   services: Record<number, ComposeService[]>;
   refreshStatus: (composeId: number) => Promise<void>;
@@ -91,7 +89,6 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   const [auth, setAuth] = useState<AuthState>({ checked: false, setupRequired: false, authenticated: false });
   const [projects, setProjects] = useState<Project[]>([]);
   const [checkedAt, setCheckedAt] = useState<Record<number, string>>({});
-  const [deployedAt, setDeployedAt] = useState<Record<number, string>>({});
   const [services, setServices] = useState<Record<number, ComposeService[]>>({});
   const [pending, setPending] = useState<Record<string, true>>({});
 
@@ -99,7 +96,6 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   // them, stable (deps-free) callbacks would close over stale state.
   const projectsRef = useRef<Project[]>([]);
   const checkedAtRef = useRef<Record<number, string>>({});
-  const deployedAtRef = useRef<Record<number, string>>({});
 
   const updateProjects = useCallback((next: Project[]) => {
     projectsRef.current = next;
@@ -117,16 +113,6 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     const next = { ...checkedAtRef.current, [composeId]: new Date().toISOString() };
     checkedAtRef.current = next;
     setCheckedAt(next);
-  }, []);
-
-  // The API records no deploy timestamp (GUIDELINES §11), so a successful
-  // deploy stamps one client-side — the same treatment §11 prescribes for the
-  // status read time. The stamp lives for the session; the deploy marker and
-  // the facts strip are only as honest as it.
-  const stampDeployed = useCallback((composeId: number) => {
-    const next = { ...deployedAtRef.current, [composeId]: new Date().toISOString() };
-    deployedAtRef.current = next;
-    setDeployedAt(next);
   }, []);
 
   const track = useCallback(async <T,>(key: string, work: () => Promise<T>): Promise<T> => {
@@ -492,13 +478,12 @@ export function PanelProvider({ children }: { children: ReactNode }) {
               : await api.restartCompose(path);
         patchCompose(composeId, () => updated);
         // The API returns no read timestamp; the rail's "checked N minutes ago"
-        // is stamped client-side, as the prototype does (GUIDELINES §11).
+        // is stamped client-side, as the prototype does (GUIDELINES §11). The
+        // deploy time needs no stamp: `updated` carries the API's
+        // `lastDeployedAt`, written on deploy success.
         stampChecked(composeId);
-        if (key === 'deploy') {
-          stampDeployed(composeId);
-        }
       }),
-    [patchCompose, stampChecked, stampDeployed, track],
+    [patchCompose, stampChecked, track],
   );
 
   const deployCompose = useCallback((composeId: number) => runComposeAction('deploy', composeId), [runComposeAction]);
@@ -612,7 +597,6 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteProject,
       deleteVariable,
       deployCompose,
-      deployedAt,
       isPending,
       loadAuthStatus,
       loadLogs,
@@ -645,7 +629,6 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteProject,
       deleteVariable,
       deployCompose,
-      deployedAt,
       isPending,
       loadAuthStatus,
       loadLogs,

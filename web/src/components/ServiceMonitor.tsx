@@ -20,11 +20,11 @@ const WINDOWS: MetricWindow[] = ['15m', '1h', '6h', '24h'];
  * to the service name, not to the container: a deploy mints a new container
  * ID, and metrics keyed by container would restart from zero on every deploy —
  * exactly when the operator wants to see what the deploy did. The deploy
- * marker reads the store's client-side deploy stamp, because the API records
- * no deploy timestamp (GUIDELINES §11).
+ * marker reads the API's `lastDeployedAt` (written on deploy success), so it
+ * survives a reload and appears for deploys made before this session.
  */
 export function ServiceMonitor({ compose, onOpenEditor }: { compose: Compose; onOpenEditor: () => void }) {
-  const { deployedAt, isPending, loadServiceMetrics, loadServices, services: servicesByCompose } = usePanel();
+  const { isPending, loadServiceMetrics, loadServices, services: servicesByCompose } = usePanel();
   const [pickedService, setPickedService] = useState<string>();
   const [metricWindow, setMetricWindow] = useState<MetricWindow>('1h');
   const [error, setError] = useState<string>();
@@ -102,9 +102,10 @@ export function ServiceMonitor({ compose, onOpenEditor }: { compose: Compose; on
   // previous samples would be drawn against the new caption.
   const ready = result?.service === service.name && result?.window === metricWindow;
   const samples = ready ? result.samples : undefined;
-  // The API records no deploy time; the stamp from this session's deploy is
-  // what the charts can honestly mark. Absent stamp, absent marker.
-  const deployedStamp = deployedAt[compose.id];
+  // The marker is the API's own deploy time — null only for a Compose that
+  // was never deployed (or was, before the panel began recording), in which
+  // case there is nothing honest to mark.
+  const deployedStamp = compose.lastDeployedAt;
   const markers = deployedStamp ? [{ at: Date.parse(deployedStamp), label: 'Deployed' }] : [];
   const charts = samples ? serviceChartSpecs(samples, metricWindow, markers) : undefined;
   const pids = samples ? latestPids(samples.samples) : undefined;

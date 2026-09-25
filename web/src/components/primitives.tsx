@@ -23,7 +23,7 @@ export function ComposeStatusTag({
   lastDeployedAt,
   status,
 }: {
-  lastDeployedAt?: string;
+  lastDeployedAt?: string | null;
   status: ComposeStatus;
 }) {
   const state = composeState(status, lastDeployedAt);
@@ -54,7 +54,7 @@ export function ComposeStatusInline({
   lastDeployedAt,
   status,
 }: {
-  lastDeployedAt?: string;
+  lastDeployedAt?: string | null;
   status: ComposeStatus;
 }) {
   const state = composeState(status, lastDeployedAt);
