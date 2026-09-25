@@ -1023,6 +1023,156 @@ func TestComposeDeployValidatesInputAndPropagatesRunnerErrors(t *testing.T) {
 	}
 }
 
+// The deploy timestamp lands on success only: a Compose starts (and a failed
+// deploy leaves it) never-deployed — null on the wire, NULL in the row — and a
+// successful deploy stamps it, after which nothing but another successful
+// deploy moves it. The stamp is a row column, so it survives a panel restart.
+func TestComposeDeployRecordsDeployedAtOnSuccessOnly(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Stamp Co", "")
+	production := productionEnvironment(t, server, project)
+
+	createResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
+		"name":        "web",
+		"yamlContent": "services:\n  web:\n    image: nginx\n",
+	})
+	defer createResponse.Body.Close()
+	var compose composeResponse
+	if err := json.NewDecoder(createResponse.Body).Decode(&compose); err != nil {
+		t.Fatalf("decode created compose: %v", err)
+	}
+
+	getAndCheck := func(label string, wantNil bool) *string {
+		t.Helper()
+		response := server.request(t, http.MethodGet, composePath(project.ID, production.ID, compose.ID), nil)
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("%s: GET status = %d, want %d", label, response.StatusCode, http.StatusOK)
+		}
+		var fetched composeResponse
+		if err := json.NewDecoder(response.Body).Decode(&fetched); err != nil {
+			t.Fatalf("%s: decode fetched compose: %v", label, err)
+		}
+		if wantNil && fetched.LastDeployedAt != nil {
+			t.Fatalf("%s: lastDeployedAt = %q, want null", label, *fetched.LastDeployedAt)
+		}
+		if !wantNil && fetched.LastDeployedAt == nil {
+			t.Fatalf("%s: lastDeployedAt = null, want a timestamp", label)
+		}
+		return fetched.LastDeployedAt
+	}
+	rowDeployedAt := func() sql.NullInt64 {
+		t.Helper()
+		var deployedAt sql.NullInt64
+		if err := server.db.QueryRow("SELECT deployed_at FROM composes WHERE id = ?", compose.ID).Scan(&deployedAt); err != nil {
+			t.Fatalf("read deployed_at row: %v", err)
+		}
+		return deployedAt
+	}
+
+	// Never deployed: null on the wire, NULL in the row.
+	getAndCheck("newly created", true)
+	if rowDeployedAt().Valid {
+		t.Fatal("newly created compose deployed_at = a value, want NULL")
+	}
+
+	// A failed deploy never reaches the write.
+	server.runner.upErr = errors.New("docker daemon unreachable")
+	failureResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
+	defer failureResponse.Body.Close()
+	if failureResponse.StatusCode != http.StatusBadGateway {
+		t.Fatalf("failed deploy status = %d, want %d", failureResponse.StatusCode, http.StatusBadGateway)
+	}
+	getAndCheck("after a failed deploy", true)
+	if rowDeployedAt().Valid {
+		t.Fatal("deployed_at after a failed deploy = a value, want NULL")
+	}
+
+	// A successful deploy stamps it — response, GET and row agree.
+	server.runner.upErr = nil
+	before := time.Now().UTC()
+	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
+	defer deployResponse.Body.Close()
+	if deployResponse.StatusCode != http.StatusOK {
+		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
+	}
+	var deployed composeResponse
+	if err := json.NewDecoder(deployResponse.Body).Decode(&deployed); err != nil {
+		t.Fatalf("decode deployed compose: %v", err)
+	}
+	if deployed.LastDeployedAt == nil {
+		t.Fatal("deploy response lastDeployedAt = null, want a timestamp")
+	}
+	stamp, err := time.Parse(time.RFC3339, *deployed.LastDeployedAt)
+	if err != nil {
+		t.Fatalf("parse lastDeployedAt %q: %v", *deployed.LastDeployedAt, err)
+	}
+	if stamp.Before(before.Add(-time.Minute)) || time.Now().UTC().Before(stamp) {
+		t.Fatalf("deploy stamp %v is outside the request window [%v, now]", stamp, before)
+	}
+	if got := getAndCheck("after a successful deploy", false); *got != *deployed.LastDeployedAt {
+		t.Fatalf("GET lastDeployedAt = %q, want the deploy response's %q", *got, *deployed.LastDeployedAt)
+	}
+	row := rowDeployedAt()
+	if !row.Valid || !time.Unix(row.Int64, 0).UTC().Equal(stamp) {
+		t.Fatalf("row deployed_at = %+v, want the stamped %v", row, stamp)
+	}
+
+	// Stop, restart and save never touch it.
+	stopResponse := server.request(t, http.MethodPost, composeStopPath(project.ID, production.ID, compose.ID), nil)
+	defer stopResponse.Body.Close()
+	if stopResponse.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d, want %d", stopResponse.StatusCode, http.StatusOK)
+	}
+	if got := getAndCheck("after a stop", false); *got != *deployed.LastDeployedAt {
+		t.Fatalf("stop changed lastDeployedAt to %q", *got)
+	}
+
+	restartResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, compose.ID), nil)
+	defer restartResponse.Body.Close()
+	if restartResponse.StatusCode != http.StatusOK {
+		t.Fatalf("restart status = %d, want %d", restartResponse.StatusCode, http.StatusOK)
+	}
+	if got := getAndCheck("after a restart", false); *got != *deployed.LastDeployedAt {
+		t.Fatalf("restart changed lastDeployedAt to %q", *got)
+	}
+
+	saveResponse := server.request(t, http.MethodPut, composePath(project.ID, production.ID, compose.ID), map[string]string{
+		"yamlContent": "services:\n  web:\n    image: nginx:1.27\n",
+	})
+	defer saveResponse.Body.Close()
+	if saveResponse.StatusCode != http.StatusOK {
+		t.Fatalf("save status = %d, want %d", saveResponse.StatusCode, http.StatusOK)
+	}
+	if got := getAndCheck("after a save", false); *got != *deployed.LastDeployedAt {
+		t.Fatalf("save changed lastDeployedAt to %q", *got)
+	}
+
+	// The stamp is row state, not server memory: a fresh handler over the same
+	// database — a panel restart — still serves it.
+	restartedRunner := newFakeComposeRunner()
+	restarted := &testServer{
+		handler: httpapi.NewHandler(server.db, restartedRunner, server.dataDir, newFakeHostHistory(), newFakeServiceFacts()),
+		db:      server.db,
+		dataDir: server.dataDir,
+		runner:  restartedRunner,
+		cookies: server.cookies,
+	}
+	restartedGet := restarted.request(t, http.MethodGet, composePath(project.ID, production.ID, compose.ID), nil)
+	defer restartedGet.Body.Close()
+	if restartedGet.StatusCode != http.StatusOK {
+		t.Fatalf("GET after restart status = %d, want %d", restartedGet.StatusCode, http.StatusOK)
+	}
+	var refetched composeResponse
+	if err := json.NewDecoder(restartedGet.Body).Decode(&refetched); err != nil {
+		t.Fatalf("decode refetched compose: %v", err)
+	}
+	if refetched.LastDeployedAt == nil || *refetched.LastDeployedAt != *deployed.LastDeployedAt {
+		t.Fatalf("lastDeployedAt after a panel restart = %v, want %q", refetched.LastDeployedAt, *deployed.LastDeployedAt)
+	}
+}
+
 func TestAuthenticatedAdminCanStopCompose(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
@@ -2031,13 +2181,14 @@ type environmentVariableResponse struct {
 }
 
 type composeResponse struct {
-	ID            int64                 `json:"id"`
-	EnvironmentID int64                 `json:"environmentId"`
-	Name          string                `json:"name"`
-	YAMLContent   string                `json:"yamlContent"`
-	CreatedAt     string                `json:"createdAt"`
-	UpdatedAt     string                `json:"updatedAt"`
-	Status        composeStatusResponse `json:"status"`
+	ID             int64                 `json:"id"`
+	EnvironmentID  int64                 `json:"environmentId"`
+	Name           string                `json:"name"`
+	YAMLContent    string                `json:"yamlContent"`
+	CreatedAt      string                `json:"createdAt"`
+	UpdatedAt      string                `json:"updatedAt"`
+	LastDeployedAt *string               `json:"lastDeployedAt"`
+	Status         composeStatusResponse `json:"status"`
 }
 
 type composeStatusResponse struct {

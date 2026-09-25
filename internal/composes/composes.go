@@ -75,15 +75,20 @@ type repository struct {
 
 // Compose is the API representation of a Compose.
 type Compose struct {
-	ID            int64         `json:"id"`
-	EnvironmentID int64         `json:"environmentId"`
-	Name          string        `json:"name"`
-	ProjectSlug   string        `json:"projectSlug"`
-	EnvSlug       string        `json:"envSlug"`
-	YAMLContent   string        `json:"yamlContent"`
-	CreatedAt     time.Time     `json:"createdAt"`
-	UpdatedAt     time.Time     `json:"updatedAt"`
-	Status        ComposeStatus `json:"status"`
+	ID            int64     `json:"id"`
+	EnvironmentID int64     `json:"environmentId"`
+	Name          string    `json:"name"`
+	ProjectSlug   string    `json:"projectSlug"`
+	EnvSlug       string    `json:"envSlug"`
+	YAMLContent   string    `json:"yamlContent"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+	// LastDeployedAt is a pointer so never-deployed stays distinct from every
+	// real timestamp on the wire: nil serializes as JSON null, while even a
+	// deploy at the Unix epoch is a non-nil time. Only a successful deploy
+	// ever sets it.
+	LastDeployedAt *time.Time    `json:"lastDeployedAt"`
+	Status         ComposeStatus `json:"status"`
 }
 
 type composeCreateInput struct {
@@ -351,6 +356,20 @@ func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.runner.Up(r.Context(), req); err != nil {
 		writeError(w, http.StatusBadGateway, "deploy failed: "+err.Error())
+		return
+	}
+
+	// The deploy timestamp records success only (deploy-timestamps spec): it
+	// lands after the runner returns without error, and no other action ever
+	// writes it — "has deployed" and "is running" stay two different facts.
+	deployedAt := s.now().UTC().Truncate(time.Second)
+	if err := s.repository.markDeployed(r.Context(), environmentID, id, deployedAt); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not record deploy time")
+		return
+	}
+	compose, err = s.repository.findByID(r.Context(), environmentID, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
 		return
 	}
 
@@ -747,7 +766,7 @@ func BackfillLegacyIdentities(ctx context.Context, db *sql.DB) error {
 
 func (r *repository) list(ctx context.Context, environmentID int64) ([]Compose, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at
+		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at
 		FROM composes
 		WHERE environment_id = ?
 		ORDER BY id ASC
@@ -788,11 +807,24 @@ func (r *repository) create(ctx context.Context, environmentID int64, projectSlu
 
 func (r *repository) findByID(ctx context.Context, environmentID, id int64) (Compose, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at
+		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at
 		FROM composes
 		WHERE environment_id = ? AND id = ?
 	`, environmentID, id)
 	return scanComposeValues(row.Scan)
+}
+
+// markDeployed records a successful deploy's time on the Compose row. It is
+// deployed_at's only writer: called after the runner reports success, never
+// by stop, restart, save or delete — so a stopped Compose keeps the timestamp
+// that says it has been deployed before.
+func (r *repository) markDeployed(ctx context.Context, environmentID, id int64, deployedAt time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE composes
+		SET deployed_at = ?
+		WHERE environment_id = ? AND id = ?
+	`, deployedAt.Unix(), environmentID, id)
+	return err
 }
 
 func (r *repository) update(ctx context.Context, environmentID, id int64, yamlContent string, updatedAt time.Time) error {
@@ -818,15 +850,20 @@ func (r *repository) delete(ctx context.Context, environmentID, id int64) (bool,
 
 func scanComposeValues(scan func(...any) error) (Compose, error) {
 	var (
-		compose   Compose
-		createdAt int64
-		updatedAt int64
+		compose    Compose
+		createdAt  int64
+		updatedAt  int64
+		deployedAt sql.NullInt64
 	)
-	if err := scan(&compose.ID, &compose.EnvironmentID, &compose.Name, &compose.ProjectSlug, &compose.EnvSlug, &compose.YAMLContent, &createdAt, &updatedAt); err != nil {
+	if err := scan(&compose.ID, &compose.EnvironmentID, &compose.Name, &compose.ProjectSlug, &compose.EnvSlug, &compose.YAMLContent, &createdAt, &updatedAt, &deployedAt); err != nil {
 		return Compose{}, err
 	}
 	compose.CreatedAt = time.Unix(createdAt, 0).UTC()
 	compose.UpdatedAt = time.Unix(updatedAt, 0).UTC()
+	if deployedAt.Valid {
+		at := time.Unix(deployedAt.Int64, 0).UTC()
+		compose.LastDeployedAt = &at
+	}
 	return compose, nil
 }
 
