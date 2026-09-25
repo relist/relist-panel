@@ -18,8 +18,10 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 8 {
-		t.Fatalf("migration version = %d, want 8", version)
+	// 00009 belongs to the parallel deploy-timestamps feature and is absent
+	// from this tree; goose sorts by version, so the gap is harmless.
+	if version != 10 {
+		t.Fatalf("migration version = %d, want 10", version)
 	}
 
 	var one int

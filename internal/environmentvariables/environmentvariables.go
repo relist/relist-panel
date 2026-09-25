@@ -31,16 +31,22 @@ type repository struct {
 }
 
 // EnvironmentVariable is the API representation of an Environment Variable.
+// Secret is a display tier owned by the user (spec, variable-secrets): it
+// masks the value on screen and nothing else — the value is stored and served
+// exactly as a plain one.
 type EnvironmentVariable struct {
 	ID            int64  `json:"id"`
 	EnvironmentID int64  `json:"environmentId"`
 	Key           string `json:"key"`
 	Value         string `json:"value"`
+	Secret        bool   `json:"secret"`
 }
 
 type environmentVariableInput struct {
 	Key   string  `json:"key"`
 	Value *string `json:"value"`
+	// Absent means false: a plain variable, as every pre-flag client means.
+	Secret bool `json:"secret"`
 }
 
 // New constructs the Environment Variable service over the application's
@@ -108,7 +114,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	variable, err := s.repository.create(r.Context(), environmentID, key, value)
+	variable, err := s.repository.create(r.Context(), environmentID, key, value, input.Secret)
 	if err != nil {
 		if isUniqueConstraint(err) {
 			writeError(w, http.StatusConflict, "an environment variable with that key already exists")
@@ -159,7 +165,7 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load environment variable")
 		return
 	}
-	if err := s.repository.update(r.Context(), environmentID, variableID, key, value); err != nil {
+	if err := s.repository.update(r.Context(), environmentID, variableID, key, value, input.Secret); err != nil {
 		if isUniqueConstraint(err) {
 			writeError(w, http.StatusConflict, "an environment variable with that key already exists")
 			return
@@ -272,7 +278,7 @@ func (r *repository) environmentExists(ctx context.Context, projectID, environme
 
 func (r *repository) list(ctx context.Context, environmentID int64) ([]EnvironmentVariable, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, environment_id, key, value
+		SELECT id, environment_id, key, value, secret
 		FROM environment_variables
 		WHERE environment_id = ?
 		ORDER BY id ASC
@@ -284,8 +290,8 @@ func (r *repository) list(ctx context.Context, environmentID int64) ([]Environme
 
 	variables := make([]EnvironmentVariable, 0)
 	for rows.Next() {
-		var variable EnvironmentVariable
-		if err := rows.Scan(&variable.ID, &variable.EnvironmentID, &variable.Key, &variable.Value); err != nil {
+		variable, err := scanVariable(rows.Scan)
+		if err != nil {
 			return nil, err
 		}
 		variables = append(variables, variable)
@@ -296,11 +302,11 @@ func (r *repository) list(ctx context.Context, environmentID int64) ([]Environme
 	return variables, nil
 }
 
-func (r *repository) create(ctx context.Context, environmentID int64, key, value string) (EnvironmentVariable, error) {
+func (r *repository) create(ctx context.Context, environmentID int64, key, value string, secret bool) (EnvironmentVariable, error) {
 	result, err := r.db.ExecContext(ctx, `
-		INSERT INTO environment_variables (environment_id, key, value)
-		VALUES (?, ?, ?)
-	`, environmentID, key, value)
+		INSERT INTO environment_variables (environment_id, key, value, secret)
+		VALUES (?, ?, ?, ?)
+	`, environmentID, key, value, secret)
 	if err != nil {
 		return EnvironmentVariable{}, err
 	}
@@ -313,24 +319,32 @@ func (r *repository) create(ctx context.Context, environmentID int64, key, value
 
 func (r *repository) findByID(ctx context.Context, environmentID, id int64) (EnvironmentVariable, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, environment_id, key, value
+		SELECT id, environment_id, key, value, secret
 		FROM environment_variables
 		WHERE environment_id = ? AND id = ?
 	`, environmentID, id)
-	var variable EnvironmentVariable
-	if err := row.Scan(&variable.ID, &variable.EnvironmentID, &variable.Key, &variable.Value); err != nil {
+	variable, err := scanVariable(row.Scan)
+	if err != nil {
 		return EnvironmentVariable{}, err
 	}
 	return variable, nil
 }
 
-func (r *repository) update(ctx context.Context, environmentID, id int64, key, value string) error {
+func (r *repository) update(ctx context.Context, environmentID, id int64, key, value string, secret bool) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE environment_variables
-		SET key = ?, value = ?
+		SET key = ?, value = ?, secret = ?
 		WHERE environment_id = ? AND id = ?
-	`, key, value, environmentID, id)
+	`, key, value, secret, environmentID, id)
 	return err
+}
+
+// scanVariable reads one row in column order, so every read shares the
+// secret column's position.
+func scanVariable(scan func(dest ...any) error) (EnvironmentVariable, error) {
+	var variable EnvironmentVariable
+	err := scan(&variable.ID, &variable.EnvironmentID, &variable.Key, &variable.Value, &variable.Secret)
+	return variable, err
 }
 
 func (r *repository) delete(ctx context.Context, environmentID, id int64) (bool, error) {

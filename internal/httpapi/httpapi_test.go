@@ -550,9 +550,10 @@ func TestAuthenticatedAdminCanManageEnvironmentVariables(t *testing.T) {
 		t.Fatalf("decode staging environment: %v", err)
 	}
 
-	createResponse := postJSON(t, server, environmentVariablesPath(project.ID, production.ID), map[string]string{
-		"key":   "DATABASE_URL",
-		"value": "postgres://production",
+	createResponse := postJSON(t, server, environmentVariablesPath(project.ID, production.ID), map[string]any{
+		"key":    "DATABASE_URL",
+		"value":  "postgres://production",
+		"secret": true,
 	})
 	defer createResponse.Body.Close()
 	if createResponse.StatusCode != http.StatusCreated {
@@ -562,7 +563,7 @@ func TestAuthenticatedAdminCanManageEnvironmentVariables(t *testing.T) {
 	if err := json.NewDecoder(createResponse.Body).Decode(&variable); err != nil {
 		t.Fatalf("decode created environment variable: %v", err)
 	}
-	if variable.ID <= 0 || variable.EnvironmentID != production.ID || variable.Key != "DATABASE_URL" || variable.Value != "postgres://production" {
+	if variable.ID <= 0 || variable.EnvironmentID != production.ID || variable.Key != "DATABASE_URL" || variable.Value != "postgres://production" || !variable.Secret {
 		t.Fatalf("created environment variable = %+v", variable)
 	}
 
@@ -599,6 +600,9 @@ func TestAuthenticatedAdminCanManageEnvironmentVariables(t *testing.T) {
 	var secondVariable environmentVariableResponse
 	if err := json.NewDecoder(secondCreateResponse.Body).Decode(&secondVariable); err != nil {
 		t.Fatalf("decode second environment variable: %v", err)
+	}
+	if secondVariable.Secret {
+		t.Fatalf("created variable without secret = %+v, want plain (absent means false)", secondVariable)
 	}
 
 	duplicateResponse := postJSON(t, server, environmentVariablesPath(project.ID, production.ID), map[string]string{
@@ -2028,6 +2032,7 @@ type environmentVariableResponse struct {
 	EnvironmentID int64  `json:"environmentId"`
 	Key           string `json:"key"`
 	Value         string `json:"value"`
+	Secret        bool   `json:"secret"`
 }
 
 type composeResponse struct {
