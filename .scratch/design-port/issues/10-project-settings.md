@@ -11,7 +11,7 @@ When it lands, the `Manage` dropdown is retired.
 
 **Blocked by: 06 (done)**
 
-**Status:** needs-triage
+**Status:** ready-for-agent
 
 - [ ] The Settings tab renders the Project form, the Environment list with create/delete, and the
       Project danger zone, per the design's Project screen
@@ -23,5 +23,12 @@ When it lands, the `Manage` dropdown is retired.
 
 Cut by the orchestrator on 2026-09-25: the design-port and host-monitoring code reviews both
 flagged that no ticket covered the Settings tab's contents, and ticket 06 shipped the `Manage`
-dropdown as an explicitly temporary affordance. Whether to build it (and when) is a product call —
-it is the last visible gap between the design and the ported app.
+dropdown as an explicitly temporary affordance.
+
+Grilled 2026-09-25 and settled: build it, priority low — `Manage` works today, this closes the
+last design-vs-app gap. **Environment delete stays record-only** (grill decision): deleting an
+Environment removes records, not running containers — someone tidying a staging environment
+must not be able to kill production containers hiding in it, and the safe path to a teardown is
+deleting Composes one by one (each with its own honest `DangerModal`) and then the empty
+Environment. The modal copy says this plainly, as ticket 06's already does. Project delete keeps
+the same semantics.
