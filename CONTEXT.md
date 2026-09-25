@@ -25,5 +25,5 @@ One running instance of a Service, created by a deploy. Its identity is not stab
 _Avoid_: Instance
 
 **Environment Variable**:
-A key-value pair scoped to an Environment, interpolated into all of that Environment's Composes at deploy time.
-_Avoid_: Secret (no distinct secret-handling tier exists yet)
+A key-value pair scoped to an Environment, interpolated into all of that Environment's Composes at deploy time. A variable may be flagged **secret**, which masks its value on screen — a display tier owned by the user, not a security boundary: the value is stored and served as any other, and the panel's single admin can always reveal it.
+_Avoid_: treating the secret flag as an encryption or access tier; "plain" is not a domain word, just the tag for the flag's absence.
