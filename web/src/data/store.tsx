@@ -35,7 +35,8 @@ import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from '
  * carries the fresh timestamp; nothing is stamped client-side.
  */
 
-export type NewVariable = { key: string; value: string };
+/** A variable to create or update: the flag is always the caller's answer — the modal reads the toggle, a bulk paste sends plain. */
+export type NewVariable = { key: string; value: string; secret: boolean };
 
 export type AuthState = {
   /** False until the first `/api/auth/status` read settles. */

@@ -63,10 +63,11 @@ export function invalidKeys(rows: readonly DotEnvRow[]): string[] {
 }
 
 /**
- * §11: the API carries no secret flag yet, so the marking is client-side for
- * now — a conservative read of the key's own shape (the words no operator
- * should publish in clear text). Once the API grows the flag it wins over the
- * guess: an explicit `false` keeps a value plain even if the key smells.
+ * The key-shape heuristic: the words no operator should publish in clear
+ * text, with `key` counting only as a whole underscore-delimited word. The
+ * migration that added the `secret` column backfilled existing rows by this
+ * same pattern (as its SQL translation); since then the heuristic's only job
+ * is suggesting the create-form default — never the tag or the masking.
  */
 const SECRET_KEY_PATTERN = /secret|password|passwd|token|credential|(^|_)(api_?)?key($|_)|(^|_)private_?key/i;
 
@@ -74,8 +75,13 @@ export function isSecretKey(key: string): boolean {
   return SECRET_KEY_PATTERN.test(key);
 }
 
-export function isSecret(variable: Pick<EnvironmentVariable, 'key' | 'secret'>): boolean {
-  return variable.secret ?? isSecretKey(variable.key);
+/**
+ * The stored flag, read alone. Every variable carries `secret` after the
+ * backfill migration, so there is no guess to fall back on — the tag and the
+ * masking answer whatever the user last saved (spec, variable-secrets).
+ */
+export function isSecret(variable: Pick<EnvironmentVariable, 'secret'>): boolean {
+  return variable.secret;
 }
 
 /** The masked form of a value: dots, 8–16 long, whatever the value holds. */

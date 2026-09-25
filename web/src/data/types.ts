@@ -14,8 +14,12 @@ export type EnvironmentVariable = {
   id: number;
   environmentId: number;
   key: string;
-  /** @design-only: the API returns the real value, unmarked. */
-  secret?: boolean;
+  /**
+   * The user's display tier, always present on the wire: a marked value is
+   * masked on screen, and the flag does nothing else — the value is stored
+   * and served exactly as a plain one (not a security boundary).
+   */
+  secret: boolean;
   updatedAt: string;
   value: string;
 };

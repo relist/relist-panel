@@ -46,8 +46,8 @@ function VariableRow({
   const { token } = theme.useToken();
   const { message } = App.useApp();
   const [revealed, setRevealed] = useState(false);
-  // The `secret` marking is client-side until the API grows the flag (§11) —
-  // the same source the Variables tab reads.
+  // The stored flag, the same source the Variables tab reads — the marking
+  // is the user's answer, never a client-side guess.
   const secret = isSecret(variable);
   const masked = maskedValue(variable.value);
   const alreadyReferenced = draft.includes(reference(variable.key));
