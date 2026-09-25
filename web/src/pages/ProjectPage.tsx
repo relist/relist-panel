@@ -4,7 +4,6 @@ import {
   MoreOutlined,
   PlusOutlined,
   RocketOutlined,
-  SettingOutlined,
   StopOutlined,
   SyncOutlined,
 } from '@ant-design/icons';
@@ -38,9 +37,10 @@ import { VariablesPanel } from '../components/VariablesPanel';
 import { YamlEditor } from '../components/YamlEditor';
 import { ComposeStatusInline, ComposeStatusTag, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { usePanel } from '../data/store';
-import type { Compose, Environment } from '../data/types';
+import type { Compose } from '../data/types';
 import { composeState, projectComposes, summarize } from '../data/types';
 import { activeTab, selectEnvironment } from './project-view';
+import { ProjectSettingsTab } from './ProjectSettingsTab';
 
 const { Text, Paragraph } = Typography;
 
@@ -59,8 +59,8 @@ const STARTER_YAML = `services:
  * (Environments as Tabs *and* sections as Tabs nested inside them): the
  * Environment is a `Segmented` switcher, the sections are the tabs, and both
  * live in the URL (`/projects/:p/env/:e/:tab`) so they survive a reload. The
- * Composes tab is fully real; the Variables and Settings tab contents land
- * with later tickets.
+ * Composes and Variables tabs are fully real; Settings is the Project form,
+ * the Environment list and the danger zone (`ProjectSettingsTab`).
  */
 export function ProjectPage() {
   const { environmentId, projectId: projectParam, tab } = useParams();
@@ -70,7 +70,6 @@ export function ProjectPage() {
     addEnvironment,
     createCompose,
     deleteCompose,
-    deleteEnvironment,
     deployCompose,
     isPending,
     loadVariables,
@@ -86,7 +85,6 @@ export function ProjectPage() {
   const [composeModalOpen, setComposeModalOpen] = useState(false);
   const [composeYAML, setComposeYAML] = useState('');
   const [deletingCompose, setDeletingCompose] = useState<Compose>();
-  const [deletingEnvironment, setDeletingEnvironment] = useState<Environment>();
   // Action failures stay on this screen as an Alert (GUIDELINES §8) — the row
   // action that retries them is right there.
   const [actionError, setActionError] = useState<string>();
@@ -152,22 +150,6 @@ export function ProjectPage() {
       setEnvironmentModalOpen(false);
       environmentForm.resetFields();
       message.success(`Created Environment ${values.name}`);
-    } catch (reason: unknown) {
-      fail(reason);
-    }
-  };
-
-  const removeEnvironment = async () => {
-    if (!deletingEnvironment) return;
-    const name = deletingEnvironment.name;
-    const wasActive = deletingEnvironment.id === activeEnvironment?.id;
-    try {
-      await deleteEnvironment(project.id, deletingEnvironment.id);
-      setDeletingEnvironment(undefined);
-      message.success(`Deleted Environment ${name}`);
-      if (wasActive) {
-        navigate(paths.project(project.id));
-      }
     } catch (reason: unknown) {
       fail(reason);
     }
@@ -252,33 +234,13 @@ export function ProjectPage() {
     ];
   };
 
-  // The Environment switcher's manage affordance: create and delete stay
-  // reachable here while the Settings tab (the design's long-form home for
-  // them) has not landed yet.
-  const manageItems: MenuProps['items'] = [
-    {
-      icon: <PlusOutlined />,
-      key: 'new-environment',
-      label: 'New Environment…',
-      onClick: () => setEnvironmentModalOpen(true),
-    },
-    { type: 'divider' },
-    ...environments.map((environment) => ({
-      danger: true,
-      icon: <DeleteOutlined />,
-      key: `delete-environment-${environment.id}`,
-      label: `Delete ${environment.name}…`,
-      onClick: () => setDeletingEnvironment(environment),
-    })),
-  ];
-
-  const settingsPlaceholder = (
-    <Card variant="outlined">
-      <EmptyState
-        description="The Project details form, the Environment list and the danger zone land with a later design-port ticket. For now, Environment create and delete sit next to the switcher above, and Project rename and delete live on the Projects screen."
-        title="Not ported yet"
-      />
-    </Card>
+  const settingsTab = (
+    <ProjectSettingsTab
+      activeEnvironmentId={activeEnvironment?.id}
+      onNewEnvironment={() => setEnvironmentModalOpen(true)}
+      onError={fail}
+      project={project}
+    />
   );
 
   return (
@@ -356,11 +318,6 @@ export function ProjectPage() {
                 }))}
                 value={activeEnvironment?.id}
               />
-              <Dropdown menu={{ items: manageItems }} placement="bottomLeft" trigger={['click']}>
-                <Button aria-label="Manage Environments" icon={<SettingOutlined />}>
-                  Manage
-                </Button>
-              </Dropdown>
             </Flex>
             {activeEnvironment && (
               <Text type="secondary">
@@ -520,7 +477,7 @@ export function ProjectPage() {
                 label: `Variables (${activeEnvironment?.variables.length ?? 0})`,
               },
               {
-                children: settingsPlaceholder,
+                children: settingsTab,
                 key: 'settings',
                 label: 'Settings',
               },
@@ -547,7 +504,10 @@ export function ProjectPage() {
             extra="Conventional names: production, staging, preview. Slug-unique within the Project."
             label="Name"
             name="name"
-            rules={[{ message: 'Enter an Environment name', required: true }]}
+            rules={[
+              { message: 'Enter an Environment name', required: true },
+              { max: 255, message: 'Use 255 characters or fewer' },
+            ]}
           >
             <Input autoFocus placeholder="staging" />
           </Form.Item>
@@ -601,39 +561,6 @@ export function ProjectPage() {
           type="info"
         />
       </Modal>
-
-      <DangerModal
-        confirmWord={deletingEnvironment?.name ?? ''}
-        consequences={
-          <Paragraph type="secondary">
-            {deletingEnvironment && (
-              <>
-                This deletes {deletingEnvironment.name} and its {deletingEnvironment.composes.length}{' '}
-                {deletingEnvironment.composes.length === 1 ? 'Compose' : 'Composes'} from the panel.{' '}
-                {deletingEnvironment.composes.length > 0 ? (
-                  <>
-                    Their files stay on disk under{' '}
-                    <Text code>
-                      dataDir/{deletingEnvironment.composes[0].projectSlug}/{deletingEnvironment.composes[0].envSlug}/
-                    </Text>{' '}
-                    and their containers keep running — delete a Compose instead to stop it and remove its containers,
-                    networks and volumes.
-                  </>
-                ) : (
-                  'It holds no Composes.'
-                )}
-              </>
-            )}
-          </Paragraph>
-        }
-        description="Deleting an Environment cannot be undone."
-        loading={isPending(`delete-environment:${deletingEnvironment?.id ?? 0}`)}
-        okText="Delete Environment"
-        onCancel={() => setDeletingEnvironment(undefined)}
-        onConfirm={() => void removeEnvironment()}
-        open={Boolean(deletingEnvironment)}
-        title="Delete this Environment?"
-      />
 
       <DangerModal
         confirmWord={deletingCompose?.name ?? ''}
