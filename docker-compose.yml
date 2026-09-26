@@ -25,6 +25,11 @@ services:
 
   traefik:
     image: traefik:v3.7
+    environment:
+      # Go can't see the cgroup mem_limit, so without GOMEMLIMIT the heap grows
+      # until the kernel OOM-kills the container instead of the GC stepping in.
+      # Keep it under mem_limit; 400MiB ≈ 80% of the 512M limit.
+      GOMEMLIMIT: 400MiB
     command:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
