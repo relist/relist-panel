@@ -6,9 +6,9 @@
 # missing from this list until the gallery was built, which meant the one screen
 # nothing looked at was also the one screen nothing rendered.
 #
-# The screens gallery (#/design/screens) is deliberately absent: it renders 18
-# live frames stacked down a page, so a single viewport-sized screenshot of it
-# would show the top of the first frame and nothing else. Review it in a browser.
+# The old screens gallery was removed for the still board (#/design/board), which
+# is a pannable canvas of live frames — no single viewport-sized screenshot can
+# show it, and it is not a route a static per-route shooter means to cover.
 #
 # THEME=dark bash scripts/screenshot.sh /tmp/rp-shots-dark
 set -euo pipefail

@@ -37,7 +37,7 @@ The provider wraps one frame and supplies, scoped to it:
 - **Static.** The scope's outer wrapper sets `pointer-events: none` (the board re-enables it for its
   own chrome). Frames do not navigate; *Open live* is the interactive path.
 
-**Blocked by:** 01 · **Blocks:** 06 · **Status:** ready-for-agent
+**Blocked by:** 01 · **Blocks:** 06 · **Status:** ready-for-human
 
 - [ ] Standalone behaviour is unchanged: with no `?ui=`/`?scene=`, every screen renders and behaves
       exactly as before, and `pnpm --dir web-design typecheck` is green
@@ -53,3 +53,4 @@ The provider wraps one frame and supplies, scoped to it:
       or keyed), and scoped readiness reflects the frame, not the page
 - [ ] No behaviour is added beyond scoping; anything that looks wrong while converting is recorded
       in Comments, not fixed here
+- 2026-09-27 — **Landed** (commit 533ad2f). The scope's isolation was proven in Chrome with 26 assertions — two frames of the *same* Compose keep distinct Monaco models and routes, toasts stay inside their frame, programmatic Modal/Drawer/dropdown opens land inside the frame box, a frame that throws leaves its neighbour standing. The dev harness route was removed by ticket 06 as planned. One design note for reviewers: the scope root uses `contain: paint`, which is what pins fixed-position overlays to the frame; antd's nested `App` needed an explicit message container for the same reason.

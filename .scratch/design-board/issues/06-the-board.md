@@ -53,7 +53,7 @@ rail boxes out. It is what 07 draws lines against, and it is testable without a 
 
 **Blocked by:** 04, 05
 
-**Status:** needs-triage
+**Status:** ready-for-human
 
 - [ ] The route renders bare (no shell), the menu's Design system group links it, and it is reachable
       after a cold load with no query string
@@ -78,3 +78,4 @@ rail boxes out. It is what 07 draws lines against, and it is testable without a 
 - [ ] `src/board/layout.ts` is pure and covered by `node --test scripts/board-layout.test.mjs` — column
       and rail placement, ordering by `menuPath`, and a frame's position for a known registry
 - [ ] `pnpm --dir web-design typecheck` green; no new dependency
+- 2026-09-27 — **Landed and accepted** (commit 585b3ab + the engine fixes). Acceptance, headless Chrome over CDP against the dev server, 8/8: a full pan across all columns keeps **mounted ≤ 4** of 105 frames; zero error-boundary cards; JS heap 154→241 MB across the pan (first-mount allocations, flat afterwards — no trend); the theme switch re-themes the chrome **and** every mounted frame live with zero page loads; `?scene=compose-editor-running` lands centred at 0.6 zoom with the frame mounted; a forced `?ui=compose.logsOpen=1` cold load opens the Logs drawer. Two engine fixes rode along: the LOD predicate compared zoom against the current state twice (frames stuck as name cards mid-pan) and the mount-time focus could silently drop when `setCenter` ran before the pan/zoom surface existed (now retries). Offline verified separately: `dist-single/index.html#/design/board` from disk renders the board, 4 mounted, target frame present, no crashes (ticket 09).

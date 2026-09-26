@@ -92,7 +92,7 @@ function Root() {
    * another. The board is handled separately — it is not `Screens` at all, but
    * the board page's own canvas of scoped frames.
    */
-  const bare = showAuth || route.kind === 'screensGallery';
+  const bare = showAuth;
 
   return (
     <ThemeModeControlContext.Provider value={themeControl}>

@@ -40,8 +40,8 @@ also appear in `#/design/states`:
 - [x] `web-design/GUIDELINES.md` records the new rules: the Volumes tab, the Explorer, the deliberate absence of a write gate on a running stack, and the archive's symlink disclosure.
 - [x] `web-design/README.md`'s screen table gains the new routes.
 - [x] `pnpm typecheck` passes, and `scripts/screenshot.sh` renders the new routes for review.
-- [x] **`#/design/screens`** — every screen on one page, each in a live frame, so the review below is one scroll instead of a route table and a dev server.
-- [ ] Reviewed screen by screen and agreed before ticket 02 or any other implementation ticket begins.
+- [x] **`#/design/board`** — every screen-state on one canvas (105 scenes, static live frames in menu order, navigation drawn between them), so the review is one board instead of a route table and a dev server. Replaced `#/design/screens`, the 18-frame gallery, per the review-surface rework; see `.scratch/design-board/spec.md`.
+- [ ] Reviewed screen by screen on `#/design/board` and agreed before ticket 02 or any other implementation ticket begins.
 
 ## Comments
 
@@ -49,11 +49,12 @@ Built, typechecked (`pnpm typecheck`) and rendered (`scripts/screenshot.sh`, all
 The design is in `web-design/`: `ComposeVolumesTab`, `VolumeExplorerPage`, `StartHandleDialog`,
 `LiveHandlesBanner`, `TextFileEditor`, and fixtures in `src/data/volumeMocks.ts`.
 
-**The review surface is `#/design/screens`** — 18 screens on one page, each a live frame at 1600px,
-grouped and labelled with the state it shows, with the mode, the frame viewport, the zoom and the
-per-frame notes all controlled from the sticky bar. The frames are the running app rather than
-pictures of it, so a reviewer can open the drawer, switch the tab, or close the handle and watch the
-frame answer. Verified by driving Chrome over CDP and asserting on the frames:
+**The review surface was `#/design/screens`** (18 live frames) and is now **`#/design/board`** —
+a pannable canvas of 105 static live frames in menu order, overlays in rails beside their screens,
+navigation drawn between frames, every frame carrying a copyable scene id and an *Open live* link to
+the same forced state. Frames render inline and are culled off-viewport, so the board costs what is
+on screen, not what exists. The design decision record lives in `.scratch/design-board/spec.md` and
+its tickets. Verified by driving Chrome over CDP and asserting on the frames:
 `[...document.querySelectorAll('iframe')].filter(f => f.contentDocument?.querySelector('.ant-app'))`
 reports 18 of 18 once the page has been scrolled.
 

@@ -198,10 +198,20 @@ function BoardInner({ innerRef, ...props }: InnerProps) {
     (id: string) => {
       const box = frameBoxes.get(id);
       if (!box) return;
-      void setCenter(box.x + box.width / 2, box.y + box.height / 2, {
-        zoom: Math.max(getZoom(), FOCUS_ZOOM),
-        duration: CAMERA_DURATION,
-      });
+      // setCenter resolves false while the pan/zoom surface is not mounted yet
+      // (it mounts after the nodes do), so a mount-time focus must retry
+      // instead of silently dropping — the ?scene= deep link has to land on
+      // its frame every time, not on whichever paint won the race.
+      void (async () => {
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          const applied = await setCenter(box.x + box.width / 2, box.y + box.height / 2, {
+            zoom: Math.max(getZoom(), FOCUS_ZOOM),
+            duration: attempt === 0 ? CAMERA_DURATION : 0,
+          });
+          if (applied !== false) return;
+          await new Promise((resolve) => setTimeout(resolve, 120));
+        }
+      })();
     },
     [frameBoxes, setCenter, getZoom],
   );

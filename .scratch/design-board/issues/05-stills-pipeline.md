@@ -59,7 +59,7 @@ as the cheap staleness signal the board shows.
 
 **Blocked by:** 01, 04
 
-**Status:** needs-triage
+**Status:** wontfix
 
 - [ ] Pilot: five frames captured (desktop, tablet, mobile, plus an overlay), looked at, and their
       bytes/ms recorded in this ticket's Comments — including the WebP-vs-PNG comparison and the

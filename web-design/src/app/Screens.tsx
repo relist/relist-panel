@@ -18,7 +18,6 @@ import { MonitoringPage } from '../pages/MonitoringPage';
 import { OverviewPage } from '../pages/OverviewPage';
 import { ProjectPage } from '../pages/ProjectPage';
 import { ProjectsPage } from '../pages/ProjectsPage';
-import { ScreensGalleryPage } from '../pages/ScreensGalleryPage';
 import { StatesGalleryPage } from '../pages/StatesGalleryPage';
 import { VolumeExplorerPage } from '../pages/VolumeExplorerPage';
 import { useRoute } from './router';
@@ -58,8 +57,6 @@ export function Screens({ onSignIn }: { onSignIn: () => void }) {
       return <GuidelinesPage />;
     case 'states':
       return <StatesGalleryPage />;
-    case 'screensGallery':
-      return <ScreensGalleryPage />;
     case 'setup':
       return <SetupPage onComplete={onSignIn} />;
     case 'signin':

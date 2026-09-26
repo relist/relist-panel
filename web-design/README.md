@@ -19,27 +19,28 @@ Other scripts: `pnpm typecheck`, `pnpm build:single` (bundles the prototype into
 
 ## Review from here
 
-**`#/design/screens` puts every screen on one page.** Each of the 18 screens is a live frame at
-1600px, grouped, numbered and labelled with the state it shows — so the pass is one scroll instead of
-a dev server and a route table. The frames are the running app, not pictures of it: open a drawer,
-switch a tab, close a Volume Handle, and the frame answers.
+**`#/design/board` is the review surface: every screen-state on one canvas.** ~105 frames laid out in
+menu order — a column per menu group, a screen's dialogs in a rail beside it — with navigation drawn
+on the canvas: solid lines from the sider menu and tab bars to the frame they show, dashed lines from
+a trigger to the overlay it opens. Frames are **static and live at once**: each one is the running app
+rendered in a forced state (nothing inside a frame is clickable — *Open live* under the frame loads
+the same state interactively), and the board only mounts the frames near the view, panning is cheap.
 
-The bar controls the mode (light/dark across every frame at once), the frame viewport height, the
-zoom, and whether the per-frame notes are shown. Every frame has an **Open** link that loads that
-route full size in its own tab.
+The bar: search/jump by scene id, group filter, theme (flips every frame and the chrome, no reload),
+a lines toggle, captions, the **mounted X/Y** counter (proof that off-screen frames are really
+unmounted), and `?scene=<id>` deep-links straight to a frame. Zoom with ctrl+wheel, pan with the
+wheel; below ~35% zoom frames collapse to name cards. Every frame's chrome carries a copyable
+**scene id** — quote it in review feedback.
 
-Two things worth knowing about the frames. They are a **fixed viewport**, not content height:
-`editorMinHeight` is `clamp(640px, 80vh, 1000px)`, and inside a frame `vh` resolves against the
-frame, so sizing a frame from its content would show a composition no real viewport produces. And
-zoom is `transform: scale()`, so the layout viewport stays at 1600px — you are looking at the real
-desktop layout drawn smaller, not at a narrower layout. Frames load lazily as you scroll, which is
-why the page is heaviest in dev and lightest from the single-file build.
+Two things worth knowing. The frames are the mock rendered inline in this one document, so *nothing
+here is a screenshot* — if the mock changes, the board changes. And tablet/mobile switch entries are
+disabled on purpose: those widths are designed in the responsive pass (`.scratch/design-board/issues/03-responsive-mobile.md`), and the board does not pretend otherwise.
 
 ## What to look at
 
 | Screen | Route | Notes |
 | --- | --- | --- |
-| **All screens** | `#/design/screens` | **The review surface: every screen below, on one page** |
+| **Still board** | `#/design/board` | **The review surface: every screen-state below, on one canvas, with the navigation drawn** |
 | Overview | `#/` | Host totals, "needs attention", activity, all Composes |
 | Projects | `#/projects` | Cards **and** table view, filter, sort |
 | Project | `#/projects/1` | Environment switcher + Composes / Variables / Settings |

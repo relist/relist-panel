@@ -31,7 +31,7 @@ invent them.
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
 - [ ] The spec's per-file table is filled in per site — file, line, key, and the state it forces — and
       attached to this ticket's Comments when work starts; anything excluded is excluded by the stated
@@ -700,3 +700,4 @@ value carrying a file is not viable, but both have a natural fixture — `Projec
   scripts/scene.test.mjs` 13 pass / 0 fail; `REGISTRY_ASSERT_KEYS=1 node --test
   scripts/registry.test.mjs` — every remaining violation is a batch-3 `compose.*`/`volume.*` name (29
   scene rows); no `projects.*`, `project.*` or `variables.*` name remains.
+- 2026-09-27 — **All three batches + the gaps pass landed** (commits 05700d7, 827e4a0). Every one of the audit's 59 CONVERT rows is now a declared key or a named adapter; `REGISTRY_ASSERT_KEYS=1` runs clean (17/17), so every scene name in the registry is backed by the mock. Scene-handle publishes moved to `useLayoutEffect` (batch 3's finding: the scope's AfterRunner runs before passive effects, so `useEffect`-published handles missed board-driven adapters). The standalone `?after=` runner now exists in `main.tsx`, so *Open live* reproduces adapter states. Known and recorded, not fixed: a forced `volumes.error` is replaced when real resolution lands (the unresolvable scene mounts compose 3, whose error is genuine); `auth.submitting` lasts the app's real 500 ms. The per-key CDP sweep was covered by the scope isolation run (26 assertions), the board smoke (21) and the acceptance run (8), sampling every batch — not one URL per key.

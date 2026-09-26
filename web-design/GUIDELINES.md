@@ -281,17 +281,20 @@ Split layout: what the panel is on the left (in `colorPrimaryBg`), the form on t
 two-step flow (Account → Ready) ending in a `Result` with the Project → Environment → Compose
 mental model restated.
 
-### 4.9 Design system (`#/design/screens`, `#/design/guidelines`, `#/design/states`)
+### 4.9 Design system (`#/design/board`, `#/design/guidelines`, `#/design/states`)
 
 The guideline and the state gallery are part of the prototype so reviewers read the rules next to the
 screens. The states gallery covers loading, empty (both "nothing yet" and "filtered to nothing"),
 inline and page-level errors, form validation, outcome feedback, destructive confirmations and narrow
-viewports.
+viewports — on the board each of those sections is also a frame of its own.
 
-`#/design/screens` is the review surface: all 18 screens on one page, each in its own live frame at
-1600px, grouped and labelled with the state it shows. It is the only screen that renders outside
-`AppShell` — the shell is part of what each frame is showing, so wrapping it would nest one panel
-inside another. Review from here; the route table above is for when you want one screen full size.
+`#/design/board` is the review surface: every screen-state as a static, live-rendered frame on one
+pannable canvas, laid out in menu order with the navigation drawn between frames (solid = a menu item
+or tab leads there; dashed = this control opens that dialog). Each frame renders the real mock in a
+forced state — nothing inside a frame is clickable; *Open live* under a frame loads that exact state
+interactively. It is the only screen that renders outside `AppShell` — the shell is part of what each
+frame is showing, so wrapping it would nest one panel inside another. Review from here and quote
+scene ids; the route table is for when you want one screen full size.
 
 ## 5. Status vocabulary
 

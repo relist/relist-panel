@@ -52,7 +52,7 @@ delete its volume-specific sections (duplicates of real screens), and leave `pat
 
 **Blocked by:** 06, 07, 08
 
-**Status:** needs-triage
+**Status:** ready-for-human
 
 - [ ] A clean `pnpm --dir web-design build` and `build:single` both succeed, and the board renders from
       `dist-single/index.html` opened off disk with no dev server and no network — mobile frames included,
@@ -73,3 +73,4 @@ delete its volume-specific sections (duplicates of real screens), and leave `pat
 - [ ] `volume-files` ticket 01's review surface points at the board, and its review gate is still open
 - [ ] `pnpm --dir web-design typecheck` and `node --test scripts/*.test.mjs` green; the whole story is
       one commit per concern (docs separate from removals separate from the shipping config)
+- 2026-09-27 — **Landed.** `#/design/screens` is gone — route kind, `paths.screens`, the bare branch and `ScreensGalleryPage.tsx` deleted; `grep -rn screensGallery web-design/src` returns nothing. The sider's entry is **Still board** → `#/design/board`. README's *Review from here* and GUIDELINES §4.9 describe the board; `screenshot.sh`'s header explains why the board is not a static shooter's subject; `volume-files` ticket 01 points its review gate at the board. Offline: `dist-single/index.html` (5.5 MB, one file) opened via `file://` renders the board — 4 frames mounted, the `?scene=` target present, no crashes. The decision record is the architecture note at the top of `spec.md` (this pivot's what-and-why) plus ticket 05's withdrawal; a separate ADR was judged redundant for a mock-only surface.

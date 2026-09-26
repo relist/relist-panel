@@ -52,7 +52,7 @@ not draw a frame the app cannot produce.
 
 **Blocked by:** 03
 
-**Status:** needs-triage
+**Status:** ready-for-human
 
 - [ ] **Review gate: the scene list is agreed as a list before anything is captured.** The ticket's
       deliverable is the list plus its captions — the review happens before 04 runs, and a scene added

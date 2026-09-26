@@ -41,7 +41,7 @@ state; a filtered board is not a scene).
 
 **Blocked by:** 06
 
-**Status:** needs-triage
+**Status:** ready-for-human
 
 - [ ] The bar is sticky and outside the transform: zooming to 50 % does not shrink the controls
 - [ ] The switch themes the bar, columns, frame cards, captions and lines immediately, any Live frame in

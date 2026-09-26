@@ -28,7 +28,7 @@
 
 **Blocked by:** — (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
 - [ ] `main.tsx`'s first import is the harness, with a comment saying why: `volumeMocks.ts` calls
       `mtime()` at module scope through `file()`/`dir()`/`symlink()`, so the fixture timestamps are

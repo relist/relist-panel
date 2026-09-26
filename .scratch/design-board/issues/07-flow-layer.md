@@ -33,7 +33,7 @@ kinds.
 
 **Blocked by:** 06
 
-**Status:** needs-triage
+**Status:** ready-for-human
 
 - [ ] The menu miniature is the app's own menu markup, inert, and every item in it has a `nav` line to the
       frame it lands on
