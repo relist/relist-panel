@@ -33,8 +33,11 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   // a cold load with a forced `?ui=palette.query=…` was wiped on mount. Keyed
   // on the false→true transition instead — every real open still clears the
   // field, a forced cold load keeps its value, and with no query string
-  // nothing moves.
-  const wasOpen = useRef(false);
+  // nothing moves. The ref is seeded from the mount-time `open` (the
+  // StartHandleDialog pattern): where `open` itself is forced true by the same
+  // load (`overview-palette-query`), the mount is not an opening, so the forced
+  // query survives it.
+  const wasOpen = useRef(open);
   useEffect(() => {
     const opening = open && !wasOpen.current;
     wasOpen.current = open;

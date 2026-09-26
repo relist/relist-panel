@@ -30,10 +30,12 @@ import {
   theme,
 } from 'antd';
 import type { MenuProps } from 'antd';
+import { useLayoutEffect } from 'react';
 import type { ReactNode } from 'react';
 import { LAYOUT } from '../app/theme';
 import type { ThemeMode } from '../app/theme';
 import { useUiState } from '../app/uiState';
+import { publishSceneHandle } from '../app/sceneAdapters';
 import { navigate, paths, useRoute } from '../app/router';
 import { usePanel } from '../data/store';
 import type { Speed } from '../data/store';
@@ -58,13 +60,34 @@ export function AppShell({
   const { projects, host, refreshStatus, setSpeed, speed } = usePanel();
   const [paletteOpen, setPaletteOpen] = useUiState('shell.paletteOpen', false);
   const [refreshing, setRefreshing] = useUiState('shell.refreshing', false);
+  // Ticket 02 (audit §2): the account `Dropdown` passed no `open`, so the menu
+  // is now controlled — `?ui=shell.accountMenu=1` holds it open, and a click
+  // still opens and closes it through `onOpenChange`.
+  const [accountMenuOpen, setAccountMenuOpen] = useUiState('shell.accountMenu', false);
+  // The all-clear scene's fiction (ticket 02): the badge counts the same
+  // store-derived Composes as OverviewPage's attention list, so it consults
+  // the same declared override rather than computing through a forced seed.
+  const [attentionClear, setAttentionClear] = useUiState('overview.attentionClear', false);
+
+  // The `seed:overview.allClear` adapter drives this copy through the shell's
+  // own setter alongside OverviewPage's. Published in a *layout* effect
+  // deliberately — see OverviewPage for why that timing is load-bearing.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('overview.attention.seed.shell', () => {
+        setAttentionClear(true);
+      }),
+    [setAttentionClear],
+  );
 
   const selectedKey =
     route.kind === 'project' || route.kind === 'compose' ? `project-${route.projectId}` : route.kind;
 
-  const attention = projects.flatMap((project) =>
-    projectComposes(project).filter((compose) => composeState(compose.status, compose.lastDeployedAt) === 'partial'),
-  ).length;
+  const attention = attentionClear
+    ? 0
+    : projects.flatMap((project) =>
+        projectComposes(project).filter((compose) => composeState(compose.status, compose.lastDeployedAt) === 'partial'),
+      ).length;
 
   const menuItems: MenuProps['items'] = [
     { key: 'overview', icon: <AppstoreOutlined />, label: 'Overview' },
@@ -272,6 +295,8 @@ export function AppShell({
                       { key: 'signout', label: 'Sign out', onClick: () => navigate(paths.signIn) },
                     ],
                   }}
+                  onOpenChange={setAccountMenuOpen}
+                  open={accountMenuOpen}
                   placement="bottomRight"
                 >
                   <Button icon={<Avatar size={22} style={{ background: token.colorPrimary }}>A</Avatar>} style={{ paddingInline: 8 }} />

@@ -1,6 +1,6 @@
 import { CloudServerOutlined, LockOutlined, SafetyCertificateOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Alert, App, Button, Card, Flex, Form, Input, Layout, Result, Steps, Tag, Typography, theme } from 'antd';
-import { useEffect } from 'react';
+import { useLayoutEffect } from 'react';
 import { navigate, paths } from '../app/router';
 import { publishSceneHandle, SceneAdapterBridge } from '../app/sceneAdapters';
 import type { SceneForm } from '../app/sceneAdapters';
@@ -101,7 +101,7 @@ export function SignInPage({ onSignIn }: { onSignIn: () => void }) {
   // handlers through it — valid values → `submitting`, empty → the field
   // errors. `<SceneAdapterBridge />` lets the adapters reach this app's own
   // antd handles.
-  useEffect(
+  useLayoutEffect(
     () =>
       publishSceneHandle<SceneForm>('auth.signin.form', {
         setFieldsValue: (values) => form.setFieldsValue(values as { email: string; password: string }),
@@ -165,7 +165,7 @@ export function SetupPage({ onComplete }: { onComplete: () => void }) {
   // Ticket 02: `after:` adapters (audit §3b) — the mismatched-confirm submit
   // the form's own validator refuses, and the sticky account-created toast.
   // `<SceneAdapterBridge />` lets them reach this app's own antd handles.
-  useEffect(
+  useLayoutEffect(
     () =>
       publishSceneHandle<SceneForm>('auth.setup.form', {
         setFieldsValue: (values) => form.setFieldsValue(values as { confirmPassword: string; email: string; password: string }),

@@ -27,8 +27,11 @@ import {
   Typography,
 } from 'antd';
 import type { MenuProps } from 'antd';
-import { useMemo, useState } from 'react';
+import { useMemo, useLayoutEffect } from 'react';
 import { navigate, paths } from '../app/router';
+import { publishSceneHandle } from '../app/sceneAdapters';
+import type { SceneForm } from '../app/sceneAdapters';
+import { useUiState } from '../app/uiState';
 import { DangerModal } from '../components/DangerModal';
 import { ComposeStatusTag, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { usePanel } from '../data/store';
@@ -41,6 +44,23 @@ const { Text, Paragraph } = Typography;
 type SortKey = 'updated' | 'name' | 'size';
 
 /**
+ * One project's ⋯ menu — the card footer and the table row share it. Ticket 02,
+ * decision D2: per-row state is addressed by naming the row in the key
+ * (`?ui=projects.rowMenu.landing=1` opens exactly landing's menu), so the
+ * controlled `open` lives here, once per rendered row. With no query string the
+ * state starts closed and the click opens it exactly as the uncontrolled
+ * `trigger` did.
+ */
+function ProjectRowMenu({ menu, project }: { menu: MenuProps['items']; project: Project }) {
+  const [open, setOpen] = useUiState(`projects.rowMenu.${project.name}`, false);
+  return (
+    <Dropdown menu={{ items: menu }} onOpenChange={setOpen} open={open} placement="bottomRight" trigger={['click']}>
+      <Button icon={<MoreOutlined />} type="text" />
+    </Dropdown>
+  );
+}
+
+/**
  * Projects: the same information as before, but the card is no longer the only
  * affordance — operators who run many Projects get a table with sorting, and
  * both views keep the status rollup visible so "which app is broken" never
@@ -50,12 +70,15 @@ export function ProjectsPage() {
   const { createProject, deleteProject, projects, updateProject, isPending } = usePanel();
   const { message } = App.useApp();
   const [form] = Form.useForm<{ name: string; description: string }>();
-  const [query, setQuery] = useState('');
-  const [sort, setSort] = useState<SortKey>('updated');
-  const [view, setView] = useState<'cards' | 'table'>('cards');
-  const [editing, setEditing] = useState<Project>();
-  const [modalOpen, setModalOpen] = useState(false);
-  const [deleting, setDeleting] = useState<Project>();
+  const [query, setQuery] = useUiState('projects.query', '');
+  const [sort, setSort] = useUiState<SortKey>('projects.sort', 'updated');
+  const [view, setView] = useUiState<'cards' | 'table'>('projects.view', 'cards');
+  // `editing`/`deleting` hold a `Project` (audit §1, CONVERT*): never forced by
+  // a URL literal (ticket 02, decision D1) — the `object:` adapters seed them
+  // through this screen's own setters, via the handles published below.
+  const [editing, setEditing] = useUiState<Project | undefined>('projects.editing', undefined);
+  const [modalOpen, setModalOpen] = useUiState('projects.modalOpen', false);
+  const [deleting, setDeleting] = useUiState<Project | undefined>('projects.deleting', undefined);
   const sceneContainer = useSceneContainer();
 
   const visible = useMemo(() => {
@@ -100,13 +123,68 @@ export function ProjectsPage() {
     }
   };
 
-  const confirmDelete = async () => {
-    if (!deleting) return;
-    const name = deleting.name;
-    await deleteProject(deleting.id);
+  // The modal's own confirm, with the target explicit so the scene harness can
+  // invoke it for a seeded `deleting` (the OK click passes the state through).
+  const confirmDelete = async (target: Project) => {
+    const name = target.name;
+    await deleteProject(target.id);
     setDeleting(undefined);
     message.success(`Deleted ${name}`);
   };
+
+  // Ticket 02: the scene adapters reach this screen's own transitions through
+  // these handles. Each is idempotent — a seed finds its target already set, a
+  // submit replays onto the same form, a wipe re-deletes nothing.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle<SceneForm>('projects.new.form', {
+        setFieldsValue: (values) => form.setFieldsValue(values as { description: string; name: string }),
+        submit: () => form.submit(),
+      }),
+    [form],
+  );
+
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('projects.editing.seed', () => {
+        if (visible[0]) openEdit(visible[0]);
+      }),
+    [openEdit, visible],
+  );
+
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('projects.deleting.seed', () => {
+        setDeleting((current) => current ?? visible[0]);
+      }),
+    [setDeleting, visible],
+  );
+
+  // The typed-name flow completed (audit §3b): open the confirm seeded, then
+  // invoke the real handler. The typed state itself is `danger.typed`.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('projects.delete.flow', () => {
+        const target = visible[0];
+        if (target) {
+          setDeleting(target);
+          void confirmDelete(target);
+        }
+      }),
+    [confirmDelete, setDeleting, visible],
+  );
+
+  // First-run (scene `projects-empty`): every seeded Project removed through
+  // the store's own deleteProject — readiness waits for the deletes to settle.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('projects.empty.seed', () => {
+        for (const project of projects) {
+          void deleteProject(project.id);
+        }
+      }),
+    [deleteProject, projects],
+  );
 
   const rowMenu = (project: Project): MenuProps['items'] => [
     { icon: <FolderOpenOutlined />, key: 'open', label: 'Open', onClick: () => navigate(paths.project(project.id)) },
@@ -186,9 +264,7 @@ export function ProjectsPage() {
                     <Button icon={<FolderOpenOutlined />} key="open" onClick={() => navigate(paths.project(project.id))} type="link">
                       Open
                     </Button>,
-                    <Dropdown key="more" menu={{ items: rowMenu(project) }} placement="bottomRight" trigger={['click']}>
-                      <Button icon={<MoreOutlined />} type="text" />
-                    </Dropdown>,
+                    <ProjectRowMenu key="more" menu={rowMenu(project)} project={project} />,
                   ]}
                   loading={isPending(`delete-project:${project.id}`)}
                   styles={{ body: { minHeight: 148 } }}
@@ -289,11 +365,7 @@ export function ProjectsPage() {
               },
               {
                 key: 'actions',
-                render: (_value, project) => (
-                  <Dropdown menu={{ items: rowMenu(project) }} placement="bottomRight" trigger={['click']}>
-                    <Button icon={<MoreOutlined />} type="text" />
-                  </Dropdown>
-                ),
+                render: (_value, project) => <ProjectRowMenu menu={rowMenu(project)} project={project} />,
                 width: 70,
               },
             ]}
@@ -353,7 +425,9 @@ export function ProjectsPage() {
         loading={isPending(`delete-project:${deleting?.id ?? 0}`)}
         okText="Delete Project"
         onCancel={() => setDeleting(undefined)}
-        onConfirm={() => void confirmDelete()}
+        onConfirm={() => {
+          if (deleting) void confirmDelete(deleting);
+        }}
         open={Boolean(deleting)}
         title="Delete this Project?"
       />

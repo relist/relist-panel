@@ -12,7 +12,7 @@ import './app/scene';
 
 import { StyleProvider } from '@ant-design/cssinjs';
 import { App as AntApp, ConfigProvider } from 'antd';
-import { StrictMode, useContext, useEffect, useMemo, useState } from 'react';
+import { StrictMode, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import './index.css';
@@ -20,7 +20,8 @@ import './monaco';
 
 import { AppShell } from './app/AppShell';
 import { RouteContext, paths, useRoute } from './app/router';
-import { sceneOverrides } from './app/scene';
+import { sceneAfter, sceneOverrides } from './app/scene';
+import { getSceneAdapter, SceneAdapterBridge } from './app/sceneAdapters';
 import { SceneReadiness } from './app/sceneReady';
 import { buildTheme, initialThemeMode, ThemeModeContext, ThemeModeControlContext } from './app/theme';
 import type { ThemeMode } from './app/theme';
@@ -91,6 +92,35 @@ function Screens({ onSignIn }: { onSignIn: () => void }) {
   }
 }
 
+/**
+ * The standalone `?after=` runner. A board frame runs its scene's named
+ * transition through the scoped AfterRunner (`scenes/scope`); an *Open live*
+ * link has no frame, so without this the `after:` scenes opened as the plain
+ * screen. One run per mount — the ref guard keeps StrictMode's double effect
+ * from firing the transition twice — and it sits after `PanelProvider` in the
+ * tree, so its passive effect runs after the screens' own mount effects and
+ * after the bridge's.
+ */
+function StandaloneAfterRunner() {
+  const ran = useRef(false);
+
+  useEffect(() => {
+    if (ran.current) return;
+    ran.current = true;
+    const name = sceneAfter();
+    if (name === null) return;
+    try {
+      getSceneAdapter(name)?.();
+    } catch (error) {
+      // `getSceneAdapter` throws in dev on a name nothing registered; there is
+      // no frame error boundary to catch it here, so this is the loud form.
+      console.error(error);
+    }
+  }, []);
+
+  return null;
+}
+
 function Root() {
   const [mode, setMode] = useState<ThemeMode>(initialThemeMode);
   const route = useRoute();
@@ -131,6 +161,13 @@ function Root() {
       <ThemeModeContext.Provider value={mode}>
         <ConfigProvider theme={buildTheme(mode)}>
           <AntApp>
+            {/* The adapters' two standalone seams (ticket 02). The bridge
+                publishes this `<AntApp>`'s message/notification handles for the
+                toast adapters; the runner drives a `?after=` name once, mounted
+                *after* `PanelProvider` so every screen-published handle is in
+                place when an adapter reads it. Both render nothing, and with no
+                `?after=` the runner is a no-op. */}
+            <SceneAdapterBridge />
             <PanelProvider overrides={sceneOverrides()}>
               {/* Publishes `data-scene-ready` for the capture pipeline; renders nothing. */}
               <SceneReadiness />
@@ -142,6 +179,7 @@ function Root() {
                 </AppShell>
               )}
             </PanelProvider>
+            <StandaloneAfterRunner />
           </AntApp>
         </ConfigProvider>
       </ThemeModeContext.Provider>

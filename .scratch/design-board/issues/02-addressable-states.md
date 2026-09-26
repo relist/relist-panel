@@ -575,4 +575,128 @@ value carrying a file is not viable, but both have a natural fixture — `Projec
   architecture update (spec.md, 2026-09-27): the board renders frames **live**, so the audit's
   "captured mid-toast" framing becomes "shown mid-toast" — the `duration: 0` mechanics are unchanged.
   Agents do not commit; the coordinator commits per batch.
+- 2026-09-27 — **Batch-1 integration gaps closed** (gaps agent, coordinator session; ran alongside
+  batches 2/3 and touched only the integration set: `app/AppShell.tsx`, `pages/OverviewPage.tsx`,
+  `pages/MonitoringPage.tsx`, `components/ServiceMonitor.tsx`, `main.tsx`, plus append-only additions
+  to `uiKeys.ts` / `sceneAdapters.ts`; `app/scene.ts` needed no change — `sceneAfter()` was already
+  the seam). The four gaps from the batch-1 record:
+  1. **`shell.accountMenu`.** The account `Dropdown` is now controlled — `open` + `onOpenChange`
+     under `useUiState` (audit §2's "needs a call-site edit, not a swap", done). A click still opens
+     and closes it; `?ui=shell.accountMenu=1` holds it open. Key declared.
+  2. **`overview-all-clear` — decision: a screen key, not a store lever.** The store lever would have
+     extended `SceneOverrides` + `PanelProvider`, both in `data/store.tsx`, which is outside this
+     agent's file set while batches 2/3 share the tree. The declared fiction is
+     `overview.attentionClear` (`?ui=overview.attentionClear=1`): the *derivations* consult it
+     instead of computing — OverviewPage's attention list **and AppShell's refresh badge**, which
+     counts the same Composes, so the frame cannot contradict itself (page says "All clear" while
+     the badge still says 2). Registered `seed:overview.allClear`, which drives both derivations
+     through their own setters (handles `overview.attention.seed.page` / `overview.attention.seed.shell`)
+     — so **ticket 04's `overview-all-clear` scene needs no registry edit**; its `after:` name works
+     as declared, and `?ui=` is the direct spelling if 04's review prefers it
+     (`ui: { 'overview.attentionClear': 1 }`). This answers 04 open question (a) for this scene;
+     `projects-empty` / `project-zero-envs` / `volume-explorer-readonly` stay with their batch owners.
+  3. **`monitoring:loading` / `monitor:loading` — a held skeleton *is* reachable** (answers 04 open
+     question (b)). D4 keeps `loading`/`result` as data and the mount `load()` running unchanged, so
+     driving the setter alone cannot hold: the in-flight fetch's `finally` drops the skeleton when
+     the mock answers. The hold is a published recipe that pins a ref the load's `finally` respects
+     (`if (!hold) setLoading(false)`) plus `setLoading(true)` — the fetch still answers into
+     `result`; only the loading state is pinned. Without an `after` name the ref is false and the
+     code path is today's exactly. Adapters registered; handles `monitoring.loading.hold` /
+     `monitor.loading.hold`.
+  4. **Standalone `?after=` runner.** `<StandaloneAfterRunner />` inside the root `<AntApp>` in
+     `main.tsx`, with `<SceneAdapterBridge />` beside it so standalone toast adapters reach the
+     app's own antd handles. One run per mount (ref guard, StrictMode-safe): reads `sceneAfter()`,
+     runs `getSceneAdapter(name)`; an unknown name is dev-loud — `getSceneAdapter`'s throw is caught
+     and `console.error`ed, since standalone has no frame error boundary to crash into.
+  **Ordering finding for every `publishSceneHandle` user (batch-1 files — reported, not fixed).**
+  The scoped AfterRunner is the *first sibling* before `{children}` in `SceneScopeProvider`, and
+  React flushes passive effects depth-first in tree order — so a handle published in a plain
+  `useEffect` is not in the map yet when a board-driven adapter reads it (dev-warn, then a no-op).
+  `AuthPages`' two form handles and `volumes.starting.seed` are `useEffect`-published; their board
+  frames plausibly render the plain screen today. The one-line move — the one this pass used for all
+  four new publishes — is `useLayoutEffect`: all layout effects flush before any passive effect, so
+  sibling order stops mattering. The standalone runner is additionally placed after `PanelProvider`
+  in the tree. (Reasoned from React's effect semantics; this environment has no browser to run a
+  frame in — worth one board glance on an auth `after:` scene.)
+  **Verification:** `pnpm --dir web-design typecheck` green; `vite build` green;
+  `node --test scripts/scene.test.mjs` 13 pass; registry 16 pass / 1 skip plain, and
+  `REGISTRY_ASSERT_KEYS=1` no longer names `shell.accountMenu`, `monitoring:loading`,
+  `monitor:loading` or `seed:overview.allClear` — every remaining violation is a batch-2/batch-3
+  name, exactly the list in ticket 04's Comments.
 
+
+- 2026-09-27 — **Batch 2 landed** (`pages/ProjectsPage.tsx`, `pages/ProjectPage.tsx`,
+  `components/VariablesPanel.tsx`, plus the appended `uiKeys.ts`/`sceneAdapters.ts` blocks). Per-site
+  swap table (audit §1 line numbers; every site CONVERT, none excluded — the audit's per-file counts
+  hold exactly):
+
+  | file:line | state | key / mechanism |
+  | --- | --- | --- |
+  | ProjectsPage :53 | `query` | `projects.query` |
+  | ProjectsPage :54 | `sort` | `projects.sort` |
+  | ProjectsPage :55 | `view` | `projects.view` |
+  | ProjectsPage :56 | `editing` | `projects.editing` — CONVERT\*: `object:projects.editing` seeds through the screen's own `openEdit` (prefill + open) |
+  | ProjectsPage :57 | `modalOpen` | `projects.modalOpen` |
+  | ProjectsPage :58 | `deleting` | `projects.deleting` — CONVERT\*: `object:projects.deleting`; `submit:projects.delete.confirmed` runs the real `onConfirm` |
+  | ProjectPage :69 | `environmentModalOpen` | `project.environmentModalOpen` |
+  | ProjectPage :70 | `composeModalOpen` | `project.composeModalOpen` |
+  | ProjectPage :71 | `composeYAML` | `project.composeYAML` — §5.10 document; `fixture:project.composeYAML` seeds `STARTER_YAML` via the screen's own setter |
+  | ProjectPage :72 | `deletingCompose` | `project.deletingCompose` — CONVERT\*: `object:project.deletingCompose` (seeded with web); `submit:project.deleteCompose.confirmed` |
+  | ProjectPage :73 | `deleteProjectOpen` | `project.deleteProjectOpen` |
+  | VariablesPanel :31 | `revealed` | `variables.revealed.<KEY>` — per-row D2, in `ValueCell` |
+  | VariablesPanel :64 | `query` | `variables.query` |
+  | VariablesPanel :65 | `editing` | `variables.editing` — CONVERT\*: `object:variables.editing` via `openEdit` (DATABASE_URL) |
+  | VariablesPanel :66 | `modalOpen` | `variables.modalOpen` |
+  | VariablesPanel :67 | `bulkOpen` | `variables.bulkOpen` |
+  | VariablesPanel :68 | `bulkText` | `variables.bulkText` — §5.10 document; `fixture:variables.bulkText` / `fixture:variables.bulkDuplicate` seed a fixture `.env` (lives beside `parseDotEnv`) |
+
+  Audit §2's uncontrolled per-row overlays got their D2 families as the registry scenes need:
+  `projects.rowMenu.<name>` (card + table ⋯ menu, new `ProjectRowMenu`), `project.rowMenu.<compose>`
+  (`ComposeRowMenu`), `project.deleteEnv.<env>` and `variables.deletePopconfirm.<key>` (the two delete
+  `Popconfirm`s, re-hosted as `DeleteEnvironmentButton`/`DeleteVariableButton` with controlled `open` +
+  `onOpenChange`). With no query string every one starts closed and clicks exactly as before.
+
+- 2026-09-27 — **Batch 2's store-lever decision (ticket 04 open question a): adapters, not
+  `SceneOverrides`.** The registry as written names `after: 'projects:empty'` and
+  `after: 'seed:project.zeroEnvs'`, and both captions say "reached through an adapter" — a store lever
+  would have required a registry `after`→`ui` swap, and `src/scenes/**` is not batch 2's to edit. Both
+  scenes act through the store's own mutations (`projects.empty.seed` deletes every seeded Project;
+  `project.zeroEnvs.seed` deletes project 4/"blog"'s one Environment — the scene hashes
+  `paths.project(4)`, which exists), so readiness genuinely waits for the transitions.
+  `src/data/store.tsx` is untouched. One deviation from ticket 04's Comments: it listed
+  `seed:projects.empty`, but the registry scene carries `projects:empty` — the registry's name is what
+  got registered.
+
+- 2026-09-27 — **D3's reset fix completed in `DangerModal` and `CommandPalette`** (batch-1 files, one
+  line each, the StartHandleDialog pattern): the `wasOpen` ref is now seeded from the mount-time
+  `open`, so a load that forces `open` *and* the value — `project-delete-modal`
+  (`project.deleteProjectOpen` + `danger.typed`) and `overview-palette-query` (`shell.paletteOpen` +
+  `palette.query`) — no longer counts the mount as an opening and wiping the forced value. With no
+  query string nothing moves; an adapter-seeded `open` (a real false→true transition) still resets.
+
+- 2026-09-27 — **Batch 2's `submit:`/`after:` adapters** (16 registered): the registry's ten
+  (`submit:projects.new.empty`, `object:projects.editing`, `object:projects.deleting`,
+  `object:project.deletingCompose`, `object:variables.editing`, `fixture:project.composeYAML`,
+  `fixture:variables.bulkText`, `fixture:variables.bulkDuplicate`, `projects:empty`,
+  `seed:project.zeroEnvs`) plus the audit §3b rows no scene names yet (`submit:project.environment.empty`,
+  `submit:project.compose.badName`, `submit:project.settings.saved`) and the typed-name flows
+  (`submit:projects.delete.confirmed`, `submit:project.deleteCompose.confirmed`). All publish-handles
+  use `useLayoutEffect`, per the integration pass's ordering finding above.
+  **Deliberately not registered: `submit:project.deleteProject.confirmed`.** Its real handler
+  navigates to `paths.projects` from inside a `.then()` — outside the AfterRunner's synchronous
+  `scopeNavigate` claim (`router.ts:159-181`) — so in a frame the navigation would land on the window
+  hash (or a sibling frame's claim) instead of the frame. That needs either a scope seam for async
+  navigates or a registry decision before a scene names it; the `object:project.deletingCompose`-style
+  seed (modal open, OK disabled) and `project.deleteProjectOpen` + `danger.typed` ui keys remain the
+  reachable spellings of that flow.
+
+- 2026-09-27 — **D4 reconciliation, batch-2 files:** 80 total = 17 converted here (ProjectsPage 6,
+  ProjectPage 5, VariablesPanel 6) + excluded-by-rule 0 + adapter-forced 4 (`projects.editing`,
+  `projects.deleting`, `project.deletingCompose`, `variables.editing` are converted sites whose
+  forcing is adapter-only per D1; `project.composeYAML`/`variables.bulkText` are the §5.10 fixtures).
+  **Verification:** `pnpm --dir web-design typecheck` green for every batch-2 file (the one error in
+  the tree, `src/pages/ComposePage.tsx(88,5) TS2339: Property 'holdVolumeResolution' does not exist on
+  type 'PanelValue'`, is batch 3's in-flight edit — reported, not touched); `node --test
+  scripts/scene.test.mjs` 13 pass / 0 fail; `REGISTRY_ASSERT_KEYS=1 node --test
+  scripts/registry.test.mjs` — every remaining violation is a batch-3 `compose.*`/`volume.*` name (29
+  scene rows); no `projects.*`, `project.*` or `variables.*` name remains.

@@ -99,6 +99,20 @@ type PanelValue = {
   projects: Project[];
   refreshStatus: (composeId: number) => Promise<void>;
   restartCompose: (composeId: number) => Promise<void>;
+  /**
+   * Scene lever (ticket 02): re-mint (or re-mode) an open Volume Handle
+   * read-only — the seed hardcodes rw on uploads, and the Explorer's readonly
+   * scene needs an open ro handle. The shape stays the store's own.
+   */
+  seedHandleMode: (volumeId: string, mode: VolumeHandleMode) => void;
+  /**
+   * Scene lever (ticket 02, D4): hold a Compose's Volume resolution in flight
+   * forever — the `volumes:loading` scene's held skeleton. Deliberately
+   * outside `track`, so the frame still becomes ready while it holds.
+   */
+  holdVolumeResolution: () => void;
+  /** Scene lever (ticket 02, D4): hold one Volume's directory listing — `volume:loading`. */
+  holdVolumeListing: (volumeId: string) => void;
   /** A Compose's Volumes, or the CLI's error when they cannot be resolved. */
   resolveComposeVolumes: (composeId: number) => Promise<{ ok: true; volumes: Volume[] } | { ok: false; error: string }>;
   saveCompose: (composeId: number, yamlContent: string) => Promise<void>;
@@ -148,14 +162,16 @@ const SEEDED_HANDLE_STARTED_MINUTES_AGO = 22;
  * minutes ago and started 22 minutes ago. Relative to *now*, so it follows the
  * frozen clock rather than fighting it — the wall clock (possibly `?clock=`'s
  * patched `Date`) standalone, or the frame's `clock` prop inside a scene scope
- * (ticket 10), where `Date` is never patched.
+ * (ticket 10), where `Date` is never patched. `mode` is a parameter because
+ * ticket 02's readonly scene re-mints the seed's shape read-only; the seed
+ * itself keeps `rw`.
  */
-function seedHandle(volumeId: string, containerId: string, now: () => number): VolumeHandle {
+function seedHandle(volumeId: string, containerId: string, now: () => number, mode: VolumeHandleMode = 'rw'): VolumeHandle {
   return {
     composeId: Number(volumeId.split(':')[0]),
     containerId,
     gid: 999,
-    mode: 'rw',
+    mode,
     startedAt: new Date(now() - SEEDED_HANDLE_STARTED_MINUTES_AGO * 60_000).toISOString(),
     uid: 999,
     uidSource: 'container-inspect',
@@ -190,6 +206,13 @@ export function PanelProvider({ children, clock, overrides }: { children: ReactN
   const [handles, setHandles] = useState<Record<string, VolumeHandle>>(() =>
     seedHandles(overrides?.handles ?? [SEEDED_HANDLE.volumeId], () => clock ?? Date.now()),
   );
+  // Ticket 02's loading levers: which fetches a scene holds in flight. Armed
+  // at most once per frame, by an adapter, before the first fetch lands; a
+  // reviewer with no query string never arms one.
+  const [holds, setHolds] = useState<{ listing: ReadonlySet<string>; resolution: boolean }>(() => ({
+    listing: new Set<string>(),
+    resolution: false,
+  }));
 
   // Identity is stable for the mount's life (`clock` never changes on a live
   // frame), so the callbacks below may capture it without re-running effects.
@@ -326,12 +349,19 @@ export function PanelProvider({ children, clock, overrides }: { children: ReactN
    * way: React error #185, maximum update depth exceeded.
    */
   const resolveComposeVolumes = useCallback(
-    (composeId: number) =>
-      track(`volumes:${composeId}`, async () => {
+    (composeId: number) => {
+      // Ticket 02: a scene-armed hold keeps the resolution in flight forever —
+      // the `volumes:loading` scene's held skeleton. Deliberately *outside*
+      // `track`: the frame must still become ready while it holds.
+      if (holds.resolution) {
+        return new Promise<{ ok: true; volumes: Volume[] } | { ok: false; error: string }>(() => {});
+      }
+      return track(`volumes:${composeId}`, async () => {
         await wait(400);
         return resolveVolumes(composeId);
-      }),
-    [track, wait],
+      });
+    },
+    [holds.resolution, track, wait],
   );
 
   const startHandle = useCallback(
@@ -371,8 +401,11 @@ export function PanelProvider({ children, clock, overrides }: { children: ReactN
   );
 
   const listDir = useCallback(
-    (volumeId: string, path: string) =>
-      track(`browse:${volumeId}:${path}`, async () => {
+    (volumeId: string, path: string) => {
+      if (holds.listing.has(volumeId)) {
+        return new Promise<VolumeEntry[]>(() => {});
+      }
+      return track(`browse:${volumeId}:${path}`, async () => {
         await wait(500);
         touchHandle(volumeId);
         const reason = unreadableReason(volumeId, path);
@@ -380,9 +413,36 @@ export function PanelProvider({ children, clock, overrides }: { children: ReactN
           throw new Error(reason);
         }
         return listVolumeDir(volumeId, path);
-      }),
-    [touchHandle, track, wait],
+      });
+    },
+    [holds.listing, touchHandle, track, wait],
   );
+
+  const seedHandleMode = useCallback(
+    (volumeId: string, mode: VolumeHandleMode) => {
+      setHandles((current) => {
+        const existing = current[volumeId];
+        if (existing) {
+          return { ...current, [volumeId]: { ...existing, mode } };
+        }
+        return { ...current, [volumeId]: { ...seedHandle(volumeId, containerIdFor(volumeId), () => clock ?? Date.now()), mode } };
+      });
+    },
+    [clock],
+  );
+
+  const holdVolumeResolution = useCallback(() => {
+    setHolds((current) => (current.resolution ? current : { ...current, resolution: true }));
+  }, []);
+
+  const holdVolumeListing = useCallback((volumeId: string) => {
+    setHolds((current) => {
+      if (current.listing.has(volumeId)) return current;
+      const listing = new Set(current.listing);
+      listing.add(volumeId);
+      return { ...current, listing };
+    });
+  }, []);
 
   const readVolumeFile = useCallback(
     (volumeId: string, path: string) =>
@@ -415,11 +475,14 @@ export function PanelProvider({ children, clock, overrides }: { children: ReactN
       projects,
       readVolumeFile,
       resolveComposeVolumes,
+      seedHandleMode,
       speed,
       setSpeed,
       startHandle,
       stopHandle,
       writeVolumeFile,
+      holdVolumeListing,
+      holdVolumeResolution,
       isPending: (key) => Boolean(pending[key]),
 
       createProject: (input) =>
@@ -641,6 +704,8 @@ export function PanelProvider({ children, clock, overrides }: { children: ReactN
       activity,
       checkedAt,
       handles,
+      holdVolumeListing,
+      holdVolumeResolution,
       lifecycle,
       listDir,
       loadMetrics,
@@ -653,6 +718,7 @@ export function PanelProvider({ children, clock, overrides }: { children: ReactN
       readVolumeFile,
       record,
       resolveComposeVolumes,
+      seedHandleMode,
       speed,
       startHandle,
       stopHandle,

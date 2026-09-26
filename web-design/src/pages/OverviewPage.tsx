@@ -9,8 +9,10 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Card, Col, Empty, Flex, List, Row, Table, Tag, Timeline, Tooltip, Typography, theme } from 'antd';
+import { useLayoutEffect } from 'react';
 import { navigate, paths } from '../app/router';
 import { useUiState } from '../app/uiState';
+import { publishSceneHandle } from '../app/sceneAdapters';
 import { ComposeStatusInline, ComposeStatusTag, PageHeader, RelativeTime, StatCard } from '../components/primitives';
 import { LiveHandlesBanner } from '../components/LiveHandlesBanner';
 import { usePanel } from '../data/store';
@@ -36,6 +38,24 @@ export function OverviewPage() {
   const { activity, projects, refreshStatus } = usePanel();
   const { token } = theme.useToken();
   const [refreshing, setRefreshing] = useUiState('overview.refreshing', false);
+  // Ticket 02: the attention list below is derived from the store's composes,
+  // so the all-clear scene has no boolean to force — `overview.attentionClear`
+  // is the declared fiction the derivations consult instead (this list, and
+  // AppShell's refresh badge). `?ui=overview.attentionClear=1` forces it
+  // directly; the `seed:overview.allClear` adapter reaches the same state
+  // through this setter. A *layout* effect, deliberately: the scoped
+  // AfterRunner's passive effect runs before sibling children's passive
+  // effects, so a handle published in a plain effect is not in place yet when
+  // a board-driven adapter reads it.
+  const [attentionClear, setAttentionClear] = useUiState('overview.attentionClear', false);
+
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('overview.attention.seed.page', () => {
+        setAttentionClear(true);
+      }),
+    [setAttentionClear],
+  );
 
   const flat: FlatCompose[] = projects.flatMap((project) =>
     project.environments.flatMap((environment) =>
@@ -50,10 +70,12 @@ export function OverviewPage() {
   );
 
   const rollup = summarize(flat.map((entry) => entry.compose));
-  const attention = flat.filter(({ compose }) => {
-    const state = composeState(compose.status, compose.lastDeployedAt);
-    return state === 'partial' || (state === 'stopped' && compose.status.total > 0) || compose.services.some((service) => service.health === 'unhealthy');
-  });
+  const attention: FlatCompose[] = attentionClear
+    ? []
+    : flat.filter(({ compose }) => {
+        const state = composeState(compose.status, compose.lastDeployedAt);
+        return state === 'partial' || (state === 'stopped' && compose.status.total > 0) || compose.services.some((service) => service.health === 'unhealthy');
+      });
 
   const refreshAll = async () => {
     setRefreshing(true);

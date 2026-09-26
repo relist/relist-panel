@@ -22,6 +22,8 @@ import type { Volume, VolumeEntry, VolumeExistence } from './types';
  *  - Compose 3 (`metrics`) has never been deployed, so its Volumes cannot be
  *    resolved at all — the tab's unavailable state.
  *  - Compose 4 (`staging` web) resolves to an empty list, for the empty state.
+ *  - Its uploads Volume is nearly full (512 KiB free, ticket 02): the
+ *    upload-no-space refusal is a fact about the Volume, not a painted flag.
  */
 
 const DATA_DIR = '/var/lib/relist-panel';
@@ -185,6 +187,24 @@ export const unreadablePaths: Record<string, string[]> = {
 export function unreadableReason(volumeId: string, path: string): string | undefined {
   if (!unreadablePaths[volumeId]?.includes(normalizeDirPath(path))) return undefined;
   return 'openat: permission denied — the Volume Handle runs as uid 999 and this directory is 0700 root:root';
+}
+
+/**
+ * Declared free space, for the upload-refusal scene (`seed:volume.uploadNoSpace`,
+ * ticket 02): uploads is nearly full, so a file well under the upload cap still
+ * does not fit on the Volume. Mirrors `unreadablePaths` — the refusal carries
+ * the helper's own words and is a fact about the Volume, consulted where the
+ * incoming size is known (the Explorer's `upload`).
+ */
+export const volumeFreeBytes: Record<string, number> = {
+  '1:/app/uploads': 524_288,
+};
+
+/** Why a write of `incomingBytes` would be refused, the way the helper would say it. */
+export function volumeWriteRefusal(volumeId: string, incomingBytes: number): string | undefined {
+  const free = volumeFreeBytes[volumeId];
+  if (free === undefined || incomingBytes <= free) return undefined;
+  return `write: no space left on device — ${incomingBytes} bytes does not fit in ${free} bytes free on ${volumeId}`;
 }
 
 /** A file above the editor's cap. Opening it refuses rather than hanging Monaco. */

@@ -37,9 +37,11 @@ import {
   theme,
 } from 'antd';
 import type { MenuProps } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { navigate, paths } from '../app/router';
+import { publishSceneHandle } from '../app/sceneAdapters';
+import { useUiState } from '../app/uiState';
 import { ComposeVolumesTab } from '../components/ComposeVolumesTab';
 import { DangerModal } from '../components/DangerModal';
 import { FullscreenEditor } from '../components/FullscreenEditor';
@@ -83,6 +85,7 @@ export function ComposePage({
     deleteCompose,
     deployCompose,
     handles,
+    holdVolumeResolution,
     isPending,
     loadLogs,
     projects,
@@ -100,28 +103,57 @@ export function ComposePage({
   const environment = location?.environment;
   const project = location?.project;
 
-  const [draft, setDraft] = useState(compose?.yamlContent ?? '');
-  const [fullscreenOpen, setFullscreenOpen] = useState(false);
-  const [logsOpen, setLogsOpen] = useState(false);
+  // Ticket 02: the visible state reads through `useUiState` under keys
+  // declared in `app/uiKeys.ts`. `logsText` stays plain `useState` — EXCLUDED
+  // as data (`loadLogs`), the audit's stated rule.
+  const [draft, setDraft] = useUiState('compose.draft', compose?.yamlContent ?? '');
+  const [fullscreenOpen, setFullscreenOpen] = useUiState('compose.fullscreenOpen', false);
+  const [logsOpen, setLogsOpen] = useUiState('compose.logsOpen', false);
   const [logsText, setLogsText] = useState<string>();
-  const [logsLoading, setLogsLoading] = useState(false);
-  const [logServices, setLogServices] = useState<string[]>([]);
-  const [logLines, setLogLines] = useState(200);
-  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [logsLoading, setLogsLoading] = useUiState('compose.logsLoading', false);
+  // Ticket 02, decision D1: the service filter is an array, never a `?ui=`
+  // literal — a forced value is the one service name the URL carried,
+  // normalized just below; the Select's own onChange keeps storing the array.
+  const [logServices, setLogServices] = useUiState<string | string[]>('compose.logServices', []);
+  const [logLines, setLogLines] = useUiState('compose.logLines', 200);
+  const [deleteOpen, setDeleteOpen] = useUiState('compose.deleteOpen', false);
+  // The header's More menu (audit §2): forced open through the controlled
+  // `open` the Dropdown already supports.
+  const [moreOpen, setMoreOpen] = useUiState('compose.moreOpen', false);
+  const selectedLogServices = Array.isArray(logServices) ? logServices : logServices === '' ? [] : [logServices];
 
+  // Ticket 02, decision D3's carve-out: this effect is a data load, not an
+  // overlay reset, so it keeps running exactly as before — a forced
+  // `compose.draft` value is clobbered by it, and the dirty state is
+  // delivered by the `fixture:compose.draft` adapter instead (audit §5.10).
   useEffect(() => {
     setDraft(compose?.yamlContent ?? '');
   }, [compose?.id, compose?.yamlContent]);
 
+  // Ticket 02, decision D3: this reset used to run whenever `composeId` was in
+  // its deps — including the mount itself, wiping a forced
+  // `?ui=compose.logServices=…` before it could paint. Keyed on the id
+  // *transition* instead: switching Composes still clears the fetched text and
+  // the service filter, a cold load keeps its forced value, and with no query
+  // string nothing moves.
+  const previousComposeId = useRef(composeId);
   useEffect(() => {
+    if (previousComposeId.current === composeId) return;
+    previousComposeId.current = composeId;
     setLogsText(undefined);
     setLogServices([]);
-  }, [composeId]);
+  }, [composeId, setLogServices, setLogsText]);
 
   // The full screen editor must never outlive the Compose it was opened for.
+  // Ticket 02, decision D3: re-keyed from "runs on mount" to "runs on the
+  // composeId transition", so a forced `?ui=compose.fullscreenOpen=1` survives
+  // a cold load and a real Compose switch still closes it.
+  const previousFullscreenComposeId = useRef(composeId);
   useEffect(() => {
+    if (previousFullscreenComposeId.current === composeId) return;
+    previousFullscreenComposeId.current = composeId;
     setFullscreenOpen(false);
-  }, [composeId]);
+  }, [composeId, setFullscreenOpen]);
 
   // The URL is the source of truth for navigation, so a stale path (renamed
   // parent, hand-edited hash) is redirected to the canonical one — tab included,
@@ -143,11 +175,11 @@ export function ComposePage({
   const logLineList = useMemo(() => (logsText ? logsText.split('\n') : []), [logsText]);
   const visibleLogLines = useMemo(() => {
     const byService =
-      logServices.length === 0
+      selectedLogServices.length === 0
         ? logLineList
-        : logLineList.filter((line) => logServices.some((service) => line.trimStart().startsWith(service)));
+        : logLineList.filter((line) => selectedLogServices.some((service) => line.trimStart().startsWith(service)));
     return byService.slice(-logLines);
-  }, [logLineList, logLines, logServices]);
+  }, [logLineList, logLines, selectedLogServices]);
 
   if (!compose || !environment || !project) {
     return (
@@ -212,6 +244,59 @@ export function ComposePage({
 
   const relatedActivity = activity.filter((entry) => entry.target === paths.compose(project.id, environment.id, compose.id));
 
+  // ---------------------------------------------------------------------------
+  // Ticket 02 — this screen's half of the scene adapters. Each closure is
+  // published in a *layout* effect with no deps, so the handle exists before
+  // the scope's AfterRunner (a prior sibling in the tree) runs the frame's
+  // `after:` adapter in its own passive effect — an ordinary effect would
+  // publish one flush too late — and stays the freshest render's closure.
+  // With no query string none of these ever run.
+  // ---------------------------------------------------------------------------
+
+  // `fixture:compose.draft` — the mount reset above keeps running (decision
+  // D3's carve-out), so the seed defers past it and lands the offending draft
+  // through the app's own setter.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('compose.draft.seed', () => {
+        if (!compose) return;
+        window.setTimeout(() => {
+          setDraft(`${compose.yamlContent}\n# unsaved: bumped the api image to 2.15.0 — deploy will not ship this until Save\n`);
+        }, 0);
+      }),
+  );
+
+  // `submit:compose.editor.save` — the editor's own save with an explicit next
+  // draft: the handler reads `draft` from its closure, so the adapter passes
+  // the value instead.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('compose.draft.save', (next: string) => {
+        if (!compose) return;
+        setDraft(next);
+        void saveCompose(compose.id, next).then(() => message.success('Saved docker-compose.yml'));
+      }),
+  );
+
+  // `submit:compose.delete.typed` — the DangerModal's own onConfirm; a scene
+  // forces `compose.deleteOpen` and `danger.typed`, then names the adapter.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('compose.delete.confirm', () => {
+        if (!compose || !environment || !project) return;
+        void deleteCompose(compose.id).then(() => {
+          setDeleteOpen(false);
+          message.success(`Deleted ${compose.name}`);
+          navigate(paths.environment(project.id, environment.id));
+        });
+      }),
+  );
+
+  // `volumes:loading` — the Volumes tab's resolution is excluded as data (the
+  // tab's own state), so the hold is a store lever armed here on the tab's
+  // behalf: this page shares the frame's PanelProvider with it.
+  useLayoutEffect(() => publishSceneHandle('volumes.loading.hold', () => holdVolumeResolution()));
+
   return (
     <>
       <PageHeader
@@ -239,7 +324,7 @@ export function ComposePage({
             <Button icon={<FileTextOutlined />} onClick={() => void openLogs()}>
               Logs
             </Button>
-            <Dropdown menu={{ items: moreMenu }} placement="bottomRight" trigger={['click']}>
+            <Dropdown menu={{ items: moreMenu }} onOpenChange={setMoreOpen} open={moreOpen} placement="bottomRight" trigger={['click']}>
               <Button icon={<MoreOutlined />} />
             </Dropdown>
             <Button
@@ -591,7 +676,7 @@ export function ComposePage({
             options={compose.services.map((service) => ({ label: service.name, value: service.name }))}
             placeholder="All services"
             style={{ minWidth: 240 }}
-            value={logServices}
+            value={selectedLogServices}
           />
           <Select
             onChange={setLogLines}

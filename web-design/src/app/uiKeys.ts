@@ -65,6 +65,82 @@ export const SCREEN_UI_KEYS: readonly string[] = [
   'startHandle.mode',
   'startHandle.uid',
   'startHandle.gid',
+  // Ticket 02 integration (batch-1 gaps): the account `Dropdown` has no state
+  // of its own to swap, so the menu is forced through its own controlled
+  // `open` (audit §2, second table).
+  'shell.accountMenu',
+  // The Overview attention fiction: the attention list is *derived* from the
+  // store's composes, so the all-clear scene has no boolean to force — this
+  // key is what the derivations consult instead of their computation (the
+  // OverviewPage list, and AppShell's refresh badge, which counts the same
+  // Composes). The `seed:overview.allClear` adapter drives the same state
+  // through the owning setters, so the registry's `after:`-named scene needs
+  // no registry edit.
+  'overview.attentionClear',
+  // pages/ProjectsPage.tsx — ticket 02, batch 2. `editing`/`deleting` hold a
+  // `Project` (D1: seeded only through the `object:` adapters, never a URL
+  // literal); `rowMenu` is the per-row ⋯ menu family (D2).
+  'projects.query',
+  'projects.sort',
+  'projects.view',
+  'projects.modalOpen',
+  'projects.editing',
+  'projects.deleting',
+  'projects.rowMenu.*',
+  // pages/ProjectPage.tsx — batch 2. `composeYAML` is a whole YAML document
+  // (§5.10: reached through `fixture:project.composeYAML`, not a URL literal)
+  // and `deletingCompose` holds a `Compose` (D1, via
+  // `object:project.deletingCompose`); `rowMenu`/`deleteEnv` are the per-row
+  // menu and delete-Popconfirm families (D2).
+  'project.environmentModalOpen',
+  'project.composeModalOpen',
+  'project.composeYAML',
+  'project.deletingCompose',
+  'project.deleteProjectOpen',
+  'project.rowMenu.*',
+  'project.deleteEnv.*',
+  // components/VariablesPanel.tsx — batch 2. `revealed` and `deletePopconfirm`
+  // are one instance per variable row (families, D2, audit §5.5); `editing`
+  // holds an `EnvironmentVariable` (D1) and `bulkText` is the paste-a-`.env`
+  // document (§5.10, via the `fixture:variables.bulk*` adapters).
+  'variables.query',
+  'variables.editing',
+  'variables.modalOpen',
+  'variables.bulkOpen',
+  'variables.bulkText',
+  'variables.revealed.*',
+  'variables.deletePopconfirm.*',
+  // pages/ComposePage.tsx — ticket 02, batch 3. `draft` is a whole YAML
+  // document whose mount reset keeps running (D3's carve-out), so the dirty
+  // state is delivered by the `fixture:compose.draft` adapter (§5.10), not a
+  // URL literal; `logServices` is an array — a forced value is the one service
+  // name the URL carried, normalized by the screen (D1); `moreOpen` is the
+  // header ⋯ menu forced through its controlled `open` (audit §2).
+  'compose.draft',
+  'compose.fullscreenOpen',
+  'compose.logsOpen',
+  'compose.logsLoading',
+  'compose.logServices',
+  'compose.logLines',
+  'compose.deleteOpen',
+  'compose.moreOpen',
+  // pages/VolumeExplorerPage.tsx — batch 3. `editing` holds
+  // `{contents, path}` and `editorTooLarge` a `VolumeEntry` (D1: seeded only
+  // through the `object:volume.*` adapters, via `openFile`); `rowMenu` and
+  // `deletePopconfirm` are one instance per entry row (families, D2, §5.5).
+  'volume.resolutionError',
+  'volume.browseError',
+  'volume.startOpen',
+  'volume.editing',
+  'volume.editorTooLarge',
+  'volume.uploadError',
+  'volume.downloadOpen',
+  'volume.newEntry',
+  'volume.newEntryName',
+  'volume.expiredHere',
+  'volume.archiveFormat',
+  'volume.rowMenu.*',
+  'volume.deletePopconfirm.*',
 ];
 
 /**

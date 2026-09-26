@@ -1,8 +1,9 @@
 import { ReloadOutlined, RocketOutlined } from '@ant-design/icons';
 import { Badge, Button, Card, Col, Descriptions, Flex, Row, Segmented, Select, Skeleton, Typography } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CODE_FONT_STACK, SERVICE_STATE_META } from '../app/theme';
 import { useUiState } from '../app/uiState';
+import { publishSceneHandle } from '../app/sceneAdapters';
 import { usePanel } from '../data/store';
 import type { Compose, MetricWindow, ServiceSample } from '../data/types';
 import { SERVICE_METRIC_WINDOWS } from '../data/types';
@@ -123,9 +124,26 @@ export function ServiceMonitor({ compose, onOpenEditor }: { compose: Compose; on
   const [pickedService, setPickedService] = useUiState<string | undefined>('monitor.service', undefined);
   const [metricWindow, setMetricWindow] = useUiState<MetricWindow>('monitor.window', '1h');
   // EXCLUDED (ticket 02) — data; store latency. `loading`/`result` are the
-  // fetch and its answer, not screen state a `?ui=` string can name.
+  // fetch and its answer, not screen state a `?ui=` string can name. The
+  // loading *scene* (`after: 'monitor:loading'`) holds the fetch's own loading
+  // state through the recipe published below (same mechanism as
+  // MonitoringPage): the pin makes the load's `finally` leave the skeletons up
+  // when the fetch answers. Without an `after` name this is today's code path.
   const [loading, setLoading] = useState(true);
   const [result, setResult] = useState<{ samples: ServiceSample[]; service: string; window: MetricWindow }>();
+
+  // A *layout* effect, deliberately: the scoped AfterRunner's passive effect
+  // runs before sibling children's passive effects, so a handle published in
+  // a plain effect is not in place yet when a board-driven adapter reads it.
+  const loadingHold = useRef(false);
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('monitor.loading.hold', () => {
+        loadingHold.current = true;
+        setLoading(true);
+      }),
+    [],
+  );
 
   // The selection is a name, not an index: after a deploy the services array is
   // rebuilt, and an index would point at whichever service happened to move.
@@ -138,7 +156,9 @@ export function ServiceMonitor({ compose, onOpenEditor }: { compose: Compose; on
       try {
         setResult({ samples: await loadServiceMetrics(compose.id, name, next), service: name, window: next });
       } finally {
-        setLoading(false);
+        // The scene's hold keeps the skeleton up even after the fetch answers —
+        // the frame is reviewed mid-load on purpose.
+        if (!loadingHold.current) setLoading(false);
       }
     },
     [compose.id, loadServiceMetrics],

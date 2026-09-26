@@ -1,11 +1,12 @@
 import { ReloadOutlined } from '@ant-design/icons';
 import { Button, Card, Col, Row, Segmented, Skeleton, Typography } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { MetricChart, summarizeMetric } from '../components/MetricChart';
 import type { MetricChartState, MetricPoint, MetricSeries, MetricSummary, MetricUnit } from '../components/MetricChart';
 import { PageHeader } from '../components/primitives';
 import { usePanel } from '../data/store';
 import { useUiState } from '../app/uiState';
+import { publishSceneHandle } from '../app/sceneAdapters';
 import type { MetricSample, MetricWindow } from '../data/types';
 import { METRIC_WINDOWS } from '../data/types';
 
@@ -131,8 +132,27 @@ export function MonitoringPage() {
   // EXCLUDED (ticket 02, decision D4) — store-fetched data, following the
   // identical `ServiceMonitor` pair: the mount `load()` below is not an overlay
   // reset, so it keeps running as-is and would overwrite any forced value.
+  // The loading *scene* (`after: 'monitoring:loading'`) therefore holds the
+  // fetch's own loading state through the recipe published below: pinning the
+  // hold makes the load's `finally` leave the skeleton up when the fetch
+  // answers, which is the one way a data state can be held without a second
+  // fixture or a slower seed. Without an `after` name the ref stays false and
+  // this is today's code path exactly.
   const [loading, setLoading] = useState(true);
   const [result, setResult] = useState<{ samples: MetricSample[]; window: MetricWindow }>();
+
+  // A *layout* effect, deliberately: the scoped AfterRunner's passive effect
+  // runs before sibling children's passive effects, so a handle published in
+  // a plain effect is not in place yet when a board-driven adapter reads it.
+  const loadingHold = useRef(false);
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('monitoring.loading.hold', () => {
+        loadingHold.current = true;
+        setLoading(true);
+      }),
+    [],
+  );
 
   const load = useCallback(
     async (next: MetricWindow) => {
@@ -140,7 +160,9 @@ export function MonitoringPage() {
       try {
         setResult({ samples: await loadMetrics(next), window: next });
       } finally {
-        setLoading(false);
+        // The scene's hold keeps the skeleton up even after the fetch answers —
+        // the frame is reviewed mid-load on purpose.
+        if (!loadingHold.current) setLoading(false);
       }
     },
     [loadMetrics],

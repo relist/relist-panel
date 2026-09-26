@@ -28,14 +28,17 @@ import {
   theme,
 } from 'antd';
 import type { MenuProps } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo } from 'react';
 import { navigate, paths } from '../app/router';
+import { publishSceneHandle } from '../app/sceneAdapters';
+import type { SceneForm } from '../app/sceneAdapters';
+import { useUiState } from '../app/uiState';
 import { DangerModal } from '../components/DangerModal';
 import { ComposeStatusInline, ComposeStatusTag, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { VariablesPanel } from '../components/VariablesPanel';
 import { YamlEditor } from '../components/YamlEditor';
 import { usePanel } from '../data/store';
-import type { Compose } from '../data/types';
+import type { Compose, Environment, Project } from '../data/types';
 import { composeState, projectComposes, summarize } from '../data/types';
 import { useSceneContainer } from '../scenes/scope';
 
@@ -54,6 +57,53 @@ const STARTER_YAML = `services:
 type TabKey = 'composes' | 'settings' | 'variables';
 
 /**
+ * One Compose row's ⋯ menu. Ticket 02, decision D2: per-row state is addressed
+ * by naming the row in the key (`?ui=project.rowMenu.web=1` opens exactly web's
+ * menu), so the controlled `open` lives here, once per rendered row. With no
+ * query string the state starts closed and the click opens it exactly as the
+ * uncontrolled `trigger` did.
+ */
+function ComposeRowMenu({ compose, menu }: { compose: Compose; menu: MenuProps['items'] }) {
+  const [open, setOpen] = useUiState(`project.rowMenu.${compose.name}`, false);
+  return (
+    <Dropdown menu={{ items: menu }} onOpenChange={setOpen} open={open} placement="bottomRight" trigger={['click']}>
+      <Button icon={<MoreOutlined />} size="small" type="text" />
+    </Dropdown>
+  );
+}
+
+/**
+ * One row of the Environments table's delete confirm (audit §5.5's per-row
+ * `Popconfirm`, addressed as `?ui=project.deleteEnv.staging=1`). Confirming
+ * stays the caller's real `onConfirm`; only the open state is addressable.
+ */
+function DeleteEnvironmentButton({
+  environment,
+  loading,
+  onDelete,
+}: {
+  environment: Environment;
+  loading: boolean;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useUiState(`project.deleteEnv.${environment.name}`, false);
+  return (
+    <Popconfirm
+      cancelText="Keep"
+      description={`This stops and removes every Compose in it (${environment.composes.length}).`}
+      okButtonProps={{ danger: true }}
+      okText="Delete"
+      onConfirm={onDelete}
+      onOpenChange={setOpen}
+      open={open}
+      title={`Delete ${environment.name}?`}
+    >
+      <Button danger icon={<DeleteOutlined />} loading={loading} size="small" type="text" />
+    </Popconfirm>
+  );
+}
+
+/**
  * Project page. One tab level instead of the previous two (Environments as
  * Tabs *and* Overview/Variables/Composes as Tabs nested inside them): the
  * Environment is a switcher, the sections are the tabs. Which Environment you
@@ -66,11 +116,15 @@ export function ProjectPage({ environmentId, projectId, tab }: { environmentId?:
   const [projectForm] = Form.useForm<{ name: string; description: string }>();
   const [environmentForm] = Form.useForm<{ name: string }>();
   const [composeForm] = Form.useForm<{ name: string }>();
-  const [environmentModalOpen, setEnvironmentModalOpen] = useState(false);
-  const [composeModalOpen, setComposeModalOpen] = useState(false);
-  const [composeYAML, setComposeYAML] = useState('');
-  const [deletingCompose, setDeletingCompose] = useState<Compose>();
-  const [deleteProjectOpen, setDeleteProjectOpen] = useState(false);
+  const [environmentModalOpen, setEnvironmentModalOpen] = useUiState('project.environmentModalOpen', false);
+  const [composeModalOpen, setComposeModalOpen] = useUiState('project.composeModalOpen', false);
+  // `composeYAML` is a whole YAML document (audit §5.10) — a `?ui=` literal
+  // cannot carry it, so the `fixture:project.composeYAML` adapter seeds
+  // `STARTER_YAML` through this screen's own setter. `deletingCompose` holds a
+  // `Compose` (decision D1) — seeded via the `object:` adapter, likewise.
+  const [composeYAML, setComposeYAML] = useUiState('project.composeYAML', '');
+  const [deletingCompose, setDeletingCompose] = useUiState<Compose | undefined>('project.deletingCompose', undefined);
+  const [deleteProjectOpen, setDeleteProjectOpen] = useUiState('project.deleteProjectOpen', false);
   const sceneContainer = useSceneContainer();
 
   const project = projects.find((candidate) => candidate.id === projectId);
@@ -86,6 +140,101 @@ export function ProjectPage({ environmentId, projectId, tab }: { environmentId?:
   }, [project, projectForm]);
 
   const composes = useMemo(() => (activeEnvironment ? activeEnvironment.composes : []), [activeEnvironment]);
+
+  // The DangerModals' own confirms, with the target explicit so the scene
+  // harness can invoke them for a seeded state (the OK click passes the state
+  // through). Both stay exactly what they were as inline handlers.
+  const confirmDeleteCompose = (target: Compose) => {
+    const name = target.name;
+    void deleteCompose(target.id).then(() => {
+      setDeletingCompose(undefined);
+      message.success(`Deleted ${name}`);
+    });
+  };
+
+  const confirmDeleteProject = (target: Project) => {
+    void deleteProject(target.id).then(() => {
+      setDeleteProjectOpen(false);
+      message.success(`Deleted ${target.name}`);
+      navigate(paths.projects);
+    });
+  };
+
+  // Ticket 02: the scene adapters reach this screen's own transitions through
+  // these handles. Each is idempotent — a seed finds its target already set, a
+  // submit replays onto the same form.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle<SceneForm>('project.environment.form', {
+        setFieldsValue: (values) => environmentForm.setFieldsValue(values as { name: string }),
+        submit: () => environmentForm.submit(),
+      }),
+    [environmentForm],
+  );
+
+  useLayoutEffect(
+    () =>
+      publishSceneHandle<SceneForm>('project.compose.form', {
+        setFieldsValue: (values) => composeForm.setFieldsValue(values as { name: string }),
+        submit: () => composeForm.submit(),
+      }),
+    [composeForm],
+  );
+
+  // The Settings form needs no values: the screen's own effect prefills it from
+  // the project, so a submit is the real "Saved Project details" transition.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle<SceneForm>('project.settings.form', {
+        setFieldsValue: (values) => projectForm.setFieldsValue(values as { description: string; name: string }),
+        submit: () => projectForm.submit(),
+      }),
+    [projectForm],
+  );
+
+  // §5.10: the New Compose YAML is a whole document, seeded as the screen's own
+  // "Insert an example" hands it over.
+  useLayoutEffect(
+    () => publishSceneHandle('project.composeYAML.fixture', () => setComposeYAML(STARTER_YAML)),
+    [setComposeYAML],
+  );
+
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('project.deletingCompose.seed', () => {
+        const target = composes.find((candidate) => candidate.name === 'web') ?? composes[0];
+        setDeletingCompose((current) => current ?? target);
+      }),
+    [composes, setDeletingCompose],
+  );
+
+  // The typed-name flow completed (audit §3b): open the confirm seeded, then
+  // invoke the real handler. The typed state itself is `danger.typed`.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('project.deleteCompose.flow', () => {
+        const target = composes.find((candidate) => candidate.name === 'web') ?? composes[0];
+        if (target) {
+          setDeletingCompose(target);
+          confirmDeleteCompose(target);
+        }
+      }),
+    [composes, confirmDeleteCompose, setDeletingCompose],
+  );
+
+  // Scene `project-zero-envs`: project 4 ("blog") has one Environment, and a
+  // Project with none is exactly its absence — removed through the store's own
+  // deleteEnvironment, readiness waiting for the delete to settle.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('project.zeroEnvs.seed', () => {
+        if (!project) return;
+        for (const environment of environments) {
+          void deleteEnvironment(project.id, environment.id);
+        }
+      }),
+    [deleteEnvironment, environments, project],
+  );
 
   if (!project) {
     return (
@@ -309,9 +458,7 @@ export function ProjectPage({ environmentId, projectId, tab }: { environmentId?:
                                       Deploy
                                     </Button>
                                   )}
-                                  <Dropdown menu={{ items: rowMenu(compose) }} placement="bottomRight" trigger={['click']}>
-                                    <Button icon={<MoreOutlined />} size="small" type="text" />
-                                  </Dropdown>
+                                  <ComposeRowMenu compose={compose} menu={rowMenu(compose)} />
                                 </Space>
                               ),
                               title: '',
@@ -392,12 +539,10 @@ export function ProjectPage({ environmentId, projectId, tab }: { environmentId?:
                           {
                             key: 'actions',
                             render: (_value, environment) => (
-                              <Popconfirm
-                                cancelText="Keep"
-                                description={`This stops and removes every Compose in it (${environment.composes.length}).`}
-                                okButtonProps={{ danger: true }}
-                                okText="Delete"
-                                onConfirm={() => {
+                              <DeleteEnvironmentButton
+                                environment={environment}
+                                loading={isPending(`delete-environment:${environment.id}`)}
+                                onDelete={() => {
                                   void deleteEnvironment(project.id, environment.id).then(() => {
                                     message.success(`Deleted Environment ${environment.name}`);
                                     if (environment.id === activeEnvironment?.id) {
@@ -405,10 +550,7 @@ export function ProjectPage({ environmentId, projectId, tab }: { environmentId?:
                                     }
                                   });
                                 }}
-                                title={`Delete ${environment.name}?`}
-                              >
-                                <Button danger icon={<DeleteOutlined />} loading={isPending(`delete-environment:${environment.id}`)} size="small" type="text" />
-                              </Popconfirm>
+                              />
                             ),
                             title: '',
                             width: 70,
@@ -542,12 +684,7 @@ export function ProjectPage({ environmentId, projectId, tab }: { environmentId?:
         okText="Delete Compose"
         onCancel={() => setDeletingCompose(undefined)}
         onConfirm={() => {
-          if (!deletingCompose) return;
-          const name = deletingCompose.name;
-          void deleteCompose(deletingCompose.id).then(() => {
-            setDeletingCompose(undefined);
-            message.success(`Deleted ${name}`);
-          });
+          if (deletingCompose) confirmDeleteCompose(deletingCompose);
         }}
         open={Boolean(deletingCompose)}
         title="Delete this Compose?"
@@ -564,13 +701,7 @@ export function ProjectPage({ environmentId, projectId, tab }: { environmentId?:
         loading={isPending(`delete-project:${project.id}`)}
         okText="Delete Project"
         onCancel={() => setDeleteProjectOpen(false)}
-        onConfirm={() => {
-          void deleteProject(project.id).then(() => {
-            setDeleteProjectOpen(false);
-            message.success(`Deleted ${project.name}`);
-            navigate(paths.projects);
-          });
-        }}
+        onConfirm={() => confirmDeleteProject(project)}
         open={deleteProjectOpen}
         title="Delete this Project?"
       />

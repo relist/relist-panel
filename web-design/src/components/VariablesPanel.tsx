@@ -1,13 +1,63 @@
 import { DeleteOutlined, EditOutlined, EyeInvisibleOutlined, EyeOutlined, PlusOutlined, SearchOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { Alert, App, Button, Card, Flex, Form, Input, Modal, Popconfirm, Space, Table, Tag, Tooltip, Typography, theme } from 'antd';
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo } from 'react';
 import { CODE_FONT_STACK } from '../app/theme';
+import { publishSceneHandle } from '../app/sceneAdapters';
+import { useUiState } from '../app/uiState';
 import { EmptyState, RelativeTime } from './primitives';
 import { usePanel } from '../data/store';
 import type { Environment, EnvironmentVariable } from '../data/types';
 import { useSceneContainer } from '../scenes/scope';
 
 const { Text, Paragraph } = Typography;
+
+/**
+ * The fixture `.env` the paste scenes seed (ticket 02, audit §3b: the paste is
+ * the state; §5.10: a document, so it arrives through the
+ * `fixture:variables.bulk*` adapters, not a URL literal). It exercises the
+ * parser's stated shape: comments, quoted values, secrets.
+ */
+const BULK_FIXTURE = `DATABASE_URL=postgres://app:pw@db:5432/app
+LOG_LEVEL=info
+STRIPE_WEBHOOK_SECRET=whsec_9f27kad81m2v
+TZ="Asia/Bangkok"
+# comments are ignored
+FEATURE_FLAGS=variant-a`;
+
+/** The duplicate-key refusal: one repeated key is enough to disable the OK. */
+const BULK_FIXTURE_DUPLICATE = `${BULK_FIXTURE}
+LOG_LEVEL=debug`;
+
+/**
+ * One variable row's delete confirm (audit §5.5's per-row `Popconfirm`,
+ * addressed as `?ui=variables.deletePopconfirm.DATABASE_URL=1`). Confirming
+ * stays the caller's real `onConfirm`; only the open state is addressable.
+ */
+function DeleteVariableButton({
+  loading,
+  onDelete,
+  variable,
+}: {
+  loading: boolean;
+  onDelete: () => void;
+  variable: EnvironmentVariable;
+}) {
+  const [open, setOpen] = useUiState(`variables.deletePopconfirm.${variable.key}`, false);
+  return (
+    <Popconfirm
+      cancelText="Keep"
+      description="Composes pick this up on their next deploy."
+      okButtonProps={{ danger: true }}
+      okText="Delete"
+      onConfirm={onDelete}
+      onOpenChange={setOpen}
+      open={open}
+      title={`Delete ${variable.key}?`}
+    >
+      <Button danger icon={<DeleteOutlined />} loading={loading} size="small" type="text" />
+    </Popconfirm>
+  );
+}
 
 /** `.env` parsing for the bulk editor. Mirrors what `docker compose` accepts. */
 export function parseDotEnv(text: string): { key: string; value: string }[] {
@@ -29,7 +79,9 @@ export function parseDotEnv(text: string): { key: string; value: string }[] {
 }
 
 function ValueCell({ variable }: { variable: EnvironmentVariable }) {
-  const [revealed, setRevealed] = useState(false);
+  // Ticket 02, decision D2: reveal is per row, addressed by naming the key —
+  // `?ui=variables.revealed.DATABASE_URL=1` reveals exactly that row.
+  const [revealed, setRevealed] = useUiState(`variables.revealed.${variable.key}`, false);
   const masked = '•'.repeat(Math.min(16, Math.max(8, variable.value.length)));
 
   return (
@@ -61,11 +113,15 @@ export function VariablesPanel({ environment }: { environment: Environment }) {
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const [form] = Form.useForm<{ key: string; value: string }>();
-  const [query, setQuery] = useState('');
-  const [editing, setEditing] = useState<EnvironmentVariable>();
-  const [modalOpen, setModalOpen] = useState(false);
-  const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkText, setBulkText] = useState('');
+  const [query, setQuery] = useUiState('variables.query', '');
+  // `editing` holds an `EnvironmentVariable` and `bulkText` a whole `.env`
+  // document (audit §1, CONVERT* / §5.10) — never forced by a URL literal
+  // (ticket 02, decision D1): the `object:`/`fixture:` adapters seed them
+  // through this panel's own setters, via the handles published below.
+  const [editing, setEditing] = useUiState<EnvironmentVariable | undefined>('variables.editing', undefined);
+  const [modalOpen, setModalOpen] = useUiState('variables.modalOpen', false);
+  const [bulkOpen, setBulkOpen] = useUiState('variables.bulkOpen', false);
+  const [bulkText, setBulkText] = useUiState('variables.bulkText', '');
   const sceneContainer = useSceneContainer();
 
   const visible = useMemo(() => {
@@ -88,6 +144,28 @@ export function VariablesPanel({ environment }: { environment: Environment }) {
     form.setFieldsValue({ key: variable.key, value: variable.value });
     setModalOpen(true);
   };
+
+  // Ticket 02: the scene adapters reach this panel's own transitions through
+  // these handles. Each is idempotent — a seed finds its target already set.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('variables.editing.seed', () => {
+        const target =
+          environment.variables.find((variable) => variable.key === 'DATABASE_URL') ?? environment.variables[0];
+        if (target) openEdit(target);
+      }),
+    [environment.variables, openEdit],
+  );
+
+  useLayoutEffect(
+    () => publishSceneHandle('variables.bulkText.fixture', () => setBulkText(BULK_FIXTURE)),
+    [setBulkText],
+  );
+
+  useLayoutEffect(
+    () => publishSceneHandle('variables.bulkDuplicate.fixture', () => setBulkText(BULK_FIXTURE_DUPLICATE)),
+    [setBulkText],
+  );
 
   const submit = async (values: { key: string; value: string }) => {
     await saveVariable(environment.id, values, editing?.id);
@@ -194,16 +272,11 @@ export function VariablesPanel({ environment }: { environment: Environment }) {
               render: (_value, variable) => (
                 <Space size={4}>
                   <Button icon={<EditOutlined />} onClick={() => openEdit(variable)} size="small" type="text" />
-                  <Popconfirm
-                    cancelText="Keep"
-                    description="Composes pick this up on their next deploy."
-                    okButtonProps={{ danger: true }}
-                    okText="Delete"
-                    onConfirm={() => void deleteVariable(environment.id, variable.id)}
-                    title={`Delete ${variable.key}?`}
-                  >
-                    <Button danger icon={<DeleteOutlined />} loading={isPending(`delete-variable:${variable.id}`)} size="small" type="text" />
-                  </Popconfirm>
+                  <DeleteVariableButton
+                    loading={isPending(`delete-variable:${variable.id}`)}
+                    onDelete={() => void deleteVariable(environment.id, variable.id)}
+                    variable={variable}
+                  />
                 </Space>
               ),
               title: '',

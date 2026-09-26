@@ -36,18 +36,20 @@ import {
   theme,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { navigate, paths } from '../app/router';
+import { publishSceneHandle } from '../app/sceneAdapters';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { useNow } from '../app/useNow';
+import { useUiState } from '../app/uiState';
 import { CodeValue, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { StartHandleDialog } from '../components/StartHandleDialog';
 import { TextFileEditor } from '../components/TextFileEditor';
 import { IDLE_TIMEOUT_MINUTES, usePanel } from '../data/store';
 import type { Volume, VolumeEntry } from '../data/types';
 import { findComposeLocation, formatBytes, formatOwner, idleMinutesLeft } from '../data/types';
-import { EDITOR_MAX_BYTES, summarizeArchive, UPLOAD_MAX_BYTES } from '../data/volumeMocks';
+import { EDITOR_MAX_BYTES, listVolumeDir, summarizeArchive, UPLOAD_MAX_BYTES, volumeWriteRefusal } from '../data/volumeMocks';
 import { useSceneContainer } from '../scenes/scope';
 
 const { Text, Paragraph } = Typography;
@@ -82,11 +84,13 @@ export function VolumeExplorerPage({
 }) {
   const {
     handles,
+    holdVolumeListing,
     isPending,
     listDir,
     projects,
     readVolumeFile,
     resolveComposeVolumes,
+    seedHandleMode,
     startHandle,
     stopHandle,
     writeVolumeFile,
@@ -102,17 +106,25 @@ export function VolumeExplorerPage({
   const project = location?.project;
   const handle = handles[volumeId];
 
+  // Ticket 02: the visible state reads through `useUiState` under keys
+  // declared in `app/uiKeys.ts`. `volumes` and `entries` stay plain `useState`
+  // — EXCLUDED as data (`resolveComposeVolumes`/`listDir`), the audit's stated
+  // rule; the loading *scenes* are held by the store through the two
+  // `*:loading` adapters instead.
   const [volumes, setVolumes] = useState<Volume[]>();
-  const [resolutionError, setResolutionError] = useState<string>();
+  const [resolutionError, setResolutionError] = useUiState<string | undefined>('volume.resolutionError', undefined);
   const [entries, setEntries] = useState<VolumeEntry[]>();
-  const [browseError, setBrowseError] = useState<string>();
-  const [startOpen, setStartOpen] = useState(false);
-  const [editing, setEditing] = useState<{ contents: string; path: string }>();
-  const [editorTooLarge, setEditorTooLarge] = useState<VolumeEntry>();
-  const [uploadError, setUploadError] = useState<string>();
-  const [downloadOpen, setDownloadOpen] = useState(false);
-  const [newEntry, setNewEntry] = useState<'file' | 'dir'>();
-  const [newEntryName, setNewEntryName] = useState('');
+  const [browseError, setBrowseError] = useUiState<string | undefined>('volume.browseError', undefined);
+  const [startOpen, setStartOpen] = useUiState('volume.startOpen', false);
+  // Ticket 02, decision D1: these two hold objects, so they are never forced
+  // by a `?ui=` literal — the `object:volume.*` adapters seed them through
+  // `openFile`, the app's own path.
+  const [editing, setEditing] = useUiState<{ contents: string; path: string } | undefined>('volume.editing', undefined);
+  const [editorTooLarge, setEditorTooLarge] = useUiState<VolumeEntry | undefined>('volume.editorTooLarge', undefined);
+  const [uploadError, setUploadError] = useUiState<string | undefined>('volume.uploadError', undefined);
+  const [downloadOpen, setDownloadOpen] = useUiState('volume.downloadOpen', false);
+  const [newEntry, setNewEntry] = useUiState<'file' | 'dir' | undefined>('volume.newEntry', undefined);
+  const [newEntryName, setNewEntryName] = useUiState('volume.newEntryName', '');
   const fileInput = useRef<HTMLInputElement>(null);
 
   const goTo = useCallback(
@@ -162,7 +174,11 @@ export function VolumeExplorerPage({
 
   // A handle expiring mid-visit is the one transition the operator did not ask
   // for, so it gets said out loud rather than silently emptying the screen.
-  const [expiredHere, setExpiredHere] = useState(false);
+  // Ticket 02, decision D3: the clear below already runs only on the
+  // handle-open *transition* (the `hadHandle` ref) — a cold load with no
+  // handle (`?ui=store.handles=none`) and a forced `volume.expiredHere=1`
+  // falls into neither branch, so the forced alert survives the mount.
+  const [expiredHere, setExpiredHere] = useUiState('volume.expiredHere', false);
   const hadHandle = useRef(false);
   useEffect(() => {
     if (handleOpen) {
@@ -182,6 +198,62 @@ export function VolumeExplorerPage({
   const crumbs = path.split('/').filter(Boolean);
   const openInNewTab = () => window.open(paths.volumeExplorer(projectId, environmentId, composeId, volumeId, path), '_blank');
 
+  // ---------------------------------------------------------------------------
+  // Ticket 02 — this screen's half of the scene adapters, published in
+  // *layout* effects with no deps so each handle exists before the scope's
+  // AfterRunner (a prior sibling in the tree) runs the frame's `after:`
+  // adapter in its own passive effect — an ordinary effect would publish one
+  // flush too late — and stays the freshest render's closure. With no query
+  // string none of these ever run.
+  // ---------------------------------------------------------------------------
+
+  // `volume:loading` — the directory listing is held by the store; resolution
+  // above still lands, so the skeleton keeps the header and Volume fact.
+  useLayoutEffect(() => publishSceneHandle('volume.loading.hold', () => holdVolumeListing(volumeId)));
+
+  // `seed:volume.handleRo` — the store's seed handle is rw and lives on
+  // uploads, so the scene's handle is re-minted (or re-moded) read-only
+  // through the store.
+  useLayoutEffect(() => publishSceneHandle('volume.handle.seedRo', () => seedHandleMode(volumeId, 'ro')));
+
+  // `object:volume.editing` / `object:volume.editorTooLarge` — both reached
+  // through `openFile`, the app's own path (its size check is what refuses the
+  // too-large file). The adapter runs before the listing resolves, so the
+  // closure reads the entry from the fixtures the listing is built from.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('volume.openFile.seed', (name: string) => {
+        const entry = listVolumeDir(volumeId, path).find((candidate) => candidate.name === name);
+        if (entry) void openFile(entry);
+      }),
+  );
+
+  // `seed:volume.uploadTooLarge` / `seed:volume.uploadNoSpace` — the screen's
+  // own `upload`, so both refusal alerts carry the app's own copy.
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('volume.upload.seed', (file: { name: string; size: number }) => {
+        void upload(file);
+      }),
+  );
+
+  // `submit:volume.newEntry.create` — the modal's own onOk body, with the
+  // values passed explicitly (the handler reads them from state).
+  useLayoutEffect(() => publishSceneHandle('volume.newEntry.submit', (kind: 'dir' | 'file', name: string) => addEntry(kind, name)));
+
+  // `submit:volume.archive.download` — the DownloadDialog's onOk, published
+  // from the page because the dialog mounts only once the listing has
+  // resolved, and the adapter runs before that. `archiveTarget` mirrors the
+  // dialog's own derivation.
+  const archiveTarget = crumbs.length === 0 ? volume?.declaredAs ?? 'Volume' : crumbs[crumbs.length - 1];
+  useLayoutEffect(
+    () =>
+      publishSceneHandle('volume.archive.confirm', (format: 'tar.gz' | 'zip') => {
+        setDownloadOpen(false);
+        message.success(`Downloading ${archiveTarget}.${format}`);
+      }),
+  );
+
   const openFile = async (entry: VolumeEntry) => {
     if (entry.size > EDITOR_MAX_BYTES) {
       setEditorTooLarge(entry);
@@ -200,10 +272,22 @@ export function VolumeExplorerPage({
     setEditing(undefined);
   };
 
-  const upload = async (file: File) => {
+  // The file's shape is what the refusal paths and the entry append read; the
+  // file input's `File` satisfies it structurally, and so does the
+  // `seed:volume.upload*` adapters' synthetic file.
+  const upload = async (file: { name: string; size: number }) => {
     setUploadError(undefined);
     if (file.size > UPLOAD_MAX_BYTES) {
       setUploadError(`${file.name} is ${formatBytes(file.size)} — the upload limit is ${formatBytes(UPLOAD_MAX_BYTES)}.`);
+      return;
+    }
+    // Ticket 02: the no-space refusal (the `seed:volume.uploadNoSpace` scene's
+    // state) is declared beside the fixtures and consulted here, where the
+    // file's size is known — the words are the helper's own, a fact about the
+    // Volume, not a painted flag.
+    const refusal = volumeWriteRefusal(volumeId, file.size);
+    if (refusal) {
+      setUploadError(refusal);
       return;
     }
     await writeVolumeFile(volumeId, joinPath(path, file.name), '');
@@ -216,23 +300,27 @@ export function VolumeExplorerPage({
     message.success(`Uploaded ${file.name}`);
   };
 
-  const createEntry = () => {
-    const name = newEntryName.trim();
+  // Shared by the modal's own onOk (which reads the two states) and the
+  // `submit:volume.newEntry.create` adapter (which is handed the values,
+  // because the handler reads them from state).
+  const addEntry = (kind: 'dir' | 'file', name: string) => {
     setEntries((current) => [
       ...(current ?? []),
       {
         gid: handle?.gid ?? 999,
-        kind: newEntry === 'dir' ? 'dir' : 'file',
-        mode: newEntry === 'dir' ? '0755' : '0644',
+        kind,
+        mode: kind === 'dir' ? '0755' : '0644',
         modifiedAt: new Date().toISOString(),
         name,
-        size: newEntry === 'dir' ? 4096 : 0,
+        size: kind === 'dir' ? 4096 : 0,
         uid: handle?.uid ?? 999,
       },
     ]);
     message.success(`Created ${joinPath(path, name)}`);
     setNewEntry(undefined);
   };
+
+  const createEntry = () => addEntry(newEntry === 'dir' ? 'dir' : 'file', newEntryName.trim());
 
   const header = (
     <PageHeader
@@ -508,7 +596,7 @@ export function VolumeExplorerPage({
           variant="outlined"
         >
           <Table
-            columns={columns(openFile, writable, message, token)}
+            columns={columns(openFile, writable, token)}
             dataSource={entries}
             pagination={false}
             rowKey={(entry) => entry.name}
@@ -654,7 +742,6 @@ function Crumbs({ crumbs, onGo, root }: { crumbs: string[]; onGo: (path: string)
 function columns(
   openFile: (entry: VolumeEntry) => void,
   writable: boolean,
-  message: { warning: (text: string) => void },
   token: ReturnType<typeof theme.useToken>['token'],
 ): ColumnsType<VolumeEntry> {
   return [
@@ -715,49 +802,72 @@ function columns(
     },
     {
       key: 'actions',
-      render: (_: unknown, entry) => (
-        <Flex gap={4} justify="flex-end">
-          {entry.kind === 'file' && (
-            <Button icon={<EditOutlined />} onClick={() => openFile(entry)} size="small" type="text" />
-          )}
-          <Dropdown
-            menu={{
-              items: [
-                { disabled: entry.kind === 'dir', icon: <DownloadOutlined />, key: 'download', label: 'Download' },
-                { disabled: !writable, icon: <EditOutlined />, key: 'rename', label: 'Rename' },
-                { type: 'divider' },
-                { danger: true, disabled: !writable, icon: <DeleteOutlined />, key: 'delete', label: 'Delete' },
-              ],
-              onClick: ({ key }) => {
-                if (key === 'download') message.warning(`Downloading ${entry.name}`);
-                if (key === 'rename') message.warning('Rename is out of scope for the design pass');
-              },
-            }}
-            trigger={['click']}
-          >
-            <Button icon={<MoreOutlined />} size="small" type="text" />
-          </Dropdown>
-          <Popconfirm
-            cancelText="Keep it"
-            description={
-              <>
-                <Text style={{ fontFamily: CODE_FONT_STACK }}>{entry.name}</Text>
-                {entry.kind === 'dir' ? ' and everything under it' : ''} is removed from the Volume. This is not a trash
-                — there is no undo.
-              </>
-            }
-            okButtonProps={{ danger: true }}
-            okText="Delete"
-            title="Delete permanently?"
-          >
-            <Button danger disabled={!writable} icon={<DeleteOutlined />} size="small" type="text" />
-          </Popconfirm>
-        </Flex>
-      ),
+      render: (_: unknown, entry) => <RowActions entry={entry} onOpen={openFile} writable={writable} />,
       title: '',
       width: 130,
     },
   ];
+}
+
+/**
+ * One entry row's actions. Ticket 02 (audit §5.5, decision D2): the More menu
+ * and the delete confirm are one instance *per row*, so their keys are
+ * addressed by naming the row — `?ui=volume.rowMenu.latest=1` — and forced
+ * open through the controlled `open` both components already support. With no
+ * query string both start closed and behave exactly as the uncontrolled
+ * triggers did.
+ *
+ * The Popconfirm's confirm stays a no-op on purpose (audit §5.6): it has no
+ * `onConfirm` today, and ticket 02 adds no behaviour beyond addressability.
+ */
+function RowActions({ entry, onOpen, writable }: { entry: VolumeEntry; onOpen: (entry: VolumeEntry) => void; writable: boolean }) {
+  const { message } = App.useApp();
+  const [menuOpen, setMenuOpen] = useUiState(`volume.rowMenu.${entry.name}`, false);
+  const [confirmOpen, setConfirmOpen] = useUiState(`volume.deletePopconfirm.${entry.name}`, false);
+
+  return (
+    <Flex gap={4} justify="flex-end">
+      {entry.kind === 'file' && (
+        <Button icon={<EditOutlined />} onClick={() => onOpen(entry)} size="small" type="text" />
+      )}
+      <Dropdown
+        menu={{
+          items: [
+            { disabled: entry.kind === 'dir', icon: <DownloadOutlined />, key: 'download', label: 'Download' },
+            { disabled: !writable, icon: <EditOutlined />, key: 'rename', label: 'Rename' },
+            { type: 'divider' },
+            { danger: true, disabled: !writable, icon: <DeleteOutlined />, key: 'delete', label: 'Delete' },
+          ],
+          onClick: ({ key }) => {
+            if (key === 'download') message.warning(`Downloading ${entry.name}`);
+            if (key === 'rename') message.warning('Rename is out of scope for the design pass');
+          },
+        }}
+        onOpenChange={setMenuOpen}
+        open={menuOpen}
+        trigger={['click']}
+      >
+        <Button icon={<MoreOutlined />} size="small" type="text" />
+      </Dropdown>
+      <Popconfirm
+        cancelText="Keep it"
+        description={
+          <>
+            <Text style={{ fontFamily: CODE_FONT_STACK }}>{entry.name}</Text>
+            {entry.kind === 'dir' ? ' and everything under it' : ''} is removed from the Volume. This is not a trash
+            — there is no undo.
+          </>
+        }
+        okButtonProps={{ danger: true }}
+        okText="Delete"
+        onOpenChange={setConfirmOpen}
+        open={confirmOpen}
+        title="Delete permanently?"
+      >
+        <Button danger disabled={!writable} icon={<DeleteOutlined />} size="small" type="text" />
+      </Popconfirm>
+    </Flex>
+  );
 }
 
 /**
@@ -783,7 +893,7 @@ function DownloadDialog({
 }) {
   const { message } = App.useApp();
   const sceneContainer = useSceneContainer();
-  const [format, setFormat] = useState<'tar.gz' | 'zip'>('tar.gz');
+  const [format, setFormat] = useUiState<'tar.gz' | 'zip'>('volume.archiveFormat', 'tar.gz');
   const summary = useMemo(() => summarizeArchive(volumeId, path), [path, volumeId]);
   const crumbs = path.split('/').filter(Boolean);
   const target = crumbs.length === 0 ? rootName : crumbs[crumbs.length - 1];

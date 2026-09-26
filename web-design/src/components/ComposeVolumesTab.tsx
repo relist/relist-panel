@@ -1,7 +1,7 @@
 import { FolderOpenOutlined, LockOutlined, PlayCircleOutlined, StopOutlined } from '@ant-design/icons';
 import { Alert, App, Button, Card, Flex, Result, Skeleton, Table, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { navigate, paths } from '../app/router';
 import { publishSceneHandle } from '../app/sceneAdapters';
 import { useNow } from '../app/useNow';
@@ -69,7 +69,7 @@ export function ComposeVolumesTab({
   // through this, the tab's own setter, with the first Volume the tab itself
   // resolved. Idempotent: a second call finds `starting` already set and
   // changes nothing.
-  useEffect(
+  useLayoutEffect(
     () =>
       publishSceneHandle('volumes.starting.seed', () => {
         setStarting((current) => current ?? volumes?.[0]);
