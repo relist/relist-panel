@@ -48,6 +48,7 @@ import { ServiceMonitor } from '../components/ServiceMonitor';
 import { YamlEditor } from '../components/YamlEditor';
 import { usePanel } from '../data/store';
 import { composeState, findComposeLocation } from '../data/types';
+import { useSceneContainer } from '../scenes/scope';
 
 const { Text, Paragraph, Title } = Typography;
 
@@ -92,6 +93,7 @@ export function ComposePage({
   } = usePanel();
   const { message } = App.useApp();
   const { token } = theme.useToken();
+  const sceneContainer = useSceneContainer();
 
   const location = findComposeLocation(projects, composeId);
   const compose = location?.compose;
@@ -534,6 +536,9 @@ export function ComposePage({
       />
 
       <Drawer
+        // Portals inside the frame box when scoped, the viewport as today
+        // standalone (ticket 10).
+        getContainer={sceneContainer}
         extra={
           <Space>
             <Button
@@ -621,7 +626,9 @@ export function ComposePage({
               border: `1px solid ${token.colorBorderSecondary}`,
               borderRadius: token.borderRadius,
               margin: 0,
-              maxHeight: 'calc(100vh - 220px)',
+              // Frame-relative inside a scope (`--frame-vh`), viewport-relative
+              // as today standalone (ticket 10).
+              maxHeight: 'calc(100 * var(--frame-vh, 1vh) - 220px)',
               overflow: 'auto',
             }}
           >

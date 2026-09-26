@@ -5,6 +5,7 @@ import { CODE_FONT_STACK } from '../app/theme';
 import { EmptyState, RelativeTime } from './primitives';
 import { usePanel } from '../data/store';
 import type { Environment, EnvironmentVariable } from '../data/types';
+import { useSceneContainer } from '../scenes/scope';
 
 const { Text, Paragraph } = Typography;
 
@@ -65,6 +66,7 @@ export function VariablesPanel({ environment }: { environment: Environment }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState('');
+  const sceneContainer = useSceneContainer();
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -219,6 +221,7 @@ export function VariablesPanel({ environment }: { environment: Environment }) {
       <Modal
         confirmLoading={isPending(`save-variable:${environment.id}`)}
         destroyOnHidden
+        getContainer={sceneContainer}
         okText={editing ? 'Save changes' : 'Add Variable'}
         onCancel={() => setModalOpen(false)}
         onOk={() => form.submit()}
@@ -247,6 +250,7 @@ export function VariablesPanel({ environment }: { environment: Environment }) {
       <Modal
         confirmLoading={isPending(`bulk-variables:${environment.id}`)}
         destroyOnHidden
+        getContainer={sceneContainer}
         okButtonProps={{ disabled: parsed.length === 0 || duplicateKeys.length > 0 }}
         okText={`Replace ${environment.variables.length} variable${environment.variables.length === 1 ? '' : 's'} with ${parsed.length}`}
         onCancel={() => setBulkOpen(false)}

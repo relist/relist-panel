@@ -48,6 +48,7 @@ import { IDLE_TIMEOUT_MINUTES, usePanel } from '../data/store';
 import type { Volume, VolumeEntry } from '../data/types';
 import { findComposeLocation, formatBytes, formatOwner, idleMinutesLeft } from '../data/types';
 import { EDITOR_MAX_BYTES, summarizeArchive, UPLOAD_MAX_BYTES } from '../data/volumeMocks';
+import { useSceneContainer } from '../scenes/scope';
 
 const { Text, Paragraph } = Typography;
 
@@ -93,6 +94,7 @@ export function VolumeExplorerPage({
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const now = useNow();
+  const sceneContainer = useSceneContainer();
 
   const location = findComposeLocation(projects, composeId);
   const compose = location?.compose;
@@ -574,6 +576,7 @@ export function VolumeExplorerPage({
 
         <Modal
           cancelText="Cancel"
+          getContainer={sceneContainer}
           okButtonProps={{ disabled: !newEntryName.trim() }}
           okText={newEntry === 'dir' ? 'Create folder' : 'Create file'}
           onCancel={() => setNewEntry(undefined)}
@@ -779,6 +782,7 @@ function DownloadDialog({
   volumeId: string;
 }) {
   const { message } = App.useApp();
+  const sceneContainer = useSceneContainer();
   const [format, setFormat] = useState<'tar.gz' | 'zip'>('tar.gz');
   const summary = useMemo(() => summarizeArchive(volumeId, path), [path, volumeId]);
   const crumbs = path.split('/').filter(Boolean);
@@ -787,6 +791,7 @@ function DownloadDialog({
   return (
     <Modal
       cancelText="Cancel"
+      getContainer={sceneContainer}
       okText={`Download ${format}`}
       onCancel={onClose}
       onOk={() => {

@@ -123,7 +123,6 @@ const PanelContext = createContext<PanelValue | undefined>(undefined);
 
 let nextId = 1_000;
 const mintId = () => ++nextId;
-const nowISO = () => new Date().toISOString();
 
 /**
  * The Volume Handle every fresh load starts with, on Compose 1's uploads bind,
@@ -147,33 +146,41 @@ const SEEDED_HANDLE_STARTED_MINUTES_AGO = 22;
 /**
  * A handle in the shape the seed has: the app's uid, read and write, opened 7
  * minutes ago and started 22 minutes ago. Relative to *now*, so it follows the
- * frozen clock rather than fighting it.
+ * frozen clock rather than fighting it — the wall clock (possibly `?clock=`'s
+ * patched `Date`) standalone, or the frame's `clock` prop inside a scene scope
+ * (ticket 10), where `Date` is never patched.
  */
-function seedHandle(volumeId: string, containerId: string): VolumeHandle {
+function seedHandle(volumeId: string, containerId: string, now: () => number): VolumeHandle {
   return {
     composeId: Number(volumeId.split(':')[0]),
     containerId,
     gid: 999,
     mode: 'rw',
-    startedAt: new Date(Date.now() - SEEDED_HANDLE_STARTED_MINUTES_AGO * 60_000).toISOString(),
+    startedAt: new Date(now() - SEEDED_HANDLE_STARTED_MINUTES_AGO * 60_000).toISOString(),
     uid: 999,
     uidSource: 'container-inspect',
-    lastUsedAt: new Date(Date.now() - SEEDED_HANDLE_OPENED_MINUTES_AGO * 60_000).toISOString(),
+    lastUsedAt: new Date(now() - SEEDED_HANDLE_OPENED_MINUTES_AGO * 60_000).toISOString(),
     volumeId,
   };
 }
 
 /** The open handles a load starts with: the seed, or the volume ids a scene named. */
-function seedHandles(volumeIds: string[]): Record<string, VolumeHandle> {
+function seedHandles(volumeIds: string[], now: () => number): Record<string, VolumeHandle> {
   return Object.fromEntries(
     volumeIds.map((volumeId) => [
       volumeId,
-      seedHandle(volumeId, volumeId === SEEDED_HANDLE.volumeId ? SEEDED_HANDLE.containerId : containerIdFor(volumeId)),
+      seedHandle(volumeId, volumeId === SEEDED_HANDLE.volumeId ? SEEDED_HANDLE.containerId : containerIdFor(volumeId), now),
     ]),
   );
 }
 
-export function PanelProvider({ children, overrides }: { children: ReactNode; overrides?: SceneOverrides }) {
+/**
+ * `clock` is a frame's frozen instant (ticket 10): every timestamp the store
+ * mints — the seeds above and each mutation's `at`/`updatedAt` — agrees with
+ * the frame's `useNow`, the way a standalone `?clock=` page agrees through the
+ * patched `Date`. Standalone it is absent and every read is the wall clock.
+ */
+export function PanelProvider({ children, clock, overrides }: { children: ReactNode; clock?: number; overrides?: SceneOverrides }) {
   const [projects, setProjects] = useState<Project[]>(mockProjects);
   const [activity, setActivity] = useState<ActivityEntry[]>(overrides?.activity ?? mockActivity);
   const [logs, setLogs] = useState<Record<number, string>>(mockLogs);
@@ -181,8 +188,12 @@ export function PanelProvider({ children, overrides }: { children: ReactNode; ov
   const [pending, setPending] = useState<Record<string, true>>({});
   const [speed, setSpeed] = useState<Speed>(overrides?.speed ?? 'normal');
   const [handles, setHandles] = useState<Record<string, VolumeHandle>>(() =>
-    seedHandles(overrides?.handles ?? [SEEDED_HANDLE.volumeId]),
+    seedHandles(overrides?.handles ?? [SEEDED_HANDLE.volumeId], () => clock ?? Date.now()),
   );
+
+  // Identity is stable for the mount's life (`clock` never changes on a live
+  // frame), so the callbacks below may capture it without re-running effects.
+  const nowISO = useCallback(() => new Date(clock ?? Date.now()).toISOString(), [clock]);
 
   const wait = useCallback(
     (ms?: number) => new Promise<void>((resolve) => setTimeout(resolve, ms ?? LATENCY[speed])),
@@ -204,7 +215,7 @@ export function PanelProvider({ children, overrides }: { children: ReactNode; ov
 
   const record = useCallback((entry: Omit<ActivityEntry, 'id' | 'at' | 'actor'>) => {
     setActivity((current) => [{ ...entry, id: mintId(), at: nowISO(), actor: 'admin@relist.local' }, ...current].slice(0, 40));
-  }, []);
+  }, [nowISO]);
 
   const patchCompose = useCallback((composeId: number, patch: (compose: Compose) => Compose) => {
     setProjects((current) =>
@@ -270,7 +281,7 @@ export function PanelProvider({ children, overrides }: { children: ReactNode; ov
         });
         setCheckedAt((current) => ({ ...current, [composeId]: nowISO() }));
       }),
-    [patchCompose, record, track, wait, withCompose],
+    [nowISO, patchCompose, record, track, wait, withCompose],
   );
 
   // The Monitoring screen loads metrics from an effect, so this method's
@@ -305,7 +316,7 @@ export function PanelProvider({ children, overrides }: { children: ReactNode; ov
       if (!handle) return current;
       return { ...current, [volumeId]: { ...handle, lastUsedAt: nowISO() } };
     });
-  }, []);
+  }, [nowISO]);
 
   /**
    * Volume methods live outside the `value` memo, on the same contract as
@@ -343,7 +354,7 @@ export function PanelProvider({ children, overrides }: { children: ReactNode; ov
           },
         }));
       }),
-    [track, wait],
+    [nowISO, track, wait],
   );
 
   const stopHandle = useCallback(
@@ -635,6 +646,7 @@ export function PanelProvider({ children, overrides }: { children: ReactNode; ov
       loadMetrics,
       loadServiceMetrics,
       logs,
+      nowISO,
       patchCompose,
       pending,
       projects,

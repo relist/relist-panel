@@ -2,6 +2,7 @@ import Editor from '@monaco-editor/react';
 import type { editor as MonacoEditorApi } from 'monaco-editor';
 import { useContext } from 'react';
 import { CODE_FONT_STACK, MONACO_THEME, ThemeModeContext } from '../app/theme';
+import { useSceneModelPrefix } from '../scenes/scope';
 import '../monaco';
 
 export const MONACO_OPTIONS = {
@@ -24,6 +25,11 @@ export const MONACO_OPTIONS = {
  * the full screen editor and the editor on the page stay the same document. The
  * second one must pass `keepCurrentModel`: without it, unmounting disposes the
  * model the first editor is still showing.
+ *
+ * Inside a scene scope the path carries the frame's prefix (`scene:<id>:`),
+ * because models live in one registry per document: two frames of one screen
+ * must never share a model (ticket 10), while within a frame the shared path —
+ * prefix included — keeps the deliberate sharing above working.
  */
 export function YamlEditor({
   height = '100%',
@@ -45,6 +51,7 @@ export function YamlEditor({
   // Monaco is themed separately from antd, so it takes the mode from context
   // rather than from a token (see `monacoThemeData` in app/theme.ts).
   const mode = useContext(ThemeModeContext);
+  const modelPrefix = useSceneModelPrefix();
 
   return (
     <Editor
@@ -55,7 +62,7 @@ export function YamlEditor({
       onChange={(next) => onChange?.(next ?? '')}
       onMount={(editor) => onMount?.(editor)}
       options={{ ...MONACO_OPTIONS, readOnly }}
-      path={path}
+      path={`${modelPrefix}${path}`}
       theme={MONACO_THEME[mode]}
       value={value}
     />

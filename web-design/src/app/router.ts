@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 
 /**
  * Minimal hash router. Deliberately hand-rolled: routing library choice is not
  * part of this design pass, but every screen must be directly linkable so the
  * whole set can be reviewed and shared page by page.
+ *
+ * Ticket 10 makes it context-first: a `SceneScopeProvider` provides
+ * `RouteContext`, and the hooks read that route when present and the window
+ * hash exactly as before when not — standalone there is no provider, so the
+ * behaviour below the context check is today's, untouched.
  */
 
 export type Route =
@@ -71,7 +76,8 @@ export const paths = {
   setup: '#/setup',
 } as const;
 
-function parse(hash: string): Route {
+/** A hash-shaped path (`#/…`) to a `Route`. Exported for the scene scope, which parses its own initial route. */
+export function parse(hash: string): Route {
   const path = hash.replace(/^#/, '').replace(/\/+$/, '');
   const parts = path.split('/').filter(Boolean);
 
@@ -120,28 +126,83 @@ function parse(hash: string): Route {
   return { kind: 'not-found', path };
 }
 
+/**
+ * A frame's route, as the scope owns it: the current hash-shaped path, its
+ * parsed form, and the setter that plays `navigate` inside the frame.
+ */
+export type RoutedValue = {
+  navigate: (to: string) => void;
+  path: string;
+  route: Route;
+};
+
+export const RouteContext = createContext<RoutedValue | undefined>(undefined);
+
+/**
+ * The one plain, non-hook `navigate` a frame can end up calling is
+ * `ComposePage`'s stale-link redirect (a mount effect), and ticket 02's
+ * `after:` adapters are plain functions too. A module function cannot read
+ * React context, so a scope *claims* this seam: while a scope holds it, plain
+ * `navigate` writes that scope's own route state and the page hash is
+ * untouched — absorbed, invisible.
+ *
+ * The claim is the most recently rendered scope, and it is exactly right in
+ * every case that happens: the redirect fires in a commit's passive effects,
+ * *after* every provider has claimed the seam in layout effects, so a just-mounted
+ * frame absorbs its own redirect. With a whole board mounted at once a stray
+ * plain `navigate` would land in *a* frame rather than the page — still
+ * absorbed, never a board-wide navigation; scenes declare valid routes, so the
+ * redirect does not fire there at all. Board chrome that must move the page
+ * calls `setScopeNavigate(null)` first. Standalone no scope ever claims the
+ * seam, and `navigate` is exactly today's hash write.
+ */
+let scopeNavigate: ((to: string) => void) | null = null;
+
+/** Claim (or, with `null`, release) plain `navigate`. Returns the previous claim. */
+export function setScopeNavigate(dispatch: ((to: string) => void) | null): ((to: string) => void) | null {
+  const previous = scopeNavigate;
+  scopeNavigate = dispatch;
+  return previous;
+}
+
+/** The current claim, if a scope holds it. */
+export function currentScopeNavigate(): ((to: string) => void) | null {
+  return scopeNavigate;
+}
+
 export function navigate(to: string) {
+  const scoped = scopeNavigate;
+  if (scoped) {
+    scoped(to);
+    return;
+  }
   if (window.location.hash === to) return;
   window.location.hash = to;
 }
 
 export function useRoute(): Route {
-  const [route, setRoute] = useState<Route>(() => parse(window.location.hash));
+  const routed = useContext(RouteContext);
+  const [hashRoute, setHashRoute] = useState<Route>(() => parse(window.location.hash));
   useEffect(() => {
-    const onChange = () => setRoute(parse(window.location.hash));
+    // Scoped: the frame's route is context state, and a page-level hash change
+    // (the board deep-linking, another frame redirecting) must not move it.
+    if (routed !== undefined) return undefined;
+    const onChange = () => setHashRoute(parse(window.location.hash));
     window.addEventListener('hashchange', onChange);
     onChange();
     return () => window.removeEventListener('hashchange', onChange);
-  }, []);
-  return route;
+  }, [routed]);
+  return routed !== undefined ? routed.route : hashRoute;
 }
 
 export function useActivePath(): string {
+  const routed = useContext(RouteContext);
   const [hash, setHash] = useState(() => window.location.hash);
   useEffect(() => {
+    if (routed !== undefined) return undefined;
     const onChange = () => setHash(window.location.hash);
     window.addEventListener('hashchange', onChange);
     return () => window.removeEventListener('hashchange', onChange);
-  }, []);
-  return hash;
+  }, [routed]);
+  return routed !== undefined ? routed.path : hash;
 }

@@ -65,11 +65,21 @@ if (typeof window !== 'undefined') {
  * With no `?clock=` this is a no-op, so there is one code path rather than two:
  * the mock reads the real clock exactly as it does today.
  */
+/**
+ * An instant in epoch milliseconds, or null when the string does not parse.
+ * Shared by the standalone `?clock=` install and by a frame's `clock` prop
+ * (ticket 10), so both spellings of "frozen time" validate identically.
+ */
+export function parseClockInstant(iso: string): number | null {
+  const instant = REAL_DATE.parse(iso);
+  return Number.isNaN(instant) ? null : instant;
+}
+
 function installFrozenClock(iso: string | null): void {
   if (iso === null) return;
 
-  const instant = REAL_DATE.parse(iso);
-  if (Number.isNaN(instant)) {
+  const instant = parseClockInstant(iso);
+  if (instant === null) {
     warn(`?clock=${iso} is not a parseable instant, so the mock keeps the wall clock.`);
     return;
   }

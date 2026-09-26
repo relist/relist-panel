@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { createContext, useContext, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 
 /**
@@ -77,12 +77,25 @@ export function installUiOverrides(ui: ReadonlyMap<string, UiValue>): void {
   forced = ui;
 }
 
-/** `useState`, plus one rule: a value the URL forced wins over `initial`. */
+/**
+ * A frame's own override map (ticket 10). `SceneScopeProvider` provides one per
+ * frame; standalone there is none and the module map above is the only source.
+ * The context lives here, with the hook that reads it, so this module stays
+ * import-light: React and nothing else of this app.
+ */
+export const UiOverridesContext = createContext<ReadonlyMap<string, UiValue> | undefined>(undefined);
+
+/**
+ * `useState`, plus one rule: a value a frame forced wins over a value the URL
+ * forced, and either wins over `initial`. As with the URL map, the override is
+ * read when the state is created — once — so a later render cannot flip a
+ * forced value back to the seed.
+ */
 export function useUiState<T>(key: string, initial: T): [T, Dispatch<SetStateAction<T>>] {
-  // The override is read when the state is created — once — so a later render
-  // cannot flip a forced value back to the seed.
+  const scoped = useContext(UiOverridesContext);
   return useState<T>(() => {
-    const value = forced.get(key);
+    const fromScope = scoped?.get(key);
+    const value = fromScope !== undefined ? fromScope : forced.get(key);
     return value === undefined ? initial : (value as unknown as T);
   });
 }

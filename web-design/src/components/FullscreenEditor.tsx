@@ -13,6 +13,7 @@ import { useMemo, useRef, useState } from 'react';
 import type { editor as MonacoEditorApi } from 'monaco-editor';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { navigate, paths } from '../app/router';
+import { useSceneContainer } from '../scenes/scope';
 import { ComposeStatusTag, EmptyState } from './primitives';
 import { YamlEditor } from './YamlEditor';
 import type { Compose, Environment, EnvironmentVariable, Project } from '../data/types';
@@ -168,6 +169,7 @@ export function FullscreenEditor({
   saving: boolean;
 }) {
   const { token } = theme.useToken();
+  const sceneContainer = useSceneContainer();
   const editorRef = useRef<MonacoEditorApi.IStandaloneCodeEditor | null>(null);
   const [query, setQuery] = useState('');
 
@@ -198,21 +200,27 @@ export function FullscreenEditor({
       closable={false}
       destroyOnHidden
       footer={null}
+      // Full screen means "the containing box", not "the viewport": percentages
+      // resolve against the modal wrap (fixed, inset 0), which is the viewport
+      // standalone and the frame box inside a scene scope (ticket 10) — the old
+      // `100vw`/`100vh` could only ever mean one document. The height chain is
+      // wrap → `.ant-modal` → content → body, hence the flex column.
+      getContainer={sceneContainer}
       onCancel={onClose}
       open={open}
-      style={{ margin: 0, maxWidth: '100vw', paddingBottom: 0, top: 0 }}
+      style={{ height: '100%', margin: 0, maxWidth: '100%', paddingBottom: 0, top: 0 }}
       styles={{
-        body: { display: 'flex', flexDirection: 'column', height: '100vh', minHeight: 0, overflow: 'hidden', padding: 0 },
+        body: { display: 'flex', flex: 1, flexDirection: 'column', minHeight: 0, overflow: 'hidden', padding: 0 },
         // antd's container is the visible panel: it carries the padding and the
         // radius that would otherwise frame the "full screen" in a 20px inset.
-        container: { borderRadius: 0, padding: 0 },
+        container: { borderRadius: 0, display: 'flex', flexDirection: 'column', height: '100%', padding: 0 },
         header: { display: 'none' },
-        // Nothing here can overflow by design (the body is exactly 100vh), so the
-        // wrapper must not add scrollbars of its own around a 100vw panel.
+        // Nothing here can overflow by design (the body is exactly the box's
+        // height), so the wrapper must not add scrollbars of its own.
         wrapper: { overflow: 'hidden' },
       }}
       title={null}
-      width="100vw"
+      width="100%"
     >
       <Flex
         align="center"

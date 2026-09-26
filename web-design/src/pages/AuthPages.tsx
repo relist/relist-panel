@@ -12,9 +12,13 @@ const { Text, Title, Paragraph } = Typography;
  */
 function AuthLayout({ children, footer, title, subtitle }: { children: React.ReactNode; footer?: React.ReactNode; subtitle: React.ReactNode; title: string }) {
   const { token } = theme.useToken();
+  // `--frame-vh` falls back to `1vh` outside a scene scope (ticket 10), so
+  // standalone this is the viewport height it always was; in a frame it is the
+  // frame's own height.
+  const frameHeight = 'calc(100 * var(--frame-vh, 1vh))';
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Flex style={{ flex: 1, minHeight: '100vh' }}>
+    <Layout style={{ minHeight: frameHeight }}>
+      <Flex style={{ flex: 1, minHeight: frameHeight }}>
         <Flex
           vertical
           justify="space-between"

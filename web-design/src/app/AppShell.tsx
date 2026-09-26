@@ -196,7 +196,16 @@ export function AppShell({
               </Text>
             </div>
           </Flex>
-          <div className="rp-sider-scroll" style={{ height: `calc(100vh - ${LAYOUT.barHeight}px - 37px)`, paddingBottom: 12 }}>
+          {/* `--frame-vh` falls back to `1vh` outside a scene scope, so the
+              standalone sider is exactly what it was; in a frame it resolves
+              against the frame's declared height (ticket 10). The `Layout`'s
+              own `minHeight: 100vh` below is deliberately left viewport-based —
+              recording, not fixing: a frame clips it, which is what the board
+              wants until it says otherwise. */}
+          <div
+            className="rp-sider-scroll"
+            style={{ height: `calc(100 * var(--frame-vh, 1vh) - ${LAYOUT.barHeight}px - 37px)`, paddingBottom: 12 }}
+          >
             <Menu
               items={menuItems}
               mode="inline"

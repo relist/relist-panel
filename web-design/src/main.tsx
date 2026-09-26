@@ -12,19 +12,21 @@ import './app/scene';
 
 import { StyleProvider } from '@ant-design/cssinjs';
 import { App as AntApp, ConfigProvider } from 'antd';
-import { StrictMode, useEffect, useMemo, useState } from 'react';
+import { StrictMode, useContext, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import './index.css';
 import './monaco';
 
 import { AppShell } from './app/AppShell';
-import { useRoute } from './app/router';
+import { RouteContext, paths, useRoute } from './app/router';
 import { sceneOverrides } from './app/scene';
 import { SceneReadiness } from './app/sceneReady';
 import { buildTheme, initialThemeMode, ThemeModeContext, ThemeModeControlContext } from './app/theme';
 import type { ThemeMode } from './app/theme';
+import { useUiState } from './app/uiState';
 import { PanelProvider, useAuthMock } from './data/store';
+import { SceneScopeProvider } from './scenes/scope';
 import { NotFoundPage, SetupPage, SignInPage } from './pages/AuthPages';
 import { ComposePage } from './pages/ComposePage';
 import { GuidelinesPage } from './pages/GuidelinesPage';
@@ -38,6 +40,13 @@ import { VolumeExplorerPage } from './pages/VolumeExplorerPage';
 
 function Screens({ onSignIn }: { onSignIn: () => void }) {
   const route = useRoute();
+
+  // TEMP — removed by ticket 06. Dev-only harness for ticket 10: proves two
+  // `SceneScopeProvider` frames in one document do not leak (route, toast,
+  // Monaco models, error boundary). Not a screen; not in the router's union.
+  if (import.meta.env.DEV && route.kind === 'not-found' && route.path === '/design/scope-dev') {
+    return <ScopeDevHarness />;
+  }
 
   switch (route.kind) {
     case 'overview':
@@ -137,6 +146,106 @@ function Root() {
         </ConfigProvider>
       </ThemeModeContext.Provider>
     </ThemeModeControlContext.Provider>
+  );
+}
+
+// TEMP — removed by ticket 06. The per-frame isolation harness (#/design/scope-dev, dev only).
+//
+// Two `SceneScopeProvider` frames of the *same* Compose, in one document, on purpose: shared
+// route, shared store module, shared Monaco — everything a board of a hundred frames would
+// share. What must not leak between them:
+//
+//   A · `dev.compose-a` — forced `ui` value, sticky toast, frozen clock, and a probe that
+//       navigates the frame to the Monitor tab on a timer.
+//   B · `dev.compose-b` — no forced state, and a nested component that throws on a timer.
+//
+// Expected, at a glance: A shows the Monitor tab and its own toast while B stays on the Editor
+// tab with none; the two Monaco models carry distinct `scene:<id>:` prefixes for the same file;
+// after the timer, B is a red card and A is untouched; every overlay (toast, modal, dropdown)
+// stays inside its own frame's box.
+
+/** A frame-local readout of the scoped route and the forced `ui` value, plus A's timed navigation. */
+function ScopeDevProbe({ label, navigateTo }: { label: string; navigateTo?: string }) {
+  const routed = useContext(RouteContext);
+  const [forced] = useUiState('dev.forced', 'seed');
+
+  useEffect(() => {
+    if (routed === undefined || navigateTo === undefined) return undefined;
+    const timer = window.setTimeout(() => routed.navigate(navigateTo), 1_500);
+    return () => window.clearTimeout(timer);
+  }, [navigateTo, routed]);
+
+  return (
+    <div
+      data-scope-probe={label}
+      style={{ background: '#FFFBE6', border: '1px solid #F0E6A8', fontSize: 12, padding: '4px 8px' }}
+    >
+      frame {label} · route <code data-scope-route>{routed?.path ?? '—'}</code> · ui.dev.forced=<code data-scope-forced>{forced}</code>
+    </div>
+  );
+}
+
+/** Throws from render, on a timer, so the frame's error boundary replaces it after boot. */
+function ScopeDevBomb({ delayMs }: { delayMs: number }) {
+  const [boom, setBoom] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setBoom(true), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [delayMs]);
+
+  if (boom) {
+    throw new Error('ScopeDevBomb: this frame threw on schedule; every other frame must be untouched.');
+  }
+  return null;
+}
+
+const SCOPE_DEV_COMPOSE = { composeId: 1, environmentId: 1, projectId: 1 } as const;
+
+function ScopeDevHarness() {
+  return (
+    <div style={{ background: '#F0F0F0', display: 'flex', gap: 32, minHeight: '100vh', padding: 32 }}>
+      <SceneScopeProvider
+        clock="2026-09-26T09:00:00Z"
+        height={900}
+        id="dev.compose-a"
+        route={paths.compose(SCOPE_DEV_COMPOSE.projectId, SCOPE_DEV_COMPOSE.environmentId, SCOPE_DEV_COMPOSE.composeId)}
+        toast={{ content: 'Frame A sticky toast — visible only in this frame', key: 'dev-a', type: 'success' }}
+        ui={new Map([['dev.forced', 'from-scope-A']])}
+        width={780}
+      >
+        <ScopeDevProbe
+          label="A"
+          navigateTo={paths.compose(
+            SCOPE_DEV_COMPOSE.projectId,
+            SCOPE_DEV_COMPOSE.environmentId,
+            SCOPE_DEV_COMPOSE.composeId,
+            'monitor',
+          )}
+        />
+        <ComposePage
+          composeId={SCOPE_DEV_COMPOSE.composeId}
+          environmentId={SCOPE_DEV_COMPOSE.environmentId}
+          projectId={SCOPE_DEV_COMPOSE.projectId}
+        />
+      </SceneScopeProvider>
+
+      <SceneScopeProvider
+        clock="2026-09-26T09:00:00Z"
+        height={1200}
+        id="dev.compose-b"
+        route={paths.compose(SCOPE_DEV_COMPOSE.projectId, SCOPE_DEV_COMPOSE.environmentId, SCOPE_DEV_COMPOSE.composeId)}
+        width={780}
+      >
+        <ScopeDevProbe label="B" />
+        <ScopeDevBomb delayMs={6_000} />
+        <ComposePage
+          composeId={SCOPE_DEV_COMPOSE.composeId}
+          environmentId={SCOPE_DEV_COMPOSE.environmentId}
+          projectId={SCOPE_DEV_COMPOSE.projectId}
+        />
+      </SceneScopeProvider>
+    </div>
   );
 }
 

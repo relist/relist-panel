@@ -1,6 +1,7 @@
 import { Alert, Input, Modal, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useSceneContainer } from '../scenes/scope';
 
 const { Text } = Typography;
 
@@ -31,6 +32,8 @@ export function DangerModal({
   title: string;
 }) {
   const [typed, setTyped] = useState('');
+  // The frame box inside a scene scope, `undefined` (the viewport) standalone.
+  const sceneContainer = useSceneContainer();
 
   useEffect(() => {
     if (open) setTyped('');
@@ -42,6 +45,7 @@ export function DangerModal({
     <Modal
       confirmLoading={loading}
       destroyOnHidden
+      getContainer={sceneContainer}
       okButtonProps={{ danger: true, disabled: !matches }}
       okText={okText}
       onCancel={onCancel}

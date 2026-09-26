@@ -34,6 +34,7 @@ import { ComposeStatusTag, EmptyState, PageHeader, RelativeTime } from '../compo
 import { usePanel } from '../data/store';
 import type { Project } from '../data/types';
 import { projectComposes, summarize } from '../data/types';
+import { useSceneContainer } from '../scenes/scope';
 
 const { Text, Paragraph } = Typography;
 
@@ -55,6 +56,7 @@ export function ProjectsPage() {
   const [editing, setEditing] = useState<Project>();
   const [modalOpen, setModalOpen] = useState(false);
   const [deleting, setDeleting] = useState<Project>();
+  const sceneContainer = useSceneContainer();
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -309,6 +311,7 @@ export function ProjectsPage() {
       <Modal
         confirmLoading={isPending(editing ? `save-project:${editing.id}` : 'create-project')}
         destroyOnHidden
+        getContainer={sceneContainer}
         okText={editing ? 'Save changes' : 'Create Project'}
         onCancel={() => setModalOpen(false)}
         onOk={() => form.submit()}

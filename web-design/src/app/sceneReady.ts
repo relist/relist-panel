@@ -21,11 +21,14 @@ import { sceneId } from './scene';
  * double-invokes them and this attribute flaps, which is one more reason the
  * pipeline never drives the dev server.
  */
-export function SceneReadiness(): null {
-  const { pending } = usePanel();
+/**
+ * The fonts half of readiness, shared by both publishers: `document.fonts`
+ * settles once, and a capture that starts before it has measured with the wrong
+ * face. Standalone `SceneReadiness` and the per-frame readiness in
+ * `scenes/scope.tsx` (ticket 10) both wait on this.
+ */
+export function useFontsReady(): boolean {
   const [fontsReady, setFontsReady] = useState(false);
-  const scene = sceneId();
-  const ready = scene !== null && fontsReady && Object.keys(pending).length === 0;
 
   useEffect(() => {
     let active = true;
@@ -41,6 +44,15 @@ export function SceneReadiness(): null {
       active = false;
     };
   }, []);
+
+  return fontsReady;
+}
+
+export function SceneReadiness(): null {
+  const { pending } = usePanel();
+  const fontsReady = useFontsReady();
+  const scene = sceneId();
+  const ready = scene !== null && fontsReady && Object.keys(pending).length === 0;
 
   useEffect(() => {
     const root = document.documentElement;

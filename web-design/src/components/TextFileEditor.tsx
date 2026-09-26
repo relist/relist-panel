@@ -2,6 +2,7 @@ import Editor from '@monaco-editor/react';
 import { useContext } from 'react';
 import { MONACO_THEME, ThemeModeContext } from '../app/theme';
 import { MONACO_OPTIONS } from './YamlEditor';
+import { useSceneModelPrefix } from '../scenes/scope';
 import '../monaco';
 
 /**
@@ -53,6 +54,9 @@ export function TextFileEditor({
   value: string;
 }) {
   const mode = useContext(ThemeModeContext);
+  // Frame-local model path (ticket 10): a board frame must never touch another
+  // frame's model, and standalone the prefix is empty so the path is unchanged.
+  const modelPrefix = useSceneModelPrefix();
 
   return (
     <Editor
@@ -63,7 +67,7 @@ export function TextFileEditor({
       onMount={onMount}
       // Keyed by the file, so switching files swaps models instead of leaving
       // one file's undo history attached to another's path.
-      path={`volume:${path}`}
+      path={`${modelPrefix}volume:${path}`}
       options={{ ...MONACO_OPTIONS, readOnly }}
       theme={MONACO_THEME[mode]}
       value={value}

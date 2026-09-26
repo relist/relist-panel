@@ -37,6 +37,7 @@ import { YamlEditor } from '../components/YamlEditor';
 import { usePanel } from '../data/store';
 import type { Compose } from '../data/types';
 import { composeState, projectComposes, summarize } from '../data/types';
+import { useSceneContainer } from '../scenes/scope';
 
 const { Text, Paragraph } = Typography;
 
@@ -70,6 +71,7 @@ export function ProjectPage({ environmentId, projectId, tab }: { environmentId?:
   const [composeYAML, setComposeYAML] = useState('');
   const [deletingCompose, setDeletingCompose] = useState<Compose>();
   const [deleteProjectOpen, setDeleteProjectOpen] = useState(false);
+  const sceneContainer = useSceneContainer();
 
   const project = projects.find((candidate) => candidate.id === projectId);
   const environments = project?.environments ?? [];
@@ -455,6 +457,7 @@ export function ProjectPage({ environmentId, projectId, tab }: { environmentId?:
       <Modal
         confirmLoading={isPending(`create-environment:${project.id}`)}
         destroyOnHidden
+        getContainer={sceneContainer}
         okText="Create Environment"
         onCancel={() => setEnvironmentModalOpen(false)}
         onOk={() => environmentForm.submit()}
@@ -488,6 +491,7 @@ export function ProjectPage({ environmentId, projectId, tab }: { environmentId?:
         cancelText="Cancel"
         confirmLoading={isPending(`create-compose:${activeEnvironment?.id ?? 0}`)}
         destroyOnHidden
+        getContainer={sceneContainer}
         okButtonProps={{ disabled: !composeYAML.trim() }}
         okText="Create Compose"
         onCancel={() => setComposeModalOpen(false)}

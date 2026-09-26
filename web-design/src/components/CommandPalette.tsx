@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { navigate, paths } from '../app/router';
 import { usePanel } from '../data/store';
+import { useSceneContainer } from '../scenes/scope';
 
 const { Text } = Typography;
 
@@ -24,6 +25,7 @@ type Hit = {
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { projects } = usePanel();
   const { token } = theme.useToken();
+  const sceneContainer = useSceneContainer();
   const [query, setQuery] = useState('');
 
   useEffect(() => {
@@ -76,6 +78,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     <Modal
       destroyOnHidden
       footer={null}
+      getContainer={sceneContainer}
       onCancel={onClose}
       open={open}
       styles={{ body: { padding: 0 } }}

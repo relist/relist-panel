@@ -5,6 +5,7 @@ import { CodeValue } from './primitives';
 import type { StartHandleInput } from '../data/store';
 import type { UidSource, Volume } from '../data/types';
 import { UID_SOURCE_LABEL } from '../data/types';
+import { useSceneContainer } from '../scenes/scope';
 
 const { Text } = Typography;
 
@@ -43,6 +44,7 @@ export function StartHandleDialog({
   const [mode, setMode] = useState<'ro' | 'rw'>('rw');
   const [uid, setUid] = useState(resolved.uid);
   const [gid, setGid] = useState(resolved.gid);
+  const sceneContainer = useSceneContainer();
 
   useEffect(() => {
     if (open) {
@@ -60,6 +62,7 @@ export function StartHandleDialog({
       cancelText="Cancel"
       confirmLoading={loading}
       destroyOnHidden
+      getContainer={sceneContainer}
       okButtonProps={{ disabled: missing }}
       okText="Open Volume"
       onCancel={onCancel}

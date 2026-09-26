@@ -33,15 +33,21 @@ export const LAYOUT = {
    * to it. This is the floor (and the height when the rail is short), keeping
    * YAML readable without scrolling inside a short box. The page around it
    * scrolls with the document — no nested scrollers.
+   *
+   * `vh` resolves against the *viewport*, which is wrong inside a board frame
+   * (ticket 10): the frame wrapper sets `--frame-vh` to a hundredth of the
+   * frame's declared height, and standalone the fallback `1vh` makes the
+   * expression byte-for-byte today's value.
    */
-  editorMinHeight: 'clamp(640px, 80vh, 1000px)',
+  editorMinHeight: 'clamp(640px, calc(80 * var(--frame-vh, 1vh)), 1000px)',
   /**
    * The Volume Explorer's file editor is a different animal from the Compose
    * YAML editor: the screen exists to browse a directory, and the editor is a
    * thing you open on one file inside it. Same bounded-box rule, shorter box —
-   * a YAML-editor-tall editor would push the file list off the screen.
+   * a YAML-editor-tall editor would push the file list off the screen. Same
+   * `--frame-vh` story as above.
    */
-  volumeEditorHeight: 'clamp(320px, 45vh, 560px)',
+  volumeEditorHeight: 'clamp(320px, calc(45 * var(--frame-vh, 1vh)), 560px)',
 } as const;
 
 export type ThemeMode = 'dark' | 'light';
