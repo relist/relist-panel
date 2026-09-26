@@ -15,6 +15,7 @@ import {
 import {
   Alert,
   App,
+  Badge,
   Button,
   Card,
   Col,
@@ -39,6 +40,7 @@ import type { MenuProps } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { navigate, paths } from '../app/router';
+import { ComposeVolumesTab } from '../components/ComposeVolumesTab';
 import { DangerModal } from '../components/DangerModal';
 import { FullscreenEditor } from '../components/FullscreenEditor';
 import { CodeValue, ComposeStatusTag, HealthBadge, PageHeader, RelativeTime, ServiceStateTag } from '../components/primitives';
@@ -49,7 +51,7 @@ import { composeState, findComposeLocation } from '../data/types';
 
 const { Text, Paragraph, Title } = Typography;
 
-type ComposeTab = 'editor' | 'monitor';
+type ComposeTab = 'editor' | 'monitor' | 'volumes';
 
 /**
  * Compose detail. Previously: a back button, five action buttons in a row, a
@@ -79,6 +81,7 @@ export function ComposePage({
     checkedAt,
     deleteCompose,
     deployCompose,
+    handles,
     isPending,
     loadLogs,
     projects,
@@ -121,10 +124,10 @@ export function ComposePage({
   // The URL is the source of truth for navigation, so a stale path (renamed
   // parent, hand-edited hash) is redirected to the canonical one — tab included,
   // or the redirect would drop the operator back on the Editor.
-  const activeTab: ComposeTab = tab === 'monitor' ? 'monitor' : 'editor';
+  const activeTab: ComposeTab = tab === 'monitor' ? 'monitor' : tab === 'volumes' ? 'volumes' : 'editor';
   const canonicalPath =
     compose && environment && project
-      ? paths.compose(project.id, environment.id, compose.id, activeTab === 'monitor' ? 'monitor' : undefined)
+      ? paths.compose(project.id, environment.id, compose.id, activeTab === 'editor' ? undefined : activeTab)
       : undefined;
   const pathIsStale = Boolean(canonicalPath) && (projectId !== project?.id || environmentId !== environment?.id);
   useEffect(() => {
@@ -161,6 +164,7 @@ export function ComposePage({
 
   const state = composeState(compose.status, compose.lastDeployedAt);
   const checked = checkedAt[compose.id];
+  const openHandleCount = Object.values(handles).filter((handle) => handle.composeId === compose.id).length;
 
   const save = async () => {
     await saveCompose(compose.id, draft);
@@ -496,9 +500,22 @@ export function ComposePage({
             key: 'monitor',
             label: 'Monitor',
           },
+          {
+            children: <ComposeVolumesTab compose={compose} environmentId={environment.id} projectId={project.id} />,
+            key: 'volumes',
+            label: (
+              // The badge matters more than it looks: a handle left open is a
+              // container still holding a Volume somewhere the operator is not
+              // looking, so the count has to be visible from the tab row.
+              <Flex align="center" gap={6}>
+                Volumes
+                {openHandleCount > 0 && <Badge count={openHandleCount} size="small" />}
+              </Flex>
+            ),
+          },
         ]}
         onChange={(key) =>
-          navigate(paths.compose(project.id, environment.id, compose.id, key === 'monitor' ? 'monitor' : undefined))
+          navigate(paths.compose(project.id, environment.id, compose.id, key === 'editor' ? undefined : key))
         }
       />
 

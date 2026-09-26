@@ -20,8 +20,14 @@ import type {
   MetricWindow,
   Project,
   ServiceSample,
+  UidSource,
+  Volume,
+  VolumeEntry,
+  VolumeHandle,
+  VolumeHandleMode,
 } from './types';
 import { findComposeLocation } from './types';
+import { fixtureFileContents, IDLE_TIMEOUT_MINUTES, listVolumeDir, resolveVolumes, unreadableReason } from './volumeMocks';
 
 /**
  * In-memory stand-in for the panel's HTTP API. Every mutation is local and
@@ -35,6 +41,14 @@ const LATENCY: Record<Speed, number> = { instant: 80, normal: 650, slow: 1_800 }
 
 export type NewVariable = { key: string; value: string };
 
+/** What the start dialog collects. Everything else about a handle is derived. */
+export type StartHandleInput = {
+  mode: VolumeHandleMode;
+  uid: number;
+  gid: number;
+  uidSource: UidSource;
+};
+
 type PanelValue = {
   activity: ActivityEntry[];
   addEnvironment: (projectId: number, name: string) => Promise<void>;
@@ -45,24 +59,40 @@ type PanelValue = {
   deleteEnvironment: (projectId: number, environmentId: number) => Promise<void>;
   deleteProject: (projectId: number) => Promise<void>;
   deployCompose: (composeId: number) => Promise<void>;
+  /** Handles, keyed by `Volume.id`. */
+  handles: Record<string, VolumeHandle>;
   host: HostInfo;
   isPending: (key: string) => boolean;
+  /** One directory of a Volume. Rejects when the handle's uid cannot read it. */
+  listDir: (volumeId: string, path: string) => Promise<VolumeEntry[]>;
   logs: Record<number, string>;
   loadLogs: (composeId: number) => Promise<string>;
   loadMetrics: (window: MetricWindow) => Promise<MetricSample[]>;
   loadServiceMetrics: (composeId: number, serviceName: string, window: MetricWindow) => Promise<ServiceSample[]>;
+  /** A text file's contents, for the editor. */
+  readVolumeFile: (volumeId: string, path: string) => Promise<string>;
   projects: Project[];
   refreshStatus: (composeId: number) => Promise<void>;
   restartCompose: (composeId: number) => Promise<void>;
+  /** A Compose's Volumes, or the CLI's error when they cannot be resolved. */
+  resolveComposeVolumes: (composeId: number) => Promise<{ ok: true; volumes: Volume[] } | { ok: false; error: string }>;
   saveCompose: (composeId: number, yamlContent: string) => Promise<void>;
   saveVariable: (environmentId: number, variable: NewVariable, variableId?: number) => Promise<void>;
   deleteVariable: (environmentId: number, variableId: number) => Promise<void>;
   replaceVariables: (environmentId: number, rows: NewVariable[]) => Promise<void>;
   setSpeed: (speed: Speed) => void;
   speed: Speed;
+  startHandle: (volumeId: string, input: StartHandleInput) => Promise<void>;
   stopCompose: (composeId: number) => Promise<void>;
+  stopHandle: (volumeId: string) => Promise<void>;
   updateProject: (projectId: number, input: { name: string; description: string }) => Promise<void>;
+  writeVolumeFile: (volumeId: string, path: string, contents: string) => Promise<void>;
 };
+
+/** Text a Compose's Volumes tab can never resolve, until it is deployed once. */
+const ENV_FILE_MISSING = "couldn't find env file";
+
+export { ENV_FILE_MISSING, IDLE_TIMEOUT_MINUTES };
 
 const PanelContext = createContext<PanelValue | undefined>(undefined);
 
@@ -77,6 +107,32 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   const [checkedAt, setCheckedAt] = useState<Record<number, string>>({});
   const [pending, setPending] = useState<Record<string, true>>({});
   const [speed, setSpeed] = useState<Speed>('normal');
+  /**
+   * Starts with one handle deliberately left open, on Compose 1's uploads bind.
+   *
+   * The Overview banner and the "already open" behaviour of the Volumes tab only
+   * exist when a handle outlives the visit that created it, so a fresh load has
+   * to show one to be reviewable at all — and putting it on the Volume with the
+   * demo tree means the Explorer opens on its real content rather than on the
+   * empty state a reviewer would then have to click past. The empty state is in
+   * the states gallery, where it belongs.
+   */
+  const [handles, setHandles] = useState<Record<string, VolumeHandle>>(() => {
+    const openedAt = new Date(Date.now() - 7 * 60_000).toISOString();
+    return {
+      '1:/app/uploads': {
+        composeId: 1,
+        containerId: 'a41c9e77b3d2',
+        gid: 999,
+        mode: 'rw',
+        startedAt: new Date(Date.now() - 22 * 60_000).toISOString(),
+        uid: 999,
+        uidSource: 'container-inspect',
+        lastUsedAt: openedAt,
+        volumeId: '1:/app/uploads',
+      },
+    };
+  });
 
   const wait = useCallback(
     (ms?: number) => new Promise<void>((resolve) => setTimeout(resolve, ms ?? LATENCY[speed])),
@@ -190,15 +246,118 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [track, wait],
   );
 
+  // A handle's idle clock runs from the last request it served, so any read or
+  // write pushes the auto-stop back. Nothing touches it on a timer: a handle
+  // nobody is using is exactly the one that should expire.
+  const touchHandle = useCallback((volumeId: string) => {
+    setHandles((current) => {
+      const handle = current[volumeId];
+      if (!handle) return current;
+      return { ...current, [volumeId]: { ...handle, lastUsedAt: nowISO() } };
+    });
+  }, []);
+
+  /**
+   * Volume methods live outside the `value` memo, on the same contract as
+   * `loadMetrics` above: the Compose tab and the Volume Explorer both call one
+   * from an effect, and an identity that changed on every pending-state update
+   * would re-run that effect — the refetch would feed itself. Measured the hard
+   * way: React error #185, maximum update depth exceeded.
+   */
+  const resolveComposeVolumes = useCallback(
+    (composeId: number) =>
+      track(`volumes:${composeId}`, async () => {
+        await wait(400);
+        return resolveVolumes(composeId);
+      }),
+    [track, wait],
+  );
+
+  const startHandle = useCallback(
+    (volumeId: string, input: StartHandleInput) =>
+      track(`handle-start:${volumeId}`, async () => {
+        await wait();
+        const openedAt = nowISO();
+        setHandles((current) => ({
+          ...current,
+          [volumeId]: {
+            composeId: Number(volumeId.split(':')[0]),
+            containerId: containerIdFor(`handle-${volumeId}-${openedAt}`),
+            gid: input.gid,
+            lastUsedAt: openedAt,
+            mode: input.mode,
+            startedAt: openedAt,
+            uid: input.uid,
+            uidSource: input.uidSource,
+            volumeId,
+          },
+        }));
+      }),
+    [track, wait],
+  );
+
+  const stopHandle = useCallback(
+    (volumeId: string) =>
+      track(`handle-stop:${volumeId}`, async () => {
+        await wait();
+        setHandles((current) => {
+          const next = { ...current };
+          delete next[volumeId];
+          return next;
+        });
+      }),
+    [track, wait],
+  );
+
+  const listDir = useCallback(
+    (volumeId: string, path: string) =>
+      track(`browse:${volumeId}:${path}`, async () => {
+        await wait(500);
+        touchHandle(volumeId);
+        const reason = unreadableReason(volumeId, path);
+        if (reason) {
+          throw new Error(reason);
+        }
+        return listVolumeDir(volumeId, path);
+      }),
+    [touchHandle, track, wait],
+  );
+
+  const readVolumeFile = useCallback(
+    (volumeId: string, path: string) =>
+      track(`read:${volumeId}:${path}`, async () => {
+        await wait(400);
+        touchHandle(volumeId);
+        return fixtureFileContents(path);
+      }),
+    [touchHandle, track, wait],
+  );
+
+  const writeVolumeFile = useCallback(
+    (volumeId: string, path: string) =>
+      track(`write:${volumeId}:${path}`, async () => {
+        await wait();
+        touchHandle(volumeId);
+      }),
+    [touchHandle, track, wait],
+  );
+
   const value = useMemo<PanelValue>(
     () => ({
       activity,
       checkedAt,
+      handles,
+      listDir,
       host: mockHost,
       logs,
       projects,
+      readVolumeFile,
+      resolveComposeVolumes,
       speed,
       setSpeed,
+      startHandle,
+      stopHandle,
+      writeVolumeFile,
       isPending: (key) => Boolean(pending[key]),
 
       createProject: (input) =>
@@ -416,7 +575,28 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       loadMetrics,
       loadServiceMetrics,
     }),
-    [activity, checkedAt, lifecycle, loadMetrics, loadServiceMetrics, logs, patchCompose, pending, projects, record, speed, track, wait, withCompose],
+    [
+      activity,
+      checkedAt,
+      handles,
+      lifecycle,
+      listDir,
+      loadMetrics,
+      loadServiceMetrics,
+      logs,
+      patchCompose,
+      pending,
+      projects,
+      readVolumeFile,
+      record,
+      resolveComposeVolumes,
+      speed,
+      startHandle,
+      stopHandle,
+      track,
+      withCompose,
+      writeVolumeFile,
+    ],
   );
 
   return <PanelContext.Provider value={value}>{children}</PanelContext.Provider>;

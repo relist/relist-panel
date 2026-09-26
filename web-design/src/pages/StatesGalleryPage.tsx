@@ -1,10 +1,20 @@
-import { CloudServerOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined, RocketOutlined, SnippetsOutlined } from '@ant-design/icons';
+import {
+  CloudServerOutlined,
+  DeleteOutlined,
+  FolderOutlined,
+  LinkOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  RocketOutlined,
+  SnippetsOutlined,
+} from '@ant-design/icons';
 import {
   Alert,
   App,
   Button,
   Card,
   Col,
+  Descriptions,
   Empty,
   Flex,
   Form,
@@ -21,6 +31,7 @@ import {
 } from 'antd';
 import { useState } from 'react';
 import { DangerModal } from '../components/DangerModal';
+import { CODE_FONT_STACK } from '../app/theme';
 import { ComposeStatusTag, EmptyState, PageHeader } from '../components/primitives';
 
 const { Text, Paragraph, Title } = Typography;
@@ -355,6 +366,203 @@ export function StatesGalleryPage() {
             </div>
           </Card>
         </Col>
+
+        <Col lg={12} xs={24}>
+          <Card title="Volume Handle — closed by idle" variant="outlined">
+            <Paragraph type="secondary">
+              The one transition the operator did not ask for, so it is said out loud rather than silently emptying the
+              screen. Nothing was changed, and reopening is one click. The countdown is visible on the screen while it
+              runs, so a handle never vanishes unannounced.
+            </Paragraph>
+            <Alert
+              closable
+              description="It stopped itself after a period of disuse. Nothing was changed, and reopening it costs one click."
+              message="This Volume Handle closed on its own"
+              showIcon
+              style={{ marginBottom: 16 }}
+              type="info"
+            />
+            <EmptyState
+              action={
+                <Button icon={<FolderOutlined />} type="primary">
+                  Open this Volume
+                </Button>
+              }
+              description="A Volume Handle is opened on purpose and closed on purpose. Nothing is mounted until you open one."
+              title="No handle open"
+            />
+          </Card>
+        </Col>
+
+        <Col lg={12} xs={24}>
+          <Card title="Volume Explorer — a symlink that leaves the Volume" variant="outlined">
+            <Paragraph type="secondary">
+              A symlink is part of the data, so it is listed with its target and marked. Only the traversal into it is
+              refused — <Text code>os.Root</Text> will not open it either, so the Explorer is not being stricter than the
+              kernel, it is being honest about the boundary.
+            </Paragraph>
+            <Flex align="center" gap={8} wrap>
+              <LinkOutlined style={{ color: token.colorWarning }} />
+              <Text style={{ fontFamily: CODE_FONT_STACK }}>legacy</Text>
+              <Text type="secondary">→</Text>
+              <Text code style={{ fontFamily: CODE_FONT_STACK }}>
+                /srv/legacy-images
+              </Text>
+              <Tag color="warning">outside the Volume</Tag>
+            </Flex>
+            <div style={{ height: 16 }} />
+            <Flex align="center" gap={8} wrap>
+              <LinkOutlined style={{ color: token.colorWarning }} />
+              <Text style={{ fontFamily: CODE_FONT_STACK }}>latest</Text>
+              <Text type="secondary">→</Text>
+              <Text code style={{ fontFamily: CODE_FONT_STACK }}>
+                invoices/2026-09
+              </Text>
+              <Tag>inside — followed</Tag>
+            </Flex>
+          </Card>
+        </Col>
+
+        <Col lg={12} xs={24}>
+          <Card title="Volume Explorer — a directory the handle cannot read" variant="outlined">
+            <Paragraph type="secondary">
+              The state an operator is most likely to hit and least likely to understand, so the message names the uid
+              the handle runs as — that is the one part of it they can change, and it is the reason the start dialog
+              asks for a uid at all.
+            </Paragraph>
+            <Result
+              extra={<Button>Try again</Button>}
+              status="error"
+              subTitle="The Volume Handle could not read this directory."
+              title="Could not read this directory"
+            />
+            <Text code style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }}>
+              helper: openat: permission denied — the Volume Handle runs as uid 999 and this directory is 0700 root:root
+            </Text>
+          </Card>
+        </Col>
+
+        <Col lg={12} xs={24}>
+          <Card title="Volume Explorer — writes, with the stack running" variant="outlined">
+            <Paragraph type="secondary">
+              This banner carries the entire safety story for writes, because the write is deliberately not gated behind
+              an acknowledgement. It has to name what is at risk — the running Services, and the database case in
+              particular — because a warning that says "be careful" is one that gets dismissed by reflex.
+            </Paragraph>
+            <Alert
+              description="Editing files a live process is using can corrupt them — a database's data directory is the one that goes wrong quietly. There is no confirmation gate on a write; this banner is the whole warning."
+              message="This Compose is running — writing can corrupt api, redis"
+              showIcon
+              type="warning"
+            />
+          </Card>
+        </Col>
+
+        <Col lg={12} xs={24}>
+          <Card title="Volume Explorer — refusals" variant="outlined">
+            <Paragraph type="secondary">
+              Each refusal states the limit it hit and what to do instead. The free-space check is the one no OS default
+              provides, and the one whose absence would fill the host rather than fail the request.
+            </Paragraph>
+            <Flex gap={8} vertical>
+              <Alert
+                description="export.csv is 4.2 MB. The editor opens files up to 1.0 MB; past that it is unusable anyway. Download it instead."
+                message="Too large to edit"
+                showIcon
+                type="info"
+              />
+              <Alert
+                description="backup.tar is 1.4 GB — the upload limit is 1.0 GB."
+                message="Upload refused"
+                showIcon
+                type="error"
+              />
+              <Alert
+                description="Not enough space on this Volume's filesystem: 240 MB free, and the file is 1.1 GB."
+                message="Upload refused"
+                showIcon
+                type="error"
+              />
+            </Flex>
+          </Card>
+        </Col>
+
+        <Col lg={12} xs={24}>
+          <Card title="Volume Explorer — download, and what is inside it" variant="outlined">
+            <Paragraph type="secondary">
+              Counted while walking the tree the panel walks anyway, so the symlink disclosure costs nothing and decides
+              whether extracting the archive somewhere else is safe. Said before the download, not after.
+            </Paragraph>
+            <Descriptions
+              column={1}
+              items={[
+                { children: <Text style={{ fontFamily: CODE_FONT_STACK }}>uploads.tar.gz</Text>, key: 'n', label: 'File' },
+                { children: '11 files, 4.9 MB', key: 's', label: 'Contents' },
+              ]}
+              labelStyle={{ width: 120 }}
+              size="small"
+            />
+            <Alert
+              description="Two entries are symlinks, and one of them points outside this Volume. They are stored as symlinks, because an archive that quietly dropped them would not be a copy of your data. Extract it somewhere you trust."
+              message="This archive contains symlinks"
+              showIcon
+              style={{ marginTop: 16 }}
+              type="warning"
+            />
+          </Card>
+        </Col>
+
+        <Col lg={12} xs={24}>
+          <Card title="Volumes tab — not resolvable yet" variant="outlined">
+            <Paragraph type="secondary">
+              The panel asks the Docker CLI which Volumes a Compose mounts, so that a path is never typed by hand. That
+              needs the environment file a deploy writes, which is why this state exists at all — and why it carries the
+              CLI's own words instead of a guess.
+            </Paragraph>
+            <Result
+              extra={
+                <Button icon={<RocketOutlined />} type="primary">
+                  Deploy this Compose
+                </Button>
+              }
+              status="warning"
+              subTitle="The panel asks the Docker CLI which Volumes this Compose mounts. That needs the environment file a deploy writes."
+              title="Not resolvable until this Compose is deployed"
+            />
+            <Text code style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }}>
+              docker compose: couldn&apos;t find env file: /var/lib/relist-panel/my-saas/production/metrics/.env
+            </Text>
+          </Card>
+        </Col>
+
+        <Col lg={12} xs={24}>
+          <Card title="Starting a Volume Handle — the two warnings" variant="outlined">
+            <Paragraph type="secondary">
+              Both belong on the dialog because neither can be decided for the operator safely: one says the panel could
+              not check something, the other says what a write can damage. Read-only vs read-write is chosen here but
+              enforced on the mount, so nothing writes around it.
+            </Paragraph>
+            <Alert
+              description={
+                <>
+                  It is an absolute bind source outside the data directory, so the panel has no way to look at it without
+                  mounting it — and mounting it is what would create it. If it is not there, opening this Volume creates
+                  it as <Text strong>root:root 0755</Text> on the host.
+                </>
+              }
+              message="The panel cannot check whether this path exists"
+              showIcon
+              style={{ marginBottom: 12 }}
+              type="warning"
+            />
+            <Alert
+              description="Anything this handle creates on the Volume will be owned by root. A Service running as uid 999 may then fail to read it, or fail to start."
+              message="Running as root"
+              showIcon
+              type="warning"
+            />
+          </Card>
+        </Col>
       </Row>
 
       <Card style={{ marginTop: 16 }} title="Screen inventory" variant="outlined">
@@ -374,6 +582,24 @@ export function StatesGalleryPage() {
             { key: 7, path: '#/projects/1/env/1/compose/2', screen: 'Compose (partly running)', states: 'warning tag · exited service · attention alert' },
             { key: 8, path: '#/signin · #/setup', screen: 'Auth', states: 'sign in · setup step 1 · setup done' },
             { key: 9, path: '#/nope', screen: 'Not found', states: '404 with escape routes' },
+            {
+              key: 10,
+              path: '#/projects/1/env/1/compose/1/volumes',
+              screen: 'Compose — Volumes tab',
+              states: 'no handle open · handle live · no Volumes · not resolvable before first deploy · unchecked bind source',
+            },
+            {
+              key: 11,
+              path: '#/projects/1/env/1/compose/1/volumes/1%3A%2Fapp%2Fuploads',
+              screen: 'Volume Explorer',
+              states: 'no handle · closed by idle · read-only · running-stack write warning · empty directory · permission denied · symlink inside and escaping · too large to edit · upload refused · download disclosure',
+            },
+            {
+              key: 12,
+              path: '#/',
+              screen: 'Overview — live handles',
+              states: 'none open · one open with countdown',
+            },
           ]}
           pagination={false}
           size="small"

@@ -1,7 +1,7 @@
 import { theme } from 'antd';
 import type { ThemeConfig } from 'antd';
 import type { editor } from 'monaco-editor';
-import { createContext } from 'react';
+import { createContext, useContext } from 'react';
 
 /**
  * The redesign keeps Ant Design's default seed palette (DESIGN.md is the
@@ -35,6 +35,13 @@ export const LAYOUT = {
    * scrolls with the document — no nested scrollers.
    */
   editorMinHeight: 'clamp(640px, 80vh, 1000px)',
+  /**
+   * The Volume Explorer's file editor is a different animal from the Compose
+   * YAML editor: the screen exists to browse a directory, and the editor is a
+   * thing you open on one file inside it. Same bounded-box rule, shorter box —
+   * a YAML-editor-tall editor would push the file list off the screen.
+   */
+  volumeEditorHeight: 'clamp(320px, 45vh, 560px)',
 } as const;
 
 export type ThemeMode = 'dark' | 'light';
@@ -45,6 +52,32 @@ export type ThemeMode = 'dark' | 'light';
  * the mode from here instead.
  */
 export const ThemeModeContext = createContext<ThemeMode>('light');
+
+/**
+ * The setter, for the one screen that has to *drive* the mode rather than read
+ * it: the screens gallery controls every frame at once, and each frame is a
+ * separate document with its own `Root`. Kept as a second context so the
+ * read-only consumers above stay untouched.
+ */
+export const ThemeModeControlContext = createContext<{
+  mode: ThemeMode;
+  setMode: (mode: ThemeMode) => void;
+}>({ mode: 'light', setMode: () => {} });
+
+export function useThemeModeControl() {
+  return useContext(ThemeModeControlContext);
+}
+
+/**
+ * Initial mode, read from `?theme=`. A search parameter rather than a token,
+ * because it has to survive being copied into a URL: the gallery spawns one
+ * iframe per route and hands each of them the mode its reviewer is looking at,
+ * so the frames and the gallery chrome agree on the very first paint, before
+ * any message can be posted.
+ */
+export function initialThemeMode(): ThemeMode {
+  return new URLSearchParams(window.location.search).get('theme') === 'dark' ? 'dark' : 'light';
+}
 
 /** Colour vocabulary for a Compose's derived lifecycle state. */
 export const COMPOSE_STATE_META = {

@@ -221,3 +221,125 @@ export function findComposeLocation(projects: Project[], composeId: number): Com
   }
   return undefined;
 }
+
+/**
+ * A **Volume**: one entry in a Compose's `volumes:` list, attached to one of its
+ * Services (CONTEXT.md). Either a named Docker volume or a host path — a bind
+ * mount — and the panel treats both alike, because the operator declares both in
+ * the same place.
+ *
+ * Everything here comes from `docker compose config --format json`, which is the
+ * only source of a source path. A path is never typed by the operator, which is
+ * what keeps this feature's privilege at "what the Compose already declares".
+ */
+export type VolumeKind = 'volume' | 'bind';
+
+export type VolumeExistence =
+  /** A named volume `docker volume inspect` found, or a bind source the panel could stat. */
+  | 'present'
+  /** Checked, and not there. Opening it would create it. */
+  | 'absent'
+  /**
+   * A bind source outside the data directory: the panel cannot stat it from
+   * inside its own container, and probing it with a mount would create it. The
+   * dialog has to say so rather than guess.
+   */
+  | 'unverifiable';
+
+export type Volume = {
+  /** `${composeId}:${target}` — stable across re-resolves of the same Compose. */
+  id: string;
+  composeId: number;
+  kind: VolumeKind;
+  /** As written in the YAML: `pgdata`, or `./config`. */
+  declaredAs: string;
+  /** What is actually mounted: the real Docker volume name, or the resolved host path. */
+  source: string;
+  /** Where it appears inside the Service's container. */
+  target: string;
+  /** Which of the Compose's Services mount it. */
+  services: string[];
+  readOnly: boolean;
+  existence: VolumeExistence;
+};
+
+/**
+ * A **Volume Handle**: the panel's temporary grant of access to one Volume
+ * (CONTEXT.md). Opened by the operator, closed explicitly or after a period of
+ * disuse, and shown on the Overview while open.
+ */
+export type VolumeHandleMode = 'ro' | 'rw';
+
+/** Where the uid/gid came from, so the dialog can say where it got the number. */
+export type UidSource = 'compose-user' | 'container-inspect' | 'volume-root' | 'default' | 'manual';
+
+export type VolumeHandle = {
+  volumeId: string;
+  composeId: number;
+  mode: VolumeHandleMode;
+  uid: number;
+  gid: number;
+  uidSource: UidSource;
+  startedAt: string;
+  /**
+   * The last request this handle served. The idle clock runs from here, not from
+   * `startedAt`: a handle someone is actively working in must not expire under
+   * them. `undefined` when idle auto-stop is off.
+   */
+  lastUsedAt: string;
+  /** The helper container's short id. Not a `Container` in CONTEXT.md's sense. */
+  containerId: string;
+};
+
+/** Minutes left before a handle auto-stops, floored at 0. */
+export function idleMinutesLeft(handle: VolumeHandle, now: number, timeoutMinutes: number): number | undefined {
+  if (timeoutMinutes <= 0) return undefined;
+  const elapsed = (now - new Date(handle.lastUsedAt).getTime()) / 60_000;
+  return Math.max(0, Math.ceil(timeoutMinutes - elapsed));
+}
+
+export const UID_SOURCE_LABEL: Record<UidSource, string> = {
+  'compose-user': "the Service's user: in the Compose",
+  'container-inspect': 'the running container (docker inspect)',
+  'volume-root': "the Volume root's current owner",
+  default: 'the default — nobody else could be asked',
+  manual: 'set by hand',
+};
+
+/** One entry in a directory listing inside a Volume. */
+export type VolumeEntryKind = 'dir' | 'file' | 'symlink';
+
+export type VolumeEntry = {
+  name: string;
+  kind: VolumeEntryKind;
+  size: number;
+  modifiedAt: string;
+  uid: number;
+  gid: number;
+  /** Octal, e.g. `'0644'`. */
+  mode: string;
+  /** A symlink's target, as stored — shown, never silently resolved. */
+  linkTarget?: string;
+  /**
+   * Set on a symlink that resolves outside the Volume. The Explorer shows it and
+   * its target, and refuses to follow it: `os.Root` will not open it either.
+   */
+  linkEscapes?: boolean;
+};
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+/** The uid/gid a Volume's files actually carry, for the "owned by" hint. */
+export function formatOwner(uid: number, gid: number): string {
+  return `${uid}:${gid}`;
+}

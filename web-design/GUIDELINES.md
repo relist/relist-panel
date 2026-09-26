@@ -244,18 +244,54 @@ tag stay above the tabs, because they belong to the Compose rather than to eithe
   simply stops drawing at the point it stopped.
 - The page scrolls with the document; the charts are fixed-height boxes. No nested scrollers.
 
-### 4.7 Auth (`/signin`, `/setup`)
+### 4.7 Volume files (Compose → Volumes, and the Volume Explorer)
+
+Opened from the Compose page, which gains a third tab beside Editor and Monitor. The tab lists only the Volumes
+**that Compose** mounts — never the host's — and is a launcher, not a file manager. The files are read in the Volume
+Explorer, a route of its own opened in a new browser tab, because browsing a directory is somewhere you go rather than
+a panel you glance at. It keeps the panel's chrome and has no nav entry of its own: a Volume is meaningless without
+its Compose as context.
+
+Both screens depend on a **Volume Handle** (CONTEXT.md) — the panel's temporary grant of access to one Volume, opened
+on purpose and closed on purpose. Nothing is mounted until the operator opens one.
+
+- **Where the list comes from.** `docker compose config --format json`, never a hand-rolled YAML parse. The panel
+  never accepts a host path from a form: a Volume can only be one the Compose already declares. This is the invariant
+  the whole feature's privilege rests on, and it is why the tab has an unavailable state — the CLI fails with
+  `couldn't find env file` until the Compose has been deployed once.
+- **The handle's state belongs on screen.** The Overview carries the live handles with their idle countdown and a
+  Close button, and the Volumes tab shows a count badge. A handle keeps a container alive holding a Volume and does
+  not close when the operator leaves the page — that is the design, so the panel has to say which ones are still
+  there. See §8 for the countdown.
+- **A symlink is shown, described, and followed only when it stays inside the Volume.** Listed with its target, and
+  marked when it leaves. Hiding one would misrepresent the data: an operator who cannot see it cannot understand why
+  a path exists. Only the traversal into it is refused, and `os.Root` refuses it too — the Explorer is not stricter
+  than the kernel, it is honest about the boundary.
+- **Errors carry the helper's own words.** A permission failure names the uid the handle runs as, because that is the
+  one part of it the operator can change, and it is why the start dialog asks for a uid at all.
+- **The start dialog holds both warnings**, because neither can be decided for the operator: a bind source whose
+  existence the panel cannot check (it is an absolute path outside the data directory — looking at it without mounting
+  it is impossible, and mounting it is what would create it), and a Compose whose Services are running.
+- The tab's empty state says the Compose declares no volumes rather than showing an empty table.
+- The page scrolls with the document, like every other screen; the file editor is the only bounded box (see §6).
+
+### 4.8 Auth (`/signin`, `/setup`)
 
 Split layout: what the panel is on the left (in `colorPrimaryBg`), the form on the right. Setup is a
 two-step flow (Account → Ready) ending in a `Result` with the Project → Environment → Compose
 mental model restated.
 
-### 4.8 Design system (`#/design/guidelines`, `#/design/states`)
+### 4.9 Design system (`#/design/screens`, `#/design/guidelines`, `#/design/states`)
 
 The guideline and the state gallery are part of the prototype so reviewers read the rules next to the
 screens. The states gallery covers loading, empty (both "nothing yet" and "filtered to nothing"),
 inline and page-level errors, form validation, outcome feedback, destructive confirmations and narrow
 viewports.
+
+`#/design/screens` is the review surface: all 18 screens on one page, each in its own live frame at
+1600px, grouped and labelled with the state it shows. It is the only screen that renders outside
+`AppShell` — the shell is part of what each frame is showing, so wrapping it would nest one panel
+inside another. Review from here; the route table above is for when you want one screen full size.
 
 ## 5. Status vocabulary
 
@@ -299,6 +335,10 @@ One vocabulary, everywhere a Compose state appears. Derived entirely from the AP
   place that scrolls internally is the fixed 340px variables column beside the file, which has no
   height of its own to grow into.
 - Tables over card grids past ~12 items; the Projects screen ships both and lets the operator choose.
+- The Volume Explorer follows the same rule with a shorter box: its editor is
+  `LAYOUT.volumeEditorHeight` (`clamp(320px, 45vh, 560px)`), because a screen whose purpose is
+  browsing a directory cannot give the editor the viewport. The file list runs long and the page
+  scrolls as one document, exactly like every other screen.
 - Controls stay 32px tall (DESIGN.md); only in-table actions drop to `size="small"`.
 - Responsive rules: below 992px the sider collapses to zero, page actions wrap under the title,
   tables scroll horizontally, and the Compose rail stacks under the editor.
@@ -337,7 +377,20 @@ Reusable pieces live in `web-design/src/components/`; port them into `web/src/` 
 - Unsaved YAML is always visible: header tag, `Modified` marker, banner with Save/Discard. Deploy
   saves first and says so.
 - Destructive actions: `Popconfirm` for cheap deletes (one variable), typed-name modal for anything
-  removing containers, volumes or files.
+  removing containers, volumes or files. A file delete inside a Volume is a `Popconfirm` naming the
+  path — permanent, with no trash, because a hidden trash directory inside the Volume would be
+  visible to the application using it.
+- **Warn; do not gate.** Writing to a Volume whose Compose is running can corrupt a live database,
+  and that write is deliberately **not** behind an acknowledgement. Since the banner is then the only
+  control, it has to name the consequence and the affected Services — never "be careful". The same
+  goes for the two start-dialog warnings: they state what is unknown or what is at risk, and they let
+  the operator proceed. A gate is reserved for what cannot be noticed afterwards.
+- **A handle that expires says so.** Idle auto-stop is the one transition the operator did not ask
+  for, so the Explorer shows the countdown while it runs and an `Alert` when it fires, rather than
+  silently emptying the screen. Any read or write restarts the clock.
+- **Errors carry their source's words.** A helper refusal is shown as the helper worded it —
+  including a permission failure naming the uid the handle runs as — not paraphrased into something
+  generic. An operator can act on a uid; they cannot act on "something went wrong".
 - Filters that match nothing are not empty states: keep the filter, say what it is filtering.
 
 ## 9. Content rules
@@ -379,6 +432,11 @@ Design decisions that need something the Go API does not return yet. Each degrad
 | Metric history across restarts | Nothing | Decided: 10s samples live in an in-process ring buffer (lost on restart), 1-minute rollups are persisted in the panel's existing SQLite so the day survives. `collecting — N of M minutes` covers the seam. |
 | A resident metrics service (cAdvisor and friends) | Nothing — and the panel should not add one | Measured on this host: cAdvisor idles at 25→33 MB RSS and climbing, needs `--privileged` and five host mounts, and still keeps only ~2 minutes of history — so it would be scraped and stored by the panel anyway. Reading four `/proc` files in-process costs ~7 KB and no new process. |
 | CPU, memory, block I/O, disk space sources | Already host-accurate from inside the container (see §4.2, sampling budget). | No API change. Do not build on memory staying host-global: that is Docker runtime behaviour (no lxcfs mount), not a contract. |
+| A Compose's Volume list | Nothing | `docker compose -p <project> -f <file> --env-file <env> config --format json`, parsed for `services.*.volumes[]` (type, source, target, read_only) plus the top-level `volumes` map for real names. Verified to resolve relative binds, `${VAR}` interpolation and each service's `user:` in the one call — 30 ms, so no caching needed. |
+| Volume Handle state | Nothing | A table plus `relist.handle` / `relist.compose` labels on the helper container, so the panel can find every live handle on startup and stop it. Nothing is adopted across a panel restart: a handle from the previous build could be asked to run an operation its older helper does not implement. |
+| Browsing a Volume's files | Nothing — the panel container holds only the Docker socket and the data directory, so `/var/lib/docker/volumes/<name>/_data` is unreachable to it | One `docker exec` per operation into a helper container that mounts exactly one Volume with `--network none`. The helper does the filesystem work itself with `os.Root` and stdlib — `os.Root` has no `ReadDir`, so listing is `root.Open(".")` then `*os.File.ReadDir`, and `go.mod` must move to `go 1.24` or `go vet` rejects `os.OpenRoot` outright. |
+| Downloading a directory as tar.gz or zip | Nothing | Streamed from the helper's stdout through the exec into the HTTP response — both formats are stdlib (`archive/tar`, `archive/zip`, `compress/gzip`) and both write to a non-seekable writer, verified by round-tripping a tree through an `io.Pipe` byte-identically. Nothing is staged on disk. |
+| Idle auto-stop, upload limits, free-space check | Nothing | `RELIST_VOLUME_IDLE_TIMEOUT` (default 30 min, `0` disables), a 1 GB upload cap, a 1 MB editor cap, a 10-minute archive timeout, and a `statfs` check inside the helper before an upload is accepted. |
 
 ## 12. Implementing this in `web/`
 

@@ -12,6 +12,7 @@ import { Alert, Button, Card, Col, Empty, Flex, List, Row, Table, Tag, Timeline,
 import { useState } from 'react';
 import { navigate, paths } from '../app/router';
 import { ComposeStatusInline, ComposeStatusTag, PageHeader, RelativeTime, StatCard } from '../components/primitives';
+import { LiveHandlesBanner } from '../components/LiveHandlesBanner';
 import { usePanel } from '../data/store';
 import type { Compose } from '../data/types';
 import { composeState, summarize } from '../data/types';
@@ -98,6 +99,8 @@ export function OverviewPage() {
           type="warning"
         />
       )}
+
+      <LiveHandlesBanner />
 
       <Row gutter={[16, 16]}>
         <Col lg={6} sm={12} xs={24}>
