@@ -1,3 +1,15 @@
+/**
+ * The scene harness is imported first, and the order is load-bearing rather than
+ * cosmetic. `data/volumeMocks.ts` calls `mtime()` at module scope, through
+ * `file()`/`dir()`/`symlink()`, so the Volume Explorer's fixture timestamps are
+ * computed while the module graph is still evaluating — before any statement of
+ * this file runs. Imported first, `app/scene` has installed the frozen `?clock=`
+ * (and the `?ui=` overrides, and the `?scene=` id) by the time the fixtures read
+ * the wall clock. A clock installed anywhere later — in this file's body, in a
+ * provider, in an effect — is already too late for that one call site.
+ */
+import './app/scene';
+
 import { StyleProvider } from '@ant-design/cssinjs';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { StrictMode, useEffect, useMemo, useState } from 'react';
@@ -8,6 +20,8 @@ import './monaco';
 
 import { AppShell } from './app/AppShell';
 import { useRoute } from './app/router';
+import { sceneOverrides } from './app/scene';
+import { SceneReadiness } from './app/sceneReady';
 import { buildTheme, initialThemeMode, ThemeModeContext, ThemeModeControlContext } from './app/theme';
 import type { ThemeMode } from './app/theme';
 import { PanelProvider, useAuthMock } from './data/store';
@@ -108,7 +122,9 @@ function Root() {
       <ThemeModeContext.Provider value={mode}>
         <ConfigProvider theme={buildTheme(mode)}>
           <AntApp>
-            <PanelProvider>
+            <PanelProvider overrides={sceneOverrides()}>
+              {/* Publishes `data-scene-ready` for the capture pipeline; renders nothing. */}
+              <SceneReadiness />
               {bare ? (
                 <Screens onSignIn={auth.signIn} />
               ) : (

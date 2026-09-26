@@ -41,6 +41,25 @@ const LATENCY: Record<Speed, number> = { instant: 80, normal: 650, slow: 1_800 }
 
 export type NewVariable = { key: string; value: string };
 
+/**
+ * Storage-level state a *scene* forces, for the mount's lifetime — the
+ * `?ui=store.*` keys the harness turns into this prop (spec: *Forcing state
+ * without a click*). A prop rather than a hook because this is the store's own
+ * seed state: no override means the seed, and "back to normal" is the seed.
+ *
+ * It carries declarations, not objects: a scene says *which* volume ids are open
+ * and the store decides what a handle looks like, so the shape of a handle stays
+ * in this file with the rest of the fixtures.
+ */
+export type SceneOverrides = {
+  /** The activity log, replaced wholesale — `[]` is the empty feed. */
+  activity?: ActivityEntry[];
+  /** Volume ids whose Handle is open, in the seed's own shape; `[]` is none open. */
+  handles?: string[];
+  /** The mock's latency, for a scene that shows a pending state. */
+  speed?: Speed;
+};
+
 /** What the start dialog collects. Everything else about a handle is derived. */
 export type StartHandleInput = {
   mode: VolumeHandleMode;
@@ -66,6 +85,12 @@ type PanelValue = {
   /** One directory of a Volume. Rejects when the handle's uid cannot read it. */
   listDir: (volumeId: string, path: string) => Promise<VolumeEntry[]>;
   logs: Record<number, string>;
+  /**
+   * Every request in flight, keyed the way `isPending` is. Exposed because the
+   * scene harness publishes readiness off it: a capture may not start while the
+   * store is still loading (`app/sceneReady.ts`).
+   */
+  pending: Record<string, true>;
   loadLogs: (composeId: number) => Promise<string>;
   loadMetrics: (window: MetricWindow) => Promise<MetricSample[]>;
   loadServiceMetrics: (composeId: number, serviceName: string, window: MetricWindow) => Promise<ServiceSample[]>;
@@ -100,39 +125,64 @@ let nextId = 1_000;
 const mintId = () => ++nextId;
 const nowISO = () => new Date().toISOString();
 
-export function PanelProvider({ children }: { children: ReactNode }) {
+/**
+ * The Volume Handle every fresh load starts with, on Compose 1's uploads bind,
+ * and the container id that deploy minted.
+ *
+ * The Overview banner and the "already open" behaviour of the Volumes tab only
+ * exist when a handle outlives the visit that created it, so a fresh load has to
+ * show one to be reviewable at all — and putting it on the Volume with the demo
+ * tree means the Explorer opens on its real content rather than on the empty
+ * state a reviewer would then have to click past. The empty state is in the
+ * states gallery, where it belongs. The container id is a literal rather than
+ * `containerIdFor` so the seed reads as the deploy it stands for; a handle a
+ * *scene* asks for is minted from its volume id instead.
+ */
+const SEEDED_HANDLE = { containerId: 'a41c9e77b3d2', volumeId: '1:/app/uploads' } as const;
+
+/** How long ago the seed says the handle was opened and last used. */
+const SEEDED_HANDLE_OPENED_MINUTES_AGO = 7;
+const SEEDED_HANDLE_STARTED_MINUTES_AGO = 22;
+
+/**
+ * A handle in the shape the seed has: the app's uid, read and write, opened 7
+ * minutes ago and started 22 minutes ago. Relative to *now*, so it follows the
+ * frozen clock rather than fighting it.
+ */
+function seedHandle(volumeId: string, containerId: string): VolumeHandle {
+  return {
+    composeId: Number(volumeId.split(':')[0]),
+    containerId,
+    gid: 999,
+    mode: 'rw',
+    startedAt: new Date(Date.now() - SEEDED_HANDLE_STARTED_MINUTES_AGO * 60_000).toISOString(),
+    uid: 999,
+    uidSource: 'container-inspect',
+    lastUsedAt: new Date(Date.now() - SEEDED_HANDLE_OPENED_MINUTES_AGO * 60_000).toISOString(),
+    volumeId,
+  };
+}
+
+/** The open handles a load starts with: the seed, or the volume ids a scene named. */
+function seedHandles(volumeIds: string[]): Record<string, VolumeHandle> {
+  return Object.fromEntries(
+    volumeIds.map((volumeId) => [
+      volumeId,
+      seedHandle(volumeId, volumeId === SEEDED_HANDLE.volumeId ? SEEDED_HANDLE.containerId : containerIdFor(volumeId)),
+    ]),
+  );
+}
+
+export function PanelProvider({ children, overrides }: { children: ReactNode; overrides?: SceneOverrides }) {
   const [projects, setProjects] = useState<Project[]>(mockProjects);
-  const [activity, setActivity] = useState<ActivityEntry[]>(mockActivity);
+  const [activity, setActivity] = useState<ActivityEntry[]>(overrides?.activity ?? mockActivity);
   const [logs, setLogs] = useState<Record<number, string>>(mockLogs);
   const [checkedAt, setCheckedAt] = useState<Record<number, string>>({});
   const [pending, setPending] = useState<Record<string, true>>({});
-  const [speed, setSpeed] = useState<Speed>('normal');
-  /**
-   * Starts with one handle deliberately left open, on Compose 1's uploads bind.
-   *
-   * The Overview banner and the "already open" behaviour of the Volumes tab only
-   * exist when a handle outlives the visit that created it, so a fresh load has
-   * to show one to be reviewable at all — and putting it on the Volume with the
-   * demo tree means the Explorer opens on its real content rather than on the
-   * empty state a reviewer would then have to click past. The empty state is in
-   * the states gallery, where it belongs.
-   */
-  const [handles, setHandles] = useState<Record<string, VolumeHandle>>(() => {
-    const openedAt = new Date(Date.now() - 7 * 60_000).toISOString();
-    return {
-      '1:/app/uploads': {
-        composeId: 1,
-        containerId: 'a41c9e77b3d2',
-        gid: 999,
-        mode: 'rw',
-        startedAt: new Date(Date.now() - 22 * 60_000).toISOString(),
-        uid: 999,
-        uidSource: 'container-inspect',
-        lastUsedAt: openedAt,
-        volumeId: '1:/app/uploads',
-      },
-    };
-  });
+  const [speed, setSpeed] = useState<Speed>(overrides?.speed ?? 'normal');
+  const [handles, setHandles] = useState<Record<string, VolumeHandle>>(() =>
+    seedHandles(overrides?.handles ?? [SEEDED_HANDLE.volumeId]),
+  );
 
   const wait = useCallback(
     (ms?: number) => new Promise<void>((resolve) => setTimeout(resolve, ms ?? LATENCY[speed])),
@@ -350,6 +400,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       listDir,
       host: mockHost,
       logs,
+      pending,
       projects,
       readVolumeFile,
       resolveComposeVolumes,
