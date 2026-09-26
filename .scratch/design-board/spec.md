@@ -32,6 +32,11 @@ Yes, all of it is buildable, and none of it needs a new dependency. The two part
   *import* time (`volumeMocks.ts`'s `mtime`, reached through the fixture helpers while the module graph
   is still evaluating), so a clock installed from `main.tsx`'s body is already too late. A frozen clock
   plus a pinned timezone fixes it, and both are load-order decisions rather than features.
+- **Mobile is designed, not inherited** (added in review). The mock's entire responsive story today is
+  `Layout.Sider` with `breakpoint="lg"` and `collapsedWidth={0}` (`app/AppShell.tsx:159`) — which deletes
+  the menu below 992px and leaves a phone user with no way to navigate — plus four descriptive sentences
+  in `GUIDELINES.md` §6. A phone-width screen has to be *designed*, screen by screen, and that is the new
+  ticket 03: the registry can only declare mobile scenes once they exist.
 
 Nothing else here is hard. What follows is the detailed plan.
 
@@ -90,14 +95,19 @@ type Scene = {
   title: string;              // 'Compose — Logs drawer'
   group: SceneGroup;          // menu group, drives the column the frame lands in
   kind: 'screen' | 'overlay' | 'feedback';
+  device: 'desktop' | 'mobile';  // viewport, the rail it lands in, and the board's device filter
   hash: string;               // the route, from router.ts's paths
   ui?: Record<string, unknown>;  // forced state, keyed as useUiState keys
-  viewport: { width: number; height: number };
-  dark?: boolean;             // also capture this one in dark (see Open questions)
+  after?: string;             // a named transition adapter (toast, submit)
+  viewport: { width: number; height: number };  // desktop 1600×1000, mobile 390×844
   caption: string;            // one line: what to look at, and why it is this way
   menuPath: string[];         // ['Projects', 'my-saas', 'production', 'web'] — ordering + flow
 };
 ```
+
+There is deliberately no `dark` field: the board's theme **switch** reviews dark live through the
+mock's own `?theme=dark` rather than paying for a second capture of every frame, so there is exactly one
+still per scene and one theme in the manifest (settled in review — see *Dark mode is a switch*).
 
 `menuPath` does the ordering ("เรียงหน้าตามเมนู") and gives the flow layer its anchors without any
 hand-placed coordinates.
@@ -186,14 +196,14 @@ Three rules fall out of that list, and all three are cheap now and expensive lat
 
 ## Scene inventory
 
-First cut, from a read of every page and component. The exact list is ticket 03's output and is
+First cut, from a read of every page and component. The exact list is ticket 04's output and is
 reviewed as a list before anything is captured — expect the count to move by ±10.
 
 **Shell and navigation** — the canvas's flow lines start here.
 
 | id | what it shows |
 | --- | --- |
-| `shell-light`, `shell-dark` | the shell itself: sider, breadcrumbs, header cluster |
+| `shell` | the shell itself: sider, breadcrumbs, header cluster (one scene, not a light/dark pair — the stills are light, so a `shell-dark` frame would be a light image with a dark label) |
 | `shell-account-menu` | account dropdown open |
 | `shell-command-palette` | command palette open |
 | `shell-command-palette-empty` | palette filtered to nothing |
@@ -263,8 +273,51 @@ are covered by real Volume Explorer scenes now.
 **Design system** — `guidelines-overview`, plus the three chart states the guidelines page is the only
 place to see (`partial`, `unavailable`, auto-axis with a >100 % worker series).
 
-Roughly **95–105 frames**, of which about a third are overlays. Capture cost at ~6 s each is 10–15
-minutes for a full run, which is why `--only` exists.
+Roughly **95–105 desktop frames**, of which about a third are overlays, plus the **~20–25 mobile
+scenes** of *Mobile: the second viewport* — so a full run is on the order of **115–130 captures**. At
+~6 s each that is 12–18 minutes, which is why `--only` exists; the real figure is measured in ticket 05
+rather than asserted here.
+
+## Mobile: the second viewport
+
+The panel is a desktop tool that gets opened on a phone after a deploy notification
+(`StatesGalleryPage.tsx:337` says exactly that), and today that experience is whatever antd does by
+default: below 992px the sider collapses to zero and the menu is simply gone — no menu button, no
+replacement — so the first thing a phone user loses is the ability to navigate. `GUIDELINES.md` §6's four
+responsive rules describe that accident; they are not a design.
+
+Mobile design fixes it, and it is a design gate of its own (ticket 03) because it changes screens:
+
+- **Two designed widths, one breakpoint.** Desktop is ≥ 992px — everything the mock shows today. Below
+  992px is mobile, designed at **390×844** (phone class) and checked at **360**, the narrowest width
+  `index.css` allows. No tablet tier: 992–1279 is today's desktop-minus-sider and stays as it is.
+- **Navigation stays reachable.** The shell gains a top bar with a menu button that opens the sider as a
+  `Drawer`; `shell-nav` is a mobile scene, because "the menu on a phone" is itself a state worth
+  reviewing.
+- **The mechanics that change are designed, not inherited.** The header cluster (search / theme /
+  account) collapses to icons plus an overflow menu; breadcrumbs truncate to the parent plus a back
+  control; a phone-width title never fights a wrapped action row. `Segmented` / `Tabs` bars scroll
+  instead of wrapping. The eight screens using `<Table>` (Projects, Variables, the environments table,
+  the Volume Explorer's file list, …) become stacked rows at phone width, keeping the one or two columns
+  that carry the decision — the file list drops uid/gid/mode, which is exactly why its owner columns can
+  go. Modals become full-height sheets below 768px; `Popconfirm` becomes a confirm dialog naming its
+  subject in the body; the Compose rail stacks under the editor with the primary action kept in the
+  header; the full-screen editor's fixed 340px variables rail stacks too. Monaco stays editable on a
+  phone — a phone is where you paste a fix from a notification — but the editor takes the viewport
+  rather than `clamp(640px, 80vh, 1000px)`.
+- **Mobile is a viewport, not a second design.** Same screens, same components, same tokens: a screen's
+  mobile frame and its desktop frame are the same scene at two widths, which is why the registry
+  declares `device` instead of a parallel set of screens.
+
+What mobile costs, said plainly: one designed pass over every screen, and a second capture for the
+screens that get one. A mobile frame for *every* state is not in the plan — the layout differs
+wholesale, so **one mobile frame per screen, in its primary state, answers most of the questions**, and
+the mobile inventory is ~20–25 scenes: those primary states, plus the states where mobile actually
+changes the answer (the nav drawer, a stacked table, a full-height dialog, the file list, a long log
+line, the charts). Ticket 03 designs them; ticket 04 declares them.
+
+**The board itself is not responsive.** A ~125-frame canvas is a desktop review surface, and a phone
+cannot review it; the offline `dist-single` copy is desktop too. That is a non-goal, not an oversight.
 
 ## The canvas
 
@@ -273,7 +326,10 @@ minutes for a full run, which is why `--only` exists.
 - One **column per menu group**, left to right in menu order: Overview, Projects, Monitoring, Project,
   Compose, Volume Explorer, Design system, Auth, Feedback. A group header sits at the top of each.
 - Within a column, frames stack in reading order. A screen's **overlays sit in a rail to its right**,
-  indented, so "Compose — running" and the three dialogs that belong to it read together.
+  indented, so "Compose — running" and the three dialogs that belong to it read together. A screen's
+  **mobile frame sits in a second rail** one column-width further right, labelled with its viewport:
+  desktop and phone read as a pair, and the device filter removes whichever half the reviewer is not
+  asking about.
 - Every frame is laid out at its captured pixel size (from the manifest), so nothing reflows when
   images load.
 
@@ -293,15 +349,32 @@ and the whole layer toggles off — a reviewer checking spacing does not want li
 
 ### Board chrome
 
-Sticky bar, outside the transform: theme (Light/Dark, per-frame where a dark still exists), group
-filter, search over scene titles and ids, zoom presets + Fit + `100%`, **lines** and **captions**
+Sticky bar, outside the transform: the **theme switch**, a **device filter** (Desktop / Mobile / Both),
+a group filter, search over scene titles and ids, zoom presets + Fit + `100%`, **lines** and **captions**
 toggles, a legend, and Print. The manifest's source revision is shown in the corner, so staleness is
 always on screen.
 
+### Dark mode is a switch
+
+Settled in review, and it is the honest version of what was asked for: **no dark stills.** A frame is an
+image, and an image cannot be re-themed. A switch that appeared to darken the frames would either invert
+pixels (a lie about the real UI) or demand a second capture of every frame — the double cost that made
+this an open question in the first draft. So the switch does two things that are true:
+
+- it themes the **board's own chrome** — bar, columns, frame cards, captions, lines — immediately, which
+  is most of what "กด switch" is for;
+- and while it is on, every **Open live** link carries `?theme=dark`, so the dark design is one click from
+  the frame, on the live mock, at that exact state. Dark is reviewed live, not photographed.
+
+The stills stay light and the lightbox says so in one line, so a dark board never implies dark
+screenshots. If dark frames are ever wanted, the door is one scene field plus one pipeline flag; the
+manifest already carries a `theme` field for it.
+
 ### Frame chrome
 
-Under each frame: scene id (monospace, copyable), title, route, and **Open live**. Clicking the image
-opens a lightbox at 100 % — the frame itself never navigates.
+Under each frame: scene id (monospace, copyable), title, route, and **Open live**. A mobile frame also
+shows its viewport (`390×844`) — the whole point of the pair is that the width differs. Clicking the image
+opens a lightbox at 100 %; the frame itself never navigates.
 
 ### Pan and zoom
 
@@ -328,9 +401,9 @@ adapters and the `duration: 0` toasts above would fire twice, the store would tr
 For each scene:
 
 1. `Emulation.setDeviceMetricsOverride` at the scene's viewport (default 1600×1000), `deviceScaleFactor` 1.
-2. Navigate to `?scene=<id>&theme=<mode>&clock=<fixed>#<hash>` — query before hash, as above. `scene=`
-   is the pipeline's own assertion: readiness reports the id back, so a capture cannot silently be of
-   the wrong scene.
+2. Navigate to `?scene=<id>&clock=<fixed>#<hash>` — query before hash, as above. `scene=` is the
+   pipeline's own assertion: readiness reports the id back, so a capture cannot silently be of the wrong
+   scene. There is no `theme=` in the URL: every still is light (*Dark mode is a switch*).
 3. Wait for readiness: `pending` empty in the store, `document.fonts.ready`, and — for scenes with an
    editor — Monaco mounted and idle. The app publishes this as `data-scene-ready` on `<html>`.
 4. Inject `animation: none !important; transition: none !important; caret-color: transparent`, so a
@@ -351,7 +424,7 @@ opposite for its own frames:
   combination.** `AppShell`'s header is sticky (`app/AppShell.tsx:221`), antd's Drawer/Modal/message are
   fixed — a drawer should come out viewport-tall inside a taller image (that is honest), but the sticky
   header and any scroll-position artefact must be looked at once, on one screen and one drawer, before
-  ~100 frames are committed to the pipeline. Ticket 04's first task is that smoke test.
+  ~125 frames are committed to the pipeline. Ticket 05's first task is that smoke test.
 
 Then encode to WebP — `Page.captureScreenshot({ format: 'webp' })`, i.e. Chrome's own encoder, which
 has no lossless switch: **quality is an integer and the output is lossy.** So "lossless" is not
@@ -360,30 +433,30 @@ screen at `quality: 90` and at default, record bytes and milliseconds, and compa
 for UI text compresses worse but rings less). Ticket 04 records the numbers in its Comments, and the
 `## Shipping the board` budget only moves once they exist.
 
-Write `public/stills/<id>[@dark].webp` and the manifest — which is a **source** file, not a public
+Write `public/stills/<id>.webp` and the manifest — which is a **source** file, not a public
 asset, so it can be imported and typechecked rather than fetched (see below):
 `src/scenes/manifest.json`, one entry per still:
 
 ```
-{ id, theme, file, width, height, bytes, sha256, capturedAt, sourceRev }
+{ id, device, theme, file, width, height, bytes, sha256, capturedAt, sourceRev }
 ```
 
 `sourceRev` is `git rev-parse HEAD` of the mock's tree plus a dirty flag, so a board built from a
 modified working tree says so.
 
-Flags: `--only <id…>`, `--group <group>`, `--theme`, `--scale`, `--check`.
+Flags: `--only <id…>`, `--group <group>`, `--device desktop|mobile`, `--scale`, `--check`.
 
 **`--check` is a same-machine check and the spec should say so.** It re-captures into a temp dir and
-compares hashes, which costs a full 10–15 minute run (so it is not a per-edit loop, and this repo has
+compares hashes, which costs a full 12–18 minute run (so it is not a per-edit loop, and this repo has
 no CI to put it in — there is no `.github/workflows`), and byte equality also breaks on a Chrome or
 font update. Its honest use is "did the mock change since the last capture, on the machine that made
 them", and the cheap alternative for everything else is `sourceRev`: if HEAD or the dirty flag moved,
 the board's corner says the stills are behind. That is the staleness signal that costs nothing.
 
 **A missing still is a visible hole, never a silent one.** The board renders a labelled placeholder
-frame for a scene the manifest does not cover, so a registry entry added without a capture is obvious
-on the board. The same rule applies to a missing **dark** variant: the theme toggle falls back to the
-light still and marks the frame, rather than showing an empty box.
+frame for a scene the manifest does not cover, so a registry entry added without a capture is obvious on
+the board. The same rule covers a device: the manifest's `device` field is what the board's filter reads,
+so a missing mobile frame shows as a hole — never as a desktop frame standing in for it.
 
 ## Shipping the board
 
@@ -408,17 +481,18 @@ Three details make it work, and each is a trap if it is left to the implementer:
    `stills/<id>.webp` resolves from `file://`; but `import.meta.glob`-ing the images would trip
    `assetsInlineLimit: 100_000_000` (`vite.single.config.ts:14`) and base64 the entire set into one HTML
    (≈ +33 % on top of ~10 MB of WebP, added to 5.5 MB). Manifest imported, images not.
-3. **Stills are committed; the built folder is not.** Commit `web-design/public/stills/**` (~100 WebP).
+3. **Stills are committed; the built folder is not.** Commit `web-design/public/stills/**` (~120 WebP).
    The design pass *is* the deliverable, a reviewer must be able to see it without regenerating it, and
    the alternative — a gitignored `stills/` rebuilt by `pnpm stills` — makes the review surface depend
-   on a 10–15 minute run on every machine that wants to look.
+   on a 12–18 minute run on every machine that wants to look.
 
-**Budget, once measured.** The first draft claimed "WebP lossless at ~8–12 MB for ~100 frames"; CDP's
+**Budget, once measured.** The first draft claimed "WebP lossless at ~8–12 MB for ~120 frames"; CDP's
 WebP is lossy (above), so that figure is unmeasured and looks optimistic for 1600×~2400 text screens.
 Ticket 04 measures one frame — bytes at `quality: 90` and default, versus PNG — and the whole set,
 *before* this recommendation is treated as settled: comfortably under ~15 MB, commit them; over, drop
-the frames' quality, cut the dark subset, or ship the set as a release artifact and say so in the
-README. Discovering it after ~100 MB of WebP has landed in git is the expensive order.
+the frames' quality, capture the mobile half with `--only` after the desktop set, or ship the stills as a
+release artifact and say so in the README. Discovering it after tens of megabytes of WebP has landed in
+git is the expensive order.
 
 **ADR.** "The review surface is stills committed to the repo" is a durable, repo-wide decision of the
 kind `docs/adr/` exists for (compare 0004, 0007, 0008). Ticket 08 writes it, with the measured sizes in
@@ -454,38 +528,43 @@ means, and it is settled here rather than left as an open question.
 | ~55 `useState` → `useUiState` edits across ~17 files | Mechanical, one hook, mock-only, reviewed per screen *and* against the per-file inventory (see *What converts, and what does not*), which is what bounds it. It is the price of addressable states, and it pays off outside the board (deep links). |
 | The clock is patched too late to matter | The six call sites are listed, and one runs at import time — so the harness is `main.tsx`'s first import, not a hook or a provider. |
 | `StrictMode` double-fires the mount-time fictions | Capture drives a production build (`vite preview` / `dist-single`), never `pnpm dev`. |
-| Images go stale as the mock changes | Manifest carries `sourceRev` (HEAD + dirty flag); the board shows it, and that is the cheap signal. `pnpm stills --check` is a same-machine, 10–15 minute re-capture that byte comparison also invalidates on a Chrome update — so it is a milestone tool, not a guard, and the repo has no CI to put it in. |
-| Capture is slow (~10–15 min for ~100 frames, estimated) | `--only` / `--group` for iteration; full runs are for review milestones. Ticket 04 makes the pilot capture (two screens, four frames) real so the number stops being a guess before ~96 more frames are taken. |
+| Images go stale as the mock changes | Manifest carries `sourceRev` (HEAD + dirty flag); the board shows it, and that is the cheap signal. `pnpm stills --check` is a same-machine, 12–18 minute re-capture that byte comparison also invalidates on a Chrome update — so it is a milestone tool, not a guard, and the repo has no CI to put it in. |
+| Capture is slow (~12–18 min for ~120 frames, estimated) | `--only` / `--group` for iteration; full runs are for review milestones. Ticket 05 makes the pilot capture (two screens, four frames) real so the number stops being a guess before ~120 more frames are taken. |
 | A frame captures mid-animation or mid-load | The readiness signal plus the animation-freeze injection, and a scene cannot capture unless `data-scene-ready` reports its own id. |
 | Beyond-viewport capture mangles sticky/fixed chrome, or looks nothing like a real viewport | Sticky header (`app/AppShell.tsx:221`) and viewport-tall overlays are smoke-tested on one screen and one drawer first, and the content-height rule is written into `GUIDELINES.md` §4.9 so it is a decision rather than a contradiction. |
-| WebP is lossy, so "lossless, 8–12 MB" may be wrong by an order of magnitude | Measured in ticket 04 before the set is committed; *Shipping the board* names the fallbacks (quality, dark subset, release artifact). |
+| WebP is lossy, so "lossless, 8–12 MB" may be wrong by an order of magnitude | Measured in ticket 05 before the set is committed; *Shipping the board* names the fallbacks (quality, staged capture, release artifact). |
 | The offline promise quietly does not hold | Shipping path is explicit: manifest imported (not fetched — `file://` blocks it), images relative, `dist-single/` folder handed over. |
-| Dark mode doubles the work | `dark: true` opt-in per scene, not global (open question 1 below). |
+| Dark design is reviewed live, not photographed | The switch (ticket 08) themes the board and hands `?theme=dark` to Open live, so the stills stay light and the lightbox says so. Dark *frames*, if ever wanted, are one scene field plus one pipeline flag — not a migration. |
+| Mobile doubles the capture count for the screens that get a phone frame | One frame per screen in its primary state (~20–25), designed in 03, declared in 04, and staged so the desktop set is reviewed first. A phone frame for every state is explicitly not the plan. |
 | Some states have no fixture to reach them | `ComposeVolumesTab`'s disabled-Open state and `StartHandleDialog`'s absent-path refusal have no fixture at all today. Either add the fixture or document the state as unrendered — the board must not draw a frame the app cannot produce. |
 | Removing `#/design/screens` ripples further than the page | The route kind, `paths.screens`, `main.tsx`'s branch and its `bare` entry, and the README prose are all named in *What happens to the existing pages*. `#/design/states` **survives** as the host for scenes with no home screen, so `screenshot.sh` and the guidelines link need no change — removing it would strand ~10 feedback scenes. |
 | The board itself grows into an app | It renders declared data and draws two kinds of lines. No comments, no approval workflow, no editing (non-goals). |
 
 ## Delivery
 
-Tickets in `.scratch/design-board/issues/`, in dependency order. Two review points rather than one:
-**ticket 03's registry** (the scene list is agreed as a list before anything is captured) and
-**ticket 04's pilot capture** (four frames, agreed before the other ~96).
+Tickets in `.scratch/design-board/issues/`, in dependency order. Three review points rather than one:
+**ticket 03's mobile screens** (the phone-width design, reviewed at 390 on the mock), **ticket 04's
+registry** (the scene list is agreed as a list before anything is captured), and **ticket 05's pilot
+capture** (four frames, agreed before the other ~120).
 
 | # | Ticket | Blocked by |
 | --- | --- | --- |
 | 01 | `01-scene-harness.md` — the harness: `?ui=` / `?clock=` / `?scene=`, `useUiState`, `SceneOverrides`, frozen clock | — |
 | 02 | `02-addressable-states.md` — the swap across the mock, plus the toast and post-action adapters | 01 |
-| 03 | `03-scene-registry.md` — every scene declared, in menu order, with captions and links | 02 |
-| 04 | `04-stills-pipeline.md` — pilot capture, readiness, determinism, WebP, manifest, measured sizes | 01, 03 |
-| 05 | `05-the-board.md` — layout, pan/zoom, frame chrome, lightbox, Open live, missing-still holes | 03, 04 |
-| 06 | `06-flow-layer.md` — menu miniature, anchors, SVG connectors, legend | 05 |
-| 07 | `07-board-chrome.md` — theme (incl. the dark subset), filters, search, print, revision corner | 05 |
-| 08 | `08-ship-and-retire.md` — offline path, remove `#/design/screens`, README, GUIDELINES, ADR, volume ticket 01 | 05, 06, 07 |
+| 03 | `03-responsive-mobile.md` — the phone-width design: shell nav, tables, dialogs, the editor, at 390/360 | 02 |
+| 04 | `04-scene-registry.md` — every scene declared, desktop and mobile, in menu order, with captions and links | 03 |
+| 05 | `05-stills-pipeline.md` — pilot capture, readiness, determinism, WebP, manifest, measured sizes | 01, 04 |
+| 06 | `06-the-board.md` — layout, device rail, pan/zoom, frame chrome, lightbox, Open live, holes | 04, 05 |
+| 07 | `07-flow-layer.md` — menu miniature, anchors, SVG connectors, legend | 06 |
+| 08 | `08-board-chrome.md` — theme switch, device/group filters, search, print, revision corner | 06 |
+| 09 | `09-ship-and-retire.md` — offline path, remove `#/design/screens`, README, GUIDELINES, ADR, volume ticket 01 | 06, 07, 08 |
 
 01 and 02 are split because they have different failure modes: the first is a new module with one hard
 ordering constraint and one determinism acceptance test, the second is ~55 reviewed edits with no new
 concepts. Together they were the plan's single long pole; apart, each is a ticket someone can finish and
-verify on its own.
+verify on its own. 03 was added in review and sits before the registry because the registry can only
+declare mobile scenes that exist, and because a phone-width design is a review gate in its own right —
+it changes screens far more than the `useUiState` swap does.
 
 ## Verification and testing decisions
 
@@ -496,13 +575,20 @@ verification is the folder's own established recipe plus one thing Node 24 ships
   `useUiState` swap's mechanical mistakes.
 - **`node --test scripts/*.test.mjs`** — `node:test` is stdlib on Node 24, so the board's *pure* rules
   (menu ordering from `menuPath`, column/rail placement, anchor fractions → canvas points, connector
-  paths, manifest ↔ registry diff) get real unit tests with no new dependency. This is where "the board
-  is declared data plus arithmetic" is cashed in: the layout module stays render-free.
+  paths, manifest ↔ registry diff, and the device pairing) get real unit tests with no new dependency.
+  This is where "the board is declared data plus arithmetic" is cashed in: the layout module stays
+  render-free.
 - **The CDP render check** — the technique every ticket in `design-port`, `host-monitoring` and
   `volume-files` used: drive the built bundle, assert on the DOM, screenshot the notable states. Each
-  ticket names what it asserts: ticket 02 that every override key produces the state it names, ticket 04
-  that a scene cannot be captured unless readiness reported *its* id, ticket 05 that every registry entry
+  ticket names what it asserts: ticket 02 that every override key produces the state it names, ticket 05
+  that a scene cannot be captured unless readiness reported *its* id, ticket 06 that every registry entry
   has a frame and that a still missing from the manifest renders the labelled placeholder.
+- **Mobile is checked at the width, not by eye.** Ticket 03's acceptance is a CDP sweep at 390 and 360
+  asserting, per screen, that the document does not scroll horizontally
+  (`documentElement.scrollWidth <= innerWidth`), that the menu button opens navigation that is reachable,
+  that the screen's primary action is inside the first viewport, and that a `<Table>` has become stacked
+  rows. DOM assertions rather than screenshots, so the sweep runs over every screen instead of a curated
+  few.
 - **Determinism is itself a test, once.** Ticket 01's acceptance is that one scene captured twice, a
   minute apart on the wall clock with the same `?clock=`, produces byte-identical WebP. Without that
   check the frozen clock is a claim rather than a fix.
@@ -511,36 +597,48 @@ verification is the folder's own established recipe plus one thing Node 24 ships
 
 ## Open questions
 
-Settled while reviewing this plan, so no ticket is built on a guess:
+Settled in review, so no ticket is built on a guess:
 
+- **Dark mode is a switch, not a second capture.** The board's switch themes the board's own chrome and
+  hands `?theme=dark` to Open live; there are no dark stills (see *Dark mode is a switch*). This removes
+  the one open question that would have doubled the capture cost.
+- **Frame chrome** — scene id, title, route, caption, **Open live**, plus the viewport on mobile frames,
+  and nothing else: the caption already *is* the "what to check" line.
+- **Mobile is in scope**, as its own design gate (ticket 03) and as a second viewport in the registry
+  (~20–25 scenes) at 390×844, checked at 360, with no tablet tier and no responsive board.
+- **Pilot first**: the pipeline captures four frames before the other ~120, so the frame chrome, the
+  image quality and the WebP budget are agreed on four images instead of a hundred.
 - **Does the board replace both `#/design/screens` and `#/design/states`?** As *review surfaces*, yes —
   see *What happens to the existing pages*. `#/design/states` keeps its route as the host for the ~10
   feedback scenes that have no home screen, which is a correction to this plan's first cut: deleting it
   would have stranded them.
 - **Commit the stills?** Yes, subject to the measured budget gate in *Shipping the board* — the decision
-  is "commit", the size is what ticket 04 measures.
+  is "commit", the size is what the pipeline measures.
 - **All overlays as frames, or only the primary ones?** All (~35). "Show the modals separately" is the
   user's ask; trimming to the primary ~20 remains a one-line filter if the board reads as crowded.
 - **The clock's scope** — all six call sites, patched rather than plumbed, with `TZ=UTC` pinned by the
   runner.
 
-Still open, and cheaper to answer now than after capture:
+Still open:
 
-1. **Dark mode coverage** — a chosen subset (`dark: true` on the ~15 frames where dark actually matters)
-   or all ~100? Recommended: the subset, decided while writing the registry in ticket 03, since doubling
-   the captured set doubles every full run.
-2. **Frame chrome contents** — scene id (monospace, copyable), title, route, caption, **Open live**.
-   Anything else wanted per frame, e.g. a one-line "what to check" for the reviewer, or the group and tab
-   the frame sits under? Every addition is paid on all ~100 frames.
-3. **Pilot first, or capture everything first?** Recommended: ticket 04 captures Overview and one Compose
-   scene in light plus one overlay (four frames), and ticket 05 renders those four before the other ~96
-   are captured — so the frame chrome, the image quality and the WebP budget are agreed on four images
-   instead of a hundred.
+1. **How much mobile, exactly** — the plan says one frame per screen in its primary state, plus the
+   states where mobile changes the answer (nav drawer, stacked table, full-height dialog, file list, a
+   long log line, the charts). If a particular screen's other states should also get a phone frame, now
+   is the cheap moment: it is ~12 more captures, and later means a registry edit plus a partial re-run.
+2. **Do the mobile rules reach the implementation in this pass?** They land in `GUIDELINES.md`, which is
+   the contract `web/` is built against, but nothing here ports them — that happens in the design port
+   (`design-port`). So: a responsive ticket there, or fold each screen's mobile rules into its existing
+   design-port ticket (where they would be verified against the real components rather than the mock)?
 
 ## Non-goals
 
 - Not a replacement for `GUIDELINES.md` — that stays the written contract; the board shows it next to
   the screens it describes.
+- **No responsive board, and no tablet tier.** The board is a desktop review surface for ~125 frames
+  (*Mobile: the second viewport*); 992–1279px stays whatever desktop is today, and the offline
+  `dist-single` copy is desktop too.
+- **No touch-gesture design and no PWA.** Mobile design here means the screens work at phone width — not
+  swipe gestures, pull-to-refresh, or installing the panel on a home screen.
 - No commenting, approval, or per-frame sign-off on the board. Feedback stays in conversation, keyed by
   scene id.
 - No pixel-diffing between captures.
