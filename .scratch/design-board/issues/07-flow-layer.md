@@ -15,10 +15,10 @@ Sources and destinations both come from the registry's `SceneLink` declarations 
 `src/board/layout.ts` (06) computes — this ticket adds no data of its own, which is what keeps it small
 and reviewable.
 
-One rule about the mobile half: a `nav` or `opens` edge is declared **once per screen**, and it starts
-and ends on **desktop** frames. A phone frame is the same screen at another width, so a link from it — or
-a pair of lines converging on it — would say something untrue about navigation. The mobile rail gets no
-connectors; it gets its label.
+One rule about the other viewports: a `nav` or `opens` edge is declared **once per screen**, and it
+starts and ends on **desktop** frames. A tablet or phone frame is the same screen at another width, so a
+link from it — or a pair of lines converging on it — would say something untrue about navigation. The
+tablet and mobile rails get no connectors; they get their width labels.
 
 Rendering rules: SVG beziers in the same transformed space as the frames, with
 `vector-effect="non-scaling-stroke"` so a line is 1 px at every zoom; connectors never draw over a frame's

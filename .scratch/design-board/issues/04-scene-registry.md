@@ -10,11 +10,10 @@ type Scene = {
   title: string;                 // 'Compose — Logs drawer'
   group: SceneGroup;             // menu group: the column the frame lands in
   kind: 'screen' | 'overlay' | 'feedback';
-  device: 'desktop' | 'mobile';  // viewport, the rail it lands in, and the board's device filter
+  viewports: ViewportKey[];      // 'desktop' | 'tablet' | 'mobile' — which widths this scene is captured at
   hash: string;                  // a route built through app/router.ts's `paths`
   ui?: Record<string, unknown>;  // forced state, keys from app/uiKeys.ts
   after?: string;                // a named transition adapter (02)
-  viewport: { width: number; height: number };  // desktop 1600×1000, mobile 390×844
   caption: string;               // one line: what to look at, and why it is this way
   menuPath: string[];            // ['Projects', 'my-saas', 'production', 'web'] — order + flow
 };
@@ -24,15 +23,21 @@ type SceneLink = { kind: 'nav' | 'opens'; from: { scene: string; at?: [number, n
 
 The links are declared here too, not in the flow layer: a menu item's destination, a tab's destination,
 and a trigger's `opens` edge are all *data about the scene*, and declaring them beside the scene is what
-keeps 06 a pure renderer. `at` is a fraction of the frame box (`[0.97, 0.04]` for a header's ⋯ button),
+keeps 07 a pure renderer. `at` is a fraction of the frame box (`[0.97, 0.04]` for a header's ⋯ button),
 which is how a trigger is expressible without pixel-picking.
 
+`ViewportKey` is `'desktop' | 'tablet' | 'mobile'`, with the sizes from the spec's `VIEWPORTS`
+(1600×1000, 834×1112, 390×844) declared once and imported by the board — a scene that listed a width
+whose size lived only in the registry would be two sources of truth for one number.
+
 Start from the spec's inventory (~95–105 desktop frames, about a third overlays) and revise it against
-the mock now that 02 has made every state reachable, then add the mobile half: **~20–25 `device: 'mobile'`
-scenes at 390×844**, one per screen for its primary state plus the states where mobile changes the answer
-(the nav drawer, a stacked table, a full-height dialog, the file list, a long log line, the charts) —
-designed in 03, and not one per state (see *Mobile: the second viewport*). Every mobile scene names the
-desktop scene it is the second viewport of, and every screen worth a phone frame gets one.
+the mock now that 02 has made every state reachable, then add the other viewports: **~20–25
+`viewports: ['mobile']` scenes at 390×844** (one per screen for its primary state, plus the states where
+mobile changes the answer: the nav drawer, a stacked table, a full-height dialog, the file list, a long
+log line, the charts) and **~10 `viewports: ['tablet']` scenes at 834×1112** (the screens whose layout
+genuinely differs there — Projects, Overview's stat rows, Variables, Monitoring, Compose, the Explorer).
+Designed in 03; every non-desktop scene names the screen it is the second viewport of, and a screen worth
+a phone frame gets one.
 
 Two entries the spec flags as unobtainable have to be resolved here rather than faked:
 `ComposeVolumesTab`'s disabled-Open state and `StartHandleDialog`'s absent-path refusal. Either add the
@@ -60,9 +65,12 @@ not draw a frame the app cannot produce.
       real scene ids
 - [ ] `node --test scripts/registry.test.mjs` (stdlib runner, no new dependency) asserts the invariants
       above, so 05 can reject a scene that points at nothing
-- [ ] Every `device: 'mobile'` scene declares 390×844 and pairs with a desktop scene; a mobile scene whose
-      screen has no desktop frame (or vice versa, for a screen that got a phone frame) is a test failure,
-      not a judgement call
+- [ ] Every `viewports` list is explicit and honest: a scene captured at one width says so, and a scene
+      captured at several lists them all. Nothing implies a variant that was not designed in 03
+- [ ] Non-desktop scenes pair with a desktop scene of the same screen, and the pairing is asserted — a
+      tablet or phone frame with no screen behind it is a test failure, not a judgement call
 - [ ] No scene declares a dark variant: the theme switch reviews dark live (see *Dark mode is a switch*),
       so a `dark` field reappearing here is a mistake
 - [ ] The list is reviewable at a glance — it is read, not run — because it is the gate 05 captures from
+- [ ] The tablet set is chosen, not defaulted: ~10 scenes, each because the 834px layout differs from both
+      desktop and phone. A tablet frame that just looks like a wider phone is a wasted capture

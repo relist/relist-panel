@@ -32,10 +32,11 @@ delete its volume-specific sections (duplicates of real screens), and leave `pat
 - `GUIDELINES.md` §4.9 — the design-system section describes the board; it also records the
   content-height-frame rule the board changes (the gallery's own header argues the opposite for its own
   frames, so the two files must stop contradicting each other).
-- `GUIDELINES.md` §6 — the four descriptive responsive sentences are replaced by the designed mobile
-  contract from 03: the 992px breakpoint, what changes under it per pattern (nav as a drawer, stacked
-  rows instead of tables, sheets instead of dialogs, scrolling tab bars, hit targets), and the rule that
-  the board is desktop-only.
+- `GUIDELINES.md` §6 — the four descriptive responsive sentences are replaced by the designed contract
+  from 03: the three tiers (desktop ≥ 1200, tablet 768–1199, mobile < 768), what changes in each per
+  pattern (nav as a drawer, stacked rows instead of tables, sheets on a phone and centred dialogs on a
+  tablet, scrolling tab bars, hit targets), the rule that the board is desktop-only, and the board's two
+  modes — stills by default, Live per frame for widths and themes that were never captured.
 - `docs/adr/` — the ADR `## Shipping the board` calls for: the review surface is stills committed to the
   repo, with the measured sizes, the lossy-WebP caveat and the rejected alternatives (gitignored stills,
   live iframes).
@@ -50,7 +51,8 @@ delete its volume-specific sections (duplicates of real screens), and leave `pat
 - [ ] A clean `pnpm --dir web-design build` and `build:single` both succeed, and the board renders from
       `dist-single/index.html` opened off disk with no dev server and no network — mobile frames included,
       since a phone rail that only resolves on the dev server is exactly the failure this ticket exists to
-      prevent
+      prevent — with the viewport and theme switches still working in Still mode, and **Live** disabled with
+      a stated reason rather than a blank iframe
 - [ ] The offline board is checked on a **fresh clone** (or after `git clean -xdf` + `pnpm install`),
       because "it renders here" with a warm `node_modules` and an old `dist-single/` is not the check
 - [ ] The committed stills' total size is recorded in Comments and is inside the budget the spec's

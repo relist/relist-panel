@@ -1,10 +1,13 @@
-# 03 — Responsive and mobile design: the panel at phone width
+# 03 — Responsive design: the panel at tablet and phone width
 
 **What to build:** The missing design. Today the panel's responsive behaviour is one antd prop —
 `Layout.Sider breakpoint="lg" collapsedWidth={0}` (`app/AppShell.tsx:159`) — which below 992px deletes
 the sider and leaves **no way to navigate at all**, plus four descriptive sentences in `GUIDELINES.md`
 §6 and a static 360px illustration in the states gallery. This ticket turns that into a designed
-contract, screen by screen, at **390×844** (phone class) and checked at **360**.
+contract at **three tiers**: tablet **768–1199** designed at **834×1112**, mobile **< 768** designed at
+**390×844** checked at **360**, desktop unchanged at **≥ 1200**. Moving the desktop floor from 992 to
+1200 is part of the design — below it the sider becomes a drawer — and it is open question 2 in the spec
+if you would rather keep 992 and treat tablet as a wide phone.
 
 This is a design gate of its own: mobile changes screens far more than the `useUiState` swap does, and it
 is reviewed at 390 on the running mock — before the registry (04) can declare a single mobile scene, and
@@ -19,8 +22,13 @@ before anything is captured from a phone-width viewport.
 - the `PrototypeStrip` (mock latency) stops taking a full row of the viewport
 
 **Then the screens.** For each: what stacks, what scrolls, what is dropped, and what stays in the first
-viewport. The known mechanics, from reading the mock rather than guessing:
+viewport — at tablet as well as at phone width, because 834 is where two columns fit and the phone
+answers do not apply. The known mechanics, from reading the mock rather than guessing:
 
+- **Tablet is its own layout**: two columns where the content allows (Overview's stat rows, Monitoring's
+  chart pairs, Projects' card grid, the Variables and Settings forms), the sider still a drawer, tables
+  stacked but with room for a third column, dialogs **centred** rather than full-height sheets, and the
+  Compose rail under the editor as on mobile.
 - **Tables → stacked rows** in the eight files that use `<Table>` (`ProjectsPage`, `VariablesPanel`,
   `ProjectPage`'s environments table, `VolumeExplorerPage`'s file list, `ComposeVolumesTab`, …). Keep the
   one or two columns that carry the decision: the file list keeps name, size and mtime and drops
@@ -43,16 +51,28 @@ viewport. The known mechanics, from reading the mock rather than guessing:
 - **Hit targets**: nothing interactive below 44px, and none of the in-table `size="small"` actions survive
   as-is on a card row.
 
+- **Editor resize**: `MONACO_OPTIONS` (`components/YamlEditor.tsx:7-17`) has no `automaticLayout`, so the
+  editor does not re-layout when its container changes width — which happens at phone width, inside a
+  sheet, and in every Live frame on the board (spec's *Viewport and theme*). One line, and it is this
+  ticket's because this is where the container starts moving.
+
 **Then the words:** `GUIDELINES.md` §6's four responsive sentences are replaced by this contract (the
-breakpoint, what changes, and the rules per pattern), and `StatesGalleryPage`'s static "Narrow viewports"
-card becomes a link to the mobile scenes instead of a picture of one.
+three tiers, what changes in each, and the rules per pattern), and `StatesGalleryPage`'s static "Narrow
+viewports" card becomes a link to the tablet and mobile scenes instead of a picture of one.
 
 **Blocked by:** 02
 
 **Status:** needs-triage
 
-- [ ] At 390 and at 360, every screen renders with **no horizontal document scroll**
-      (`documentElement.scrollWidth <= innerWidth`) — the sweep is per screen, asserted, not eyeballed
+- [ ] At 834, at 390 and at 360, every screen renders with **no horizontal document scroll**
+      (`documentElement.scrollWidth <= innerWidth`) — the sweep is per screen per width, asserted, not
+      eyeballed
+- [ ] At 834 the designed two-column layouts actually appear where the design says they do, and nowhere
+      else — a screen that reflows to one column at 834 is a decision, recorded in Comments
+- [ ] Dialogs are centred at 834 and full-height sheets at 390; the destructive controls stay reachable
+      and their consequences readable in both
+- [ ] The editor survives a container resize (`automaticLayout`), verified inside a phone-width sheet and
+      inside a Live frame on the board
 - [ ] Navigation is reachable at phone width: the menu button opens the sider as a `Drawer`, the current
       route is selected inside it, and closing it returns to the screen
 - [ ] Every screen's primary action is inside the first viewport at 390 (Deploy on Compose, Save on

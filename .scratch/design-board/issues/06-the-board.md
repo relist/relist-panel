@@ -9,20 +9,30 @@ Layout grammar, from the spec's `### Layout grammar`:
 - one column per `SceneGroup`, left to right in menu order, with a header per column;
 - inside a column, frames stack in registry order, and a screen's overlays sit in an indented **rail to
   its right**, so "Compose — running" and the three dialogs that belong to it read together;
-- a **mobile frame sits in a second rail**, one rail further right of the desktop frame it pairs with,
-  labelled with its viewport — desktop and phone read as a pair, and the device filter (08) removes
-  whichever half the reviewer is not asking about;
+- a **tablet rail, then a mobile rail**, each to the right of the desktop frame it pairs with, labelled
+  with its width — desktop, tablet and phone read as one group, and the viewport switch (08) decides
+  which rails are on the canvas;
 - every frame is laid out at its captured pixel size from the manifest, so nothing reflows as images
   load — the sizes are in the manifest for exactly this reason;
 - a scene's tabs sit with the screen they belong to, and `feedback` scenes form their own column.
 
 Frame chrome, under each frame: scene **id** (monospace, copyable — it is the string feedback quotes),
-title, route, caption, the viewport for a mobile frame, and **Open live** (the `?ui=` + hash URL from
-01/02). Clicking the image opens a lightbox at 100 %; the frame itself never navigates.
+title, route, caption, the width on tablet/mobile frames, **Open live** (the `?ui=` + hash URL from
+01/02) and **Live** (below). Clicking the image opens a lightbox at 100 %; the frame itself never
+navigates.
 
-Holes are visible, never silent: a scene with no still renders a labelled placeholder frame, and because
-there are no dark stills, a missing *device* frame is a hole too — never a desktop frame quietly standing
-in for a phone one.
+Holes are visible, never silent: a scene with no still for the selected width renders a labelled
+placeholder frame **with a Live button**, and because there are no dark stills, a missing width is a hole
+too — never another width's image quietly standing in for it.
+
+**Live mode, per frame.** The **Live** control swaps that one frame's image for a real iframe of the
+mock, at the width the viewport switch is on and the theme the theme switch is on: `?ui=`/`after` come
+from the scene, so the live frame is the same state, and the theme flips by posting `relist:theme`
+(`main.tsx:85` already listens) rather than reloading. That is what makes a width and a theme that were
+never captured reviewable at all — and it is deliberately one frame at a time here (the bar's *Live this
+group* / *filtered set*, capped at 8, is 08). Offline there is no dev server, so Live is disabled and
+says why instead of showing a blank box. Monaco inside a Live frame needs the `automaticLayout` line from
+03, since the frame's width changes under it.
 
 Pan and zoom: wheel zooms to the cursor, drag pans, `Fit` frames a group, `0` / `+` / `-` for the
 obvious, `100 %` for the truthful. A minimap is a stretch, not part of the plan.
@@ -42,7 +52,13 @@ rail boxes out. It is what 07 draws lines against, and it is testable without a 
       loading
 - [ ] Overlays sit in their screen's rail, in registry order; `menuPath` is the only thing that decides
       position (no hand-placed coordinates anywhere in the board)
-- [ ] Frame chrome carries id, title, route, caption and Open live (plus whatever open question 2 settles)
+- [ ] Frame chrome carries id, title, route, caption, the width on tablet/mobile frames, Open live and Live
+- [ ] The viewport switch (08) shows the variant the scene declares, and a width the scene does not declare
+      renders the labelled hole with its Live button — asserted in the DOM, because a stretched or borrowed
+      image is the exact failure this guards
+- [ ] **Live** swaps one frame for a real iframe at the same `?ui=`/`after` state, reflows when the width
+      changes, and flips theme through `relist:theme` with **no reload** (the harness counts page loads)
+- [ ] Live is disabled offline with a stated reason, and the rest of the board is unaffected by that
 - [ ] Clicking a frame opens the lightbox at 100 %; the frame does not navigate
 - [ ] **Open live lands on the frame's exact state** — the acceptance test for the whole plan: open the
       light window, paste three different `Open live` URLs, and each renders the state its caption claims
