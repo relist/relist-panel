@@ -22,11 +22,16 @@ are wrong with it:
 
 Yes, all of it is buildable, and none of it needs a new dependency. The two parts that need care:
 
-- **Forcing a state without a click.** Every screen's state has to become addressable. This is
-  mechanical (a `useUiState` hook replacing raw `useState`, ~50 call sites) but it is the foundation —
-  the board, the capture pipeline, and shareable state URLs all rest on it.
-- **Capture determinism.** The mock reads `Date.now()` in several places (`store.tsx:121,128`,
-  `app/useNow.ts:11`), so two captures a minute apart differ. A frozen clock fixes it.
+- **Forcing a state without a click.** Every screen's state has to become addressable. Mechanical, but
+  not small, and the count matters more than it looks: the mock holds **80 `useState` sites across 22
+  files**, of which the **≈55 that gate something visible** move to a `useUiState` hook — the rest are
+  store state, refs and derived values, and stay where they are (see *What converts, and what does
+  not*). It is the foundation — the board, the capture pipeline, and shareable state URLs all rest on
+  it.
+- **Capture determinism.** The mock reads the wall clock in six places, and one of them runs at
+  *import* time (`volumeMocks.ts`'s `mtime`, reached through the fixture helpers while the module graph
+  is still evaluating), so a clock installed from `main.tsx`'s body is already too late. A frozen clock
+  plus a pinned timezone fixes it, and both are load-order decisions rather than features.
 
 Nothing else here is hard. What follows is the detailed plan.
 
@@ -40,8 +45,11 @@ Four decisions carry the design:
 1. **Frames are captured images, not live iframes.** The scene count is around a hundred, and each
    live frame is a full React root with its own store and its own Monaco instance. The 18-frame
    gallery already weighs what it weighs; a hundred of them is not a review surface, it is a stress
-   test. Stills also make the board viewable by someone who has no Node and no Chrome, and they make
-   the board *static* in the literal sense the user asked for — nothing to click except the canvas.
+   test. Stills also make the board *static* in the literal sense the user asked for: nothing animates,
+   nothing can be clicked by accident, and nothing claims to be live. Whether they also make it
+   viewable by someone with no Node and no Chrome depends on what is built and committed — see
+   **Shipping the board**, which is a decision in this spec rather than a footnote, because images
+   alone do not make a route openable.
 2. **A scene is the unit, not a screen.** `Scene = route + forced state`. A screen with four states is
    four scenes; a screen with three dialogs is four scenes. This is what makes "show the modals
    separately" fall out of the design rather than being a special case.
@@ -68,7 +76,7 @@ Four decisions carry the design:
 - **Interactivity inside a frame.** A frame is an image; you cannot type in it. The mock pages stay
   interactive for development, and every frame carries a link to its live equivalent.
 - **True liveness.** An image is a snapshot; if the mock changes, the image is stale until re-captured.
-  `## Stills in git` and the manifest below make staleness visible instead of silent.
+  `## Shipping the board` and the manifest below make staleness visible instead of silent.
 
 ## The scene model
 
@@ -102,18 +110,43 @@ web-design/src/app/uiState.ts
 const [open, setOpen] = useUiState('compose.logsOpen', false);
 ```
 
-`useUiState(key, initial)` is `useState` plus one rule: a value present in the current override map
-wins over `initial`, and clearing it returns the screen to normal. The override map comes from the
-URL (`?ui=compose.logsOpen=1&ui=compose.tab=logs`), applied by `main.tsx` before first paint.
+`useUiState(key, initial)` is `useState` plus one rule: a value present in the override map wins over
+`initial`. The map is read **once, at module load**, from the URL
+(`?ui=compose.logsOpen=1&ui=compose.tab=logs`), by the harness module `main.tsx`
+imports first. Read-once is deliberate: it makes the override a *scene* mechanism, not a second router
+— it takes effect on the next load, which is exactly what a capture, an **Open live** click and a
+pasted URL all are, and nothing has to listen for `popstate` or race the hash router. The cost is that
+editing `?ui=` in a live tab does nothing until reload; the spec should not claim otherwise. A `ui`
+key that no scene declares is a dev-mode warning, because the board is the only consumer of these keys
+and a typo has to be loud rather than a silent no-op.
 
-The call sites are the inventory in the next section — every `useState` that gates something visible.
-**This is the bulk of the mechanical work in the whole plan**, and it is contained entirely inside
-`web-design/`.
+**What converts, and what does not.** The hook is for state that *selects what is rendered*. Measured
+against the mock as it stands:
+
+| file | `useState` sites | to `useUiState` (expected; ticket 01 confirms per site) |
+| --- | --- | --- |
+| `pages/VolumeExplorerPage.tsx` | 13 | 11 — dialogs, editor, refusals; `fileInput` is a ref and stays |
+| `data/store.tsx` | 8 | 0 — store seed state goes through `SceneOverrides`, below |
+| `pages/ComposePage.tsx` | 8 | 7 — logs drawer, fullscreen, delete, dirty draft, log filters |
+| `pages/ProjectsPage.tsx` | 6 | 5 — view, filter, modals |
+| `components/VariablesPanel.tsx` | 6 | 5 — modal, bulk paste, query, editing row |
+| `pages/ProjectPage.tsx` | 5 | 4 |
+| `components/ServiceMonitor.tsx` | 4 | 2 — window and series selection |
+| `app/AppShell.tsx` | 2 | 2 — palette, refreshing |
+| 14 more files (`MonitoringPage` 3, `StartHandleDialog` 3, `ComposeVolumesTab` 3, …; `ScreensGalleryPage`'s 4 excluded — that page is deleted by 08) | 28 | 20 |
+| **total** | **80** | **≈55** |
+
+Excluded by rule, not by taste: derived values that should be `useMemo`, imperative handles (`useRef`,
+`Form.useForm`), and the router's own state (the hash already is the source of truth). Ticket 01's
+first output is this table filled in per site — it is what keeps "≈55" from drifting into "every
+`useState` in the app", and it is reviewable before a single screen is touched.
 
 antd helps here: every overlay accepts a controlled `open`, so a dropdown, tooltip, popconfirm or
 modal is forceable without touching its internals (`Dropdown open`, `Popconfirm open`, `Select open`).
 Storage-level state — which handle is open, the mock latency, the activity log — is forced through a
-`SceneOverrides` object applied to the store (`data/store.tsx:108`) on mount, not through the hook.
+`SceneOverrides` object passed into `PanelProvider` as a prop (`data/store.tsx:103`, the component's
+own signature — its `useState` calls are the seed values), not through the hook: an override is a
+prop, and "back to normal" is the seed.
 
 Two families of state need a small fiction, and it is worth being explicit about both:
 
@@ -125,13 +158,35 @@ Two families of state need a small fiction, and it is worth being explicit about
 
 ### A frozen clock
 
-`?clock=2026-09-26T09:00:00Z` fixes the mock's notion of "now", read by `app/useNow.ts`,
-`store.tsx`'s seeded timestamps, and every relative-time label. Without it, "closes in 8 min" and
-"Checked 3 minutes ago" drift between captures and a frame cannot be reproduced.
+`?clock=2026-09-26T09:00:00Z` fixes the mock's notion of "now". The wall clock is read in six places
+and every one of them has to see the fixed value, so the first draft's list of three was short:
+
+| site | what drifts without it |
+| --- | --- |
+| `app/useNow.ts:11,14` | every relative label and the idle countdown ("closes in 8 min") |
+| `data/store.tsx:121,128` | the seeded handle's `openedAt` / `startedAt` |
+| `data/store.tsx:233` → `data/mocks.ts:526` | `metricSamples(window)` defaults `now = Date.now()`; the Monitor charts' axis labels *and* shape |
+| `data/volumeMocks.ts:26` | every file's `modifiedAt` in the Volume Explorer |
+| `pages/GuidelinesPage.tsx:15,24,28` | the guidelines page's activity feed and deploy demo |
+| `data/mocks.ts:641` | the log fixture's relative timestamps |
+
+Three rules fall out of that list, and all three are cheap now and expensive later:
+
+1. **The clock installs before the module graph evaluates, not in `main.tsx`'s body.**
+   `volumeMocks.ts` calls `mtime()` at module scope through `file()`/`dir()`/`symlink()`, so the
+   fixture timestamps exist before any statement of `main.tsx` runs. The harness (`?clock=`, `?ui=`,
+   `?scene=`) must therefore be the **first import** of `main.tsx` — `import './app/scene'` — with the
+   hook and the store overrides re-exported from it, and a comment saying why the order matters.
+2. **Patch, don't plumb.** The harness patches `Date.now` and `new Date()`'s no-argument form for the
+   life of the page; the six call sites above need no edit at all. That keeps the diff on the state
+   that has to *change* (the `useUiState` swap) and leaves the fixtures alone.
+3. **Capture runs pin `TZ=UTC`.** `mocks.ts`'s `hourOfDay()` and dayjs both render in local time, so the
+   same frozen instant draws a different chart and different "3 minutes ago" labels on two machines.
+   The clock makes a frame reproducible *given* the timezone; the runner is what pins it.
 
 ## Scene inventory
 
-First cut, from a read of every page and component. The exact list is ticket 02's output and is
+First cut, from a read of every page and component. The exact list is ticket 03's output and is
 reviewed as a list before anything is captured — expect the count to move by ±10.
 
 **Shell and navigation** — the canvas's flow lines start here.
@@ -255,9 +310,20 @@ a stretch, not part of the plan.
 
 ## The capture pipeline
 
-`web-design/scripts/stills.mjs` — Node 24, no new dependencies, CDP over the global `WebSocket`. Same
-instrument the gallery was verified with; plain `chrome --screenshot` is not an option, since it was
-measured failing to paint this app at all (see `screenshot.sh`'s header, and the ticket-01 comments).
+`web-design/scripts/stills.mjs` — Node 24, no new dependencies, CDP over the global `WebSocket`.
+Same instrument the gallery was verified with (`.scratch/volume-files/issues/01-design-pass.md` drove
+Chrome over CDP to assert on the 18 frames; `host-monitoring` and `design-port` both kept a file:// CDP
+harness for their render checks). Plain `chrome --screenshot` is not the tool for *this* job because
+the board needs scripted waits and whole-page capture, and because `scripts/screenshot.sh` cannot shoot
+a surface too tall for one viewport — the same reason it already excludes `#/design/screens`
+(`scripts/screenshot.sh:9`). It is not a paint failure: the `volume-files` ticket that built the gallery
+recorded all its routes rendering non-blank with that script.
+
+**Capture runs against a production build, not `vite dev`.** `main.tsx` wraps the app in
+`<StrictMode>`, and React 19 double-invokes effects in development — the mount-time `after: 'submit'`
+adapters and the `duration: 0` toasts above would fire twice, the store would transition twice, and
+`data-scene-ready` would flap. The pipeline therefore drives `vite preview` (or the built
+`dist-single/`), where effects run once; `pnpm dev` remains for humans.
 
 For each scene:
 
@@ -269,41 +335,115 @@ For each scene:
    editor — Monaco mounted and idle. The app publishes this as `data-scene-ready` on `<html>`.
 4. Inject `animation: none !important; transition: none !important; caret-color: transparent`, so a
    shimmer, a tooltip fade or Monaco's blinking cursor cannot smear the frame.
-5. Measure `scrollHeight`, then `Page.captureScreenshot({ captureBeyondViewport: true })` at the real
-   viewport height — so `clamp(640px, 80vh, 1000px)` (`theme.ts:37`) resolves against a genuine
-   viewport while the image still shows the whole page.
+5. Measure `scrollHeight`, then `Page.captureScreenshot({ clip: {…height: scrollHeight}, captureBeyondViewport: true })`
+   at the real viewport height — so `clamp(640px, 80vh, 1000px)` (`theme.ts:37`) resolves against a
+   genuine viewport while the image still shows the whole page.
 
-Then encode to WebP and write `public/stills/<id>[@dark].webp` plus `public/stills/manifest.json`:
+Two consequences of step 5 that have to be accepted knowingly, because the gallery's header argues the
+opposite for its own frames:
+
+- **The image is content-height, not viewport-height.** `#/design/screens` refused content-height
+  frames on the grounds that "the composition a reviewer approved would be one no real viewport ever
+  shows". The board is a catalogue of states rather than a viewport review, so the whole page in one
+  frame is the right call *here* — but the rule that changes is worth a line in `GUIDELINES.md` rather
+  than a contradiction between two files.
+- **Beyond-viewport capture plus `position: sticky` and viewport-tall overlays is the fragile
+  combination.** `AppShell`'s header is sticky (`app/AppShell.tsx:221`), antd's Drawer/Modal/message are
+  fixed — a drawer should come out viewport-tall inside a taller image (that is honest), but the sticky
+  header and any scroll-position artefact must be looked at once, on one screen and one drawer, before
+  ~100 frames are committed to the pipeline. Ticket 04's first task is that smoke test.
+
+Then encode to WebP — `Page.captureScreenshot({ format: 'webp' })`, i.e. Chrome's own encoder, which
+has no lossless switch: **quality is an integer and the output is lossy.** So "lossless" is not
+available for free and the size estimate has to be measured, not asserted: capture one 1600×1000 text
+screen at `quality: 90` and at default, record bytes and milliseconds, and compare against PNG (which
+for UI text compresses worse but rings less). Ticket 04 records the numbers in its Comments, and the
+`## Shipping the board` budget only moves once they exist.
+
+Write `public/stills/<id>[@dark].webp` and the manifest — which is a **source** file, not a public
+asset, so it can be imported and typechecked rather than fetched (see below):
+`src/scenes/manifest.json`, one entry per still:
 
 ```
 { id, theme, file, width, height, bytes, sha256, capturedAt, sourceRev }
 ```
 
-Flags: `--only <id…>`, `--group <group>`, `--theme`, `--scale`, `--check` (capture to a temp dir and
-compare hashes; non-zero exit on drift).
+`sourceRev` is `git rev-parse HEAD` of the mock's tree plus a dirty flag, so a board built from a
+modified working tree says so.
+
+Flags: `--only <id…>`, `--group <group>`, `--theme`, `--scale`, `--check`.
+
+**`--check` is a same-machine check and the spec should say so.** It re-captures into a temp dir and
+compares hashes, which costs a full 10–15 minute run (so it is not a per-edit loop, and this repo has
+no CI to put it in — there is no `.github/workflows`), and byte equality also breaks on a Chrome or
+font update. Its honest use is "did the mock change since the last capture, on the machine that made
+them", and the cheap alternative for everything else is `sourceRev`: if HEAD or the dirty flag moved,
+the board's corner says the stills are behind. That is the staleness signal that costs nothing.
 
 **A missing still is a visible hole, never a silent one.** The board renders a labelled placeholder
 frame for a scene the manifest does not cover, so a registry entry added without a capture is obvious
-on the board.
+on the board. The same rule applies to a missing **dark** variant: the theme toggle falls back to the
+light still and marks the frame, rather than showing an empty box.
 
-## Stills in git
+## Shipping the board
 
-Recommended: commit `web-design/public/stills/**` (WebP + manifest). The design pass *is* the
-deliverable, and a reviewer — or the user, on a machine with no Node — must be able to open the board
-and see it. WebP lossless at scale 1 puts ~100 frames at roughly 8–12 MB, which is a real cost and the
-reason it is an open question below. The alternative is a gitignored `stills/` regenerated by
-`pnpm stills`, at the price of the board being unviewable without a build.
+Two artifacts, and the difference between them is what the first draft left implicit:
+
+- **The board is the mock's `#/design/board` route.** One implementation of the canvas, not a second
+  app — Decision 1's "the board does not grow into an app" held to.
+- **The offline copy is a built *folder*, not a file.** `pnpm build:single` writes
+  `dist-single/index.html` (already ~5.5 MB today) and copies `public/stills/` beside it, so the offline
+  review path is: somebody who has Node builds once, then anyone — no Node, no Chrome — opens
+  `dist-single/index.html#/design/board` from disk. `dist-single/` is gitignored
+  (`web-design/.gitignore`), so that folder is handed over, not committed. The link to give a reviewer is
+  `dist-single/index.html#/design/board`.
+
+Three details make it work, and each is a trap if it is left to the implementer:
+
+1. **The manifest is imported, never fetched.** `fetch()` from a `file://` page is blocked, so a board
+   that reads `public/stills/manifest.json` at runtime would look perfect in dev and render 100 holes
+   offline. `stills.mjs` writes it to `src/scenes/manifest.json`, which the board imports like any other
+   module — inlined by both builds, typechecked, no request.
+2. **Stills are referenced relatively, never imported.** `public/` is copied verbatim into `outDir`, and
+   `stills/<id>.webp` resolves from `file://`; but `import.meta.glob`-ing the images would trip
+   `assetsInlineLimit: 100_000_000` (`vite.single.config.ts:14`) and base64 the entire set into one HTML
+   (≈ +33 % on top of ~10 MB of WebP, added to 5.5 MB). Manifest imported, images not.
+3. **Stills are committed; the built folder is not.** Commit `web-design/public/stills/**` (~100 WebP).
+   The design pass *is* the deliverable, a reviewer must be able to see it without regenerating it, and
+   the alternative — a gitignored `stills/` rebuilt by `pnpm stills` — makes the review surface depend
+   on a 10–15 minute run on every machine that wants to look.
+
+**Budget, once measured.** The first draft claimed "WebP lossless at ~8–12 MB for ~100 frames"; CDP's
+WebP is lossy (above), so that figure is unmeasured and looks optimistic for 1600×~2400 text screens.
+Ticket 04 measures one frame — bytes at `quality: 90` and default, versus PNG — and the whole set,
+*before* this recommendation is treated as settled: comfortably under ~15 MB, commit them; over, drop
+the frames' quality, cut the dark subset, or ship the set as a release artifact and say so in the
+README. Discovering it after ~100 MB of WebP has landed in git is the expensive order.
+
+**ADR.** "The review surface is stills committed to the repo" is a durable, repo-wide decision of the
+kind `docs/adr/` exists for (compare 0004, 0007, 0008). Ticket 08 writes it, with the measured sizes in
+it, and cites it from `README.md` and `GUIDELINES.md`.
 
 ## What happens to the existing pages
 
-- `#/design/screens` is **removed**; the board replaces it (`#/design/board`), and the menu's Design
-  system group becomes *Still board* and *Guidelines*.
-- `#/design/states` stops being a page a reviewer scrolls: its generic sections become scenes (above),
-  and its volume-specific sections are deleted as duplicates of real screens.
+The board replaces both design surfaces **as review surfaces** — that is what "one review surface"
+means, and it is settled here rather than left as an open question.
+
+- `#/design/screens` is **removed**: the route, `pages/ScreensGalleryPage.tsx`, `paths.screens`, the
+  `screensGallery` branch in `main.tsx` (and its `bare` entry), the route kind in `router.ts`, the
+  gallery's comment header, and the README prose. The board takes its place at `#/design/board`, and the
+  menu's Design system group becomes *Still board* and *Guidelines*.
+- `#/design/states` **stops being a review surface but keeps its route**, because it is the only place
+  the ~10 feedback scenes with no home screen exist: relabelled (its title stops claiming to be the
+  states gallery), volume-specific sections deleted as duplicates of real screens, and it stays
+  reachable for capture without a menu item of its own. `paths.states` and `GuidelinesPage.tsx:586`'s
+  link survive; only the link's wording changes.
+- `scripts/screenshot.sh` keeps working and gains nothing — its `states:/design/states` line still
+  resolves, which is the check that the previous bullet is true rather than a claim.
 - The prototype pages themselves are untouched apart from the `useUiState` swap — they remain the mock,
   they remain interactive, and they remain the thing scenes are captured from.
-- `scripts/screenshot.sh` keeps working (it is a local aid for one-off routes) and gains nothing.
-- `web-design/README.md` and `GUIDELINES.md` §4.9 are updated to describe the board.
+- `web-design/README.md` and `GUIDELINES.md` §4.9 are updated to describe the board (§4.9 also records
+  the content-height-frame rule the board changes, so the two files stop contradicting each other).
 - `volume-files` ticket 01's review surface is rewritten to point at the board; the review gate itself
   does not move — the volume implementation still waits for approval.
 
@@ -311,40 +451,91 @@ reason it is an open question below. The alternative is a gitignored `stills/` r
 
 | Risk | Containment |
 | --- | --- |
-| ~50 `useState` → `useUiState` edits touch nearly every screen | Mechanical, one hook, mock-only, and reviewed per screen. It is the price of addressable states, and it pays off outside the board (deep links). |
-| Images go stale as the mock changes | Manifest carries `sourceRev`; the board shows it. `pnpm stills --check` detects drift. Nothing claims to be live. |
-| Capture is slow (~10–15 min for ~100 frames) | `--only` / `--group` for iteration; full runs are for review milestones, not every edit. |
-| A frame captures mid-animation or mid-load | The readiness signal plus the animation-freeze injection. This is precisely what `chrome --screenshot` got wrong. |
-| Dark mode doubles the work | `dark: true` opt-in per scene, not global (open question). |
+| ~55 `useState` → `useUiState` edits across ~17 files | Mechanical, one hook, mock-only, reviewed per screen *and* against the per-file inventory (see *What converts, and what does not*), which is what bounds it. It is the price of addressable states, and it pays off outside the board (deep links). |
+| The clock is patched too late to matter | The six call sites are listed, and one runs at import time — so the harness is `main.tsx`'s first import, not a hook or a provider. |
+| `StrictMode` double-fires the mount-time fictions | Capture drives a production build (`vite preview` / `dist-single`), never `pnpm dev`. |
+| Images go stale as the mock changes | Manifest carries `sourceRev` (HEAD + dirty flag); the board shows it, and that is the cheap signal. `pnpm stills --check` is a same-machine, 10–15 minute re-capture that byte comparison also invalidates on a Chrome update — so it is a milestone tool, not a guard, and the repo has no CI to put it in. |
+| Capture is slow (~10–15 min for ~100 frames, estimated) | `--only` / `--group` for iteration; full runs are for review milestones. Ticket 04 makes the pilot capture (two screens, four frames) real so the number stops being a guess before ~96 more frames are taken. |
+| A frame captures mid-animation or mid-load | The readiness signal plus the animation-freeze injection, and a scene cannot capture unless `data-scene-ready` reports its own id. |
+| Beyond-viewport capture mangles sticky/fixed chrome, or looks nothing like a real viewport | Sticky header (`app/AppShell.tsx:221`) and viewport-tall overlays are smoke-tested on one screen and one drawer first, and the content-height rule is written into `GUIDELINES.md` §4.9 so it is a decision rather than a contradiction. |
+| WebP is lossy, so "lossless, 8–12 MB" may be wrong by an order of magnitude | Measured in ticket 04 before the set is committed; *Shipping the board* names the fallbacks (quality, dark subset, release artifact). |
+| The offline promise quietly does not hold | Shipping path is explicit: manifest imported (not fetched — `file://` blocks it), images relative, `dist-single/` folder handed over. |
+| Dark mode doubles the work | `dark: true` opt-in per scene, not global (open question 1 below). |
 | Some states have no fixture to reach them | `ComposeVolumesTab`'s disabled-Open state and `StartHandleDialog`'s absent-path refusal have no fixture at all today. Either add the fixture or document the state as unrendered — the board must not draw a frame the app cannot produce. |
+| Removing `#/design/screens` ripples further than the page | The route kind, `paths.screens`, `main.tsx`'s branch and its `bare` entry, and the README prose are all named in *What happens to the existing pages*. `#/design/states` **survives** as the host for scenes with no home screen, so `screenshot.sh` and the guidelines link need no change — removing it would strand ~10 feedback scenes. |
 | The board itself grows into an app | It renders declared data and draws two kinds of lines. No comments, no approval workflow, no editing (non-goals). |
 
 ## Delivery
 
-Tickets in `.scratch/design-board/issues/`, in dependency order. Ticket 02's registry is the review
-point: the scene list is agreed before anything is captured.
+Tickets in `.scratch/design-board/issues/`, in dependency order. Two review points rather than one:
+**ticket 03's registry** (the scene list is agreed as a list before anything is captured) and
+**ticket 04's pilot capture** (four frames, agreed before the other ~96).
 
 | # | Ticket | Blocked by |
 | --- | --- | --- |
-| 01 | `useUiState` + override parsing + frozen clock, applied across the mock | — |
-| 02 | The scene registry: every scene declared, in menu order, with captions | 01 |
-| 03 | `stills.mjs`: CDP capture, readiness, WebP, manifest | 01, 02 |
-| 04 | The board: layout, pan/zoom, frame chrome, lightbox, Open live | 02, 03 |
-| 05 | The flow layer: menu miniature, anchors, SVG connectors, legend | 04 |
-| 06 | Board chrome: theme, filters, search, print, manifest revision | 04 |
-| 07 | Retire the old surfaces; update README, GUIDELINES, and volume ticket 01 | 04, 05, 06 |
+| 01 | `01-scene-harness.md` — the harness: `?ui=` / `?clock=` / `?scene=`, `useUiState`, `SceneOverrides`, frozen clock | — |
+| 02 | `02-addressable-states.md` — the swap across the mock, plus the toast and post-action adapters | 01 |
+| 03 | `03-scene-registry.md` — every scene declared, in menu order, with captions and links | 02 |
+| 04 | `04-stills-pipeline.md` — pilot capture, readiness, determinism, WebP, manifest, measured sizes | 01, 03 |
+| 05 | `05-the-board.md` — layout, pan/zoom, frame chrome, lightbox, Open live, missing-still holes | 03, 04 |
+| 06 | `06-flow-layer.md` — menu miniature, anchors, SVG connectors, legend | 05 |
+| 07 | `07-board-chrome.md` — theme (incl. the dark subset), filters, search, print, revision corner | 05 |
+| 08 | `08-ship-and-retire.md` — offline path, remove `#/design/screens`, README, GUIDELINES, ADR, volume ticket 01 | 05, 06, 07 |
+
+01 and 02 are split because they have different failure modes: the first is a new module with one hard
+ordering constraint and one determinism acceptance test, the second is ~55 reviewed edits with no new
+concepts. Together they were the plan's single long pole; apart, each is a ticket someone can finish and
+verify on its own.
+
+## Verification and testing decisions
+
+`web-design/` has no test runner today and this plan does not add a dependency to give it one, so
+verification is the folder's own established recipe plus one thing Node 24 ships for free:
+
+- **`pnpm --dir web-design typecheck`** — the mock's existing gate, and the one that catches the
+  `useUiState` swap's mechanical mistakes.
+- **`node --test scripts/*.test.mjs`** — `node:test` is stdlib on Node 24, so the board's *pure* rules
+  (menu ordering from `menuPath`, column/rail placement, anchor fractions → canvas points, connector
+  paths, manifest ↔ registry diff) get real unit tests with no new dependency. This is where "the board
+  is declared data plus arithmetic" is cashed in: the layout module stays render-free.
+- **The CDP render check** — the technique every ticket in `design-port`, `host-monitoring` and
+  `volume-files` used: drive the built bundle, assert on the DOM, screenshot the notable states. Each
+  ticket names what it asserts: ticket 02 that every override key produces the state it names, ticket 04
+  that a scene cannot be captured unless readiness reported *its* id, ticket 05 that every registry entry
+  has a frame and that a still missing from the manifest renders the labelled placeholder.
+- **Determinism is itself a test, once.** Ticket 01's acceptance is that one scene captured twice, a
+  minute apart on the wall clock with the same `?clock=`, produces byte-identical WebP. Without that
+  check the frozen clock is a claim rather than a fix.
+- **The review gate is not automated.** The board is approved by the user looking at it (non-goals); no
+  ticket may treat "the stills exist" as approval of the design.
 
 ## Open questions
 
-1. **Commit the stills?** Recommended yes (~8–12 MB). The alternative keeps the repo light but makes
-   the board unviewable without a build.
-2. **Dark mode coverage** — a chosen subset (~15 frames where dark actually matters) or all ~100?
-3. **Does the board replace both `#/design/screens` and `#/design/states`?** Recommended yes, with the
-   states page's generic demos surviving as scenes.
-4. **All overlays as frames, or only the primary ones?** The plan assumes all (~35), which is what
-   "modals shown separately" implies; trimming to the primary ~20 is a one-line filter.
-5. **Frame chrome contents** — scene id, title, route, caption, Open live. Anything else you want on
-   the frame (e.g. a "what to check" line per scene)?
+Settled while reviewing this plan, so no ticket is built on a guess:
+
+- **Does the board replace both `#/design/screens` and `#/design/states`?** As *review surfaces*, yes —
+  see *What happens to the existing pages*. `#/design/states` keeps its route as the host for the ~10
+  feedback scenes that have no home screen, which is a correction to this plan's first cut: deleting it
+  would have stranded them.
+- **Commit the stills?** Yes, subject to the measured budget gate in *Shipping the board* — the decision
+  is "commit", the size is what ticket 04 measures.
+- **All overlays as frames, or only the primary ones?** All (~35). "Show the modals separately" is the
+  user's ask; trimming to the primary ~20 remains a one-line filter if the board reads as crowded.
+- **The clock's scope** — all six call sites, patched rather than plumbed, with `TZ=UTC` pinned by the
+  runner.
+
+Still open, and cheaper to answer now than after capture:
+
+1. **Dark mode coverage** — a chosen subset (`dark: true` on the ~15 frames where dark actually matters)
+   or all ~100? Recommended: the subset, decided while writing the registry in ticket 03, since doubling
+   the captured set doubles every full run.
+2. **Frame chrome contents** — scene id (monospace, copyable), title, route, caption, **Open live**.
+   Anything else wanted per frame, e.g. a one-line "what to check" for the reviewer, or the group and tab
+   the frame sits under? Every addition is paid on all ~100 frames.
+3. **Pilot first, or capture everything first?** Recommended: ticket 04 captures Overview and one Compose
+   scene in light plus one overlay (four frames), and ticket 05 renders those four before the other ~96
+   are captured — so the frame chrome, the image quality and the WebP budget are agreed on four images
+   instead of a hundred.
 
 ## Non-goals
 
