@@ -77,11 +77,6 @@ export function installUiOverrides(ui: ReadonlyMap<string, UiValue>): void {
   forced = ui;
 }
 
-/** The keys `?ui=` forced, for the dev warning and for tests. */
-export function forcedUiKeys(): string[] {
-  return [...forced.keys()];
-}
-
 /** `useState`, plus one rule: a value the URL forced wins over `initial`. */
 export function useUiState<T>(key: string, initial: T): [T, Dispatch<SetStateAction<T>>] {
   // The override is read when the state is created — once — so a later render

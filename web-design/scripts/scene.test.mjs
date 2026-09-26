@@ -12,8 +12,10 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
-import { coerceUiValue, parseSceneUrl } from '../src/app/uiState.ts';
+import { coerceUiValue, installUiOverrides, parseSceneUrl, useUiState } from '../src/app/uiState.ts';
 import { createUndeclaredUiKeyWarner, DECLARED_UI_KEYS, STORE_UI_KEY_LIST, undeclaredUiKeys } from '../src/app/uiKeys.ts';
 
 describe('parseSceneUrl', () => {
@@ -81,6 +83,23 @@ describe('coerceUiValue', () => {
     assert.equal(coerceUiValue(''), '');
     // A number is not inferred: 1 and 0 are flags, so 2 stays a string.
     assert.equal(coerceUiValue('2'), '2');
+  });
+});
+
+describe('useUiState', () => {
+  it('returns the seed for a key ?ui= does not force, and the override for one it does', () => {
+    installUiOverrides(parseSceneUrl('?ui=compose.tab=logs&ui=compose.logsOpen=1').ui);
+
+    const Probe = () => {
+      const [tab] = useUiState('compose.tab', 'yaml');
+      const [logsOpen] = useUiState('compose.logsOpen', false);
+      const [fullscreen] = useUiState('compose.fullscreen', false);
+      return createElement('p', null, `${tab}/${String(logsOpen)}/${String(fullscreen)}`);
+    };
+
+    // A real renderer: the rule under test is one a hook has to obey, and React
+    // is already a dependency — this adds no test framework to the folder.
+    assert.equal(renderToStaticMarkup(createElement(Probe)), '<p>logs/true/false</p>');
   });
 });
 

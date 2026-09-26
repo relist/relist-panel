@@ -16,10 +16,10 @@
  */
 import type { SceneOverrides } from '../data/store';
 import { createUndeclaredUiKeyWarner, DECLARED_UI_KEYS, STORE_UI_KEYS } from './uiKeys';
-import { forcedUiKeys, installUiOverrides, parseSceneUrl, useUiState } from './uiState';
+import { installUiOverrides, parseSceneUrl, useUiState } from './uiState';
 import type { SceneUrl, UiValue } from './uiState';
 
-export { forcedUiKeys, useUiState };
+export { useUiState };
 export type { SceneUrl, UiValue };
 
 const REAL_DATE = Date;
@@ -64,7 +64,7 @@ if (typeof window !== 'undefined') {
  * With no `?clock=` this is a no-op, so there is one code path rather than two:
  * the mock reads the real clock exactly as it does today.
  */
-export function installFrozenClock(iso: string | null): void {
+function installFrozenClock(iso: string | null): void {
   if (iso === null) return;
 
   const instant = REAL_DATE.parse(iso);
