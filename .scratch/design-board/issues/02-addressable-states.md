@@ -31,7 +31,7 @@ invent them.
 
 **Blocked by:** 01
 
-**Status:** needs-triage
+**Status:** ready-for-agent
 
 - [ ] The spec's per-file table is filled in per site — file, line, key, and the state it forces — and
       attached to this ticket's Comments when work starts; anything excluded is excluded by the stated
@@ -508,4 +508,46 @@ value carrying a file is not viable, but both have a natural fixture — `Projec
   should show `.scratch/design-board/issues/01-scene-harness.md` (ticket 01's own edit, not mine) plus
   this file.
 
+
+
+- 2026-09-26 — **Coordinator: claimed for implementation, and the five questions the audit raised are
+  answered here so no agent has to guess.** `Status:` moved to `ready-for-agent`. The audit's §5 findings
+  are a change to the plan, not a footnote, so these rules are binding for every batch of this ticket.
+  - **D1 — `?ui=` stays scalar-only.** Ticket 01's coercion (`1`/`0`/`true`/`false`, else the string) is
+    not extended. The nine object/array sites in §5.2 are never forced by a URL literal: either a named
+    `after:` adapter in `app/sceneAdapters.ts` seeds the object through the app's own setter, or the site
+    is excluded and the reason recorded. No typed-override map, no second coercion path.
+  - **D2 — per-row state is addressed by naming the row in the key** (§5.5). `?ui=variables.revealed.DATABASE_URL=1`
+    parses with the existing "split on the first `=`" rule — no harness change. `uiKeys.ts` gains one
+    thing: a declared key **family** with a trailing `.*` (`variables.revealed.*`, `volume.rowMenu.*`, …),
+    so a legitimate addressed key does not warn while a key matching no declared family still does.
+  - **D3 — a site clobbered on mount (§5.4) is fixed by re-keying the reset on the `open` transition**
+    (false → true), not on `open === true`. For a reviewer with no query string that is
+    behaviour-identical — the state starts at its default and only a click opens the overlay — and it
+    lets a forced value survive a cold load. Where the effect is not an overlay reset at all
+    (`MonitoringPage`/`ServiceMonitor`'s `load()` on mount, `ComposePage.tsx:110-112` `setDraft`), the
+    effect keeps running exactly as it does today and that site's state is delivered by an `after:`
+    adapter instead. No other behaviour moves.
+  - **D4 — the acceptance list is the audit's 59-row CONVERT table, not "≈55".** The spec's own rows sum
+    to 56 and three rows are one site short each; the audit's §1 table supersedes them. The final
+    reconciliation in this ticket's Comments must show `80 = converted + excluded-by-rule + adapter-forced`
+    with the rule named per site. §5.3's twins are aligned rather than argued: `MetricChart.tsx:175`
+    `width` is excluded (measured — a layout effect and a `ResizeObserver` overwrite any forced value) and
+    `MonitoringPage.tsx:130-131` follows the same verdict as its `ServiceMonitor.tsx:124-125` twin
+    (excluded as store-fetched data; the loading *scene* is an `after:` adapter).
+  - **D5 — `compose.tab` (§5.1) is not a `ui` key**, because the `Tabs` are the route
+    (`router.ts:104-106`); the same holds for `ProjectPage`'s tab and environment `Segmented`. The spec's
+    example at `spec.md:136` is corrected in ticket 09's docs pass, not here. `signedIn` (§5.7) stays
+    route-only — `useAuthMock` is outside `PanelProvider`, so `SceneOverrides` cannot reach it; recorded,
+    not worked around.
+- 2026-09-26 — **Batches, so three agents can work this ticket without colliding.** Batch 1 (running
+  now) owns the pattern and these files: `app/AppShell.tsx`, `pages/OverviewPage.tsx`,
+  `pages/MonitoringPage.tsx`, `components/ServiceMonitor.tsx`, `components/StartHandleDialog.tsx`,
+  `components/ComposeVolumesTab.tsx`, `components/CommandPalette.tsx`, `components/DangerModal.tsx`,
+  `components/MetricChart.tsx`, `components/FullscreenEditor.tsx`, `pages/AuthPages.tsx`,
+  `pages/StatesGalleryPage.tsx`, plus `app/sceneAdapters.ts` and the `uiKeys.ts` additions. It also fixes
+  the **adapter registry's shape** — a registration API (`registerSceneAdapter(name, fn)`) so a later
+  batch registers its own adapters from its own screen file and never edits the registry — because that
+  is what keeps batches 2 and 3 parallel instead of serial. Reserved: batch 2 = `ProjectsPage`,
+  `ProjectPage`, `VariablesPanel`; batch 3 = `ComposePage`, `VolumeExplorerPage`.
 
