@@ -1,8 +1,9 @@
 import { AppstoreOutlined, DashboardOutlined, FileTextOutlined, FolderOutlined, RocketOutlined, SearchOutlined } from '@ant-design/icons';
 import { Flex, Input, Modal, Tag, Typography, theme } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { navigate, paths } from '../app/router';
+import { useUiState } from '../app/uiState';
 import { usePanel } from '../data/store';
 import { useSceneContainer } from '../scenes/scope';
 
@@ -26,11 +27,19 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const { projects } = usePanel();
   const { token } = theme.useToken();
   const sceneContainer = useSceneContainer();
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useUiState('palette.query', '');
 
+  // Ticket 02, decision D3: the reset used to run whenever `open` was true, so
+  // a cold load with a forced `?ui=palette.query=…` was wiped on mount. Keyed
+  // on the false→true transition instead — every real open still clears the
+  // field, a forced cold load keeps its value, and with no query string
+  // nothing moves.
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (open) setQuery('');
-  }, [open]);
+    const opening = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (opening) setQuery('');
+  }, [open, setQuery]);
 
   const hits = useMemo<Hit[]>(() => {
     const staticHits: Hit[] = [

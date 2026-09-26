@@ -550,6 +550,24 @@ value carrying a file is not viable, but both have a natural fixture — `Projec
   batch registers its own adapters from its own screen file and never edits the registry — because that
   is what keeps batches 2 and 3 parallel instead of serial. Reserved: batch 2 = `ProjectsPage`,
   `ProjectPage`, `VariablesPanel`; batch 3 = `ComposePage`, `VolumeExplorerPage`.
+- 2026-09-27 — **Batch 1 landed.** 21 keys registered (`uiKeys.ts`), D3 re-keys applied
+  (StartHandleDialog / CommandPalette / DangerModal now reset on the false→true transition), D4's
+  exclusions applied (`MetricChart.width`, `MonitoringPage.loading/result`), `chart.hoverAt`
+  converted, `states.section` added for ticket 04's feedback scenes. Two seams were added to
+  `sceneAdapters.ts` so module-scope adapters can reach the running app: `<SceneAdapterBridge />`
+  (captures the mounting AntApp's message/notification) and `publishSceneHandle(name, value)`
+  (screens publish forms/setter recipes, auto-unpublished on unmount). Registered: five
+  `toast:states.*`, the keyed deploy notification, `toast:auth.adminCreated`, three
+  `submit:auth.*` adapters, `object:volumes.starting`. **D4 reconciliation, batch-1 files:**
+  converted 17 sites / excluded 4 by rule (`MonitoringPage loading+result`, `ServiceMonitor
+  loading+result` already excluded before this batch, `MetricChart.width`) / 1 excluded as data
+  (`ComposeVolumesTab.volumes` — deviation from the audit's CONVERT*, recorded per D4's
+  reconciliation rule). Known gaps carried for later batches/integration: `shell.accountMenu`
+  (the account Dropdown needs a controlled `open` — AppShell call-site edit, not a swap),
+  `overview-all-clear` needs a store lever (see ticket 04's Comments), and standalone `?after=`
+  has no runner yet (only the scope's AfterRunner runs adapters; `main.tsx` was out of batch
+  scope) — Open-live links to `after:` scenes stay unreproducible until the coordinator adds the
+  standalone runner.
 - 2026-09-27 — **Coordinator handover.** The previous session claimed this ticket and stopped before
   batch 1 produced code (no `sceneAdapters.ts`, no `useUiState` call sites; working tree clean). This
   session takes the claim over, running all three batches as specified above — batch 1 first for the

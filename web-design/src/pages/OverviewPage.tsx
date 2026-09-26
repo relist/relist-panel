@@ -9,8 +9,8 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Card, Col, Empty, Flex, List, Row, Table, Tag, Timeline, Tooltip, Typography, theme } from 'antd';
-import { useState } from 'react';
 import { navigate, paths } from '../app/router';
+import { useUiState } from '../app/uiState';
 import { ComposeStatusInline, ComposeStatusTag, PageHeader, RelativeTime, StatCard } from '../components/primitives';
 import { LiveHandlesBanner } from '../components/LiveHandlesBanner';
 import { usePanel } from '../data/store';
@@ -35,7 +35,7 @@ type FlatCompose = {
 export function OverviewPage() {
   const { activity, projects, refreshStatus } = usePanel();
   const { token } = theme.useToken();
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing] = useUiState('overview.refreshing', false);
 
   const flat: FlatCompose[] = projects.flatMap((project) =>
     project.environments.flatMap((environment) =>

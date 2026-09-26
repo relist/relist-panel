@@ -1,6 +1,7 @@
 import { Alert, Col, Descriptions, Flex, InputNumber, Modal, Radio, Row, Tag, Typography } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { CODE_FONT_STACK } from '../app/theme';
+import { useUiState } from '../app/uiState';
 import { CodeValue } from './primitives';
 import type { StartHandleInput } from '../data/store';
 import type { UidSource, Volume } from '../data/types';
@@ -41,18 +42,28 @@ export function StartHandleDialog({
   runningServices: string[];
   volume: Volume;
 }) {
-  const [mode, setMode] = useState<'ro' | 'rw'>('rw');
-  const [uid, setUid] = useState(resolved.uid);
-  const [gid, setGid] = useState(resolved.gid);
+  const [mode, setMode] = useUiState<'ro' | 'rw'>('startHandle.mode', 'rw');
+  const [uid, setUid] = useUiState('startHandle.uid', resolved.uid);
+  const [gid, setGid] = useUiState('startHandle.gid', resolved.gid);
   const sceneContainer = useSceneContainer();
 
+  // Ticket 02, decision D3: this reset used to run whenever `open` was true —
+  // which on a cold load with a forced `?ui=startHandle.…` value is the mount
+  // itself, wiping the forced value before it could paint. Keyed on the
+  // false→true transition (and on a changed resolution while open) instead.
+  // With no query string the behaviour is identical: the state starts at the
+  // resolved defaults and every real open resets them.
+  const previous = useRef({ open, gid: resolved.gid, uid: resolved.uid });
   useEffect(() => {
-    if (open) {
+    const reopened = open && !previous.current.open;
+    const reresolved = open && (previous.current.uid !== resolved.uid || previous.current.gid !== resolved.gid);
+    previous.current = { open, gid: resolved.gid, uid: resolved.uid };
+    if (reopened || reresolved) {
       setMode('rw');
       setUid(resolved.uid);
       setGid(resolved.gid);
     }
-  }, [open, resolved.gid, resolved.uid]);
+  }, [open, resolved.gid, resolved.uid, setGid, setMode, setUid]);
 
   const missing = volume.existence === 'absent';
   const source = uid !== resolved.uid || gid !== resolved.gid ? ('manual' as const) : resolved.source;

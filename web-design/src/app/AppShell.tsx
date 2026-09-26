@@ -30,10 +30,10 @@ import {
   theme,
 } from 'antd';
 import type { MenuProps } from 'antd';
-import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { LAYOUT } from '../app/theme';
 import type { ThemeMode } from '../app/theme';
+import { useUiState } from '../app/uiState';
 import { navigate, paths, useRoute } from '../app/router';
 import { usePanel } from '../data/store';
 import type { Speed } from '../data/store';
@@ -56,8 +56,8 @@ export function AppShell({
   const { token } = theme.useToken();
   const route = useRoute();
   const { projects, host, refreshStatus, setSpeed, speed } = usePanel();
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useUiState('shell.paletteOpen', false);
+  const [refreshing, setRefreshing] = useUiState('shell.refreshing', false);
 
   const selectedKey =
     route.kind === 'project' || route.kind === 'compose' ? `project-${route.projectId}` : route.kind;

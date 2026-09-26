@@ -2,6 +2,7 @@ import { ReloadOutlined, RocketOutlined } from '@ant-design/icons';
 import { Badge, Button, Card, Col, Descriptions, Flex, Row, Segmented, Select, Skeleton, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { CODE_FONT_STACK, SERVICE_STATE_META } from '../app/theme';
+import { useUiState } from '../app/uiState';
 import { usePanel } from '../data/store';
 import type { Compose, MetricWindow, ServiceSample } from '../data/types';
 import { SERVICE_METRIC_WINDOWS } from '../data/types';
@@ -119,8 +120,10 @@ function chartsFromSamples(samples: ServiceSample[], metricWindow: MetricWindow,
  */
 export function ServiceMonitor({ compose, onOpenEditor }: { compose: Compose; onOpenEditor: () => void }) {
   const { loadServiceMetrics } = usePanel();
-  const [pickedService, setPickedService] = useState<string>();
-  const [metricWindow, setMetricWindow] = useState<MetricWindow>('1h');
+  const [pickedService, setPickedService] = useUiState<string | undefined>('monitor.service', undefined);
+  const [metricWindow, setMetricWindow] = useUiState<MetricWindow>('monitor.window', '1h');
+  // EXCLUDED (ticket 02) — data; store latency. `loading`/`result` are the
+  // fetch and its answer, not screen state a `?ui=` string can name.
   const [loading, setLoading] = useState(true);
   const [result, setResult] = useState<{ samples: ServiceSample[]; service: string; window: MetricWindow }>();
 

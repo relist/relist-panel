@@ -3,7 +3,9 @@ import { Alert, App, Button, Card, Flex, Result, Skeleton, Table, Tag, Tooltip, 
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useEffect, useState } from 'react';
 import { navigate, paths } from '../app/router';
+import { publishSceneHandle } from '../app/sceneAdapters';
 import { useNow } from '../app/useNow';
+import { useUiState } from '../app/uiState';
 import { CodeValue, EmptyState } from './primitives';
 import { StartHandleDialog } from './StartHandleDialog';
 import { IDLE_TIMEOUT_MINUTES, usePanel } from '../data/store';
@@ -38,9 +40,12 @@ export function ComposeVolumesTab({
   const { message } = App.useApp();
   const now = useNow();
 
+  // EXCLUDED (ticket 02) — data (`resolveComposeVolumes`), the same verdict as
+  // its `VolumeExplorerPage` twin: an array a `?ui=` string cannot carry, and
+  // the resolution effect below is a data load, not an overlay reset.
   const [volumes, setVolumes] = useState<Volume[]>();
-  const [error, setError] = useState<string>();
-  const [starting, setStarting] = useState<Volume>();
+  const [error, setError] = useUiState<string | undefined>('volumes.error', undefined);
+  const [starting, setStarting] = useUiState<Volume | undefined>('volumes.starting', undefined);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,6 +63,19 @@ export function ComposeVolumesTab({
       cancelled = true;
     };
   }, [compose.id, resolveComposeVolumes]);
+
+  // Ticket 02, decision D1: `starting` holds a `Volume` — an object a `?ui=`
+  // string cannot carry — so the `object:volumes.starting` adapter seeds it
+  // through this, the tab's own setter, with the first Volume the tab itself
+  // resolved. Idempotent: a second call finds `starting` already set and
+  // changes nothing.
+  useEffect(
+    () =>
+      publishSceneHandle('volumes.starting.seed', () => {
+        setStarting((current) => current ?? volumes?.[0]);
+      }),
+    [setStarting, volumes],
+  );
 
   const openExplorer = useCallback(
     (volume: Volume, inNewTab = true) => {

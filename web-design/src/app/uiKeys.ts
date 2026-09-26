@@ -18,8 +18,54 @@
  *    click*), so a scene names it here and the harness turns it into that prop.
  */
 
-/** Screen keys: one per `useUiState` call site. Ticket 02 fills this in. */
-export const SCREEN_UI_KEYS: readonly string[] = [];
+/**
+ * Screen keys: one per `useUiState` call site. Ticket 02 fills this in —
+ * batch 1 below; batches 2 (`ProjectsPage`, `ProjectPage`, `VariablesPanel`)
+ * and 3 (`ComposePage`, `VolumeExplorerPage`) append theirs.
+ *
+ * A trailing `.*` declares a *family* (ticket 02, decision D2): the state is
+ * one instance per row, addressed by naming the row in the key —
+ * `?ui=fullscreen.revealed.DATABASE_URL=1`. The parse already allows it (a
+ * value splits on its first `=`; the key is whatever came before), so the
+ * declaration only keeps the warner quiet for a legitimate addressed key
+ * while a key matching no declared family still warns.
+ */
+export const SCREEN_UI_KEYS: readonly string[] = [
+  // app/AppShell.tsx
+  'shell.paletteOpen',
+  'shell.refreshing',
+  // pages/OverviewPage.tsx
+  'overview.refreshing',
+  // pages/MonitoringPage.tsx
+  'monitoring.window',
+  // components/ServiceMonitor.tsx
+  'monitor.service',
+  'monitor.window',
+  // pages/AuthPages.tsx
+  'auth.submitting',
+  'auth.setupStep',
+  // pages/StatesGalleryPage.tsx
+  'states.dangerOpen',
+  'states.confirmOpen',
+  'states.section',
+  // components/MetricChart.tsx
+  'chart.hoverAt',
+  // components/ComposeVolumesTab.tsx
+  'volumes.error',
+  'volumes.starting',
+  // components/FullscreenEditor.tsx — `revealed` is one instance per variable
+  // row (family, D2); `railQuery` is the rail's single filter field.
+  'fullscreen.revealed.*',
+  'fullscreen.railQuery',
+  // components/DangerModal.tsx
+  'danger.typed',
+  // components/CommandPalette.tsx
+  'palette.query',
+  // components/StartHandleDialog.tsx
+  'startHandle.mode',
+  'startHandle.uid',
+  'startHandle.gid',
+];
 
 /**
  * Store keys, as an object rather than a list so `sceneOverrides()` reads them
@@ -41,7 +87,15 @@ export const DECLARED_UI_KEYS: readonly string[] = [...SCREEN_UI_KEYS, ...STORE_
 /** The keys in `keys` that no screen and no store override declares, in order, without repeats. */
 export function undeclaredUiKeys(keys: Iterable<string>, declared: readonly string[] = DECLARED_UI_KEYS): string[] {
   const known = new Set(declared);
-  return [...new Set(keys)].filter((key) => !known.has(key));
+  // A declared `name.*` family covers every addressed key under `name.`
+  // (ticket 02, decision D2); anything else is an exact match.
+  const families = declared
+    .filter((entry) => entry.endsWith('.*'))
+    .map((entry) => entry.slice(0, -2));
+  return [...new Set(keys)].filter((key) => {
+    if (known.has(key)) return false;
+    return !families.some((prefix) => key.startsWith(prefix));
+  });
 }
 
 /**

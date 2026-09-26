@@ -1,6 +1,7 @@
 import { Alert, Input, Modal, Typography } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
+import { useUiState } from '../app/uiState';
 import { useSceneContainer } from '../scenes/scope';
 
 const { Text } = Typography;
@@ -31,13 +32,20 @@ export function DangerModal({
   open: boolean;
   title: string;
 }) {
-  const [typed, setTyped] = useState('');
+  const [typed, setTyped] = useUiState('danger.typed', '');
   // The frame box inside a scene scope, `undefined` (the viewport) standalone.
   const sceneContainer = useSceneContainer();
 
+  // Ticket 02, decision D3: the reset used to run whenever `open` was true, so
+  // a cold load with a forced `?ui=danger.typed=…` was wiped on mount. Keyed on
+  // the false→true transition instead — every real open still clears the field,
+  // a forced cold load keeps its value, and with no query string nothing moves.
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (open) setTyped('');
-  }, [open]);
+    const opening = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (opening) setTyped('');
+  }, [open, setTyped]);
 
   const matches = typed.trim() === confirmWord;
 

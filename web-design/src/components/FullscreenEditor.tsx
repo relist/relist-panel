@@ -9,10 +9,11 @@ import {
   UndoOutlined,
 } from '@ant-design/icons';
 import { App, Button, Flex, Input, Modal, Tag, Tooltip, Typography, theme } from 'antd';
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef } from 'react';
 import type { editor as MonacoEditorApi } from 'monaco-editor';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { navigate, paths } from '../app/router';
+import { useUiState } from '../app/uiState';
 import { useSceneContainer } from '../scenes/scope';
 import { ComposeStatusTag, EmptyState } from './primitives';
 import { YamlEditor } from './YamlEditor';
@@ -44,7 +45,10 @@ function VariableRow({
 }) {
   const { token } = theme.useToken();
   const { message } = App.useApp();
-  const [revealed, setRevealed] = useState(false);
+  // Ticket 02, decision D2: one instance of this state per variable row, so
+  // the key is addressed by the row — `?ui=fullscreen.revealed.DATABASE_URL=1`
+  // reveals exactly that row.
+  const [revealed, setRevealed] = useUiState<boolean>(`fullscreen.revealed.${variable.key}`, false);
   const masked = '•'.repeat(Math.min(16, Math.max(8, variable.value.length)));
   const alreadyReferenced = draft.includes(reference(variable.key));
 
@@ -171,7 +175,7 @@ export function FullscreenEditor({
   const { token } = theme.useToken();
   const sceneContainer = useSceneContainer();
   const editorRef = useRef<MonacoEditorApi.IStandaloneCodeEditor | null>(null);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useUiState('fullscreen.railQuery', '');
 
   const variables = useMemo(() => {
     const needle = query.trim().toLowerCase();

@@ -10,9 +10,12 @@ import type { Volume, VolumeEntry, VolumeExistence } from './types';
  * The fixtures are shaped to make every state this feature can be in reachable
  * by clicking, which is the point of a design pass:
  *
- *  - Compose 1 (`web`, running) has all five Volume shapes — a named volume, a
+ *  - Compose 1 (`web`, running) has all six Volume shapes — a named volume, a
  *    second named volume, a bind under the data directory whose existence is
- *    known, a bind outside it whose existence is not, and a read-only bind.
+ *    known, a bind outside it whose existence is not, a read-only bind, and a
+ *    bind whose source was checked and is not there (ticket 04: the absent
+ *    state the Start Handle dialog refuses and the Volumes tab disables Open
+ *    for had no fixture before).
  *  - Its uploads Volume carries the whole tree: nested directories, an empty
  *    directory, a file too large for the editor, a symlink that stays inside,
  *    a symlink that escapes, and a filename with a newline in it.
@@ -59,6 +62,9 @@ const composeOne: Omit<Volume, 'composeId' | 'id'>[] = [
   bind('./uploads', '/app/uploads', ['api'], false, 'present'),
   bind('./config', '/app/config', ['api'], true, 'present'),
   bind('/srv/legacy-images', '/app/legacy', ['api'], true, 'unverifiable'),
+  // Declared in the YAML but never provisioned: the source was stat-ed and is
+  // not there, so the panel refuses to open it — mounting it would create it.
+  bind('./retired', '/app/retired', ['api'], false, 'absent'),
 ];
 
 export const volumeFixtures: Record<number, Omit<Volume, 'composeId' | 'id'>[]> = {

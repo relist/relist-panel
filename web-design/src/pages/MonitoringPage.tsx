@@ -5,6 +5,7 @@ import { MetricChart, summarizeMetric } from '../components/MetricChart';
 import type { MetricChartState, MetricPoint, MetricSeries, MetricSummary, MetricUnit } from '../components/MetricChart';
 import { PageHeader } from '../components/primitives';
 import { usePanel } from '../data/store';
+import { useUiState } from '../app/uiState';
 import type { MetricSample, MetricWindow } from '../data/types';
 import { METRIC_WINDOWS } from '../data/types';
 
@@ -126,7 +127,10 @@ function chartsFromSamples(samples: MetricSample[], metricWindow: MetricWindow):
  */
 export function MonitoringPage() {
   const { host, loadMetrics } = usePanel();
-  const [metricWindow, setMetricWindow] = useState<MetricWindow>('1h');
+  const [metricWindow, setMetricWindow] = useUiState<MetricWindow>('monitoring.window', '1h');
+  // EXCLUDED (ticket 02, decision D4) — store-fetched data, following the
+  // identical `ServiceMonitor` pair: the mount `load()` below is not an overlay
+  // reset, so it keeps running as-is and would overwrite any forced value.
   const [loading, setLoading] = useState(true);
   const [result, setResult] = useState<{ samples: MetricSample[]; window: MetricWindow }>();
 

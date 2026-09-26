@@ -2,6 +2,7 @@ import { Card, Flex, Typography, theme } from 'antd';
 import dayjs from 'dayjs';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
+import { useUiState } from '../app/uiState';
 import { EmptyState } from './primitives';
 
 const { Text } = Typography;
@@ -172,8 +173,10 @@ export function MetricChart({
 }) {
   const { token } = theme.useToken();
   const plotRef = useRef<HTMLDivElement>(null);
+  // EXCLUDED (ticket 02, decision D4) — measured, not state: the layout effect
+  // and the ResizeObserver below overwrite any forced value on every render.
   const [width, setWidth] = useState(600);
-  const [hoverAt, setHoverAt] = useState<number>();
+  const [hoverAt, setHoverAt] = useUiState<number | undefined>('chart.hoverAt', undefined);
 
   // The plot's width is read back from the DOM rather than assumed: the card is
   // as wide as its column, and a viewBox that kept an older width would draw the
