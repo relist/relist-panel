@@ -114,7 +114,7 @@ export function AppShell({
       type: 'group',
       label: 'Design system',
       children: [
-        { key: 'screens', icon: <PictureOutlined />, label: 'All screens' },
+        { key: 'board', icon: <PictureOutlined />, label: 'Still board' },
         { key: 'guidelines', icon: <FileTextOutlined />, label: 'Guidelines' },
         { key: 'states', icon: <RocketOutlined />, label: 'States gallery' },
       ],
@@ -125,7 +125,7 @@ export function AppShell({
     if (key === 'overview') return navigate(paths.overview);
     if (key === 'projects') return navigate(paths.projects);
     if (key === 'monitoring') return navigate(paths.monitoring);
-    if (key === 'screens') return navigate(paths.screens);
+    if (key === 'board') return navigate(paths.board);
     if (key === 'guidelines') return navigate(paths.guidelines);
     if (key === 'states') return navigate(paths.states);
     const projectId = Number(String(key).replace('project-', ''));

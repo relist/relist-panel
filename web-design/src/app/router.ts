@@ -32,6 +32,12 @@ export type Route =
    * part of what each frame is showing.
    */
   | { kind: 'screensGallery' }
+  /**
+   * The still board — every registry scene on one pan/zoom canvas. A review
+   * surface like the screens gallery, and bare for the same reason: the shell
+   * is part of what each of its frames is showing.
+   */
+  | { kind: 'board' }
   | { kind: 'signin' }
   | { kind: 'setup' }
   | { kind: 'not-found'; path: string };
@@ -72,6 +78,7 @@ export const paths = {
   guidelines: '#/design/guidelines',
   states: '#/design/states',
   screens: '#/design/screens',
+  board: '#/design/board',
   signIn: '#/signin',
   setup: '#/setup',
 } as const;
@@ -118,6 +125,7 @@ export function parse(hash: string): Route {
     if (parts[1] === 'guidelines') return { kind: 'guidelines' };
     if (parts[1] === 'states') return { kind: 'states' };
     if (parts[1] === 'screens') return { kind: 'screensGallery' };
+    if (parts[1] === 'board') return { kind: 'board' };
   }
 
   if (parts[0] === 'signin') return { kind: 'signin' };

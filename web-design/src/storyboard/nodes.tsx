@@ -224,11 +224,17 @@ function FrameNodeComponent({ data }: NodeProps<FrameFlowNode>) {
   const [detailed, setDetailed] = useState(() => store.getState().transform[2] >= lodBreak);
 
   // Hysteretic subscription: setState with an unchanged value is a no-op, so
-  // this re-renders the node only when a threshold is actually crossed.
+  // this re-renders the node only when a threshold is actually crossed. The
+  // hysteresis is asymmetric on purpose — detail is dropped the moment zoom
+  // dips below the floor but regained only above floor+hysteresis — and the
+  // predicate must be evaluated against the threshold, not against the current
+  // state twice: comparing `zoom < lodBreak` while detailed made every store
+  // tick above the floor a coin flip, leaving frames stuck as name cards
+  // mid-pan (ticket 06's smoke test caught it).
   useEffect(() => {
     const unsubscribe = store.subscribe((state) => {
       const zoom = state.transform[2];
-      setDetailed((d) => (d ? zoom < lodBreak : zoom >= lodBreak + LOD_HYSTERESIS));
+      setDetailed((d) => (d ? zoom >= lodBreak : zoom >= lodBreak + LOD_HYSTERESIS));
     });
     return unsubscribe;
   }, [store, lodBreak]);
