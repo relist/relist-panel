@@ -24,6 +24,18 @@ _Avoid_: Container (a Service is the definition; a Container is one running inst
 One running instance of a Service, created by a deploy. Its identity is not stable: every deploy mints a new one, so anything that outlives a single deploy — metric history, for one — is keyed by Service, never by Container.
 _Avoid_: Instance
 
+**Volume**:
+One entry in a Compose's `volumes:` list, attached to one of its Services. Either a named Docker volume or a host path (a bind mount) — the panel treats both alike, because the operator declares both in the same place.
+_Avoid_: Mount, Storage. Docker's own "volume" means only the named kind, so never assume a Volume is a named volume.
+
+**Volume Handle**:
+The panel's temporary grant of access to one Volume, so its files can be browsed and edited. Opened by the operator, closed explicitly or after a period of disuse, and shown on the dashboard while open. Carries the Volume's owner (uid/gid) and whether writing is allowed.
+_Avoid_: Session (that is a login session), File Manager. It is backed by its own container, which is not a **Container** — no Service defines it and no deploy creates it.
+
+**Volume Explorer**:
+The screen inside the panel where a Volume's files are listed, edited, uploaded and downloaded. Part of the panel, not a separate application.
+_Avoid_: File Manager, File Browser
+
 **Environment Variable**:
 A key-value pair scoped to an Environment, interpolated into all of that Environment's Composes at deploy time. A variable may be flagged **secret**, which masks its value on screen — a display tier owned by the user, not a security boundary: the value is stored and served as any other, and the panel's single admin can always reveal it.
 _Avoid_: treating the secret flag as an encryption or access tier; "plain" is not a domain word, just the tag for the flag's absence.
