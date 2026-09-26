@@ -1,5 +1,15 @@
 # 05 — `stills.mjs`: the capture pipeline
 
+> **WITHDRAWN — 2026-09-27.** The user's direction in review: no screenshots. The board renders its
+> frames live (`src/storyboard/`, React Flow, viewport culling + LOD — see the architecture update at
+> the top of spec.md). Nothing here is built, and none of it is needed: no capture run, no WebP
+> budget, no manifest. What survives into ticket 06: the production-build warning about
+> `StrictMode` double-effects (adapters must be idempotent), the readiness pattern (now per frame,
+> ticket 10), and the CDP render-check technique (now asserting heap/mounted bounds instead of
+> byte-identical captures). The rest of this file is kept as the record of why stills were chosen
+> first, and why the measurement — which priced the iframe, not the frame — does not apply to the
+> inline, culled design.
+
 **What to build:** `web-design/scripts/stills.mjs` — Node 24, no new dependencies, CDP over the global
 `WebSocket` — plus a `"stills"` script in `web-design/package.json`. It drives a **production build**
 (`vite preview`, or the built `dist-single/`), never `pnpm dev`: `main.tsx` wraps the app in

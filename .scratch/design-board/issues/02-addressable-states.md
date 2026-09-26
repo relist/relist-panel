@@ -550,4 +550,11 @@ value carrying a file is not viable, but both have a natural fixture — `Projec
   batch registers its own adapters from its own screen file and never edits the registry — because that
   is what keeps batches 2 and 3 parallel instead of serial. Reserved: batch 2 = `ProjectsPage`,
   `ProjectPage`, `VariablesPanel`; batch 3 = `ComposePage`, `VolumeExplorerPage`.
+- 2026-09-27 — **Coordinator handover.** The previous session claimed this ticket and stopped before
+  batch 1 produced code (no `sceneAdapters.ts`, no `useUiState` call sites; working tree clean). This
+  session takes the claim over, running all three batches as specified above — batch 1 first for the
+  pattern, batches 2 and 3 after it lands. D1–D5 above are binding as written. One amendment from the
+  architecture update (spec.md, 2026-09-27): the board renders frames **live**, so the audit's
+  "captured mid-toast" framing becomes "shown mid-toast" — the `duration: 0` mechanics are unchanged.
+  Agents do not commit; the coordinator commits per batch.
 

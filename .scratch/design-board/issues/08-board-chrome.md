@@ -1,5 +1,14 @@
 # 08 — Board chrome: the switch, filters, search, print, revision
 
+> **Re-scoped — 2026-09-27.** Two changes from the architecture update. **Theme:** the switch flips
+> every frame *and* the chrome, live, through the theme context — dark frames are real, and the
+> "frames stay light" rule is gone. **Viewport:** the switch sets live frames' widths for real; a
+> width with no designed scenes (ticket 03) offers only desktop until it exists, honestly. Withdrawn:
+> the Live cap (the whole canvas is live but culled — the bound is the culling, ticket 06's
+> acceptance), the manifest revision corner, and the holes. Kept: search/jump by scene id, group
+> filter, zoom + Fit, lines/captions toggles, legend, the `?scene=` deep link, and the new
+> **mounted X/Y** counter as the visible proof of culling.
+
 **What to build:** The sticky bar above the canvas — outside the zoom transform, so controls stay
 readable at any zoom — carrying everything a reviewer needs to *narrow* a hundred-and-twenty-odd frames
 down to the question they are asking:

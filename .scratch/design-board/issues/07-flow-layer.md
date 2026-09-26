@@ -1,5 +1,10 @@
 # 07 — The flow layer: menu miniature, anchors, connectors
 
+> **Re-scoped — 2026-09-27.** The two line kinds, the anchors and the legend stand as written; they
+> are drawn as React Flow **edges** inside the `src/storyboard/` engine (declared in the registry,
+> ticket 04) rather than as a hand-rolled SVG layer, with `vector-effect:
+> non-scaling-stroke` on the paths. Blocked by 06 (not 05).
+
 **What to build:** The reason the board is a *board* rather than a document — navigation drawn on the
 canvas. Two kinds of line and only two, exactly as the spec's `### Flow lines` says; a third would be
 decoration.

@@ -1,5 +1,11 @@
 # 04 — The scene registry: every scene, in menu order, with captions
 
+> **Architecture update — 2026-09-27 (spec.md).** The board renders frames **live**, so every
+> "captured" below reads "rendered" and the still filename reads the frame id. The registry type,
+> ordering, links and invariants stand as written. **Blocked-by change:** desktop scenes need only
+> 02; non-desktop scenes stay gated on 03 — declare `viewports` honestly now, render them after 03.
+> The width matrix question is gone: a live frame renders any declared width with no second capture.
+
 **What to build:** `web-design/src/scenes/registry.ts` — the catalogue of scenes, the ordering, and the
 navigation the flow layer will draw. This is the plan's second half's source of truth: nothing is
 captured (05) or laid out (06) that is not declared here.

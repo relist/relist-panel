@@ -1,5 +1,16 @@
 # 06 — The board: one canvas, frames in menu order
 
+> **Re-scoped — 2026-09-27 (spec.md architecture update).** The canvas renders **live inline
+> frames**, not stills: no manifest, no holes-with-Live-buttons. Frames are the mock's own screens
+> wrapped in ticket 10's `SceneScopeProvider`, rendered through a reusable engine in
+> `src/storyboard/` (React + `@xyflow/react` only — it never imports antd, the router or the mock),
+> with `onlyRenderVisibleElements` culling and an LOD floor (below ~35% zoom a frame is a name
+> card). Acceptance adds what the stills design got for free: while panning the whole canvas,
+> mounted frames stay ≤ ~24 and JS heap stays flat (CDP `Performance.getMetrics`), and zero frames
+> hit the error boundary. The Live cap, the revision corner and the manifest import are withdrawn;
+> the offline `dist-single` path gets *simpler* (inline frames need no dev server). Blocked by 02,
+> 04 and 10 — not 05.
+
 **What to build:** `#/design/board` — a route in the mock that renders the registry (04) and the
 manifest (05) as a pannable, zoomable canvas of stills. It renders **outside `AppShell`**, exactly as the
 gallery it replaces does, because the shell is part of what each frame is showing.

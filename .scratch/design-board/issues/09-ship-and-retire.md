@@ -1,5 +1,11 @@
 # 09 — Ship it, and retire what it replaces
 
+> **Simplified — 2026-09-27.** With live frames the offline path gets easier, not harder: the board
+> renders inline, so `dist-single/index.html#/design/board` works from disk with no dev server, no
+> manifest import and no `public/stills/` copy — that whole half of this ticket shrinks to "verify it
+> from `file://`". The removals (`#/design/screens`), the docs (README, GUIDELINES, volume ticket 01)
+> and the ADR/decision record stand as written, with the architecture update cited as the decision.
+
 **What to build:** The last mile — the offline path, the removals, the documentation, and the decision
 record. Nothing here is hard; all of it is easy to forget, which is why it is a ticket rather than a
 trailing paragraph.
