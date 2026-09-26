@@ -45,9 +45,9 @@ function install(search: string): void {
   overrides = storeOverrides(url.ui);
 }
 
-// Guarded rather than assumed: `scene.ts` is the module the tests may import for
-// its clock, and a module that throws on import under Node is a module nothing
-// can test. In the browser this runs before every fixture does.
+// Guarded rather than assumed: the URL is only a browser thing, and a module that
+// throws when it is imported outside one is a module nothing can inspect. In the
+// browser this body runs before every fixture's does.
 if (typeof window !== 'undefined') {
   install(window.location.search);
 }
@@ -57,9 +57,10 @@ if (typeof window !== 'undefined') {
  *
  * Patch, don't plumb: the mock reads the clock in six places (spec: *A frozen
  * clock* — `useNow`, the store's seeded handle, `metricSamples`, `volumeMocks`'s
- * `mtime`, `GuidelinesPage`'s module-scope stamps, the log fixture) and every one
- * of them already goes through `Date.now()` or a no-argument `new Date()`. Patch
- * those two primitives and no fixture and no screen needs an edit at all.
+ * `mtime`, `GuidelinesPage`'s module-scope stamps, `serviceMetricSamples`) and
+ * every one of them already goes through `Date.now()` or a no-argument
+ * `new Date()`. Patch those two primitives and no fixture and no screen needs an
+ * edit at all.
  *
  * With no `?clock=` this is a no-op, so there is one code path rather than two:
  * the mock reads the real clock exactly as it does today.
