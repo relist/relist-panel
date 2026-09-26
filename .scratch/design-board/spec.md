@@ -660,6 +660,22 @@ verify on its own. 03 was added in review and sits before the registry because t
 declare mobile scenes that exist, and because a phone-width design is a review gate in its own right —
 it changes screens far more than the `useUiState` swap does.
 
+**What is written by hand, and what is generated**, because the plan can be read as "write every screen
+again and photograph it in every shape it has". It is neither:
+
+| hand-written | generated |
+| --- | --- |
+| 02: ~55 `useState` → `useUiState` edits across ~17 files. The screens **already exist**; nothing new is designed here | 05: the frames — one command over the registry, ~130 captures, no clicking through pages (`--only` / `--group` / `--viewport` for iteration) |
+| 03: the tablet and mobile rules, screen by screen. This is the only genuinely *new* design in the plan | 06: the layout — frames, rails and columns computed from registry + manifest, nothing placed by hand |
+| 04: the registry, ~125–140 declared scenes. This is the artifact the review gate reads | 07: the connectors — drawn from declared links and computed boxes |
+| 05's script and 06–08's board code: the only new surface in the plan | 05: the manifest, `sourceRev`, and the staleness the board shows |
+
+Overlays are part of the same loop, not a manual pass: a scene declares its forced state (`ui`/`after`)
+and the pipeline navigates the URL, so "capture all the modals separately" is ~35 registry entries, not
+~35 people opening drawers. The matrix is bounded the same way: **every** screen exists at desktop, the
+~20–25 mobile and ~10 tablet frames are chosen per screen rather than per state, and dark is never
+captured at all. A scene added later is one registry entry plus one capture — not a redesign.
+
 ## Verification and testing decisions
 
 `web-design/` has no test runner today and this plan does not add a dependency to give it one, so
