@@ -49,14 +49,15 @@ screen-state, overlays included — ordered by the menu, with navigation drawn a
 
 Four decisions carry the design:
 
-1. **Frames are captured images, not live iframes.** The scene count is around a hundred, and each
-   live frame is a full React root with its own store and its own Monaco instance. The 18-frame
-   gallery already weighs what it weighs; a hundred of them is not a review surface, it is a stress
-   test. Stills also make the board *static* in the literal sense the user asked for: nothing animates,
-   nothing can be clicked by accident, and nothing claims to be live. Whether they also make it
-   viewable by someone with no Node and no Chrome depends on what is built and committed — see
-   **Shipping the board**, which is a decision in this spec rather than a footnote, because images
-   alone do not make a route openable.
+1. **Frames are captured images, not live iframes.** The scene count is around a hundred and thirty, and
+   each live frame is a full React root with its own store and its own Monaco instance. That is measured,
+   not feared: 18 live frames cost **287 MB of heap, 19 renderer processes and ~19 s to be ready**, against
+   **0.5 MB and 261 ms** for the same 18 screens as stills (*Why stills: measured*). A hundred and thirty of
+   them is not a review surface, it is a stress test. Stills also make the board *static* in the literal
+   sense the user asked for: nothing animates, nothing can be clicked by accident, and nothing claims to be
+   live. Whether they also make it viewable by someone with no Node and no Chrome depends on what is built
+   and committed — see **Shipping the board**, which is a decision in this spec rather than a footnote,
+   because images alone do not make a route openable.
 2. **A scene is the unit, not a screen.** `Scene = route + forced state`. A screen with four states is
    four scenes; a screen with three dialogs is four scenes. This is what makes "show the modals
    separately" fall out of the design rather than being a special case.
@@ -285,8 +286,10 @@ place to see (`partial`, `unavailable`, auto-axis with a >100 % worker series).
 
 Roughly **95–105 desktop frames**, of which about a third are overlays, plus the **~20–25 mobile** and
 **~10 tablet** scenes of *Mobile and tablet: the other viewports* — so a full run is on the order of
-**125–140 captures**. At ~6 s each that is 12–18 minutes, which is why `--only` exists; the real figure
-is measured in ticket 05 rather than asserted here.
+**125–140 captures**. That sounds slow and is not: measured, ~130 frames is ~12 MB of WebP and ~20 s of
+actual encoding (*Why stills: measured*). The first draft's 10–15 minutes was the fixed 6 s settle a naive
+harness waits per scene, which is exactly why the pipeline waits on the readiness signal instead; ticket
+05 reports the real end-to-end number.
 
 ## Mobile and tablet: the other viewports
 
@@ -404,13 +407,14 @@ default:
   a real option and the maximal reading of the ask. It is the open question below, to be answered with
   ticket 05's measured pilot numbers rather than guessed at now.
 
-**Live mode is bounded, and the bound is the plan's original argument.** ~130 live React roots with their
-own stores and Monacos were rejected as a review surface for a good reason, and that reason has not
-changed. So Live is: one frame in the lightbox by default, plus an optional *Live this group* / *Live the
-filtered set* **capped at 8** with the count shown on the button. Flipping theme and width on the frames
-actually under judgement is the point; rendering the whole canvas live is not. Offline (`dist-single`)
-there is no dev server, so Live is unavailable and says so instead of showing a blank iframe — and the
-viewport and theme switches still work in Still mode for whatever was captured.
+**Live mode is bounded, and the bound is the measurement.** *Why stills: measured* gives the per-frame
+cost of a live frame (~9 MB heap, a renderer process, ~28 MB RSS) and it is what caps Live: one frame in
+the lightbox by default, plus an optional *Live this group* / *Live the filtered set* **capped at 8** with
+the count shown on the button — 8 live frames is ~73 MB of heap, which is a review tool, and ~130 is a
+stress test. Flipping theme and width on the frames actually under judgement is the point; rendering the
+whole canvas live is not. Offline (`dist-single`) there is no dev server, so Live is unavailable and says
+so instead of showing a blank iframe — the viewport and theme switches still work in Still mode for
+whatever was captured.
 
 One implementation detail Live mode surfaces immediately: the mock's Monaco is mounted without
 `automaticLayout` (`components/YamlEditor.tsx:7-17`), so a live frame whose width changes does not
@@ -444,6 +448,33 @@ lightbox at 100 %; the frame itself never navigates.
 
 Wheel zooms to the cursor, drag pans, `Fit` frames a group, `0`/`+`/`-` for the obvious. A minimap is
 a stretch, not part of the plan.
+
+## Why stills: measured, not asserted
+
+Measured on this host (Chrome 152, the mock's own single-file build, one fresh browser per state,
+1600×1000, 18 frames of the same screens both ways):
+
+| 18 frames of the same screens | JS heap | renderer frames | ready | RSS vs a blank tab |
+| --- | --- | --- | --- | --- |
+| **live iframes** (what `#/design/screens` does today) | **287 MB** | **19** | **~19 s** (lazy frames included) | **+~0.5 GB** |
+| **still images** (WebP q90, 1.6 MB of files) | **0.5 MB** | **1** | **261 ms** | +~89 MB (decoded bitmaps) |
+
+That is ~**9 MB of heap, one renderer process and ~28 MB of RSS per live frame** — so the ~130 scenes
+this plan reaches would be ~1.2 GB of heap and ~130 renderer processes in one page, against ~12 MB of
+files and one process for the stills. The gallery's own README already admits the shape of this
+("heaviest in dev"); the number is what makes Decision 1 a measurement rather than a preference.
+
+The same run measured the capture side, and it corrects the first draft:
+
+| per frame | measured |
+| --- | --- |
+| `Page.captureScreenshot({ format: 'webp', quality: 90 })` at 1600px, content height | **131–198 ms** (mean 155) |
+| file size | **61–121 KB**, mean **90 KB** |
+| ~130 frames, that rate | **~12 MB** of WebP, **~20 s of actual encoding** |
+
+So the 10–15 minute estimate was almost entirely the *fixed 6 s settle* a naive harness waits per
+scene, not the capture. Waiting on the readiness signal instead (as the pipeline already specifies) puts
+a full run in the low minutes; ticket 05 replaces the estimate with the real number and reports both.
 
 ## The capture pipeline
 
@@ -511,7 +542,7 @@ modified working tree says so.
 Flags: `--only <id…>`, `--group <group>`, `--viewport desktop|tablet|mobile`, `--scale`, `--check`.
 
 **`--check` is a same-machine check and the spec should say so.** It re-captures into a temp dir and
-compares hashes, which costs a full 12–18 minute run (so it is not a per-edit loop, and this repo has
+compares hashes, which costs a full re-capture (minutes at the measured rate, so not a per-edit loop, and this repo has
 no CI to put it in — there is no `.github/workflows`), and byte equality also breaks on a Chrome or
 font update. Its honest use is "did the mock change since the last capture, on the machine that made
 them", and the cheap alternative for everything else is `sourceRev`: if HEAD or the dirty flag moved,
@@ -548,15 +579,13 @@ Three details make it work, and each is a trap if it is left to the implementer:
 3. **Stills are committed; the built folder is not.** Commit `web-design/public/stills/**` (~130 WebP).
    The design pass *is* the deliverable, a reviewer must be able to see it without regenerating it, and
    the alternative — a gitignored `stills/` rebuilt by `pnpm stills` — makes the review surface depend
-   on a 12–18 minute run on every machine that wants to look.
+   on a full re-capture on every machine that wants to look.
 
-**Budget, once measured.** The first draft claimed "WebP lossless at ~8–12 MB for ~130 frames"; CDP's
-WebP is lossy (above), so that figure is unmeasured and looks optimistic for 1600×~2400 text screens.
-Ticket 04 measures one frame — bytes at `quality: 90` and default, versus PNG — and the whole set,
-*before* this recommendation is treated as settled: comfortably under ~15 MB, commit them; over, drop
-the frames' quality, capture the mobile half with `--only` after the desktop set, or ship the stills as a
-release artifact and say so in the README. Discovering it after tens of megabytes of WebP has landed in
-git is the expensive order.
+**Budget, closed by measurement.** The first draft claimed "WebP lossless at ~8–12 MB for ~130 frames".
+The measurement (*Why stills: measured*) gives **mean 90 KB per frame at `quality: 90`**: ~12 MB is right,
+and the only wrong word was "lossless" — CDP's WebP is lossy, and this is what it costs. Ticket 05
+confirms it on the real set including the tablet and mobile frames, and the fallbacks above (quality,
+staged capture, release artifact) become contingency rather than expectation.
 
 **ADR.** "The review surface is stills committed to the repo" is a durable, repo-wide decision of the
 kind `docs/adr/` exists for (compare 0004, 0007, 0008). Ticket 08 writes it, with the measured sizes in
@@ -593,7 +622,7 @@ means, and it is settled here rather than left as an open question.
 | The clock is patched too late to matter | The six call sites are listed, and one runs at import time — so the harness is `main.tsx`'s first import, not a hook or a provider. |
 | `StrictMode` double-fires the mount-time fictions | Capture drives a production build (`vite preview` / `dist-single`), never `pnpm dev`. |
 | Images go stale as the mock changes | Manifest carries `sourceRev` (HEAD + dirty flag); the board shows it, and that is the cheap signal. `pnpm stills --check` is a same-machine, 12–18 minute re-capture that byte comparison also invalidates on a Chrome update — so it is a milestone tool, not a guard, and the repo has no CI to put it in. |
-| Capture is slow (~12–18 min for ~125–140 frames, estimated) | `--only` / `--group` for iteration; full runs are for review milestones. Ticket 05 makes the pilot capture (two screens, five frames) real so the number stops being a guess before ~130 more frames are taken. |
+| Capture looked slow | It is not: the 12–18 minute estimate was a fixed 6 s settle per scene, while measured encoding is 155 ms/frame (*Why stills: measured*). `--only` / `--group` still exist for iteration; ticket 05 reports the real full-run time with the readiness wait in place. |
 | A frame captures mid-animation or mid-load | The readiness signal plus the animation-freeze injection, and a scene cannot capture unless `data-scene-ready` reports its own id. |
 | Beyond-viewport capture mangles sticky/fixed chrome, or looks nothing like a real viewport | Sticky header (`app/AppShell.tsx:221`) and viewport-tall overlays are smoke-tested on one screen and one drawer first, and the content-height rule is written into `GUIDELINES.md` §4.9 so it is a decision rather than a contradiction. |
 | WebP is lossy, so "lossless, 8–12 MB" may be wrong by an order of magnitude | Measured in ticket 05 before the set is committed; *Shipping the board* names the fallbacks (quality, staged capture, release artifact). |

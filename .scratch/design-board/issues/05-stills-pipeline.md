@@ -71,5 +71,9 @@ as the cheap staleness signal the board shows.
       fixtures 03 could not make reachable)
 - [ ] `--only` / `--group` make a single-frame iteration a seconds-long loop, verified by capturing one
       scene twice while tuning the readiness wait
-- [ ] Full run completes and its real wall-clock time replaces the spec's 10–15 minute estimate
+- [ ] **Capture waits on readiness, not on a clock**: the measured cost is 155 ms of encoding per frame
+      (spec's *Why stills: measured*), so the pipeline's real end-to-end time per frame is reported and
+      the first draft's fixed-settle estimate is replaced rather than repeated
+- [ ] Full run completes and its real wall-clock time is recorded in Comments (measured along with bytes per
+      frame at `quality: 90`, so the `## Shipping the board` budget stops being an estimate)
 - [ ] `pnpm --dir web-design typecheck` still green; no new dependency in `package.json`
