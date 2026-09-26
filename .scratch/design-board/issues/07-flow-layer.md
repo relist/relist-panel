@@ -1,4 +1,4 @@
-# 06 — The flow layer: menu miniature, anchors, connectors
+# 07 — The flow layer: menu miniature, anchors, connectors
 
 **What to build:** The reason the board is a *board* rather than a document — navigation drawn on the
 canvas. Two kinds of line and only two, exactly as the spec's `### Flow lines` says; a third would be
@@ -11,9 +11,14 @@ decoration.
   declared as a fraction of the frame box (`{ scene: 'projects', at: [0.97, 0.04] }`) — that is how "the
   ⋯ button in the header" is expressible without pixel-picking.
 
-Sources and destinations both come from the registry's `SceneLink` declarations (03) and the boxes
-`src/board/layout.ts` (05) computes — this ticket adds no data of its own, which is what keeps it small
+Sources and destinations both come from the registry's `SceneLink` declarations (04) and the boxes
+`src/board/layout.ts` (06) computes — this ticket adds no data of its own, which is what keeps it small
 and reviewable.
+
+One rule about the mobile half: a `nav` or `opens` edge is declared **once per screen**, and it starts
+and ends on **desktop** frames. A phone frame is the same screen at another width, so a link from it — or
+a pair of lines converging on it — would say something untrue about navigation. The mobile rail gets no
+connectors; it gets its label.
 
 Rendering rules: SVG beziers in the same transformed space as the frames, with
 `vector-effect="non-scaling-stroke"` so a line is 1 px at every zoom; connectors never draw over a frame's
@@ -21,7 +26,7 @@ image (`opens` lines terminate at the frame's edge); the whole layer toggles off
 checking spacing does not want lines across the frames; a legend sits in the board's bar naming the two
 kinds.
 
-**Blocked by:** 05
+**Blocked by:** 06
 
 **Status:** needs-triage
 

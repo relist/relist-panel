@@ -2,7 +2,7 @@
 
 **What to build:** The `useUiState` swap across the mock — the ≈55 of the mock's 80 `useState` sites
 that gate something visible, per the inventory in the spec (`### Forcing state without a click`) — plus
-the two families of state that need a small fiction, so the registry (03) is written against states
+the two families of state that need a small fiction, so the registry (04) is written against states
 that can actually be forced. Mechanically repetitive, conceptually empty: the point is coverage, so the
 counts in the spec's table are the acceptance list, not a sample.
 
@@ -24,6 +24,10 @@ Two families get a fiction, and both are declared rather than painted:
 
 Both live behind a small registry of named adapters in `web-design/src/app/sceneAdapters.ts`, keyed by
 the `after` string, so a scene names an outcome and the adapter owns how to reach it.
+
+Mobile comes after this ticket (03) and adds its own keys — `shell.navOpen` and whatever a phone-width
+state needs — on top of the same helper; nothing here has to anticipate them, and nothing here should
+invent them.
 
 **Blocked by:** 01
 

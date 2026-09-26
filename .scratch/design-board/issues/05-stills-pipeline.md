@@ -1,4 +1,4 @@
-# 04 — `stills.mjs`: the capture pipeline
+# 05 — `stills.mjs`: the capture pipeline
 
 **What to build:** `web-design/scripts/stills.mjs` — Node 24, no new dependencies, CDP over the global
 `WebSocket` — plus a `"stills"` script in `web-design/package.json`. It drives a **production build**
@@ -31,33 +31,36 @@ Then the full run, per scene:
 5. Measure `scrollHeight` and `Page.captureScreenshot({ clip, captureBeyondViewport: true })`, so
    `clamp(640px, 80vh, 1000px)` (`theme.ts:37`) resolves against a genuine viewport while the image
    still shows the whole page. This is the content-height rule the spec changes deliberately; §4.9 of
-   `GUIDELINES.md` records it (08).
+   `GUIDELINES.md` records it (09). For a `device: 'mobile'` scene the viewport is 390×844 instead, and
+   the same step applies — a phone frame is not a scaled desktop one.
 
-Writes `public/stills/<id>[@dark].webp` **and** `src/scenes/manifest.json` — the manifest is a source
+Writes `public/stills/<id>.webp` **and** `src/scenes/manifest.json` — the manifest is a source
 file, imported by the board rather than fetched, because `fetch()` from a `file://` page is blocked and
 an offline review would otherwise render holes. One entry per still:
-`{ id, theme, file, width, height, bytes, sha256, capturedAt, sourceRev }`, with `sourceRev` =
-`git rev-parse HEAD` plus a dirty flag.
+`{ id, device, theme, file, width, height, bytes, sha256, capturedAt, sourceRev }` (`theme` is always
+`light`: there are no dark stills, per *Dark mode is a switch* — the field is kept so a dark pass later
+is a scene field and a flag, not a migration), with `sourceRev` = `git rev-parse HEAD` plus a dirty flag.
 
-Flags: `--only <id…>`, `--group <group>`, `--theme`, `--scale`, `--check`. `--check` re-captures into a
+Flags: `--only <id…>`, `--group <group>`, `--device desktop|mobile`, `--scale`, `--check`. `--check` re-captures into a
 temp dir and compares hashes: same-machine, full-run cost, and it breaks on a Chrome or font update, so
 it is documented as a milestone tool rather than a guard (there is no CI in this repo), with `sourceRev`
 as the cheap staleness signal the board shows.
 
-**Blocked by:** 01, 03
+**Blocked by:** 01, 04
 
 **Status:** needs-triage
 
 - [ ] Pilot: four frames captured, looked at, and their bytes/ms recorded in this ticket's Comments —
       including the WebP-vs-PNG comparison and the resolution of the spec's `## Shipping the board`
-      budget (commit, squeeze quality, or ship the set as an artifact)
+      budget (commit, squeeze quality, or ship the set as an artifact). One of the four is a **mobile**
+      scene, so the phone viewport is exercised before ~25 of them are queued
 - [ ] The sticky header and one viewport-tall drawer are inspected in a pilot image and their behaviour
-      written down, so the ~96 later captures are not a surprise
+      written down, so the ~120 later captures are not a surprise
 - [ ] Readiness is anchored to `?scene=`'s own id: a scene whose id does not come back never captures,
       and the runner fails loudly naming the scene
 - [ ] Two captures of the same scene, a minute apart on the wall clock, are byte-identical (the
       determinism acceptance test the frozen clock exists for)
-- [ ] A registry entry with no still does **not** fail silently: the run reports it, and the board (05)
+- [ ] A registry entry with no still does **not** fail silently: the run reports it, and the board (06)
       renders a labelled placeholder
 - [ ] Every scene in the registry is either captured or listed in Comments as unrendered (the two
       fixtures 03 could not make reachable)
