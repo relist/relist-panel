@@ -1,5 +1,11 @@
 # 03 — Responsive design: the panel at tablet and phone width
 
+> **Closed wontfix — 2026-09-27.** Decided with the mock's retirement (ticket 14): the panel is
+> desktop-only for now, so the three-tier contract below was never built and is not planned under
+> this pass. Nothing was designed for tablet/phone and nothing was ported, so no work is lost. If
+> mobile becomes a goal it starts as a new design pass, with the retired mock's desktop design as
+> the reference (tag `design-mock`, and see `docs/design-states.md`).
+
 **What to build:** The missing design. Today the panel's responsive behaviour is one antd prop —
 `Layout.Sider breakpoint="lg" collapsedWidth={0}` (`app/AppShell.tsx:159`) — which below 992px deletes
 the sider and leaves **no way to navigate at all**, plus four descriptive sentences in `GUIDELINES.md`
@@ -62,7 +68,7 @@ viewports" card becomes a link to the tablet and mobile scenes instead of a pict
 
 **Blocked by:** 02
 
-**Status:** needs-triage
+**Status:** wontfix
 
 - [ ] At 834, at 390 and at 360, every screen renders with **no horizontal document scroll**
       (`documentElement.scrollWidth <= innerWidth`) — the sweep is per screen per width, asserted, not
