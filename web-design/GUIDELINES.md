@@ -281,20 +281,29 @@ Split layout: what the panel is on the left (in `colorPrimaryBg`), the form on t
 two-step flow (Account → Ready) ending in a `Result` with the Project → Environment → Compose
 mental model restated.
 
-### 4.9 Design system (`#/design/board`, `#/design/guidelines`, `#/design/states`)
+### 4.9 Design system (`#/design/flow`, `#/design/board`, `#/design/guidelines`, `#/design/states`)
 
 The guideline and the state gallery are part of the prototype so reviewers read the rules next to the
 screens. The states gallery covers loading, empty (both "nothing yet" and "filtered to nothing"),
 inline and page-level errors, form validation, outcome feedback, destructive confirmations and narrow
 viewports — on the board each of those sections is also a frame of its own.
 
-`#/design/board` is the review surface: every screen-state as a static, live-rendered frame on one
-pannable canvas, laid out in menu order with the navigation drawn between frames (solid = a menu item
-or tab leads there; dashed = this control opens that dialog). Each frame renders the real mock in a
-forced state — nothing inside a frame is clickable; *Open live* under a frame loads that exact state
-interactively. It is the only screen that renders outside `AppShell` — the shell is part of what each
-frame is showing, so wrapping it would nest one panel inside another. Review from here and quote
-scene ids; the route table is for when you want one screen full size.
+`#/design/board` is the inventory: every screen-state as a live-rendered frame on one pannable canvas,
+laid out in menu order, with a screen's overlays in a rail beside it and its tabs below. Each frame
+renders the real mock in a forced state — nothing inside a frame is clickable; *Open live* under a
+frame loads that exact state interactively. The board only mounts frames near the view, and their
+content mounts once the camera has settled, so panning stays cheap. The navigation is one toggle away
+(lines, **off by default**): solid = a menu item or tab leads there, dashed = this control opens that
+dialog. It is the only screen that renders outside `AppShell` — the shell is part of what each frame is
+showing, so wrapping it would nest one panel inside another. Review frames from here and quote scene
+ids; the route table is for when you want one screen full size.
+
+`#/design/flow` is the journeys: `src/scenes/tasks.ts` declares six tasks as ordered scene ids, and
+each renders as a row of numbered step cards — no canvas and no live frames. Every connector carries
+the label of the thing that causes it: a registry link's own label for a declared link (so a rename
+moves the diagram with it), or the menu control a nav hop goes through. A card links out to its frame
+on the board and to the live mock at its exact state. Reading a flow happens here; looking at a frame
+happens on the board.
 
 ## 5. Status vocabulary
 

@@ -22,7 +22,7 @@
 
 **Blocked by:** 06, 07 — both landed.
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
 - [ ] Panning the board at review zoom mounts no frame content during the gesture, and frames fill in
       after the camera settles — counted by a headless probe, with the previous numbers recorded
@@ -31,3 +31,19 @@
 - [ ] The gate does not re-render the board per wheel tick (the idle state only flips at its two edges)
 - [ ] `lines` starts off; the toggle, the legend and the `?scene=` deep link behave exactly as before
 - [ ] `pnpm --dir web-design typecheck` green; `node --test scripts/storyboard.test.mjs` untouched
+
+- 2026-09-27 — **Landed and accepted.** Commits `60c3b26` (the idle gate) and `322bf5b` (lines off).
+  A/B over CDP against the offline single-file build, deep-linked to `?scene=compose-editor-running`
+  (zoom 0.6), counting mounted app shells (`.react-flow__node .ant-layout`) while dispatching 16
+  horizontal wheel events, sampled every fourth:
+
+  | | during the pan | after settling |
+  | --- | --- | --- |
+  | before (mount when visible) | 6 → 9 → 12 → 9 | 9 |
+  | after (mount at rest) | 0 → 0 → 0 → 0 | 9 |
+
+  The `mounted X/Y` census is unchanged at rest (3/105 in the deep-linked view; no error-boundary
+  cards). The engine-side state flips only at a gesture's two edges — a wheel tick with `moving`
+  already false bails out of the update — and `data-frame-content` marks the mounted half for probes.
+  `node --test` suite and `pnpm typecheck` green; `lines` starts off, the toggle and the deep link are
+  unchanged.

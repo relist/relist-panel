@@ -29,7 +29,7 @@ honest:
 
 **Blocked by:** 10 (scene scope), 04 (registry) — both landed.
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
 - [ ] `TASKS` covers sign-in/first run, create a Project, the Project tabs, a partial Compose, a Volume
       handle, and sign-out; every task has a one-sentence `summary` that names the question it answers
@@ -42,3 +42,13 @@ honest:
       each card carries its scene id and a working *On the board* and *Open live* link
 - [ ] The page imports neither `@xyflow/react` nor the storyboard engine
 - [ ] `node --test scripts/flow.test.mjs` and `pnpm --dir web-design typecheck` green
+
+- 2026-09-27 — **Landed and accepted.** Commits `b674261` (model) and `8e32045` (page). `TASKS` is
+  six tasks / 25 steps; `validateTasks(TASKS, SCENES)` is `[]` and each problem kind has a failing
+  fixture in `scripts/flow.test.mjs` (16 tests). The page was checked over the offline single-file
+  build through headless Chrome: the DOM carries 6 `data-flow-task`, 25 `data-flow-card`, 17 line
+  connectors and 2 wrap chips (19 hops total), a card's *Board* link reads
+  `?scene=projects-cards#/design/board`, and a *Live* link carries its scene's exact state
+  (`?ui=auth.setupStep%3D1&after=toast%3Aauth.adminCreated#/setup`); screenshot at 1600×1000 and
+  1600×3000 reviewed. `scripts/screenshot.sh` gained `task-flows`. Full `node --test` suite: 61 pass,
+  1 skipped (the env-gated registry assertion); `pnpm typecheck` green.

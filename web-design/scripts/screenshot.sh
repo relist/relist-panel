@@ -35,6 +35,7 @@ routes=(
   "compose-new:/projects/1/env/1/compose/3"
   "guidelines:/design/guidelines"
   "states:/design/states"
+  "task-flows:/design/flow"
   "signin:/signin"
   "setup:/setup"
   "notfound:/nope"

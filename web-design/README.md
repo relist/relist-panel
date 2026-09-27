@@ -19,18 +19,23 @@ Other scripts: `pnpm typecheck`, `pnpm build:single` (bundles the prototype into
 
 ## Review from here
 
-**`#/design/board` is the review surface: every screen-state on one canvas.** ~105 frames laid out in
-menu order — a column per menu group, a screen's dialogs in a rail beside it — with navigation drawn
-on the canvas: solid lines from the sider menu and tab bars to the frame they show, dashed lines from
-a trigger to the overlay it opens. Frames are **static and live at once**: each one is the running app
-rendered in a forced state (nothing inside a frame is clickable — *Open live* under the frame loads
-the same state interactively), and the board only mounts the frames near the view, panning is cheap.
+**`#/design/board` is the inventory: every screen-state on one canvas.** ~105 frames laid out in
+menu order — a column per menu group, a screen's dialogs in a rail beside it — so a screen and its
+states read together. Frames are **static and live at once**: each one is the running app rendered in
+a forced state (nothing inside a frame is clickable — *Open live* under the frame loads the same state
+interactively), the board only mounts the frames near the view, and their content mounts once the
+camera settles, so panning stays cheap.
 
-The bar: search/jump by scene id, group filter, theme (flips every frame and the chrome, no reload),
-a lines toggle, captions, the **mounted X/Y** counter (proof that off-screen frames are really
-unmounted), and `?scene=<id>` deep-links straight to a frame. Zoom with ctrl+wheel, pan with the
-wheel; below ~35% zoom frames collapse to name cards. Every frame's chrome carries a copyable
-**scene id** — quote it in review feedback.
+**`#/design/flow` reads the journeys instead.** Six tasks, one row each: small numbered step cards
+generated from the registry, with each connector carrying the label of the link that causes it — or
+naming the menu control a nav hop goes through. Walk a flow here; look at a frame on the board.
+
+The board's bar: search/jump by scene id, group filter, theme (flips every frame and the chrome, no
+reload), a lines toggle (**off by default** — navigation is a toggle away now that the flow page reads
+journeys), captions, the **mounted X/Y** counter (proof that off-screen frames are really unmounted),
+and `?scene=<id>` deep-links straight to a frame. Zoom with ctrl+wheel, pan with the wheel; below ~35%
+zoom frames collapse to name cards. Every frame's chrome carries a copyable **scene id** — quote it in
+review feedback.
 
 Two things worth knowing. The frames are the mock rendered inline in this one document, so *nothing
 here is a screenshot* — if the mock changes, the board changes. And tablet/mobile switch entries are
@@ -40,7 +45,8 @@ disabled on purpose: those widths are designed in the responsive pass (`.scratch
 
 | Screen | Route | Notes |
 | --- | --- | --- |
-| **Still board** | `#/design/board` | **The review surface: every screen-state below, on one canvas, with the navigation drawn** |
+| **Still board** | `#/design/board` | **The inventory: every screen-state below on one canvas; the lines toggle draws the navigation** |
+| **Task flows** | `#/design/flow` | **The journeys: six tasks as numbered step rows, generated from the registry's links** |
 | Overview | `#/` | Host totals, "needs attention", activity, all Composes |
 | Projects | `#/projects` | Cards **and** table view, filter, sort |
 | Project | `#/projects/1` | Environment switcher + Composes / Variables / Settings |
