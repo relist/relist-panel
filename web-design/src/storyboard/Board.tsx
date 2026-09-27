@@ -22,8 +22,14 @@
  * Pan/zoom feel: `panOnScroll` pans on wheel and zooms on ctrl/cmd+wheel and
  * pinch (React Flow's built-in Figma behavior — there is no separate
  * `zoomOnCtrl` prop); drag pans; keyboard zoom uses the default activation
- * key. `zoomOnScroll` and `zoomOnDoubleClick` are off, `minZoom` 0.08,
- * `maxZoom` 1.5, and `translateExtent` keeps the viewport near the board.
+ * key. `zoomOnScroll` and `zoomOnDoubleClick` are off, `maxZoom` 1.5, and
+ * `translateExtent` keeps the viewport near the board.
+ *
+ * `minZoom` is 0.02 because the board has to *fit*: 105 frames in nine columns
+ * come to roughly 26 000 board units tall, so the mount-time `fitView` (and
+ * the Fit control) needs ~0.024. At the previous 0.08 the fit was silently
+ * clamped to the floor and the camera landed on a corner of the board — every
+ * node still a name card at that zoom, so the lower floor costs nothing.
  */
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
@@ -306,7 +312,7 @@ function BoardInner({ innerRef, ...props }: InnerProps) {
           zoomOnScroll={false}
           panOnDrag
           zoomOnDoubleClick={false}
-          minZoom={0.08}
+          minZoom={0.02}
           maxZoom={1.5}
           translateExtent={translateExtent}
           defaultViewport={INITIAL_VIEWPORT}
