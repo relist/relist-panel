@@ -6,6 +6,7 @@ import {
   FileTextOutlined,
   FolderOutlined,
   MoonOutlined,
+  NodeIndexOutlined,
   PictureOutlined,
   RocketOutlined,
   SearchOutlined,
@@ -115,6 +116,7 @@ export function AppShell({
       label: 'Design system',
       children: [
         { key: 'board', icon: <PictureOutlined />, label: 'Still board' },
+        { key: 'flow', icon: <NodeIndexOutlined />, label: 'Task flows' },
         { key: 'guidelines', icon: <FileTextOutlined />, label: 'Guidelines' },
         { key: 'states', icon: <RocketOutlined />, label: 'States gallery' },
       ],
@@ -126,6 +128,7 @@ export function AppShell({
     if (key === 'projects') return navigate(paths.projects);
     if (key === 'monitoring') return navigate(paths.monitoring);
     if (key === 'board') return navigate(paths.board);
+    if (key === 'flow') return navigate(paths.flow);
     if (key === 'guidelines') return navigate(paths.guidelines);
     if (key === 'states') return navigate(paths.states);
     const projectId = Number(String(key).replace('project-', ''));
@@ -156,8 +159,9 @@ export function AppShell({
       { title: compose?.name ?? 'Unknown Compose' },
     );
   }
-  if (route.kind === 'guidelines' || route.kind === 'states') {
-    crumbs.push({ title: 'Design system' }, { title: route.kind === 'guidelines' ? 'Guidelines' : 'States gallery' });
+  if (route.kind === 'guidelines' || route.kind === 'states' || route.kind === 'flow') {
+    const title = route.kind === 'guidelines' ? 'Guidelines' : route.kind === 'flow' ? 'Task flows' : 'States gallery';
+    crumbs.push({ title: 'Design system' }, { title });
   }
   if (route.kind === 'not-found') crumbs.push({ title: 'Not found' });
 

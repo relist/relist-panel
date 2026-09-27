@@ -13,6 +13,7 @@
 
 import { NotFoundPage, SetupPage, SignInPage } from '../pages/AuthPages';
 import { ComposePage } from '../pages/ComposePage';
+import { FlowPage } from '../pages/FlowPage';
 import { GuidelinesPage } from '../pages/GuidelinesPage';
 import { MonitoringPage } from '../pages/MonitoringPage';
 import { OverviewPage } from '../pages/OverviewPage';
@@ -57,6 +58,8 @@ export function Screens({ onSignIn }: { onSignIn: () => void }) {
       return <GuidelinesPage />;
     case 'states':
       return <StatesGalleryPage />;
+    case 'flow':
+      return <FlowPage />;
     case 'setup':
       return <SetupPage onComplete={onSignIn} />;
     case 'signin':
