@@ -7,7 +7,7 @@ import type { Compose, ComposeService, EnvironmentVariable, HostMetrics, MetricW
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
- * The panel's data layer: the prototype's store shape (`web-design/src/data/store.tsx`)
+ * The panel's data layer: the prototype's store shape (the retired design mock, tag `design-mock`)
  * with every method body replaced by a call to the real API. Components read the
  * same state and call the same methods as in the prototype; the store is the seam.
  *

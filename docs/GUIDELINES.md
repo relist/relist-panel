@@ -1,7 +1,14 @@
 # Relist Panel — UX/UI redesign guidelines
 
-Status: **proposal**, reviewed as a clickable prototype in [`web-design/`](.) (`pnpm dev`).
-The prototype is mock-only and deliberately not wired to the API.
+Status: **agreed and implemented in `web/`** (the port is `.scratch/design-port/`, closed). This
+file is the design contract the port was held to; the rules below still govern the panel's UI.
+
+> **Where the mock went — 2026-09-27.** These guidelines were reviewed through a clickable,
+> API-free mock in `web-design/` (`pnpm dev`). With the port closed the mock left the working tree:
+> its archive is the git tag `design-mock`, and its 105 states survive as
+> [`design-states.md`](./design-states.md). Section numbers are unchanged — `web/src/` cites them
+> (`§4.1`, `§11`, `§12`) — and the sections that describe the mock's own review surfaces (§4.9's
+> board and galleries, §12's port order) now read as history.
 
 Scope of this pass: information architecture, screen layouts, state coverage, copy, and the
 interaction rules that hold them together. Out of scope: backend changes, routing-library choice,
@@ -283,6 +290,9 @@ mental model restated.
 
 ### 4.9 Design system (`#/design/flow`, `#/design/board`, `#/design/map`, `#/design/guidelines`, `#/design/states`)
 
+*Retired with the mock: this section describes the design-system surfaces the mock hosted, not
+routes the panel ships. The rules in the rest of this file are what the port kept.*
+
 The guideline and the state gallery are part of the prototype so reviewers read the rules next to the
 screens. The states gallery covers loading, empty (both "nothing yet" and "filtered to nothing"),
 inline and page-level errors, form validation, outcome feedback, destructive confirmations and narrow
@@ -457,6 +467,8 @@ Design decisions that need something the Go API does not return yet. Each degrad
 | Idle auto-stop, upload limits, free-space check | Nothing | `RELIST_VOLUME_IDLE_TIMEOUT` (default 30 min, `0` disables), a 1 GB upload cap, a 1 MB editor cap, a 10-minute archive timeout, and a `statfs` check inside the helper before an upload is accepted. |
 
 ## 12. Implementing this in `web/`
+
+*Landed — `.scratch/design-port/` ran this order to close; kept as the record of how the port ran.*
 
 Order matters; each step is reviewable on its own.
 
