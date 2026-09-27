@@ -37,6 +37,12 @@ export type Route =
    * is part of what each of its frames is showing.
    */
   | { kind: 'board' }
+  /**
+   * The task flows — the registry's declared links read as the journeys a
+   * reviewer walks, one section per task (ticket 11). A document, not a canvas:
+   * it renders inside the shell, like the guidelines it sits beside.
+   */
+  | { kind: 'flow' }
   | { kind: 'signin' }
   | { kind: 'setup' }
   | { kind: 'not-found'; path: string };
@@ -77,6 +83,7 @@ export const paths = {
   guidelines: '#/design/guidelines',
   states: '#/design/states',
   board: '#/design/board',
+  flow: '#/design/flow',
   signIn: '#/signin',
   setup: '#/setup',
 } as const;
@@ -123,6 +130,7 @@ export function parse(hash: string): Route {
     if (parts[1] === 'guidelines') return { kind: 'guidelines' };
     if (parts[1] === 'states') return { kind: 'states' };
     if (parts[1] === 'board') return { kind: 'board' };
+    if (parts[1] === 'flow') return { kind: 'flow' };
   }
 
   if (parts[0] === 'signin') return { kind: 'signin' };
