@@ -28,6 +28,7 @@ import { buildTheme, initialThemeMode, ThemeModeContext, ThemeModeControlContext
 import type { ThemeMode } from './app/theme';
 import { PanelProvider, useAuthMock } from './data/store';
 import { BoardPage } from './pages/BoardPage';
+import { MapPage } from './pages/MapPage';
 
 /**
  * The standalone `?after=` runner. A board frame runs its scene's named
@@ -111,6 +112,8 @@ function Root() {
               <SceneReadiness />
               {route.kind === 'board' ? (
                 <BoardPage />
+              ) : route.kind === 'map' ? (
+                <MapPage />
               ) : bare ? (
                 <Screens onSignIn={auth.signIn} />
               ) : (

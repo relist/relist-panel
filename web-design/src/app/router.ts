@@ -43,6 +43,12 @@ export type Route =
    * it renders inside the shell, like the guidelines it sits beside.
    */
   | { kind: 'flow' }
+  /**
+   * The scene map — the whole registry as cards, with the reachability panel
+   * (ticket 13). Bare like the board: it is a canvas, and the shell would only
+   * compete with it.
+   */
+  | { kind: 'map' }
   | { kind: 'signin' }
   | { kind: 'setup' }
   | { kind: 'not-found'; path: string };
@@ -84,6 +90,7 @@ export const paths = {
   states: '#/design/states',
   board: '#/design/board',
   flow: '#/design/flow',
+  map: '#/design/map',
   signIn: '#/signin',
   setup: '#/setup',
 } as const;
@@ -131,6 +138,7 @@ export function parse(hash: string): Route {
     if (parts[1] === 'states') return { kind: 'states' };
     if (parts[1] === 'board') return { kind: 'board' };
     if (parts[1] === 'flow') return { kind: 'flow' };
+    if (parts[1] === 'map') return { kind: 'map' };
   }
 
   if (parts[0] === 'signin') return { kind: 'signin' };

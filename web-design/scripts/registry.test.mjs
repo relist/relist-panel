@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url';
 import { parse, paths } from '../src/app/router.ts';
 import { DECLARED_UI_KEYS } from '../src/app/uiKeys.ts';
 import { GROUPS } from '../src/scenes/groups.ts';
+import { orphanReport } from '../src/scenes/orphans.ts';
 import { VIEWPORT_SIZES } from '../src/scenes/types.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -267,6 +268,19 @@ describe('registry — links', () => {
         assert.ok(link.label, `scene "${scene.id}" tab to "${link.to}" has no label`);
       }
     }
+  });
+
+  it('leaves no overlay without a trigger (ticket 13\'s reachability invariant)', () => {
+    // The menu-group set only feeds the report's third list (a group no menu
+    // item names, like Compose, is reached by drilling); this assertion is
+    // about links, so the set does not matter and is left empty on purpose —
+    // the real one comes from the adapter on the page.
+    const report = orphanReport(SCENES, new Set());
+    assert.deepEqual(
+      report.unlinkedOverlays.map((row) => row.sceneId),
+      [],
+      'an overlay nothing triggers is a state with no way to open it',
+    );
   });
 });
 

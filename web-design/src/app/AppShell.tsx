@@ -2,6 +2,7 @@ import {
   AppstoreOutlined,
   BulbOutlined,
   CloudServerOutlined,
+  ClusterOutlined,
   DashboardOutlined,
   FileTextOutlined,
   FolderOutlined,
@@ -117,6 +118,7 @@ export function AppShell({
       children: [
         { key: 'board', icon: <PictureOutlined />, label: 'Still board' },
         { key: 'flow', icon: <NodeIndexOutlined />, label: 'Task flows' },
+        { key: 'map', icon: <ClusterOutlined />, label: 'Scene map' },
         { key: 'guidelines', icon: <FileTextOutlined />, label: 'Guidelines' },
         { key: 'states', icon: <RocketOutlined />, label: 'States gallery' },
       ],
@@ -129,6 +131,7 @@ export function AppShell({
     if (key === 'monitoring') return navigate(paths.monitoring);
     if (key === 'board') return navigate(paths.board);
     if (key === 'flow') return navigate(paths.flow);
+    if (key === 'map') return navigate(paths.map);
     if (key === 'guidelines') return navigate(paths.guidelines);
     if (key === 'states') return navigate(paths.states);
     const projectId = Number(String(key).replace('project-', ''));
