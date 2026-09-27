@@ -281,7 +281,7 @@ Split layout: what the panel is on the left (in `colorPrimaryBg`), the form on t
 two-step flow (Account → Ready) ending in a `Result` with the Project → Environment → Compose
 mental model restated.
 
-### 4.9 Design system (`#/design/flow`, `#/design/board`, `#/design/guidelines`, `#/design/states`)
+### 4.9 Design system (`#/design/flow`, `#/design/board`, `#/design/map`, `#/design/guidelines`, `#/design/states`)
 
 The guideline and the state gallery are part of the prototype so reviewers read the rules next to the
 screens. The states gallery covers loading, empty (both "nothing yet" and "filtered to nothing"),
@@ -304,6 +304,12 @@ the label of the thing that causes it: a registry link's own label for a declare
 moves the diagram with it), or the menu control a nav hop goes through. A card links out to its frame
 on the board and to the live mock at its exact state. Reading a flow happens here; looking at a frame
 happens on the board.
+
+`#/design/map` is the whole registry as cards — the board with its LOD floor above `maxZoom`, so no
+live content can mount at any zoom — beside the reachability report `src/scenes/orphans.ts` derives:
+overlays nothing triggers (empty, and asserted), everything else no link targets (entry screens and
+forced states, listed with that reading stated), and the groups no menu item names. It is the surface
+for "does every state have a way in?", in the only terms the registry can honestly answer.
 
 ## 5. Status vocabulary
 

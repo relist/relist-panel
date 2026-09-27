@@ -36,6 +36,7 @@ routes=(
   "guidelines:/design/guidelines"
   "states:/design/states"
   "task-flows:/design/flow"
+  "scene-map:/design/map"
   "signin:/signin"
   "setup:/setup"
   "notfound:/nope"

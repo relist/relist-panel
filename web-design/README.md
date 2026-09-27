@@ -30,6 +30,11 @@ camera settles, so panning stays cheap.
 generated from the registry, with each connector carrying the label of the link that causes it — or
 naming the menu control a nav hop goes through. Walk a flow here; look at a frame on the board.
 
+**`#/design/map` is the whole registry as cards, with the reachability report.** No live content at any
+zoom — the same name cards the board shows when you zoom out — plus the honest reading of what the
+registry's links can and cannot say: every overlay has a declared trigger, and the scenes that no link
+targets are entry points and forced states, listed rather than hidden.
+
 The board's bar: search/jump by scene id, group filter, theme (flips every frame and the chrome, no
 reload), a lines toggle (**off by default** — navigation is a toggle away now that the flow page reads
 journeys), captions, the **mounted X/Y** counter (proof that off-screen frames are really unmounted),
@@ -47,6 +52,7 @@ disabled on purpose: those widths are designed in the responsive pass (`.scratch
 | --- | --- | --- |
 | **Still board** | `#/design/board` | **The inventory: every screen-state below on one canvas; the lines toggle draws the navigation** |
 | **Task flows** | `#/design/flow` | **The journeys: six tasks as numbered step rows, generated from the registry's links** |
+| **Scene map** | `#/design/map` | **Every scene as a card, with the reachability report (every overlay has a trigger; what no link targets)** |
 | Overview | `#/` | Host totals, "needs attention", activity, all Composes |
 | Projects | `#/projects` | Cards **and** table view, filter, sort |
 | Project | `#/projects/1` | Environment switcher + Composes / Variables / Settings |

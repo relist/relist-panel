@@ -47,3 +47,10 @@
   already false bails out of the update — and `data-frame-content` marks the mounted half for probes.
   `node --test` suite and `pnpm typecheck` green; `lines` starts off, the toggle and the deep link are
   unchanged.
+
+- 2026-09-27 — **Follow-up found while building 13, fixed in `281c97a`:** the mount-time `fitView`
+  never actually fitted. The board's extent needs ~0.024 zoom, and `minZoom` was 0.08, so the fit was
+  silently clamped and the camera landed on a corner (checked over CDP: `scale(0.08)`,
+  `translate(-236, -677)`, 31/105 rendered). With `minZoom` 0.02 the default view is the whole board —
+  `scale(0.0244)`, 105/105 mounted, all name cards — and the Fit control works. Ticket 06's acceptance
+  never checked the no-deep-link camera, which is why this survived it.
