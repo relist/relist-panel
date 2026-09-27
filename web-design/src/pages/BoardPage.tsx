@@ -7,7 +7,8 @@ import { AppShell } from '../app/AppShell';
 import { parse } from '../app/router';
 import { Screens } from '../app/Screens';
 import { CODE_FONT_STACK, useThemeModeControl } from '../app/theme';
-import { boardGroups, boardMenu, sceneOverridesOf, serializeUiValue, toBoardScenes, toUiValue } from '../scenes/adapter';
+import { boardGroups, boardMenu, sceneOverridesOf, toBoardScenes, toUiValue } from '../scenes/adapter';
+import { openLiveUrl } from '../scenes/openLive';
 import { SCENES } from '../scenes/registry';
 import { SceneScopeProvider } from '../scenes/scope';
 import type { Scene, SceneGroupId } from '../scenes/types';
@@ -62,22 +63,10 @@ function isBareHash(hash: string): boolean {
 }
 
 /**
- * The *Open live* URL: the interactive app at the frame's exact forced state —
- * `?ui=`/`?after=` from the scene, `?theme=dark` while the board is dark, and
- * the scene's hash. Built from a fresh search so the board's own chrome state
- * (`?scene=`) never leaks into a live page.
+ * The *Open live* URL moved to `../scenes/openLive` when the task flow page
+ * needed the same rule (ticket 11). Board chrome calls it with the board's own
+ * dark state.
  */
-function openLiveUrl(scene: Scene, dark: boolean): string {
-  const url = new URL(window.location.href);
-  url.search = '';
-  if (dark) url.searchParams.set('theme', 'dark');
-  for (const [key, raw] of Object.entries(scene.ui ?? {})) {
-    url.searchParams.append('ui', `${key}=${serializeUiValue(toUiValue(raw))}`);
-  }
-  if (scene.after !== undefined) url.searchParams.set('after', scene.after);
-  url.hash = scene.hash;
-  return url.toString();
-}
 
 const CAPTION_CLAMP: CSSProperties = {
   WebkitBoxOrient: 'vertical',
