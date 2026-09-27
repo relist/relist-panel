@@ -137,7 +137,9 @@ export function BoardPage() {
   const boardRef = useRef<BoardHandle>(null);
   const [captions, setCaptions] = useState(true);
   const [groupFilter, setGroupFilter] = useState<SceneGroupId | 'all'>('all');
-  const [lines, setLines] = useState(true);
+  // Off by default (ticket 12): reading a journey is #/design/flow's job now,
+  // and an inventory with its lines off is the board's best state.
+  const [lines, setLines] = useState(false);
   const [stats, setStats] = useState({ mounted: 0, total: SCENES.length });
   // `?scene=<id>` deep link. The box *reflects* the id, but the deep link is a
   // jump, not a filter — filtering by it would collapse the board to one scene
