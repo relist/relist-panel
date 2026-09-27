@@ -11,6 +11,10 @@
  *   the viewport (edges, only when both ends are visible); `FrameNode` reports
  *   mount/unmount so the app can show "mounted X/Y";
  * - the LOD floor in `nodes.tsx` keeps zoomed-out pans cheap;
+ * - frame *content* mounts only at rest (ticket 12): while the camera is
+ *   moving every frame is its name card, so a pan never mounts an antd screen
+ *   mid-gesture — the state lives here because a freshly culled mount must
+ *   read "moving" too;
  * - every node gets explicit `width`/`height`/`initialWidth`/`initialHeight`
  *   from the layout, so culling works before first measurement and remounted
  *   nodes never reflow anything.
@@ -22,7 +26,7 @@
  * `maxZoom` 1.5, and `translateExtent` keeps the viewport near the board.
  */
 
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { ReactNode, Ref } from 'react';
 import {
   Background,
@@ -34,6 +38,7 @@ import {
   ReactFlowProvider,
   useNodesInitialized,
   useReactFlow,
+  useStoreApi,
 } from '@xyflow/react';
 import type { CoordinateExtent, Edge, Node, Viewport } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -41,7 +46,7 @@ import '@xyflow/react/dist/style.css';
 import type { BoardGroup, BoardMenuItem, BoardScene, LayoutNode } from './types';
 import { computeLayout, groupColor } from './layout';
 import { DEFAULT_OPENS_COLOR, edgeTypes } from './edges';
-import { nodeTypes } from './nodes';
+import { CAMERA_IDLE_MS, CameraIdleContext, nodeTypes } from './nodes';
 import type { FrameNodeData, HeaderNodeData } from './nodes';
 
 // ---------------------------------------------------------------------------
@@ -92,6 +97,36 @@ function BoardInner({ innerRef, ...props }: InnerProps) {
 
   const layout = useMemo(() => computeLayout(scenes, groups, menu), [scenes, groups, menu]);
   const { setCenter, fitView, getZoom } = useReactFlow();
+
+  // ---- camera-idle gate (ticket 12) ----------------------------------------
+
+  /**
+   * Frame content is the expensive half of a node (a whole antd screen), so it
+   * mounts only while the camera is at rest — see `CameraIdleContext`. The
+   * subscription flips the state at exactly the two edges of a gesture: a
+   * wheel tick with `moving` already false bails out of the update, so panning
+   * never re-renders the board per event.
+   */
+  const store = useStoreApi();
+  const [cameraIdle, setCameraIdle] = useState(true);
+  useEffect(() => {
+    let last = store.getState().transform;
+    let timer: number | undefined;
+    const unsubscribe = store.subscribe((state) => {
+      if (state.transform === last) return;
+      last = state.transform;
+      setCameraIdle((idle) => (idle ? false : idle));
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        setCameraIdle(true);
+      }, CAMERA_IDLE_MS);
+    });
+    return () => {
+      window.clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [store]);
 
   // ---- group colors (stable hash; MiniMap and name cards agree on them) ----
 
@@ -246,47 +281,52 @@ function BoardInner({ innerRef, ...props }: InnerProps) {
 
   return (
     <div style={{ width: '100%', height: '100%' }}>
-      <ReactFlow
-        nodes={flowNodes}
-        edges={flowEdges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        // The RAM mechanism: off-screen nodes must not be mounted.
-        onlyRenderVisibleElements
-        // The canvas is a board, not an editor.
-        nodesDraggable={false}
-        nodesConnectable={false}
-        nodesFocusable={false}
-        edgesFocusable={false}
-        elementsSelectable={false}
-        deleteKeyCode={null}
-        // Figma feel: wheel pans, ctrl/cmd+wheel and pinch zoom (built into
-        // React Flow's `panOnScroll` mode — there is no `zoomOnCtrl` prop).
-        panOnScroll
-        zoomOnPinch
-        zoomOnScroll={false}
-        panOnDrag
-        zoomOnDoubleClick={false}
-        minZoom={0.08}
-        maxZoom={1.5}
-        translateExtent={translateExtent}
-        defaultViewport={INITIAL_VIEWPORT}
-        fitView={!initialSceneId}
-        fitViewOptions={FIT_VIEW_OPTIONS}
-      >
-        <Background variant={BackgroundVariant.Dots} gap={28} size={1.6} />
-        <Controls position="bottom-left" showInteractive={false} />
-        <MiniMap
-          position="bottom-right"
-          pannable
-          zoomable
-          bgColor="#f1f5f9"
-          maskColor="rgba(241, 245, 249, 0.7)"
-          nodeColor={miniMapColor}
-          nodeStrokeWidth={0}
-          nodeBorderRadius={4}
-        />
-      </ReactFlow>
+      {/* The idle gate travels by context, so a node culled in mid-pan mounts
+          as its name card rather than mounting content the gesture will hide
+          again a hundred milliseconds later. */}
+      <CameraIdleContext.Provider value={cameraIdle}>
+        <ReactFlow
+          nodes={flowNodes}
+          edges={flowEdges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          // The RAM mechanism: off-screen nodes must not be mounted.
+          onlyRenderVisibleElements
+          // The canvas is a board, not an editor.
+          nodesDraggable={false}
+          nodesConnectable={false}
+          nodesFocusable={false}
+          edgesFocusable={false}
+          elementsSelectable={false}
+          deleteKeyCode={null}
+          // Figma feel: wheel pans, ctrl/cmd+wheel and pinch zoom (built into
+          // React Flow's `panOnScroll` mode — there is no `zoomOnCtrl` prop).
+          panOnScroll
+          zoomOnPinch
+          zoomOnScroll={false}
+          panOnDrag
+          zoomOnDoubleClick={false}
+          minZoom={0.08}
+          maxZoom={1.5}
+          translateExtent={translateExtent}
+          defaultViewport={INITIAL_VIEWPORT}
+          fitView={!initialSceneId}
+          fitViewOptions={FIT_VIEW_OPTIONS}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={28} size={1.6} />
+          <Controls position="bottom-left" showInteractive={false} />
+          <MiniMap
+            position="bottom-right"
+            pannable
+            zoomable
+            bgColor="#f1f5f9"
+            maskColor="rgba(241, 245, 249, 0.7)"
+            nodeColor={miniMapColor}
+            nodeStrokeWidth={0}
+            nodeBorderRadius={4}
+          />
+        </ReactFlow>
+      </CameraIdleContext.Provider>
     </div>
   );
 }

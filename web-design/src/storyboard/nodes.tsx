@@ -13,9 +13,15 @@
  * small hysteresis (`LOD_HYSTERESIS`) and the subscription only calls
  * `setState` when a threshold is actually crossed, so panning/zooming cannot
  * thrash content in and out at the boundary.
+ *
+ * Ticket 12 adds the camera-idle gate on top of the floor: content is mounted
+ * only while the board is at rest (`CameraIdleContext`), because the mount
+ * itself — a whole antd screen — is what drops frames when it happens in the
+ * middle of a pan. The floor answers "is this readable at this zoom"; the gate
+ * answers "is anyone still moving".
  */
 
-import { Component, memo, useEffect, useState } from 'react';
+import { Component, createContext, memo, useContext, useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { Handle, Position, useStoreApi } from '@xyflow/react';
 import type { Node, NodeProps } from '@xyflow/react';
@@ -33,6 +39,19 @@ import {
 
 /** Extra zoom a collapsed frame needs before its content re-mounts. */
 export const LOD_HYSTERESIS = 0.03;
+
+/**
+ * True while the board's camera is at rest: frame content mounts on this side
+ * of the gate only (ticket 12). A pan that mounts a whole antd screen on every
+ * frame scrolling into view drops frames in the gesture, so a frame keeps its
+ * name card until the camera has been still for `CAMERA_IDLE_MS`. The board
+ * owns this state, not the node: a freshly culled mount must read "moving"
+ * too, which a per-node timer cannot know.
+ */
+export const CameraIdleContext = createContext(true);
+
+/** Camera-still time before frame content is allowed back in. */
+export const CAMERA_IDLE_MS = 180;
 
 // ---------------------------------------------------------------------------
 // Node data + flow-node types (what Board.tsx puts in `node.data`)
@@ -218,6 +237,7 @@ function FrameNodeComponent({ data }: NodeProps<FrameFlowNode>) {
   const { box, color, lodBreak, renderFrame, onMountChange } = data;
   const scene = box.scene as BoardScene;
   const store = useStoreApi();
+  const cameraIdle = useContext(CameraIdleContext);
 
   // Initial state from the current zoom: below the floor, renderFrame output is
   // never mounted at all — the LOD promise is kept from the first paint.
@@ -261,8 +281,15 @@ function FrameNodeComponent({ data }: NodeProps<FrameFlowNode>) {
         pointerEvents: 'none',
       }}
     >
-      <div style={{ width: '100%', height: '100%', overflow: 'hidden' }}>
-        {detailed ? (
+      {/* Two gates decide what is inside a frame. `detailed` is the LOD floor
+          (below it a frame is a name card at every camera state); `cameraIdle`
+          is ticket 12's mount-at-rest rule — panning mounts no screen content,
+          and the content returns once the gesture has settled. */}
+      <div
+        data-frame-content={detailed && cameraIdle ? 'true' : undefined}
+        style={{ width: '100%', height: '100%', overflow: 'hidden' }}
+      >
+        {detailed && cameraIdle ? (
           <FrameContent scene={scene} renderFrame={renderFrame} />
         ) : (
           <NameCard scene={scene} color={color} />
