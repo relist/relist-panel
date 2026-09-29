@@ -8,8 +8,9 @@ config file is only reachable by SSHing in and running `docker run -v ... alpine
 delete action (compose-panel ticket 11) can *remove* a Compose's volumes; nothing can read them.
 
 The operator wants: on a Compose's page, a tab listing **only the Volumes that Compose mounts**; a
-file manager over one of them — browse, edit, upload, rename, delete; and download of a directory as
-**tar.gz**. It must match the panel's Ant Design theme, and it must not make the panel heavy.
+file manager over one of them — browse, edit, upload, delete; download of a directory as **tar.gz**,
+and restore of an uploaded tar.gz. It must match the panel's Ant Design theme, and it must not make
+the panel heavy.
 The reference point is Dokploy, whose panel idles at 1–2 GB RSS, which is what makes small VPSs
 painful.
 
@@ -254,14 +255,15 @@ earlier either — the panel uses the presence of the Compose file as its "is de
 
 Because a `docker run` with a missing source creates it, the panel checks before it mounts:
 
-- **Named volume**: `docker volume inspect` (10 ms, exact) runs before the first operation of an
-  Explorer session, and again before `archive` and `extract` — so a Volume deleted underneath the
-  session is reported, not silently recreated empty.
+- **Named volume**: `docker volume inspect` (10 ms, exact) runs before the first operation against a
+  Volume, and again before `archive` and `extract` — so a Volume deleted underneath a browse is
+  reported, not silently recreated empty.
 - **Bind source inside the data directory**: the panel can `os.Stat` it directly (identical-path
   mount, ADR-0002), so it checks before every operation and refuses if it is absent.
 - **Bind source outside the data directory**: the panel cannot stat it, and probing it with a mount
-  would create it. The start dialog states plainly that the path does not exist or cannot be
-  checked, and that continuing will create it as `root:root 0755`, and the operator decides.
+  would create it. The confirmation before the first operation states plainly that the path does not
+  exist or cannot be checked, that continuing will create it as `root:root 0755`, and the operator
+  decides.
 
 ## UID/GID
 
@@ -298,8 +300,8 @@ Rules:
   differs from the Volume, and a restore from it loses data without saying so. Because the tree is
   walked anyway, the Explorer can state before the download how many symlinks the archive will hold
   and how many of them point outside the Volume — the extraction-time hazard is disclosed rather
-  than hidden. The fix for that hazard belongs at extraction, not in whether we record the data
-  honestly.
+  than hidden. The fix for that hazard is at extraction (see Restore), not in whether we record the
+  data honestly.
 - **Hardlinks are written as regular files**, never as hardlink entries. That sidesteps the hardlink
   tar-slip vector entirely at the cost of a larger archive, and Go's `FileInfoHeader` cannot express
   a hardlink target anyway.
@@ -311,6 +313,27 @@ Rules:
 A tar.gz must be fully received before extraction — gzip decompresses sequentially — so the download
 cannot show a size-based progress bar. That is inherent to streaming, not a bug. Resumable downloads
 would need a staged file with `Range` support, which costs disk and is out of scope.
+
+## Restore
+
+A tar.gz is streamed from the HTTP request body straight into the helper's stdin for the `extract`
+operation — one `docker run --rm -i` with the Volume mounted `:rw`, no temp file anywhere, nothing
+staged on the panel's disk. Upload and extract are one operation: the operator does not "upload then
+extract" in two steps, and the archive is never stored.
+
+The target is a directory, relative to `/data`, that must already exist; directories inside the
+archive are created as part of extraction.
+
+Every entry is validated **before it is written**: names must be relative and contain no `..`
+segment, no absolute paths, and symlink or hardlink entries are refused outright — the
+extraction-time hazard ADR-0008 named. A refused entry aborts the rest of the stream.
+
+Partial extraction must be disclosed rather than hidden: entries written before a failure stay
+written (there is no transaction across a stream), and the UI must say so before the operator runs
+it. Files that already exist are overwritten; directories merge; nothing else is deleted.
+
+Caps are enforced end to end: compressed ≤ 1 GiB on the request body; uncompressed ≤ 4 GiB and
+≤ 10k entries, counted by the helper as it streams.
 
 ## No standing state
 
@@ -324,15 +347,17 @@ in-flight `docker` child when the operator's HTTP request is cancelled; the help
 ## v1 operation set
 
 Read: list a directory (name, size, mtime, owner uid/gid, mode, kind); `stat` one entry; download a
-single file; download a directory as an archive.
+single file; download a directory as tar.gz.
 
-Write: upload a file into the current directory; create an empty text file; edit a text file and
-save (Monaco); create a directory; rename or move an entry; delete a file or a whole directory tree.
+Write: upload a file into the current directory; edit a text file and save (Monaco); delete a file or
+a whole directory tree.
 
-Deliberately **not** in v1: copy/duplicate, a chmod/chown editor, search, image or media preview,
-multi-select bulk operations, drag-and-drop move, symlink creation, and downloading a *selection* as
-an archive (v1 archives whole directories only). These are all additions to a per-operation API
-rather than rework, so adding one later is additive.
+Restore: extract an uploaded tar.gz into a directory that already exists.
+
+Deliberately **not** in v1 — all of these are additive later: create an empty file, mkdir, rename or
+move, copy/duplicate, a chmod/chown editor, search, image or media preview, multi-select or
+drag-and-drop, symlink creation, and zip in either direction. Each lands as another operation on the
+same per-operation API rather than as rework.
 
 Delete is permanent, with a `Popconfirm` naming the path — no trash. A hidden trash directory inside
 the Volume would be visible to the application using it, which is worse than the operator having to
@@ -345,9 +370,12 @@ is an invitation to turn them off:
 
 | | limit |
 | --- | --- |
-| upload | 1 GB, and refused if it exceeds the free space on the Volume's filesystem (the helper checks `statfs`) |
+| upload | 1 GiB, and refused when it exceeds the Volume's free space (the helper checks `statfs`) |
 | editable text file | 1 MB |
-| archive | 10 minute timeout on the stream |
+| archive stream | 10 minute timeout |
+| restore, compressed | ≤ 1 GiB, enforced on the request body |
+| restore, uncompressed | ≤ 4 GiB, counted by the helper as it streams |
+| restore, entries | ≤ 10,000, counted by the helper as it streams |
 
 The free-space check is the part no OS default provides, and a full disk is a host-wide failure, not
 a panel one.
@@ -364,17 +392,15 @@ The Explorer shows resolved paths — the host path for a bind source, and
 - The Volume Explorer opens in a new browser tab, as its own route in the panel SPA, behind the
   panel's existing session auth. It is not a separate web app and has no nav entry of its own —
   a Volume is meaningless without its Compose as context.
-- Document flow, no nested scrollers (`web-design/GUIDELINES.md` §6): the file list, the editor, and
+- Document flow, no nested scrollers (`docs/GUIDELINES.md` §6): the file list, the editor, and
   the upload panel all run long on the page.
 - Monaco is the editor, reused from the Compose YAML screen — not a second editor dependency.
-- An absolute bind source outside the data directory gets a confirmation before its first handle,
-  even though the operator declared it.
-- **The design pass comes first and is the visual contract.** Ticket 01 extends
-  `web-design/src/pages/ComposePage.tsx` (currently two tabs, General and Logs) to three, adds the
-  Volume Explorer page and its route, adds the handle surfaces to the Overview, and renders every
-  state this feature can be in — including the ones that carry the safety story, like the
-  running-stack write banner and the archive's symlink disclosure. Implementation follows the
-  approved mock screen by screen rather than reinterpreting it.
+- An absolute bind source outside the data directory gets a confirmation before its first
+  operation, even though the operator declared it.
+- **UI work happens directly in `web/`**, following `docs/GUIDELINES.md`. The clickable mock was
+  retired per **ADR-0009** and lives at the annotated tag `design-mock` — the visual reference for
+  the Explorer's screens and states, not a gate on implementation. Ticket 01 is closed by this
+  re-plan.
 
 ## Security decisions
 
@@ -395,17 +421,20 @@ The Explorer shows resolved paths — the host path for a bind source, and
 
 ## Out of scope
 
-- **Uploading or restoring an archive.** tar extraction is the sharpest edge in the feature: `../`
-  entries, symlinks, and hardlinks can all write outside the destination. It needs its own threat
-  model. There is also a second, independent reason it is harder: reading a zip needs random access,
-  so the restore direction cannot stream the way the download direction does.
+- **Zip, in either direction.** tar.gz is the only archive format: a zip restore needs random access
+  (its central directory sits at the end of the stream), so it cannot be fed to the streaming
+  `extract`, and zip for download only would leave one format with no restore story.
+- **Archive upload of arbitrary non-tar formats.** Plain tar, 7z, rar: `extract` accepts a gzipped
+  tar stream only.
 - **Deleting a Volume.** Irreversible, and the Compose delete action already covers teardown.
 - **A permissions editor** (chmod/chown). Note also that `os.Root.Chmod`, `Chown`, and `Chtimes` are
   documented as racy on Unix — this would need care beyond what `os.Root` gives.
 - Search, image/media previews, bulk multi-select, drag-and-drop move.
-- Handles on any path not declared in a Compose — forbidden by the invariant above.
+- Any path not declared in a Compose — the mount source comes only from the parsed Compose output;
+  no input field accepts a host path (the invariant above).
 - Resumable or `Range` downloads.
 - Multi-host.
+- **An audit viewer.** The audit rows are deferred entirely in v1 (Security decisions 8).
 
 ## Tickets
 
@@ -413,44 +442,40 @@ The Explorer shows resolved paths — the host path for a bind source, and
 
 | | ticket | blocked by |
 | --- | --- | --- |
-| 01 | Design pass: Volumes tab, Volume Explorer, handle surfaces | — |
-| 02 | `volfs` package and the `relist-volhelper` binary | 01 |
-| 03 | Resolve a Compose's Volumes, and the UID/GID chain | 01 |
-| 04 | Handle lifecycle and the container run spec | 01, 02 |
-| 05 | Read endpoints over `docker exec` | 01, 03, 04 |
-| 06 | Archive download | 01, 05 |
-| 07 | Volumes tab and Volume Explorer — the read-only slice | 01, 03, 05, 06 |
-| 08 | Write operations | 01, 05 |
-| 09 | Caps and the free-space check | 01, 08 |
-| 10 | Dashboard banner and audit rows | 01, 04, 08 |
-| 11 | Docs: README and ADR cross-references | 01, 07 |
+| 01 | closed — design review gate is moot after ADR-0009; review happens in web/ during implementation, against tag `design-mock` | — |
+| 02 | `volfs`, the tar.gz writer, and the `relist-volhelper` binary | — |
+| 03 | Resolve a Compose's Volumes, uid/gid, and pre-flight | — |
+| 04 | closed — replaced by 13; no persistent container, so no lifecycle | — |
+| 05 | Read endpoints and backup download, one run per operation | 02, 03, 13 |
+| 06 | closed — merged into 05; tar.gz only | — |
+| 07 | Volumes tab and Volume Explorer — the read-only slice | 05 |
+| 08 | Write operations — upload, edit, delete (API and UI) | 02, 03, 13, 05 |
+| 09 | closed — caps live in 08 (upload/free space) and 12 (restore) | — |
+| 10 | closed — no dashboard in this model; audit rows deferred | — |
+| 11 | Docs: README and ADR cross-references | 07, 08, 12 |
+| 12 | Restore: streamed tar.gz extraction (helper, endpoint, UI) | 02, 03, 13, 05 |
+| 13 | The `docker run --rm` runner seam and its test fake | — |
 
-**The work starts with the design pass, and nothing else starts until it is approved.** Every ticket
-after 01 carries `01` as a blocker, and that edge is a *process* gate rather than a technical one —
-matching how `web-design/` already works ("meant to be reviewed screen by screen, agreed on, and then
-implemented in `../web` as a separate piece of work"). A design review regularly changes decisions
-that cascade back into this spec, and finding that out on a mock costs a fraction of finding it out
-in Go. The consequences worth naming: tickets 05 and 08 both depend on 03/04 for real technical
-reasons, so those edges stay regardless. But the four tickets that touch no UI at all (02, 03, 04,
-05) do not technically depend on the visual design at all — if the review is going to take a while,
-dropping `01` from those four edges lets the backend run in parallel.
-
-Ticket 07 is the tracer bullet: it is the first point at which an operator can see and download their
-data end to end. Everything risky lives at or before it — whether the panel can start a helper from
-its own image, whether the argv/stdio protocol carries bytes both ways, whether `docker compose
-config` holds up on real Composes, whether the archive streams. After 07 the remaining work is
-ordinary Go and React.
+**Ticket 13 is the cheapest first landing** — no UI, no Docker in tests, so the runner and its fake
+can land while everything else is still open. **05 + 07 together are the tracer bullet**: the first
+point at which an operator can list their Compose's Volumes, browse, and download a backup end to
+end. **12 is last because it is the security-heaviest** — extraction is the sharpest edge in the
+feature. The old rule — nothing starts until the design pass is approved — no longer applies: ticket
+01 is closed by this re-plan.
 
 ## Testing decisions
 
 The repo's only test seam is the HTTP API, and it stays that way here.
 
-- The panel's side of the protocol is tested through HTTP requests, with exec calls faked the same
-  way `ComposeRunner` is faked today — the fake records the argv it was asked to run.
+- The panel's side of the protocol is tested through HTTP requests, with `docker` runs faked at the
+  runner seam the same way `ComposeRunner` is faked today — the fake records the argv it was asked
+  to run.
 - `internal/volfs` is a real package with real tests against a real temp directory: traversal (`..`,
-  absolute, encoded), symlinks pointing out of the root, symlinks pointing inside it, newline-bearing
-  filenames, and the archive entry names.
-- Archive tests round-trip: produce with our writer, read back with `archive/tar` and `archive/zip`,
-  assert every entry name is relative and contains no `..` segment, and assert a symlink survives as
-  a symlink.
+  absolute, encoded), symlinks pointing out of the root and inside it, newline-bearing filenames,
+  and the archive entry names.
+- Extraction validation is tested against malicious archives: `..` entries, absolute entries,
+  symlink and hardlink entries, and the entry-count and uncompressed-size caps.
+- Archive tests round-trip tar.gz only: produce with our writer, read back with `archive/tar` and
+  `compress/gzip`, assert every entry name is relative and contains no `..` segment, and assert a
+  symlink survives as a symlink.
 - No real Docker in tests.
