@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { Credentials, ProjectInput } from './api';
-import type { Compose, ComposeService, ComposeVolumes, EnvironmentVariable, HostMetrics, MetricWindow, Project, ServiceMetrics } from './types';
+import type { Compose, ComposeService, ComposeVolumes, EnvironmentVariable, HostMetrics, MetricWindow, Project, ServiceMetrics, VolumeEntry } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
@@ -69,6 +69,8 @@ type PanelValue = {
   loadServices: (composeId: number) => Promise<void>;
   /** The Compose's resolved Volumes and pre-flight statuses, from the Compose CLI. */
   loadVolumes: (composeId: number) => Promise<ComposeVolumes>;
+  /** One directory inside a resolved Volume, for the Explorer's current path. */
+  listVolumeEntries: (composeId: number, source: string, path: string) => Promise<VolumeEntry[]>;
   loadVariables: (environmentId: number) => Promise<void>;
   projects: Project[];
   /** Per-Service rows per Compose, from the Services endpoint. */
@@ -606,6 +608,26 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [loadVariablesInto, track],
   );
 
+  // A directory listing carries no tree state either: it is a fact about the
+  // Volume's files at one moment, and the Explorer owns it. The pending key
+  // names the exact listing (`volume-list:<compose>:<source>:<path>`) so a
+  // refresh spins only the directory it re-reads.
+  const listVolumeEntries = useCallback(
+    (composeId: number, source: string, path: string) =>
+      track(`volume-list:${composeId}:${source}:${path}`, async () => {
+        const location = findComposeLocation(projectsRef.current, composeId);
+        if (!location) {
+          throw new Error('Compose not found');
+        }
+        return api.listVolumeEntries(
+          { projectId: location.project.id, environmentId: location.environment.id, composeId },
+          source,
+          path,
+        );
+      }),
+    [track],
+  );
+
   const isPending = useCallback((key: string) => Boolean(pending[key]), [pending]);
 
   const value = useMemo<PanelValue>(
@@ -629,6 +651,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       loadServices,
       loadVariables,
       loadVolumes,
+      listVolumeEntries,
       projects,
       refreshStatus,
       replaceVariables,
@@ -662,6 +685,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       loadServices,
       loadVariables,
       loadVolumes,
+      listVolumeEntries,
       pending,
       projects,
       refreshStatus,

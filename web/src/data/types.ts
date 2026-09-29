@@ -378,3 +378,24 @@ export type ComposeVolumes = {
   volumes: ComposeVolume[];
   services: VolumeServiceUser[];
 };
+
+/** What one entry of a directory listing is, per the helper's `list`/`stat` JSON. */
+export type VolumeEntryKind = 'file' | 'directory' | 'symlink' | 'other';
+
+/**
+ * One entry of a directory listing (`GET …/volumes/list`), exactly as
+ * `relist-volhelper list` reports it. `mode` is the raw `fs.FileMode` value —
+ * the low 9 bits are the permission bits, the high bits carry the type — and
+ * `mtime` is RFC 3339. `link` is a symlink's target as stored: shown, never
+ * silently resolved, and empty (absent on the wire) for everything else.
+ */
+export type VolumeEntry = {
+  name: string;
+  kind: VolumeEntryKind;
+  size: number;
+  mode: number;
+  mtime: string;
+  uid: number;
+  gid: number;
+  link?: string;
+};

@@ -8,6 +8,7 @@ import { NotFoundPage } from '../pages/NotFoundPage';
 import { OverviewPage } from '../pages/OverviewPage';
 import { ProjectPage } from '../pages/ProjectPage';
 import { ProjectsPage } from '../pages/ProjectsPage';
+import { VolumeExplorerPage } from '../pages/VolumeExplorerPage';
 import { AppShell } from './AppShell';
 import { routePaths } from './paths';
 import { RequireAuth } from './RequireAuth';
@@ -30,6 +31,7 @@ const elements: Record<string, ReactElement> = {
   'projects/:projectId/env/:environmentId/:tab': <ProjectPage />,
   'projects/:projectId/env/:environmentId/compose/:composeId': <ComposePage />,
   'projects/:projectId/env/:environmentId/compose/:composeId/:tab': <ComposePage />,
+  'projects/:projectId/env/:environmentId/compose/:composeId/volumes/explorer': <VolumeExplorerPage />,
 };
 
 // Mounted at Vite's base (`/` in the shipped panel). Honouring it — with the

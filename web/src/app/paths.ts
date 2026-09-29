@@ -20,6 +20,24 @@ export const paths = {
   projects: '/projects',
   setup: '/setup',
   signIn: '/signin',
+  /**
+   * The Volume Explorer's URL: the Compose's route plus a `volumes/explorer`
+   * leaf, with the Volume's resolved source and the relative path in the
+   * query. A source is an absolute host path or a Docker name, and a path is
+   * a sequence of file names — either way, a segment may hold slashes,
+   * spaces or newlines, which is why the query carries them instead of the
+   * path: each parameter is percent-encoded whole, so it round-trips
+   * untouched through a reload. `path` is `''` at the Volume root, matching
+   * the helper protocol.
+   */
+  volumeExplorer: (
+    projectId: number | string,
+    environmentId: number | string,
+    composeId: number | string,
+    source: string,
+    path = '',
+  ) =>
+    `/projects/${projectId}/env/${environmentId}/compose/${composeId}/volumes/explorer?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`,
 } as const;
 
 /**
@@ -36,6 +54,10 @@ export const routePaths = [
   { path: 'projects/:projectId/env/:environmentId/:tab' },
   { path: 'projects/:projectId/env/:environmentId/compose/:composeId' },
   { path: 'projects/:projectId/env/:environmentId/compose/:composeId/:tab' },
+  // The Explorer is a route of its own so the new tab survives a reload and
+  // the back button works. `volumes/explorer` is two static segments, so it
+  // out-ranks the Compose `:tab` route and `.../volumes` stays the tab.
+  { path: 'projects/:projectId/env/:environmentId/compose/:composeId/volumes/explorer' },
 ] as const;
 
 export type ResolvedPath = {

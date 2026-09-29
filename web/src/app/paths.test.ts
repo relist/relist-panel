@@ -15,6 +15,27 @@ describe('paths', () => {
     expect(paths.compose(1, 2, 3)).toBe('/projects/1/env/2/compose/3');
     expect(paths.compose(1, 2, 3, 'monitor')).toBe('/projects/1/env/2/compose/3/monitor');
   });
+
+  it('builds the Volume Explorer link with the source and path in the query', () => {
+    // At the root `path` is empty and still present: the screen reads it as
+    // "the Volume root", the same convention the helper's protocol uses.
+    expect(paths.volumeExplorer(1, 2, 3, 'demo_pgdata')).toBe(
+      '/projects/1/env/2/compose/3/volumes/explorer?source=demo_pgdata&path=',
+    );
+    // A bind source is an absolute host path; a path is a sequence of names.
+    // Both are encoded whole, so slashes, spaces and newlines survive.
+    expect(paths.volumeExplorer(1, 2, 3, '/srv/legacy images', 'invoices/2026-09/a b\nc.txt')).toBe(
+      '/projects/1/env/2/compose/3/volumes/explorer?source=%2Fsrv%2Flegacy%20images&path=invoices%2F2026-09%2Fa%20b%0Ac.txt',
+    );
+  });
+
+  it('round-trips sources and paths through the query', () => {
+    const source = '/srv/legacy images\nodd';
+    const path = 'invoices/2026-09/a b\nc.txt';
+    const url = new URL(paths.volumeExplorer(1, 2, 3, source, path), 'http://panel');
+    expect(url.searchParams.get('source')).toBe(source);
+    expect(url.searchParams.get('path')).toBe(path);
+  });
 });
 
 describe('resolvePath', () => {
@@ -40,6 +61,17 @@ describe('resolvePath', () => {
     // `compose` is static, so it must out-rank the environment's `:tab`.
     const resolved = resolvePath('/projects/1/env/2/compose/3');
     expect(resolved?.pattern).toBe('projects/:projectId/env/:environmentId/compose/:composeId');
+  });
+
+  it('resolves the Volume Explorer leaf and keeps the Volumes tab on the Compose route', () => {
+    expect(resolvePath('/projects/1/env/2/compose/3/volumes/explorer')).toEqual({
+      params: { composeId: '3', environmentId: '2', projectId: '1' },
+      pattern: 'projects/:projectId/env/:environmentId/compose/:composeId/volumes/explorer',
+    });
+    expect(resolvePath('/projects/1/env/2/compose/3/volumes')).toEqual({
+      params: { composeId: '3', environmentId: '2', projectId: '1', tab: 'volumes' },
+      pattern: 'projects/:projectId/env/:environmentId/compose/:composeId/:tab',
+    });
   });
 
   it('tolerates a trailing slash', () => {

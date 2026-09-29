@@ -685,6 +685,9 @@ export function ComposePage() {
                       }
                       deploying={isPending(`deploy:${compose.id}`)}
                       error={volumesError}
+                      explorerHref={(volume) =>
+                        paths.volumeExplorer(project.id, environment.id, compose.id, volume.source)
+                      }
                       onDeploy={() => void deploy()}
                       onRetry={() => void fetchVolumes()}
                       payload={volumesPayload}

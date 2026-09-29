@@ -1,4 +1,4 @@
-import { CloudDownloadOutlined, LockOutlined, RocketOutlined } from '@ant-design/icons';
+import { CloudDownloadOutlined, ExportOutlined, LockOutlined, RocketOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Flex, Result, Skeleton, Table, Tag, Tooltip, Typography } from 'antd';
 import { CODE_FONT_STACK } from '../app/theme';
 import type { ComposeVolume, ComposeVolumes } from '../data/types';
@@ -14,13 +14,15 @@ const { Text, Paragraph } = Typography;
  *
  * The page owns the one fetch — `available: false` hides the whole tab, which
  * is a page-level decision — so this component receives the resolution rather
- * than asking for it, and a re-render never refetches. The Volume Explorer
- * that opens from each row lands with session 2; nothing here writes.
+ * than asking for it, and a re-render never refetches. Every row offers the
+ * Volume Explorer (its own route, opened in a new browser tab) and the
+ * whole-tree archive; nothing here writes.
  */
 export function ComposeVolumesTab({
   archiveHref,
   deploying,
   error,
+  explorerHref,
   onDeploy,
   onRetry,
   payload,
@@ -30,6 +32,8 @@ export function ComposeVolumesTab({
   /** The page's deploy is in flight, so the state's affordance spins with it. */
   deploying: boolean;
   error?: string;
+  /** Builds the Volume Explorer's URL for one Volume. */
+  explorerHref: (volume: ComposeVolume) => string;
   onDeploy: () => void;
   onRetry: () => void;
   payload?: ComposeVolumes;
@@ -164,23 +168,39 @@ export function ComposeVolumesTab({
             key: 'actions',
             render: (_value, volume) => {
               // A missing source is refused rather than recreated: mounting it
-              // is what would create it, as root:root 0755.
+              // is what would create it, as root:root 0755. The Explorer has
+              // its own gate for the unverifiable case; this row only refuses
+              // what the resolution already marked missing.
               const refusal = downloadRefusal(volume);
               return (
-                <Tooltip title={refusal ?? 'Downloads the whole Volume as a tar.gz archive, straight to disk.'}>
-                  <Button
-                    disabled={Boolean(refusal)}
-                    href={refusal ? undefined : archiveHref(volume)}
-                    icon={<CloudDownloadOutlined />}
-                    size="small"
-                  >
-                    Download tar.gz
-                  </Button>
-                </Tooltip>
+                <Flex gap={4} justify="flex-end" wrap>
+                  <Tooltip title={refusal ?? 'Opens this Volume in its own browser tab.'}>
+                    <Button
+                      disabled={Boolean(refusal)}
+                      href={refusal ? undefined : explorerHref(volume)}
+                      icon={<ExportOutlined />}
+                      rel="noreferrer"
+                      size="small"
+                      target="_blank"
+                    >
+                      Open
+                    </Button>
+                  </Tooltip>
+                  <Tooltip title={refusal ?? 'Downloads the whole Volume as a tar.gz archive, straight to disk.'}>
+                    <Button
+                      disabled={Boolean(refusal)}
+                      href={refusal ? undefined : archiveHref(volume)}
+                      icon={<CloudDownloadOutlined />}
+                      size="small"
+                    >
+                      Download tar.gz
+                    </Button>
+                  </Tooltip>
+                </Flex>
               );
             },
             title: '',
-            width: 170,
+            width: 260,
           },
         ]}
         dataSource={view.volumes}

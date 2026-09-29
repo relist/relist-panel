@@ -15,6 +15,7 @@ import type {
   Project,
   ServiceFacts,
   ServiceMetrics,
+  VolumeEntry,
 } from './types';
 import type { MetricWindow } from './types';
 
@@ -143,6 +144,16 @@ export const api = {
    * CLI's own `couldn't find env file`.
    */
   listVolumes: (location: ComposePath) => request<ComposeVolumes>(`${composePath(location)}/volumes`),
+  /**
+   * One directory's entries, from the helper's `list`. `source` must be one
+   * of the Compose's resolved sources and `path` is relative to the Volume
+   * root (`''` is the root); a refusal — a symlink that escapes, a directory
+   * the operation uid cannot read — arrives as the API's own message.
+   */
+  listVolumeEntries: (location: ComposePath, source: string, path: string) =>
+    request<VolumeEntry[]>(
+      `${composePath(location)}/volumes/list?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`,
+    ),
   serviceMetrics: (location: ComposePath, service: string, window: MetricWindow) =>
     request<ServiceMetrics>(`${composePath(location)}/services/${encodeURIComponent(service)}/metrics?window=${window}`),
 };
@@ -170,11 +181,22 @@ function composePath(location: ComposePath): string {
 }
 
 /**
- * The direct download URL for one Volume's whole-tree tar.gz backup
- * (`path: "."`). It is handed to the browser as an `<a href>` — the archive
- * streams from the helper straight to disk, potentially for gigabytes, so it
- * must never pass through a `fetch` and a blob in the tab's memory.
+ * The direct download URL for one directory's tar.gz archive: `path` defaults
+ * to the Volume root (`.`, the whole-tree backup the Volumes tab offers) and
+ * the Explorer passes the directory it is showing. Both are handed to the
+ * browser as an `<a href>` — the archive streams from the helper straight to
+ * disk, potentially for gigabytes, so it must never pass through a `fetch`
+ * and a blob in the tab's memory.
  */
-export function volumeArchiveUrl(location: ComposePath, source: string): string {
-  return `${composePath(location)}/volumes/archive?source=${encodeURIComponent(source)}&path=.`;
+export function volumeArchiveUrl(location: ComposePath, source: string, path = '.'): string {
+  return `${composePath(location)}/volumes/archive?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`;
+}
+
+/**
+ * The direct download URL for one file — `read` with `download=1`, so the
+ * response is an attachment and the anchor never navigates the tab. Same rule
+ * as the archive: an `<a href>`, never a fetch/blob.
+ */
+export function volumeReadUrl(location: ComposePath, source: string, path: string): string {
+  return `${composePath(location)}/volumes/read?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}&download=1`;
 }
