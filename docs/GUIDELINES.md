@@ -259,26 +259,36 @@ Explorer, a route of its own opened in a new browser tab, because browsing a dir
 a panel you glance at. It keeps the panel's chrome and has no nav entry of its own: a Volume is meaningless without
 its Compose as context.
 
-Both screens depend on a **Volume Handle** (CONTEXT.md) — the panel's temporary grant of access to one Volume, opened
-on purpose and closed on purpose. Nothing is mounted until the operator opens one.
+Every operation is one `docker run --rm` of the helper from the panel's own image (ADR-0010), mounting exactly one
+source. Nothing stands between operations — no handle to open, keep alive or expire, and nothing mounted while idle.
+Read operations mount the source `:ro`; `write`, `delete` and `extract` mount it `:rw`, and the mount flag — not the
+UI — is the enforcer.
 
 - **Where the list comes from.** `docker compose config --format json`, never a hand-rolled YAML parse. The panel
   never accepts a host path from a form: a Volume can only be one the Compose already declares. This is the invariant
   the whole feature's privilege rests on, and it is why the tab has an unavailable state — the CLI fails with
   `couldn't find env file` until the Compose has been deployed once.
-- **The handle's state belongs on screen.** The Overview carries the live handles with their idle countdown and a
-  Close button, and the Volumes tab shows a count badge. A handle keeps a container alive holding a Volume and does
-  not close when the operator leaves the page — that is the design, so the panel has to say which ones are still
-  there. See §8 for the countdown.
+- **tar.gz is the only archive format, in both directions.** Download streams the helper's stdout straight to the
+  browser, restore streams the upload straight into `extract`: nothing is staged on the panel's disk. Zip is out —
+  a zip restore would need random access, and a download-only format would have no restore story.
+- **Restore discloses partial extraction.** Every entry is validated before it is written, but there is no
+  transaction across a stream: entries written before a failure stay written, and the confirmation says so before
+  the operator starts.
+- **The caps are hard-coded.** 1 GiB per upload, 1 MB for the editor, a 10-minute archive timeout; a restore is
+  capped at 1 GiB compressed, 4 GiB uncompressed and 10,000 entries. An upload beyond the Volume's free space is
+  refused before anything is read — the helper checks `statfs` — and a stream that still overruns loses its partial
+  file.
 - **A symlink is shown, described, and followed only when it stays inside the Volume.** Listed with its target, and
   marked when it leaves. Hiding one would misrepresent the data: an operator who cannot see it cannot understand why
   a path exists. Only the traversal into it is refused, and `os.Root` refuses it too — the Explorer is not stricter
   than the kernel, it is honest about the boundary.
-- **Errors carry the helper's own words.** A permission failure names the uid the handle runs as, because that is the
-  one part of it the operator can change, and it is why the start dialog asks for a uid at all.
-- **The start dialog holds both warnings**, because neither can be decided for the operator: a bind source whose
-  existence the panel cannot check (it is an absolute path outside the data directory — looking at it without mounting
-  it is impossible, and mounting it is what would create it), and a Compose whose Services are running.
+- **Errors carry the helper's own words.** A permission failure names the uid the operation runs as — the Service's
+  resolved `user:`, else `0:0` with a warning that files it writes become root-owned — because that is the one part
+  of it the operator can change.
+- **The two pre-flight warnings.** An unverifiable bind source — an absolute path outside the data directory, where
+  looking at it without mounting it is impossible and mounting it is what would create it as `root:root 0755` — waits
+  for one acknowledgement per visit, before its first operation. A Compose whose Services are running gets a banner
+  naming what a write can corrupt, and it lets the write proceed. See §8.
 - The tab's empty state says the Compose declares no volumes rather than showing an empty table.
 - The page scrolls with the document, like every other screen; the file editor is the only bounded box (see §6).
 
@@ -410,14 +420,15 @@ Reusable pieces live in `web-design/src/components/`; port them into `web/src/` 
   visible to the application using it.
 - **Warn; do not gate.** Writing to a Volume whose Compose is running can corrupt a live database,
   and that write is deliberately **not** behind an acknowledgement. Since the banner is then the only
-  control, it has to name the consequence and the affected Services — never "be careful". The same
-  goes for the two start-dialog warnings: they state what is unknown or what is at risk, and they let
-  the operator proceed. A gate is reserved for what cannot be noticed afterwards.
-- **A handle that expires says so.** Idle auto-stop is the one transition the operator did not ask
-  for, so the Explorer shows the countdown while it runs and an `Alert` when it fires, rather than
-  silently emptying the screen. Any read or write restarts the clock.
+  control, it has to name the consequence and the affected Services — never "be careful" — and it
+  lets the write proceed. The one acknowledgement the Explorer asks for is an unverifiable bind
+  source — an absolute path outside the data directory that the panel cannot `stat`, where the mount
+  itself is what would create it. It asks once per visit, before the first operation. A gate is
+  reserved for what cannot be noticed afterwards.
+- **Nothing expires on its own.** Every operation ends with its own `docker run --rm`, so there is no
+  idle auto-stop and the Explorer never empties itself while the operator is elsewhere.
 - **Errors carry their source's words.** A helper refusal is shown as the helper worded it —
-  including a permission failure naming the uid the handle runs as — not paraphrased into something
+  including a permission failure naming the uid the operation runs as — not paraphrased into something
   generic. An operator can act on a uid; they cannot act on "something went wrong".
 - Filters that match nothing are not empty states: keep the filter, say what it is filtering.
 
@@ -461,10 +472,6 @@ Design decisions that need something the Go API does not return yet. Each degrad
 | A resident metrics service (cAdvisor and friends) | Nothing — and the panel should not add one | Measured on this host: cAdvisor idles at 25→33 MB RSS and climbing, needs `--privileged` and five host mounts, and still keeps only ~2 minutes of history — so it would be scraped and stored by the panel anyway. Reading four `/proc` files in-process costs ~7 KB and no new process. |
 | CPU, memory, block I/O, disk space sources | Already host-accurate from inside the container (see §4.2, sampling budget). | No API change. Do not build on memory staying host-global: that is Docker runtime behaviour (no lxcfs mount), not a contract. |
 | A Compose's Volume list | Nothing | `docker compose -p <project> -f <file> --env-file <env> config --format json`, parsed for `services.*.volumes[]` (type, source, target, read_only) plus the top-level `volumes` map for real names. Verified to resolve relative binds, `${VAR}` interpolation and each service's `user:` in the one call — 30 ms, so no caching needed. |
-| Volume Handle state | Nothing | A table plus `relist.handle` / `relist.compose` labels on the helper container, so the panel can find every live handle on startup and stop it. Nothing is adopted across a panel restart: a handle from the previous build could be asked to run an operation its older helper does not implement. |
-| Browsing a Volume's files | Nothing — the panel container holds only the Docker socket and the data directory, so `/var/lib/docker/volumes/<name>/_data` is unreachable to it | One `docker exec` per operation into a helper container that mounts exactly one Volume with `--network none`. The helper does the filesystem work itself with `os.Root` and stdlib — `os.Root` has no `ReadDir`, so listing is `root.Open(".")` then `*os.File.ReadDir`, and `go.mod` must move to `go 1.24` or `go vet` rejects `os.OpenRoot` outright. |
-| Downloading a directory as tar.gz or zip | Nothing | Streamed from the helper's stdout through the exec into the HTTP response — both formats are stdlib (`archive/tar`, `archive/zip`, `compress/gzip`) and both write to a non-seekable writer, verified by round-tripping a tree through an `io.Pipe` byte-identically. Nothing is staged on disk. |
-| Idle auto-stop, upload limits, free-space check | Nothing | `RELIST_VOLUME_IDLE_TIMEOUT` (default 30 min, `0` disables), a 1 GB upload cap, a 1 MB editor cap, a 10-minute archive timeout, and a `statfs` check inside the helper before an upload is accepted. |
 
 ## 12. Implementing this in `web/`
 
