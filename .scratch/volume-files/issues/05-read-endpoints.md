@@ -6,16 +6,16 @@ tar.gz straight from the helper's stdout into the HTTP response.
 
 **Blocked by:** 02, 03, 13
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
 - [x] `GET .../composes/{composeID}/volumes` serves the resolved Volumes, each pre-flight status, every Service's uid/gid resolution and the feature-availability flag (session 1/3)
 - [x] Endpoints for list, stat and read, each one `docker run --rm` with the path as an argv element after `--`
 - [x] `read` streams raw bytes straight into the response with `io.Copy`: nothing buffered whole in memory, nothing written to disk
-- [ ] `GET` backup streams the helper's tar.gz stdout into the response with no temp file anywhere, so a 50 GB Volume never becomes a 50 GB file in the data directory; a single file is served as a plain download, not wrapped in an archive
-- [ ] `Content-Disposition` follows RFC 6266: control characters stripped, and `filename*` percent-encoded for any non-ASCII name
+- [x] `GET` backup streams the helper's tar.gz stdout into the response with no temp file anywhere, so a 50 GB Volume never becomes a 50 GB file in the data directory; a single file is served as a plain download, not wrapped in an archive
+- [x] `Content-Disposition` follows RFC 6266: control characters stripped, and `filename*` percent-encoded for any non-ASCII name
 - [x] Paths are always relative to the Volume root, and a path from a request is never interpolated into a shell string — there is no shell in the path from request to helper
 - [x] A refusal from the helper (escaping path, missing entry) surfaces as the panel's normal JSON error carrying the helper's own message, not a generic failure
-- [ ] HTTP-seam tests fake the runner and assert the exact argv for each operation, including a path beginning with `-` and a path containing a newline
+- [x] HTTP-seam tests fake the runner and assert the exact argv for each operation, including a path beginning with `-` and a path containing a newline
 
 ## Comments
 
@@ -59,3 +59,30 @@ pre-flight refusals with no run, the full user precedence, root and
 leading-slash paths, paths starting with `-` and containing a newline, streamed
 read bytes, pre-/post-output read failures, helper-message 502s, garbage-JSON
 refusal and the 503; the lazy status writer has its own package unit test.
+
+**session 3/3:** the backup download landed. `GET .../volumes/archive` runs the
+same pipeline session 2 established (availability → Compose load → exact
+`Source` match → `Preflight` → user and path), then the helper's tar.gz
+streams byte-for-byte into the response as `application/gzip`; nothing is
+buffered and nothing is staged. The archive's context carries the spec's
+ten-minute cap (`archiveTimeout`, a package var so a test can shrink it), and
+the fake runner now records the run's context deadline so the seam asserts it.
+`contentDisposition` is the shared RFC 6266 helper: control characters
+stripped, `/` and `\` neutralized to `_`, ASCII names quoted with `"` escaped,
+non-ASCII names carrying a percent-encoded `filename*` (RFC 5987) plus an
+ASCII `filename` fallback, so no header can ever name a path. An archive of
+`path: "."` is named after the Volume — its logical name, or the base of a
+bind's source — otherwise after the base of the archived path plus `.tar.gz`.
+`read` gained `download=1`: the same stream with `Content-Disposition:
+attachment; filename="<base>"`; without it the bytes stay inline. The lazy
+status writer now holds the download headers too, so a pre-output failure is
+still a plain JSON 502 with no attachment headers, while a post-output failure
+is logged into a committed 200. Evidence: `gofmt -l . && go vet ./... && go
+test ./...` under `golang:1.27-alpine` — gofmt silent, vet clean, full suite
+green. The seam scripts tar.gz bytes for a named volume, a bind, a nested
+path, a non-ASCII name, a `-` path and a newline path and asserts status,
+`application/gzip`, the exact disposition, the recorded `OpArchive`/`ReadOnly`
+request and a ~10-minute deadline; it also pins 502-before/committed-after
+failures, membership and pre-flight refusals with no run, the 503, and
+`download=1` vs plain read; `contentDisposition` and `archiveName` have their
+own unit tables.

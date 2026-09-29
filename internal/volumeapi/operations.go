@@ -2,12 +2,14 @@ package volumeapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -34,26 +36,38 @@ func (s *Service) statFile(w http.ResponseWriter, r *http.Request) {
 	s.metadata(w, r, volumes.OpStat)
 }
 
-// readFile streams one file's bytes straight to the client.
+// readFile streams one file's bytes straight to the client. `download=1`
+// marks the stream an attachment named after the file's base name; without
+// it the bytes stay inline, exactly as before.
 func (s *Service) readFile(w http.ResponseWriter, r *http.Request) {
-	s.stream(w, r, volumes.OpRead)
+	req, _, ok := s.operation(w, r, volumes.OpRead)
+	if !ok {
+		return
+	}
+
+	disposition := ""
+	if r.URL.Query().Get("download") == "1" {
+		disposition = contentDisposition(filepath.Base(req.Path))
+	}
+	s.stream(w, r.Context(), req, "application/octet-stream", disposition)
 }
 
 // operation validates one operation request and resolves the helper run it
 // asks for, or writes the error response itself. The order is the spec's:
 // the Compose must exist, the feature must be available, the source must be a
 // resolved Volume (never free text), its pre-flight must permit a mount, and
-// the user and path must be the shapes this API accepts. Nothing but a
-// Request it returns ever reaches the runner.
-func (s *Service) operation(w http.ResponseWriter, r *http.Request, op volumes.Op) (volumes.Request, bool) {
+// the user and path must be the shapes this API accepts. It returns the
+// matched Volume too, so a download can be named after what it carries.
+// Nothing but a Request it returns ever reaches the runner.
+func (s *Service) operation(w http.ResponseWriter, r *http.Request, op volumes.Op) (volumes.Request, volumes.Volume, bool) {
 	request, ok := s.composeRequest(w, r)
 	if !ok {
-		return volumes.Request{}, false
+		return volumes.Request{}, volumes.Volume{}, false
 	}
 
 	if err := s.runner.Available(r.Context()); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "volume files unavailable: "+err.Error())
-		return volumes.Request{}, false
+		return volumes.Request{}, volumes.Volume{}, false
 	}
 
 	resolution, err := s.resolver.Resolve(r.Context(), volumes.ComposeRef{
@@ -63,34 +77,34 @@ func (s *Service) operation(w http.ResponseWriter, r *http.Request, op volumes.O
 	})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "volume resolution failed: "+err.Error())
-		return volumes.Request{}, false
+		return volumes.Request{}, volumes.Volume{}, false
 	}
 
 	volume, ok := volumeBySource(resolution.Volumes, r.URL.Query().Get("source"))
 	if !ok {
 		writeError(w, http.StatusNotFound, "unknown volume")
-		return volumes.Request{}, false
+		return volumes.Request{}, volumes.Volume{}, false
 	}
 
 	preflight, err := s.resolver.Preflight(r.Context(), volume)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "volume pre-flight failed: "+err.Error())
-		return volumes.Request{}, false
+		return volumes.Request{}, volumes.Volume{}, false
 	}
 	if preflight.Status == volumes.PreflightMissing {
 		writeError(w, http.StatusConflict, "volume "+volume.Source+" is missing: "+preflight.Warning)
-		return volumes.Request{}, false
+		return volumes.Request{}, volumes.Volume{}, false
 	}
 
 	user, err := operationUser(r.URL.Query(), volume, resolution.Users)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return volumes.Request{}, false
+		return volumes.Request{}, volumes.Volume{}, false
 	}
 	path, err := operationPath(r.URL.Query())
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return volumes.Request{}, false
+		return volumes.Request{}, volumes.Volume{}, false
 	}
 
 	return volumes.Request{
@@ -99,7 +113,7 @@ func (s *Service) operation(w http.ResponseWriter, r *http.Request, op volumes.O
 		Op:       op,
 		Path:     path,
 		ReadOnly: true,
-	}, true
+	}, volume, true
 }
 
 // volumeBySource matches a request's source against the resolution's exact
@@ -166,7 +180,7 @@ func operationPath(query url.Values) (string, error) {
 // output is validated so garbage is a Bad Gateway rather than a lie forwarded
 // to the UI.
 func (s *Service) metadata(w http.ResponseWriter, r *http.Request, op volumes.Op) {
-	req, ok := s.operation(w, r, op)
+	req, _, ok := s.operation(w, r, op)
 	if !ok {
 		return
 	}
@@ -186,46 +200,62 @@ func (s *Service) metadata(w http.ResponseWriter, r *http.Request, op volumes.Op
 	_, _ = w.Write(stdout.Bytes())
 }
 
-// stream answers read: bytes go from the helper to the client as they arrive,
-// and the 200 status waits for the first byte so a run that failed before
-// producing output can still be a 502 carrying the helper's message. Once
-// bytes have flowed the response is committed; a later failure can only be
-// logged, because the status was already sent.
-func (s *Service) stream(w http.ResponseWriter, r *http.Request, op volumes.Op) {
-	req, ok := s.operation(w, r, op)
-	if !ok {
-		return
+// stream answers read and archive: bytes go from the helper to the client as
+// they arrive. Neither the status nor the download headers are committed
+// until the first byte, so a run that failed before producing output can
+// still be a 502 carrying the helper's message — a plain JSON error with no
+// attachment headers on it. Once bytes have flowed the response is committed;
+// a later failure can only be logged, because the status was already sent.
+func (s *Service) stream(w http.ResponseWriter, ctx context.Context, req volumes.Request, contentType, disposition string) {
+	headers := http.Header{"Content-Type": []string{contentType}}
+	if disposition != "" {
+		headers.Set("Content-Disposition", disposition)
 	}
-
-	w.Header().Set("Content-Type", "application/octet-stream")
-	out := &statusWriter{w: w}
-	err := s.runner.Run(r.Context(), req, nil, out)
+	out := &statusWriter{w: w, headers: headers}
+	err := s.runner.Run(ctx, req, nil, out)
 	if err != nil {
 		if out.wrote {
-			log.Printf("volume %s failed after bytes were sent: %v", op, err)
+			log.Printf("volume %s failed after bytes were sent: %v", req.Op, err)
 			return
 		}
-		writeError(w, http.StatusBadGateway, "volume "+string(op)+" failed: "+err.Error())
+		writeError(w, http.StatusBadGateway, "volume "+string(req.Op)+" failed: "+err.Error())
 		return
 	}
 	if !out.wrote {
-		w.WriteHeader(http.StatusOK)
+		out.commit()
 	}
 }
 
-// statusWriter delays the 200 until the helper's first byte arrives: a run
-// that fails before producing output can still answer with an error status,
-// while once a byte has flowed the status is committed and nothing can change
-// it. Only Write is needed — the runner's streaming contract is an io.Writer.
+// statusWriter delays the status — and the response headers it carries —
+// until the helper's first byte arrives: a run that fails before producing
+// output can still answer with an error status and a plain JSON body, while
+// once a byte has flowed the status is committed and nothing can change it.
+// Only Write and commit are needed — the runner's streaming contract is an
+// io.Writer.
 type statusWriter struct {
-	w     http.ResponseWriter
-	wrote bool
+	w       http.ResponseWriter
+	headers http.Header
+	wrote   bool
+}
+
+// commit applies the held headers and sends 200, once. The first byte and a
+// successful run that produced none both call it.
+func (s *statusWriter) commit() {
+	if s.wrote {
+		return
+	}
+	s.wrote = true
+	for name, values := range s.headers {
+		for _, value := range values {
+			s.w.Header().Add(name, value)
+		}
+	}
+	s.w.WriteHeader(http.StatusOK)
 }
 
 func (s *statusWriter) Write(p []byte) (int, error) {
-	if len(p) > 0 && !s.wrote {
-		s.wrote = true
-		s.w.WriteHeader(http.StatusOK)
+	if len(p) > 0 {
+		s.commit()
 	}
 	return s.w.Write(p)
 }

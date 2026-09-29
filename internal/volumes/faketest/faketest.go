@@ -8,16 +8,19 @@ package faketest
 import (
 	"context"
 	"io"
+	"time"
 
 	"relist-panel/internal/volumes"
 )
 
 // Call is one Run the fake served: the Request as it was passed (source,
-// user, op, path, read-only) plus the bytes drained from stdin. Stdout is not
-// recorded — tests script it.
+// user, op, path, read-only), the deadline of the context the Run was given —
+// zero means the context was unbounded — and the bytes drained from stdin.
+// Stdout is not recorded — tests script it.
 type Call struct {
-	Request volumes.Request
-	Stdin   []byte
+	Request  volumes.Request
+	Deadline time.Time
+	Stdin    []byte
 }
 
 // Runner is a scripted volumes.Runner. Its zero value records calls and
@@ -41,8 +44,11 @@ func (f *Runner) Available(_ context.Context) error {
 }
 
 // Run implements volumes.Runner.
-func (f *Runner) Run(_ context.Context, req volumes.Request, stdin io.Reader, stdout io.Writer) error {
+func (f *Runner) Run(ctx context.Context, req volumes.Request, stdin io.Reader, stdout io.Writer) error {
 	call := Call{Request: req}
+	if deadline, ok := ctx.Deadline(); ok {
+		call.Deadline = deadline
+	}
 	if stdin != nil {
 		data, err := io.ReadAll(stdin)
 		if err != nil {

@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"relist-panel/internal/volumes"
 	"relist-panel/internal/volumes/faketest"
@@ -454,6 +455,260 @@ func TestVolumeReadFailureAfterBytesLeavesTheResponseCommitted(t *testing.T) {
 	}
 }
 
+// An archive is one read-only helper run whose tar.gz bytes reach the client
+// untouched, named per RFC 6266 — after the Volume for a whole-Volume
+// download, after the archived path's base otherwise — under the spec's
+// ten-minute cap. Paths are still passed through untouched, dash and newline
+// included.
+func TestVolumeArchiveStreamsTheHelperTarGz(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+	server.volumeRunner.Stdout = "\x1f\x8b\x08\x00tar gz bytes\x00\xff"
+
+	tests := []struct {
+		name        string
+		source      string
+		path        string
+		disposition string
+	}{
+		{
+			name:        "a whole named volume is named after its logical name",
+			source:      "demoapp_pgdata",
+			path:        ".",
+			disposition: `attachment; filename="pgdata.tar.gz"`,
+		},
+		{
+			name:        "a whole bind is named after its source's base",
+			source:      fixture.presentBind,
+			path:        ".",
+			disposition: `attachment; filename="data.tar.gz"`,
+		},
+		{
+			name:        "a subdirectory is named after the archived path",
+			source:      "demoapp_pgdata",
+			path:        "backups/nightly",
+			disposition: `attachment; filename="nightly.tar.gz"`,
+		},
+		{
+			name:        "a non-ascii name carries a percent-encoded filename*",
+			source:      "demoapp_pgdata",
+			path:        "backups/café",
+			disposition: `attachment; filename="caf_.tar.gz"; filename*=utf-8''caf%c3%a9.tar.gz`,
+		},
+		{
+			name:        "a path beginning with a dash passes through",
+			source:      "demoapp_pgdata",
+			path:        "-dash",
+			disposition: `attachment; filename="-dash.tar.gz"`,
+		},
+		{
+			name:        "a newline is stripped from the header",
+			source:      "demoapp_pgdata",
+			path:        "nested/with\nnewline",
+			disposition: `attachment; filename="withnewline.tar.gz"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := server.request(t, http.MethodGet, volumeOpPath(fixture, "archive", url.Values{
+				"source": {tt.source},
+				"path":   {tt.path},
+			}), nil)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusOK, body)
+			}
+			if contentType := response.Header.Get("Content-Type"); contentType != "application/gzip" {
+				t.Errorf("Content-Type = %q, want application/gzip", contentType)
+			}
+			if disposition := response.Header.Get("Content-Disposition"); disposition != tt.disposition {
+				t.Errorf("Content-Disposition = %q, want %q", disposition, tt.disposition)
+			}
+			body, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if string(body) != server.volumeRunner.Stdout {
+				t.Errorf("body = %q, want the helper's tar.gz %q", body, server.volumeRunner.Stdout)
+			}
+		})
+	}
+
+	want := []volumes.Request{
+		{Source: "demoapp_pgdata", User: "999:998", Op: volumes.OpArchive, Path: ".", ReadOnly: true},
+		{Source: fixture.presentBind, User: "999:998", Op: volumes.OpArchive, Path: ".", ReadOnly: true},
+		{Source: "demoapp_pgdata", User: "999:998", Op: volumes.OpArchive, Path: "backups/nightly", ReadOnly: true},
+		{Source: "demoapp_pgdata", User: "999:998", Op: volumes.OpArchive, Path: "backups/café", ReadOnly: true},
+		{Source: "demoapp_pgdata", User: "999:998", Op: volumes.OpArchive, Path: "-dash", ReadOnly: true},
+		{Source: "demoapp_pgdata", User: "999:998", Op: volumes.OpArchive, Path: "nested/with\nnewline", ReadOnly: true},
+	}
+	calls := server.volumeRunner.Calls
+	if len(calls) != len(want) {
+		t.Fatalf("runner calls = %d, want %d: %+v", len(calls), len(want), calls)
+	}
+	for i, request := range want {
+		if calls[i].Request != request {
+			t.Errorf("call %d request = %+v, want %+v", i, calls[i].Request, request)
+		}
+		// The cap is the spec's ten minutes, on the run's context.
+		if remaining := time.Until(calls[i].Deadline); remaining <= 9*time.Minute || remaining > 10*time.Minute {
+			t.Errorf("call %d deadline is %v away, want about 10m", i, remaining)
+		}
+	}
+}
+
+// An archive that fails before producing output is still a 502 carrying the
+// helper's message — and a plain JSON error, with no download headers on it.
+func TestVolumeArchiveFailureBeforeOutputIsBadGateway(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	server.volumeRunner.Stdout = ""
+	server.volumeRunner.Err = errors.New("docker run ... exit status 1: archive: permission denied")
+
+	response := server.request(t, http.MethodGet, volumeOpPath(fixture, "archive", url.Values{
+		"source": {"demoapp_pgdata"},
+	}), nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadGateway {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusBadGateway, body)
+	}
+	if contentType := response.Header.Get("Content-Type"); contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", contentType)
+	}
+	if disposition := response.Header.Get("Content-Disposition"); disposition != "" {
+		t.Errorf("Content-Disposition = %q, want none before any byte", disposition)
+	}
+	assertErrorContains(t, response, "volume archive failed", "permission denied")
+}
+
+// Once archive bytes have flowed the response is committed: a later failure
+// cannot change the status or the headers, only the log.
+func TestVolumeArchiveFailureAfterBytesLeavesTheResponseCommitted(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	server.volumeRunner.Stdout = "\x1f\x8b\x08\x00partial gzip"
+	server.volumeRunner.Err = errors.New("docker run ... exit status 1: archive: broken pipe")
+
+	response := server.request(t, http.MethodGet, volumeOpPath(fixture, "archive", url.Values{
+		"source": {"demoapp_pgdata"},
+	}), nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d: bytes already flowed", response.StatusCode, http.StatusOK)
+	}
+	if contentType := response.Header.Get("Content-Type"); contentType != "application/gzip" {
+		t.Errorf("Content-Type = %q, want application/gzip", contentType)
+	}
+	if disposition := response.Header.Get("Content-Disposition"); disposition != `attachment; filename="pgdata.tar.gz"` {
+		t.Errorf("Content-Disposition = %q, want the committed disposition", disposition)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != "\x1f\x8b\x08\x00partial gzip" {
+		t.Errorf("body = %q, want the bytes that got through", body)
+	}
+}
+
+// The archive route shares the pipeline's refusals: an undeclared source and
+// a missing volume both answer before any helper run.
+func TestVolumeArchiveRefusesUndeclaredAndMissingSources(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	undeclared := server.request(t, http.MethodGet, volumeOpPath(fixture, "archive", url.Values{"source": {"host-etc"}}), nil)
+	defer undeclared.Body.Close()
+	if undeclared.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(undeclared.Body)
+		t.Fatalf("undeclared source status = %d, want %d, body = %s", undeclared.StatusCode, http.StatusNotFound, body)
+	}
+	assertErrorContains(t, undeclared, "unknown volume")
+
+	server.volumeCLI.VolumeExistsByName["demoapp_pgdata"] = false
+	missing := server.request(t, http.MethodGet, volumeOpPath(fixture, "archive", url.Values{"source": {"demoapp_pgdata"}}), nil)
+	defer missing.Body.Close()
+	if missing.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(missing.Body)
+		t.Fatalf("missing volume status = %d, want %d, body = %s", missing.StatusCode, http.StatusConflict, body)
+	}
+	assertErrorContains(t, missing, "demoapp_pgdata", "does not exist")
+
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none for refused archives", server.volumeRunner.Calls)
+	}
+}
+
+// `download=1` is read's one extra: the same stream, marked an attachment
+// named after the file's base name. Without it the stream stays inline,
+// exactly as before, and neither is capped — the ten minutes are the
+// archive's.
+func TestVolumeReadDownloadSetsAnAttachmentDisposition(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+	server.volumeRunner.Stdout = "raw\x00file bytes"
+
+	download := server.request(t, http.MethodGet, volumeOpPath(fixture, "read", url.Values{
+		"source":   {"demoapp_pgdata"},
+		"path":     {"sub/file.bin"},
+		"download": {"1"},
+	}), nil)
+	defer download.Body.Close()
+	if download.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(download.Body)
+		t.Fatalf("download status = %d, want %d, body = %s", download.StatusCode, http.StatusOK, body)
+	}
+	if contentType := download.Header.Get("Content-Type"); contentType != "application/octet-stream" {
+		t.Errorf("download Content-Type = %q, want application/octet-stream", contentType)
+	}
+	if disposition := download.Header.Get("Content-Disposition"); disposition != `attachment; filename="file.bin"` {
+		t.Errorf("download Content-Disposition = %q, want the file's base name", disposition)
+	}
+	body, err := io.ReadAll(download.Body)
+	if err != nil {
+		t.Fatalf("read download body: %v", err)
+	}
+	if string(body) != server.volumeRunner.Stdout {
+		t.Errorf("download body = %q, want the helper's bytes", body)
+	}
+
+	inline := server.request(t, http.MethodGet, volumeOpPath(fixture, "read", url.Values{
+		"source": {"demoapp_pgdata"},
+		"path":   {"sub/file.bin"},
+	}), nil)
+	defer inline.Body.Close()
+	if inline.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(inline.Body)
+		t.Fatalf("inline status = %d, want %d, body = %s", inline.StatusCode, http.StatusOK, body)
+	}
+	if disposition := inline.Header.Get("Content-Disposition"); disposition != "" {
+		t.Errorf("plain read Content-Disposition = %q, want none (inline)", disposition)
+	}
+
+	want := volumes.Request{Source: "demoapp_pgdata", User: "999:998", Op: volumes.OpRead, Path: "sub/file.bin", ReadOnly: true}
+	calls := server.volumeRunner.Calls
+	if len(calls) != 2 {
+		t.Fatalf("runner calls = %d, want 2: %+v", len(calls), calls)
+	}
+	for i, call := range calls {
+		if call.Request != want {
+			t.Errorf("call %d request = %+v, want %+v", i, call.Request, want)
+		}
+		if !call.Deadline.IsZero() {
+			t.Errorf("call %d deadline = %v, want none: the ten-minute cap is the archive's", i, call.Deadline)
+		}
+	}
+}
+
 func TestVolumeMetadataFailuresAreBadGateway(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
@@ -498,7 +753,7 @@ func TestVolumeOperationsReportTheFeatureUnavailable(t *testing.T) {
 
 	server.volumeRunner.AvailableErr = errors.New("volume files need a containerized panel whose image the host's Docker can see")
 
-	for _, op := range []string{"list", "stat", "read"} {
+	for _, op := range []string{"list", "stat", "read", "archive"} {
 		t.Run(op, func(t *testing.T) {
 			response := server.request(t, http.MethodGet, volumeOpPath(fixture, op, url.Values{"source": {"demoapp_pgdata"}}), nil)
 			defer response.Body.Close()

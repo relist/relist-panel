@@ -1,10 +1,11 @@
 // Package volumeapi owns the Volume Explorer's HTTP surface: one Compose's
 // resolved Volumes with their pre-flight status, the uid/gid an operation per
 // Service would run as, whether the feature can run at all, and the read
-// operations themselves — list, stat and read, each one `docker run --rm`
-// through the volumes.Runner seam (ADR-0010). It owns no SQL and derives no
-// paths — composes.ComposeRunRequest carries the Compose's deploy identity and
-// volumes.Resolver does the reading through the Compose CLI.
+// operations themselves — list, stat, read and archive, each one
+// `docker run --rm` through the volumes.Runner seam (ADR-0010). It owns no
+// SQL and derives no paths — composes.ComposeRunRequest carries the Compose's
+// deploy identity and volumes.Resolver does the reading through the Compose
+// CLI.
 package volumeapi
 
 import (
@@ -34,12 +35,14 @@ func New(composeService *composes.Service, resolver *volumes.Resolver, runner vo
 }
 
 // RegisterRoutes adds the authenticated Volume Explorer endpoints to mux: the
-// listing of a Compose's resolved Volumes and the per-operation reads.
+// listing of a Compose's resolved Volumes and the per-operation reads,
+// archive included.
 func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes", s.list)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/list", s.listFiles)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/stat", s.statFile)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/read", s.readFile)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/archive", s.archive)
 }
 
 // list answers one Compose's resolved Volumes and every Service's operation
