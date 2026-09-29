@@ -1,5 +1,10 @@
 # Volume file access runs in a panel-made helper container, off every network
 
+**Revised by ADR-0010 (2026-09-29).** The decision below — a long-lived helper container per Volume
+Handle, driven by one `docker exec` per operation — is replaced by one `docker run --rm` per
+operation. This ADR's measurements and rejected options stay as written: they are the evidence base
+the revision argues from, and the container hardening and helper design carry over unchanged.
+
 Browsing, editing, and downloading the files of a Compose's Volumes needs a process that can *see*
 those files. The panel cannot: it runs in a container that mounts only the Docker socket and the
 data directory, so a volume's contents at `/var/lib/docker/volumes/<name>/_data` on the host are
