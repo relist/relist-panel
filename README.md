@@ -61,9 +61,29 @@ Override the defaults via environment variables (or a `.env` file next to
   to the panel on
 - `TRAEFIK_HTTP_PORT` (default `80`) — the host port Traefik's HTTP
   entrypoint is published on
+- `RELIST_IMAGE` (unset by default) — the panel image that Volume file
+  operations run from; set it only when the panel cannot name its own image
+  (`docker inspect $(hostname)` fails, e.g. a custom `hostname:` on the panel
+  service) by adding it to that service's `environment:`. The image must be on
+  the host; `docker compose build` puts it there
 
 Traefik ships with a minimal default (`--providers.docker`, HTTP entrypoint
 only, `exposedbydefault=false`); TLS/ACME and additional entrypoints are left
 to the operator to configure — routing for anything deployed through the
 panel is controlled entirely by Traefik labels written directly in that
 Compose's YAML, per the v1 scope.
+
+## Volume files
+
+Each Compose page has a **Volumes** tab listing the Volumes that Compose
+mounts, with a **Volume Explorer** behind each one for browsing, editing,
+uploading, deleting, and downloading or restoring a tar.gz.
+
+Volume files require a **containerized panel**: the helper runs from the
+panel's own image, which must be on the host, over the Docker socket this
+install mounts. Running the bare binary hides the Volumes tab.
+
+The feature assumes **TLS** on the panel's domain — a volume file manager over
+plain HTTP is a data-exfiltration channel. The install stack's Traefik is
+HTTP-only by default (above), so terminate TLS before exposing the panel
+beyond localhost.
