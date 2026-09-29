@@ -52,14 +52,31 @@ func (s *Service) readFile(w http.ResponseWriter, r *http.Request) {
 	s.stream(w, r.Context(), req, "application/octet-stream", disposition)
 }
 
-// operation validates one operation request and resolves the helper run it
-// asks for, or writes the error response itself. The order is the spec's:
+// operation validates one read operation request and resolves the helper run
+// it asks for, or writes the error response itself. The order is the spec's:
 // the Compose must exist, the feature must be available, the source must be a
 // resolved Volume (never free text), its pre-flight must permit a mount, and
 // the user and path must be the shapes this API accepts. It returns the
 // matched Volume too, so a download can be named after what it carries.
-// Nothing but a Request it returns ever reaches the runner.
+// Nothing but a Request it returns ever reaches the runner. It is the read
+// family's entry point: the mount is `:ro` and the Volume root is a legal
+// path.
 func (s *Service) operation(w http.ResponseWriter, r *http.Request, op volumes.Op) (volumes.Request, volumes.Volume, bool) {
+	return s.operationOf(w, r, op, true, operationPath)
+}
+
+// contentOperation is the pipeline for the write family (write and delete),
+// which varies in exactly two ways: the mount is read-write, and the path
+// must name an entry rather than the Volume root. Availability, membership,
+// pre-flight and user resolution stay identical.
+func (s *Service) contentOperation(w http.ResponseWriter, r *http.Request, op volumes.Op) (volumes.Request, volumes.Volume, bool) {
+	return s.operationOf(w, r, op, false, operationContentPath)
+}
+
+// operationOf is operation with the two family choices injected: readOnly is
+// the mount flag — the kernel is the enforcer — and pathOf applies the
+// family's path rule before anything runs.
+func (s *Service) operationOf(w http.ResponseWriter, r *http.Request, op volumes.Op, readOnly bool, pathOf func(url.Values) (string, error)) (volumes.Request, volumes.Volume, bool) {
 	request, ok := s.composeRequest(w, r)
 	if !ok {
 		return volumes.Request{}, volumes.Volume{}, false
@@ -101,7 +118,7 @@ func (s *Service) operation(w http.ResponseWriter, r *http.Request, op volumes.O
 		writeError(w, http.StatusBadRequest, err.Error())
 		return volumes.Request{}, volumes.Volume{}, false
 	}
-	path, err := operationPath(r.URL.Query())
+	path, err := pathOf(r.URL.Query())
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return volumes.Request{}, volumes.Volume{}, false
@@ -112,7 +129,7 @@ func (s *Service) operation(w http.ResponseWriter, r *http.Request, op volumes.O
 		User:     user,
 		Op:       op,
 		Path:     path,
-		ReadOnly: true,
+		ReadOnly: readOnly,
 	}, volume, true
 }
 
@@ -171,6 +188,22 @@ func operationPath(query url.Values) (string, error) {
 	}
 	if strings.HasPrefix(path, "/") {
 		return "", errors.New("path must be relative to the volume root")
+	}
+	return path, nil
+}
+
+// operationContentPath is operationPath for the write family: a write or a
+// delete must name an entry, so the root itself — absent, empty or "." — is
+// refused before any helper run. Whether the named entry is a file and not a
+// directory is the helper's business: the panel cannot tell without running
+// it, and the write fails cleanly if it is not.
+func operationContentPath(query url.Values) (string, error) {
+	path, err := operationPath(query)
+	if err != nil {
+		return "", err
+	}
+	if path == "." {
+		return "", errors.New("path must name a file or directory, not the volume root")
 	}
 	return path, nil
 }

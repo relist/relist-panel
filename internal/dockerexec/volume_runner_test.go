@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -268,6 +269,64 @@ func TestVolumeRunnerRunFoldsStderrIntoTheError(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("Run() error = %v, want it to contain %q", err, want)
 		}
+	}
+}
+
+// exitCodeError scripts a process-shaped failure without running anything:
+// the exit code is all Run's refusal mapping reads.
+type exitCodeError int
+
+func (e exitCodeError) Error() string { return "exit status " + strconv.Itoa(int(e)) }
+func (e exitCodeError) ExitCode() int { return int(e) }
+
+// Exit 3 is the helper's refusal — it refused before doing the work — so the
+// run comes back as a typed RefusalError carrying the helper's own message,
+// which is what the HTTP layer maps to 507 rather than 502.
+func TestVolumeRunnerRunMapsHelperRefusal(t *testing.T) {
+	runner := &VolumeRunner{
+		resolveImage: func(context.Context) (string, error) { return testImage, nil },
+		runDocker: func(_ context.Context, _ []string, _ io.Reader, _, stderr io.Writer) error {
+			_, _ = io.WriteString(stderr, "relist-volhelper: write \"big.bin\" needs 2147483648 bytes but the Volume has only 1048576 free\n")
+			return exitCodeError(3)
+		},
+	}
+
+	err := runner.Run(context.Background(), volumes.Request{Op: volumes.OpWrite, Path: "big.bin"}, nil, io.Discard)
+	var refusal *volumes.RefusalError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Run() error = %v, want a *volumes.RefusalError", err)
+	}
+	for _, want := range []string{"needs 2147483648 bytes", "only 1048576 free"} {
+		if !strings.Contains(refusal.Error(), want) {
+			t.Errorf("refusal = %q, want it to contain %q", refusal.Error(), want)
+		}
+	}
+}
+
+// Exit 1 and 2 are ordinary failures: only 3 marks a refusal, and every other
+// failure keeps the argv, the exit and the helper's stderr.
+func TestVolumeRunnerRunKeepsExitOneAndTwoOrdinary(t *testing.T) {
+	for _, code := range []int{1, 2} {
+		t.Run("exit "+strconv.Itoa(code), func(t *testing.T) {
+			runner := &VolumeRunner{
+				resolveImage: func(context.Context) (string, error) { return testImage, nil },
+				runDocker: func(_ context.Context, _ []string, _ io.Reader, _, stderr io.Writer) error {
+					_, _ = io.WriteString(stderr, "relist-volhelper: write: permission denied")
+					return exitCodeError(code)
+				},
+			}
+
+			err := runner.Run(context.Background(), volumes.Request{Op: volumes.OpWrite, Path: "notes.txt"}, nil, io.Discard)
+			var refusal *volumes.RefusalError
+			if errors.As(err, &refusal) {
+				t.Fatalf("Run() error = %v, want an ordinary failure, not a refusal", err)
+			}
+			for _, want := range []string{"exit status " + strconv.Itoa(code), "permission denied", "docker run"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Run() error = %v, want it to contain %q", err, want)
+				}
+			}
+		})
 	}
 }
 

@@ -50,6 +50,26 @@ type Request struct {
 	ReadOnly      bool
 }
 
+// RefusalError is a helper refusal: the helper exited 3 before doing the
+// work — a declared upload that cannot fit the Volume's free space, or a
+// stream that overran the free space measured when it began — and Message is
+// the helper's own explanation, naming need against available. Every other
+// non-zero exit is an ordinary failure; this type exists so the HTTP layer
+// can answer 507 Insufficient Storage with the helper's message instead of
+// the 502 every other run failure gets.
+type RefusalError struct {
+	Message string
+}
+
+// Error implements error. A refusal that somehow carried no message still
+// reads as a refusal rather than as an empty failure.
+func (e *RefusalError) Error() string {
+	if e.Message == "" {
+		return "the helper refused the operation"
+	}
+	return e.Message
+}
+
 // Runner is the seam that turns one operation into one helper run. Run
 // streams the operation's bytes over stdin/stdout — write and extract consume
 // stdin, read and archive produce stdout — and returns an error with the

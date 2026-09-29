@@ -1,11 +1,13 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -797,5 +799,384 @@ func TestVolumeOperationsRequireAKnownCompose(t *testing.T) {
 	}
 	if len(server.volumeCLI.ComposeConfigRefs) != 0 {
 		t.Errorf("ComposeConfig calls = %+v, want none without a known compose", server.volumeCLI.ComposeConfigRefs)
+	}
+}
+
+// uploadCap mirrors volumeapi's hard-coded cap: the spec's 1 GiB, the panel's
+// own pre-run bound. The Volume's free space is the helper's check.
+const uploadCap = 1 << 30
+
+// contentPath builds one write operation URL with its query encoded the way
+// the SPA sends it.
+func contentPath(f explorerCompose, query url.Values) string {
+	return composeVolumesPath(f.project.ID, f.production.ID, f.compose.ID) + "/content?" + query.Encode()
+}
+
+// sendUpload sends a write the way the SPA does: the file's bytes as the raw
+// request body, no JSON envelope, with an explicit Content-Length. length
+// overrides the declared length — the 413 test declares more than it sends —
+// and -1 leaves it unknown, the chunked case.
+func sendUpload(t *testing.T, server *testServer, method, path string, body []byte, length int64) *http.Response {
+	t.Helper()
+	var reader io.Reader = bytes.NewReader(body)
+	if length < 0 {
+		// Hiding the concrete reader type keeps httptest from inferring a
+		// length, exactly the shape a chunked request arrives in.
+		reader = struct{ io.Reader }{reader}
+	}
+	request := httptest.NewRequest(method, "http://relist-panel.test"+path, reader)
+	request.ContentLength = length
+	return server.serve(request)
+}
+
+// contentRequest issues one content request: raw bytes for PUT, none for
+// DELETE.
+func contentRequest(t *testing.T, server *testServer, method, path string) *http.Response {
+	t.Helper()
+	if method == http.MethodPut {
+		return sendUpload(t, server, method, path, []byte("bytes"), 5)
+	}
+	return server.request(t, method, path, nil)
+}
+
+// A write — upload or edit, named volume or bind — is exactly one helper run:
+// read-write, the body's bytes as stdin, and the declared length on
+// DeclaredBytes, which the runner turns into `write --expect <n>`.
+func TestVolumeWriteStreamsTheBodyIntoOneReadWriteRun(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	body := []byte("hello \x00 volume\n")
+	tests := []struct {
+		name   string
+		source string
+		path   string
+	}{
+		{name: "upload to a named volume", source: "demoapp_pgdata", path: "uploads/notes.txt"},
+		{name: "edit a file on a bind", source: fixture.presentBind, path: "config/app.yaml"},
+		{name: "upload to an unverifiable bind", source: fixture.unverifiableBind, path: "new.txt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := sendUpload(t, server, http.MethodPut, contentPath(fixture, url.Values{
+				"source": {tt.source},
+				"path":   {tt.path},
+			}), body, int64(len(body)))
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusNoContent {
+				got, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusNoContent, got)
+			}
+		})
+	}
+
+	want := []faketest.Call{
+		{Request: volumes.Request{Source: "demoapp_pgdata", User: "999:998", Op: volumes.OpWrite, Path: "uploads/notes.txt", DeclaredBytes: int64(len(body)), ReadOnly: false}, Stdin: body},
+		{Request: volumes.Request{Source: fixture.presentBind, User: "999:998", Op: volumes.OpWrite, Path: "config/app.yaml", DeclaredBytes: int64(len(body)), ReadOnly: false}, Stdin: body},
+		{Request: volumes.Request{Source: fixture.unverifiableBind, User: "999:998", Op: volumes.OpWrite, Path: "new.txt", DeclaredBytes: int64(len(body)), ReadOnly: false}, Stdin: body},
+	}
+	if !reflect.DeepEqual(server.volumeRunner.Calls, want) {
+		t.Errorf("runner calls =\n\t%+v\nwant\n\t%+v", server.volumeRunner.Calls, want)
+	}
+}
+
+// A write without a declared length — a chunked body — is a 411 and runs
+// nothing: the helper's `--expect` comes from that length, and the panel's
+// own UI always sends Content-Length.
+func TestVolumeWriteRequiresADeclaredLength(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	response := sendUpload(t, server, http.MethodPut, contentPath(fixture, url.Values{
+		"source": {"demoapp_pgdata"},
+		"path":   {"notes.txt"},
+	}), []byte("bytes"), -1)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusLengthRequired {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusLengthRequired, body)
+	}
+	assertErrorContains(t, response, "Content-Length")
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none without a declared length", server.volumeRunner.Calls)
+	}
+}
+
+// The spec's 1 GiB cap: a declared length above it is a 413 before any run,
+// while exactly at the cap is not the panel's to refuse — the helper's
+// free-space check decides that one.
+func TestVolumeWriteRefusesDeclaredLengthsAboveTheCap(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+	query := url.Values{"source": {"demoapp_pgdata"}, "path": {"big.bin"}}
+
+	over := sendUpload(t, server, http.MethodPut, contentPath(fixture, query), []byte("tiny"), uploadCap+1)
+	defer over.Body.Close()
+	if over.StatusCode != http.StatusRequestEntityTooLarge {
+		body, _ := io.ReadAll(over.Body)
+		t.Fatalf("status = %d, want %d, body = %s", over.StatusCode, http.StatusRequestEntityTooLarge, body)
+	}
+	assertErrorContains(t, over, "1 GiB")
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Fatalf("runner calls = %+v, want none above the cap", server.volumeRunner.Calls)
+	}
+
+	atCap := sendUpload(t, server, http.MethodPut, contentPath(fixture, query), []byte("tiny"), uploadCap)
+	defer atCap.Body.Close()
+	if atCap.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(atCap.Body)
+		t.Fatalf("at the cap status = %d, want %d, body = %s", atCap.StatusCode, http.StatusNoContent, body)
+	}
+	calls := server.volumeRunner.Calls
+	if len(calls) != 1 || calls[0].Request.DeclaredBytes != uploadCap {
+		t.Errorf("runner calls = %+v, want one with DeclaredBytes = %d", calls, int64(uploadCap))
+	}
+}
+
+// A helper refusal — exit 3, before any work — is 507 Insufficient Storage
+// carrying the helper's own need-vs-available message. The run happened: the
+// refusal is the helper's, and the panel reports it.
+func TestVolumeWriteRefusalIsInsufficientStorage(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	server.volumeRunner.Err = &volumes.RefusalError{
+		Message: `relist-volhelper: write "big.bin" needs 2147483648 bytes but the Volume has only 1048576 free`,
+	}
+	response := sendUpload(t, server, http.MethodPut, contentPath(fixture, url.Values{
+		"source": {"demoapp_pgdata"},
+		"path":   {"big.bin"},
+	}), []byte("bytes"), 5)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusInsufficientStorage {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusInsufficientStorage, body)
+	}
+	assertErrorContains(t, response, "needs 2147483648 bytes", "only 1048576 free")
+}
+
+// Every other write failure stays the 502 the read operations answer, with
+// the helper's message.
+func TestVolumeWriteFailureIsBadGateway(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	server.volumeRunner.Err = errors.New("docker run ... exit status 1: write: permission denied")
+
+	response := sendUpload(t, server, http.MethodPut, contentPath(fixture, url.Values{
+		"source": {"demoapp_pgdata"},
+		"path":   {"notes.txt"},
+	}), []byte("bytes"), 5)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadGateway {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusBadGateway, body)
+	}
+	assertErrorContains(t, response, "volume write failed", "permission denied")
+}
+
+// A delete — a file or a whole tree — is exactly one read-write helper run,
+// consumes nothing on stdin, and answers 204.
+func TestVolumeDeleteRunsOneReadWriteRun(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	response := server.request(t, http.MethodDelete, contentPath(fixture, url.Values{
+		"source": {"demoapp_pgdata"},
+		"path":   {"old/nested"},
+	}), nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusNoContent, body)
+	}
+
+	want := []faketest.Call{{Request: volumes.Request{
+		Source:   "demoapp_pgdata",
+		User:     "999:998",
+		Op:       volumes.OpDelete,
+		Path:     "old/nested",
+		ReadOnly: false,
+	}}}
+	if !reflect.DeepEqual(server.volumeRunner.Calls, want) {
+		t.Errorf("runner calls =\n\t%+v\nwant\n\t%+v", server.volumeRunner.Calls, want)
+	}
+}
+
+// A delete that fails for any ordinary reason is a 502 with the helper's
+// message; delete is permanent, and the run is the only thing that can refuse
+// it.
+func TestVolumeDeleteFailureIsBadGateway(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	server.volumeRunner.Err = errors.New("docker run ... exit status 1: delete: permission denied")
+
+	response := server.request(t, http.MethodDelete, contentPath(fixture, url.Values{
+		"source": {"demoapp_pgdata"},
+		"path":   {"old/nested"},
+	}), nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadGateway {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusBadGateway, body)
+	}
+	assertErrorContains(t, response, "volume delete failed", "permission denied")
+}
+
+// The Volume root is not an entry to overwrite or delete: absent, empty and
+// "." are all a 400 before any run, on both verbs.
+func TestVolumeContentRefusesTheRootPath(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	tests := []struct {
+		name   string
+		method string
+		query  url.Values
+	}{
+		{name: "PUT absent", method: http.MethodPut, query: url.Values{"source": {"demoapp_pgdata"}}},
+		{name: "PUT empty", method: http.MethodPut, query: url.Values{"source": {"demoapp_pgdata"}, "path": {""}}},
+		{name: "PUT dot", method: http.MethodPut, query: url.Values{"source": {"demoapp_pgdata"}, "path": {"."}}},
+		{name: "DELETE absent", method: http.MethodDelete, query: url.Values{"source": {"demoapp_pgdata"}}},
+		{name: "DELETE empty", method: http.MethodDelete, query: url.Values{"source": {"demoapp_pgdata"}, "path": {""}}},
+		{name: "DELETE dot", method: http.MethodDelete, query: url.Values{"source": {"demoapp_pgdata"}, "path": {"."}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := contentRequest(t, server, tt.method, contentPath(fixture, tt.query))
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusBadRequest {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusBadRequest, body)
+			}
+			assertErrorContains(t, response, "volume root")
+		})
+	}
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none for the volume root", server.volumeRunner.Calls)
+	}
+}
+
+// The write routes share the read pipeline's refusals: an undeclared source
+// is a 404 and a missing volume a 409, each before any run, for PUT and
+// DELETE alike.
+func TestVolumeContentRefusesUndeclaredAndMissingSources(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		t.Run("undeclared source, "+method, func(t *testing.T) {
+			response := contentRequest(t, server, method, contentPath(fixture, url.Values{
+				"source": {"host-etc"},
+				"path":   {"notes.txt"},
+			}))
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusNotFound {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusNotFound, body)
+			}
+			assertErrorContains(t, response, "unknown volume")
+		})
+	}
+
+	server.volumeCLI.VolumeExistsByName["demoapp_pgdata"] = false
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		t.Run("missing volume, "+method, func(t *testing.T) {
+			response := contentRequest(t, server, method, contentPath(fixture, url.Values{
+				"source": {"demoapp_pgdata"},
+				"path":   {"notes.txt"},
+			}))
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusConflict {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusConflict, body)
+			}
+			assertErrorContains(t, response, "demoapp_pgdata", "does not exist")
+		})
+	}
+
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none for refused writes", server.volumeRunner.Calls)
+	}
+}
+
+// Without a containerized panel a write is a 503 with the reason, like every
+// other operation, and neither the Compose CLI nor the runner is touched.
+func TestVolumeContentReportsTheFeatureUnavailable(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+	server.volumeRunner.AvailableErr = errors.New("volume files need a containerized panel whose image the host's Docker can see")
+
+	response := contentRequest(t, server, http.MethodPut, contentPath(fixture, url.Values{
+		"source": {"demoapp_pgdata"},
+		"path":   {"notes.txt"},
+	}))
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusServiceUnavailable {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusServiceUnavailable, body)
+	}
+	assertErrorContains(t, response, "volume files unavailable", "containerized panel")
+	if len(server.volumeCLI.ComposeConfigRefs) != 0 {
+		t.Errorf("ComposeConfig calls = %+v, want none while unavailable", server.volumeCLI.ComposeConfigRefs)
+	}
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none while unavailable", server.volumeRunner.Calls)
+	}
+}
+
+// Every write answers PUT or DELETE only — never GET — so the SameSite=Lax
+// session cookie keeps them CSRF-safe. A GET or POST matches no route at all
+// (the SPA fallback answers 404) and runs nothing.
+func TestVolumeContentNeverAnswersGET(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			response := server.request(t, method, contentPath(fixture, url.Values{
+				"source": {"demoapp_pgdata"},
+				"path":   {"notes.txt"},
+			}), nil)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusNotFound {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d: no route may answer a write, body = %s", response.StatusCode, http.StatusNotFound, body)
+			}
+		})
+	}
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none for a non-write method", server.volumeRunner.Calls)
+	}
+}
+
+// The write routes ride the same middleware as everything else: without a
+// session they are a 401 and nothing runs.
+func TestVolumeContentRequiresAuthentication(t *testing.T) {
+	server := newTestServer(t)
+
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			response := contentRequest(t, server, method, "/api/projects/1/environments/1/composes/1/volumes/content?source=demoapp_pgdata&path=notes.txt")
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusUnauthorized)
+			}
+		})
+	}
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none without a session", server.volumeRunner.Calls)
 	}
 }

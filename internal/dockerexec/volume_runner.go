@@ -24,6 +24,21 @@ const helperEntrypoint = "/usr/local/bin/relist-volhelper"
 // `docker inspect` cannot answer (ADR-0010): the operator names it directly.
 const panelImageEnv = "RELIST_IMAGE"
 
+// helperRefusedExitCode is the helper's exitRefused (3): it refused before
+// doing the work, so the run carries a volumes.RefusalError. Exit 1 and 2 —
+// operation failure and malformed invocation — stay ordinary failures, and
+// docker run propagates the container's own exit code.
+const helperRefusedExitCode = 3
+
+// exitCoder is the shape a failed child leaves behind: *exec.ExitError
+// carries the exit code docker propagated from the helper. It is declared as
+// an interface so the mapping is scriptable without a process.
+type exitCoder interface {
+	ExitCode() int
+}
+
+var _ exitCoder = (*exec.ExitError)(nil)
+
 // VolumeRunner implements volumes.Runner: every operation is its own
 // `docker run --rm` of the panel's own image with the helper as entrypoint,
 // and the container removes itself when the operation ends (ADR-0010).
@@ -52,6 +67,8 @@ func (r *VolumeRunner) Available(ctx context.Context) error {
 
 // Run runs one operation and returns when it has ended. stdin and stdout
 // carry the operation's bytes; stderr is captured into the returned error.
+// A helper refusal — exit 3, before any work — comes back as a
+// *volumes.RefusalError; every other failure is a plain error.
 func (r *VolumeRunner) Run(ctx context.Context, req volumes.Request, stdin io.Reader, stdout io.Writer) error {
 	image, err := r.resolveImage(ctx)
 	if err != nil {
@@ -61,11 +78,19 @@ func (r *VolumeRunner) Run(ctx context.Context, req volumes.Request, stdin io.Re
 	argv := volumeArgv(image, req)
 	var stderr bytes.Buffer
 	if err := r.runDocker(ctx, argv, stdin, stdout, &stderr); err != nil {
+		message := strings.TrimSpace(stderr.String())
+		var exit exitCoder
+		if errors.As(err, &exit) && exit.ExitCode() == helperRefusedExitCode {
+			// The helper refused before doing the work (the spec's Caps):
+			// its message is the whole story — need versus available — and
+			// the HTTP layer answers 507 rather than 502.
+			return &volumes.RefusalError{Message: message}
+		}
 		// A cancelled operator request kills the docker CLI child
 		// (exec.CommandContext); the helper then sees its stdin pipe close
 		// and dies on EOF/EPIPE, and --rm removes the container. Nothing
 		// lingers (ADR-0010).
-		return fmt.Errorf("docker %s: %w: %s", strings.Join(argv, " "), err, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("docker %s: %w: %s", strings.Join(argv, " "), err, message)
 	}
 	return nil
 }

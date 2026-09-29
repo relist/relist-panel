@@ -29,8 +29,9 @@ type Runner struct {
 	// Calls records every Run, in order.
 	Calls []Call
 	// Stdout is written to the caller's writer on every Run, and Err
-	// returned after it. Tests mutate both between calls to script a
-	// sequence.
+	// returned after it — a *volumes.RefusalError included, so the HTTP
+	// seam can script a helper refusal. Tests mutate both between calls
+	// to script a sequence.
 	Stdout string
 	Err    error
 	// AvailableErr is returned by Available; the zero value — nil — answers

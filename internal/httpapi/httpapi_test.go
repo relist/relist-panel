@@ -2591,6 +2591,13 @@ func (s *testServer) request(t *testing.T, method, path string, value any) *http
 	if value != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
+	return s.serve(request)
+}
+
+// serve runs one request through the server's handler and refreshes the
+// stored cookies from the response, the same way request does. It exists for
+// bodies request cannot carry: raw upload bytes with a declared length.
+func (s *testServer) serve(request *http.Request) *http.Response {
 	for _, cookie := range s.cookies {
 		request.AddCookie(cookie)
 	}
