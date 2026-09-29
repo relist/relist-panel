@@ -30,6 +30,12 @@ const panelImageEnv = "RELIST_IMAGE"
 // docker run propagates the container's own exit code.
 const helperRefusedExitCode = 3
 
+// helperArchiveRefusedExitCode is the helper's exitArchiveRefused (4): the
+// bytes on stdin were not a usable tar.gz, named an entry unsafe to write, or
+// ran past a restore cap — the client's body's fault, not the Volume's — so
+// the run carries a volumes.ArchiveRefusedError for the HTTP layer's 422.
+const helperArchiveRefusedExitCode = 4
+
 // exitCoder is the shape a failed child leaves behind: *exec.ExitError
 // carries the exit code docker propagated from the helper. It is declared as
 // an interface so the mapping is scriptable without a process.
@@ -68,7 +74,8 @@ func (r *VolumeRunner) Available(ctx context.Context) error {
 // Run runs one operation and returns when it has ended. stdin and stdout
 // carry the operation's bytes; stderr is captured into the returned error.
 // A helper refusal — exit 3, before any work — comes back as a
-// *volumes.RefusalError; every other failure is a plain error.
+// *volumes.RefusalError, and an archive refusal — exit 4 — as a
+// *volumes.ArchiveRefusedError; every other failure is a plain error.
 func (r *VolumeRunner) Run(ctx context.Context, req volumes.Request, stdin io.Reader, stdout io.Writer) error {
 	image, err := r.resolveImage(ctx)
 	if err != nil {
@@ -80,11 +87,22 @@ func (r *VolumeRunner) Run(ctx context.Context, req volumes.Request, stdin io.Re
 	if err := r.runDocker(ctx, argv, stdin, stdout, &stderr); err != nil {
 		message := strings.TrimSpace(stderr.String())
 		var exit exitCoder
-		if errors.As(err, &exit) && exit.ExitCode() == helperRefusedExitCode {
-			// The helper refused before doing the work (the spec's Caps):
-			// its message is the whole story — need versus available — and
-			// the HTTP layer answers 507 rather than 502.
-			return &volumes.RefusalError{Message: message}
+		if errors.As(err, &exit) {
+			switch exit.ExitCode() {
+			case helperRefusedExitCode:
+				// The helper refused before doing the work (the spec's
+				// Caps): its message is the whole story — need versus
+				// available — and the HTTP layer answers 507 rather than
+				// 502.
+				return &volumes.RefusalError{Message: message}
+			case helperArchiveRefusedExitCode:
+				// The helper refused the bytes it was fed (the spec's
+				// Restore): an unsafe entry, a restore cap exceeded, or a
+				// body that is not a usable tar.gz. The body is the
+				// client's, and the HTTP layer answers 422 rather than
+				// 502.
+				return &volumes.ArchiveRefusedError{Message: message}
+			}
 		}
 		// A cancelled operator request kills the docker CLI child
 		// (exec.CommandContext); the helper then sees its stdin pipe close

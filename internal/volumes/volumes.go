@@ -70,6 +70,26 @@ func (e *RefusalError) Error() string {
 	return e.Message
 }
 
+// ArchiveRefusedError is a helper refusal of the bytes it was fed: the helper
+// exited 4 because the stream was not a usable tar.gz, named an entry unsafe
+// to write, or ran past one of the restore caps, and Message is the helper's
+// own explanation, naming the offending entry where one is known. The body is
+// the client's, so this type exists so the HTTP layer can answer 422
+// Unprocessable Content with the helper's message instead of the 502 every
+// other run failure gets — or the 507 a space refusal gets.
+type ArchiveRefusedError struct {
+	Message string
+}
+
+// Error implements error. A refusal that somehow carried no message still
+// reads as an archive refusal rather than as an empty failure.
+func (e *ArchiveRefusedError) Error() string {
+	if e.Message == "" {
+		return "the helper refused the archive"
+	}
+	return e.Message
+}
+
 // Runner is the seam that turns one operation into one helper run. Run
 // streams the operation's bytes over stdin/stdout — write and extract consume
 // stdin, read and archive produce stdout — and returns an error with the

@@ -57,3 +57,19 @@ func TestRunnerRecordsCallsAndScriptsAnswers(t *testing.T) {
 		t.Errorf("second call recorded stdin = %q, want empty", fake.Calls[1].Stdin)
 	}
 }
+
+// A typed archive refusal survives the fake unchanged, the same error the
+// real runner builds from helper exit 4, so the HTTP seam scripts the
+// message its 422 will carry.
+func TestRunnerCarriesATypedArchiveRefusal(t *testing.T) {
+	fake := &faketest.Runner{Err: &volumes.ArchiveRefusedError{Message: "unsafe archive entry: ../escape"}}
+
+	err := fake.Run(context.Background(), volumes.Request{Op: volumes.OpExtract, Path: "uploads"}, nil, nil)
+	var refusal *volumes.ArchiveRefusedError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Run() error = %v, want a *volumes.ArchiveRefusedError", err)
+	}
+	if refusal.Message != "unsafe archive entry: ../escape" {
+		t.Errorf("refusal = %q, want the scripted message", refusal.Error())
+	}
+}

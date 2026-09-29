@@ -1,12 +1,12 @@
 // Package volumeapi owns the Volume Explorer's HTTP surface: one Compose's
 // resolved Volumes with their pre-flight status, the uid/gid an operation per
 // Service would run as, whether the feature can run at all, and the
-// operations themselves — the reads (list, stat, read and archive) and the
-// writes (write, over a request body, and delete) — each one
-// `docker run --rm` through the volumes.Runner seam (ADR-0010). It owns no
-// SQL and derives no paths — composes.ComposeRunRequest carries the Compose's
-// deploy identity and volumes.Resolver does the reading through the Compose
-// CLI.
+// operations themselves — the reads (list, stat, read and archive), the
+// writes (write, over a request body, and delete), and the restore of a
+// tar.gz streamed into extract — each one `docker run --rm` through the
+// volumes.Runner seam (ADR-0010). It owns no SQL and derives no paths —
+// composes.ComposeRunRequest carries the Compose's deploy identity and
+// volumes.Resolver does the reading through the Compose CLI.
 package volumeapi
 
 import (
@@ -38,8 +38,9 @@ func New(composeService *composes.Service, resolver *volumes.Resolver, runner vo
 // RegisterRoutes adds the authenticated Volume Explorer endpoints to mux: the
 // listing of a Compose's resolved Volumes, the per-operation reads (archive
 // included), and the per-operation writes — content answers PUT for an
-// upload or edit and DELETE for a file or a tree, never GET, so the
-// SameSite=Lax session cookie keeps them CSRF-safe.
+// upload or edit and DELETE for a file or a tree, and restore answers PUT
+// for a tar.gz streamed into extract — never GET, so the SameSite=Lax
+// session cookie keeps them CSRF-safe.
 func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes", s.list)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/list", s.listFiles)
@@ -48,6 +49,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/archive", s.archive)
 	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/content", s.writeFile)
 	mux.HandleFunc("DELETE /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/content", s.deleteFile)
+	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/restore", s.restore)
 }
 
 // list answers one Compose's resolved Volumes and every Service's operation

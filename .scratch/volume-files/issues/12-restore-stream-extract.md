@@ -10,8 +10,8 @@ the sharpest edge in the feature, so this lands last.
 
 - [x] `internal/volfs` gains `extract`: every entry is validated **before it is written** — names relative and free of `..` segments, no absolute paths, symlink and hardlink entries refused outright — and a refusal aborts the rest of the stream
 - [x] The helper gains `extract -- <relpath>`, consuming the tar.gz on stdin; the target is a directory relative to `/data` that must already exist, directories inside the archive are created, existing files are overwritten and directories merge
-- [ ] One HTTP endpoint streams the request body straight into the run's stdin with the Volume mounted `:rw` — upload and extract are one operation, and nothing is staged on the panel's disk
-- [ ] Caps enforced end to end: compressed ≤ 1 GiB on the request body, uncompressed ≤ 4 GiB and ≤ 10k entries counted by the helper as it streams
+- [x] One HTTP endpoint streams the request body straight into the run's stdin with the Volume mounted `:rw` — upload and extract are one operation, and nothing is staged on the panel's disk
+- [x] Caps enforced end to end: compressed ≤ 1 GiB on the request body, uncompressed ≤ 4 GiB and ≤ 10k entries counted by the helper as it streams
 - [ ] The UI discloses, before the operator runs it, that a stream that fails mid-way leaves the entries already written in place — extraction is partial, there is no transaction across a stream — and names the target directory
 - [ ] Tests against malicious archives: `..` entries, absolute entries, symlink and hardlink entries, and the entry-count and uncompressed-size caps
 
@@ -67,3 +67,21 @@ proven unread; an absolute path exits 2. Spec: the op list already carried `extr
 the Protocol paragraph gained exit 4. Evidence under `golang:1.27-alpine`: `gofmt -l .`
 silent, `go vet ./...` clean, `go test ./...` all green. Still open: the streaming endpoint and the
 UI disclosure (session 3/3).
+
+**session 3/4:** the restore endpoint landed. `PUT .../volumes/restore?source=&path=&user=&service=`
+rides the existing pipeline unchanged (availability 503 → Compose 404 → membership 404 → pre-flight
+`missing` 409 / `unverifiable` proceeds → user/path 400), then streams the raw request body into
+exactly one read-write `extract` run's stdin — `OpExtract`, `ReadOnly: false`, nothing staged on the
+panel's disk. `path` is the target directory, so unlike the write family the Volume root is legal:
+absent, empty or `.` runs against `.`; a leading `/` is still a 400. The declared length is required
+(chunked → **411**) and checked against the spec's 1 GiB compressed cap (**413**), both before any
+run; success is **204**. `dockerexec.VolumeRunner` maps helper exit **4** to the new typed
+`volumes.ArchiveRefusedError`, answered **422** with the helper's own message (unsafe entry, cap
+exceeded, unusable tar.gz — the body is the client's); exit 3 stays `RefusalError` → 507 and every
+other failure 502. HTTP-seam tests, no real Docker: the recorded run (`OpExtract`, `ReadOnly:
+false`, target path, body as stdin) for a named volume, a bind and an unverifiable bind; the 411 and
+413 refusals with no run; 422 carrying the helper's message; the 507/502 mapping; the legal root vs.
+a leading-`/` 400; and the pipeline refusals (unknown Compose, undeclared source, missing
+volume/bind, unavailable feature) each with no run. Evidence under `golang:1.27-alpine`:
+`gofmt -l .` silent, `go vet ./...` clean, `go test ./...` all green. Still open: the UI disclosure
+(session 4/4).

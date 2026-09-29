@@ -1180,3 +1180,300 @@ func TestVolumeContentRequiresAuthentication(t *testing.T) {
 		t.Errorf("runner calls = %+v, want none without a session", server.volumeRunner.Calls)
 	}
 }
+
+// restoreCap mirrors volumeapi's hard-coded compressed cap: the spec's 1 GiB
+// on the request body, the panel's own pre-run bound. The uncompressed and
+// entry caps are the helper's, counted as it streams.
+const restoreCap = 1 << 30
+
+// restorePath builds one restore URL with its query encoded the way the SPA
+// sends it.
+func restorePath(f explorerCompose, query url.Values) string {
+	return composeVolumesPath(f.project.ID, f.production.ID, f.compose.ID) + "/restore?" + query.Encode()
+}
+
+// restoreRequest sends a restore the way the SPA does: the tar.gz as the raw
+// request body, no JSON envelope, with an explicit Content-Length. length
+// overrides the declared length — the 413 test declares more than it sends —
+// and -1 leaves it unknown, the chunked case.
+func restoreRequest(t *testing.T, server *testServer, path string, body []byte, length int64) *http.Response {
+	t.Helper()
+	return sendUpload(t, server, http.MethodPut, path, body, length)
+}
+
+// A restore — into a named volume, a bind or an unverifiable bind — is exactly
+// one helper run: read-write, `extract`, the target path, and the tar.gz
+// body's bytes as stdin, answered 204. The panel interprets nothing in the
+// body; no size is declared to the helper, because `--expect` is write's.
+func TestVolumeRestoreStreamsTheBodyIntoOneReadWriteRun(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	body := []byte("\x1f\x8b\x08\x00restore tar gz bytes\x00\xff")
+	tests := []struct {
+		name   string
+		source string
+		path   string
+	}{
+		{name: "into a named volume", source: "demoapp_pgdata", path: "uploads/restored"},
+		{name: "into a bind", source: fixture.presentBind, path: "restored"},
+		{name: "into an unverifiable bind", source: fixture.unverifiableBind, path: "restored"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := restoreRequest(t, server, restorePath(fixture, url.Values{
+				"source": {tt.source},
+				"path":   {tt.path},
+			}), body, int64(len(body)))
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusNoContent {
+				got, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusNoContent, got)
+			}
+		})
+	}
+
+	want := []faketest.Call{
+		{Request: volumes.Request{Source: "demoapp_pgdata", User: "999:998", Op: volumes.OpExtract, Path: "uploads/restored", ReadOnly: false}, Stdin: body},
+		{Request: volumes.Request{Source: fixture.presentBind, User: "999:998", Op: volumes.OpExtract, Path: "restored", ReadOnly: false}, Stdin: body},
+		{Request: volumes.Request{Source: fixture.unverifiableBind, User: "999:998", Op: volumes.OpExtract, Path: "restored", ReadOnly: false}, Stdin: body},
+	}
+	if !reflect.DeepEqual(server.volumeRunner.Calls, want) {
+		t.Errorf("runner calls =\n\t%+v\nwant\n\t%+v", server.volumeRunner.Calls, want)
+	}
+}
+
+// The restore target is the directory to extract into, so the path rule is
+// the read family's, not the write family's: the Volume root is legal —
+// absent, empty and "." all run against "." — and the target's existence is
+// the helper's check. A leading slash is still a 400 before any run.
+func TestVolumeRestoreRootIsLegalAndAbsolutePathsAreRefused(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	body := []byte("\x1f\x8b\x08\x00tar.gz bytes")
+	rootTargets := []struct {
+		name  string
+		query url.Values
+	}{
+		{name: "absent", query: url.Values{"source": {"demoapp_pgdata"}}},
+		{name: "empty", query: url.Values{"source": {"demoapp_pgdata"}, "path": {""}}},
+		{name: "dot", query: url.Values{"source": {"demoapp_pgdata"}, "path": {"."}}},
+	}
+	for _, tt := range rootTargets {
+		t.Run("root, "+tt.name, func(t *testing.T) {
+			response := restoreRequest(t, server, restorePath(fixture, tt.query), body, int64(len(body)))
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusNoContent {
+				got, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusNoContent, got)
+			}
+			last := server.volumeRunner.Calls[len(server.volumeRunner.Calls)-1].Request
+			if last.Path != "." {
+				t.Errorf("path = %q, want the volume root %q", last.Path, ".")
+			}
+		})
+	}
+
+	before := len(server.volumeRunner.Calls)
+	absolute := restoreRequest(t, server, restorePath(fixture, url.Values{
+		"source": {"demoapp_pgdata"},
+		"path":   {"/etc/passwd"},
+	}), body, int64(len(body)))
+	defer absolute.Body.Close()
+	if absolute.StatusCode != http.StatusBadRequest {
+		got, _ := io.ReadAll(absolute.Body)
+		t.Fatalf("absolute path status = %d, want %d, body = %s", absolute.StatusCode, http.StatusBadRequest, got)
+	}
+	assertErrorContains(t, absolute, "relative to the volume root")
+	if len(server.volumeRunner.Calls) != before {
+		t.Errorf("runner calls = %+v, want an absolute path refused without a run", server.volumeRunner.Calls[before:])
+	}
+}
+
+// The compressed cap is the panel's own, on the declared length and before
+// any run: a chunked body has no length to check — 411 — while a declared
+// length above 1 GiB is a 413. Exactly at the cap is not the panel's to
+// refuse; the helper's own caps decide what the bytes contain.
+func TestVolumeRestoreRequiresADeclaredLengthAndCapsIt(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+	query := url.Values{"source": {"demoapp_pgdata"}, "path": {"restored"}}
+
+	chunked := restoreRequest(t, server, restorePath(fixture, query), []byte("bytes"), -1)
+	defer chunked.Body.Close()
+	if chunked.StatusCode != http.StatusLengthRequired {
+		got, _ := io.ReadAll(chunked.Body)
+		t.Fatalf("status = %d, want %d, body = %s", chunked.StatusCode, http.StatusLengthRequired, got)
+	}
+	assertErrorContains(t, chunked, "Content-Length")
+
+	over := restoreRequest(t, server, restorePath(fixture, query), []byte("tiny"), restoreCap+1)
+	defer over.Body.Close()
+	if over.StatusCode != http.StatusRequestEntityTooLarge {
+		got, _ := io.ReadAll(over.Body)
+		t.Fatalf("status = %d, want %d, body = %s", over.StatusCode, http.StatusRequestEntityTooLarge, got)
+	}
+	assertErrorContains(t, over, "1 GiB")
+
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Fatalf("runner calls = %+v, want none without a usable declared length", server.volumeRunner.Calls)
+	}
+
+	atCap := restoreRequest(t, server, restorePath(fixture, query), []byte("tiny"), restoreCap)
+	defer atCap.Body.Close()
+	if atCap.StatusCode != http.StatusNoContent {
+		got, _ := io.ReadAll(atCap.Body)
+		t.Fatalf("at the cap status = %d, want %d, body = %s", atCap.StatusCode, http.StatusNoContent, got)
+	}
+}
+
+// The helper's archive refusal — exit 4: an unsafe entry, a restore cap
+// exceeded, or a body that is not a usable tar.gz — is a 422 carrying the
+// helper's own message, because the body is the client's, not the Volume's.
+// The run happened: only the helper can judge the archive.
+func TestVolumeRestoreArchiveRefusalIsUnprocessable(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	server.volumeRunner.Err = &volumes.ArchiveRefusedError{
+		Message: `relist-volhelper: extract "restored": unsafe archive entry: entry "../escape" has a ".." segment`,
+	}
+	body := []byte("\x1f\x8b\x08\x00not really a tar")
+	response := restoreRequest(t, server, restorePath(fixture, url.Values{
+		"source": {"demoapp_pgdata"},
+		"path":   {"restored"},
+	}), body, int64(len(body)))
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusUnprocessableEntity {
+		got, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusUnprocessableEntity, got)
+	}
+	assertErrorContains(t, response, "unsafe archive entry", `"../escape"`)
+
+	calls := server.volumeRunner.Calls
+	if len(calls) != 1 || calls[0].Request.Op != volumes.OpExtract || string(calls[0].Stdin) != string(body) {
+		t.Errorf("runner calls = %+v, want one extract that consumed the body", calls)
+	}
+}
+
+// A space refusal — exit 3 — keeps the write family's 507 Insufficient
+// Storage, and every other restore failure stays the 502 the read operations
+// answer.
+func TestVolumeRestoreFailureMapping(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+	query := url.Values{"source": {"demoapp_pgdata"}, "path": {"restored"}}
+	body := []byte("bytes")
+
+	t.Run("space refusal is 507", func(t *testing.T) {
+		server.volumeRunner.Err = &volumes.RefusalError{
+			Message: `relist-volhelper: extract "restored": no space left on device`,
+		}
+		response := restoreRequest(t, server, restorePath(fixture, query), body, int64(len(body)))
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusInsufficientStorage {
+			got, _ := io.ReadAll(response.Body)
+			t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusInsufficientStorage, got)
+		}
+		assertErrorContains(t, response, "no space left on device")
+	})
+
+	t.Run("ordinary failure is 502", func(t *testing.T) {
+		server.volumeRunner.Err = errors.New("docker run ... exit status 1: extract: permission denied")
+		response := restoreRequest(t, server, restorePath(fixture, query), body, int64(len(body)))
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusBadGateway {
+			got, _ := io.ReadAll(response.Body)
+			t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusBadGateway, got)
+		}
+		assertErrorContains(t, response, "volume extract failed", "permission denied")
+	})
+}
+
+// The restore route is an ordinary child of the Compose routes — an unknown
+// Compose is a 404 and nothing resolves or runs — and it shares the write
+// family's pipeline: an undeclared source is a 404 and a missing volume or
+// bind a 409, each before any helper run.
+func TestVolumeRestoreRefusesUndeclaredAndMissingSources(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	unknown := restoreRequest(t, server, composeVolumesPath(fixture.project.ID, fixture.production.ID, 999)+"/restore?source=demoapp_pgdata", []byte("bytes"), 5)
+	defer unknown.Body.Close()
+	if unknown.StatusCode != http.StatusNotFound {
+		got, _ := io.ReadAll(unknown.Body)
+		t.Fatalf("unknown compose status = %d, want %d, body = %s", unknown.StatusCode, http.StatusNotFound, got)
+	}
+	if len(server.volumeCLI.ComposeConfigRefs) != 0 {
+		t.Errorf("ComposeConfig calls = %+v, want none without a known compose", server.volumeCLI.ComposeConfigRefs)
+	}
+
+	undeclared := restoreRequest(t, server, restorePath(fixture, url.Values{
+		"source": {"host-etc"},
+		"path":   {"restored"},
+	}), []byte("bytes"), 5)
+	defer undeclared.Body.Close()
+	if undeclared.StatusCode != http.StatusNotFound {
+		got, _ := io.ReadAll(undeclared.Body)
+		t.Fatalf("undeclared source status = %d, want %d, body = %s", undeclared.StatusCode, http.StatusNotFound, got)
+	}
+	assertErrorContains(t, undeclared, "unknown volume")
+
+	server.volumeCLI.VolumeExistsByName["demoapp_pgdata"] = false
+	missing := []struct {
+		name   string
+		source string
+	}{
+		{name: "named volume", source: "demoapp_pgdata"},
+		{name: "bind", source: fixture.missingBind},
+	}
+	for _, tt := range missing {
+		t.Run("missing "+tt.name, func(t *testing.T) {
+			response := restoreRequest(t, server, restorePath(fixture, url.Values{
+				"source": {tt.source},
+				"path":   {"restored"},
+			}), []byte("bytes"), 5)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusConflict {
+				got, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusConflict, got)
+			}
+			assertErrorContains(t, response, "does not exist")
+		})
+	}
+
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none for refused restores", server.volumeRunner.Calls)
+	}
+}
+
+// Without a containerized panel a restore is a 503 with the reason, like
+// every other operation, and neither the Compose CLI nor the runner is
+// touched.
+func TestVolumeRestoreReportsTheFeatureUnavailable(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+	server.volumeRunner.AvailableErr = errors.New("volume files need a containerized panel whose image the host's Docker can see")
+
+	response := restoreRequest(t, server, restorePath(fixture, url.Values{"source": {"demoapp_pgdata"}}), []byte("bytes"), 5)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusServiceUnavailable {
+		got, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusServiceUnavailable, got)
+	}
+	assertErrorContains(t, response, "volume files unavailable", "containerized panel")
+	if len(server.volumeCLI.ComposeConfigRefs) != 0 {
+		t.Errorf("ComposeConfig calls = %+v, want none while unavailable", server.volumeCLI.ComposeConfigRefs)
+	}
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none while unavailable", server.volumeRunner.Calls)
+	}
+}

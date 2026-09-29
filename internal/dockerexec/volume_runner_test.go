@@ -303,6 +303,35 @@ func TestVolumeRunnerRunMapsHelperRefusal(t *testing.T) {
 	}
 }
 
+// Exit 4 is the helper's archive refusal — the bytes on stdin were not
+// something it could safely extract — so the run comes back as a typed
+// ArchiveRefusedError carrying the helper's own message, which is what the
+// HTTP layer maps to 422 rather than 502. It is not a space refusal.
+func TestVolumeRunnerRunMapsArchiveRefusal(t *testing.T) {
+	runner := &VolumeRunner{
+		resolveImage: func(context.Context) (string, error) { return testImage, nil },
+		runDocker: func(_ context.Context, _ []string, _ io.Reader, _, stderr io.Writer) error {
+			_, _ = io.WriteString(stderr, "relist-volhelper: extract \"uploads\": unsafe archive entry: entry \"../escape\" has a \"..\" segment\n")
+			return exitCodeError(4)
+		},
+	}
+
+	err := runner.Run(context.Background(), volumes.Request{Op: volumes.OpExtract, Path: "uploads"}, nil, io.Discard)
+	var refusal *volumes.ArchiveRefusedError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Run() error = %v, want a *volumes.ArchiveRefusedError", err)
+	}
+	for _, want := range []string{"unsafe archive entry", `"../escape"`, `".." segment`} {
+		if !strings.Contains(refusal.Error(), want) {
+			t.Errorf("refusal = %q, want it to contain %q", refusal.Error(), want)
+		}
+	}
+	var spaceRefusal *volumes.RefusalError
+	if errors.As(err, &spaceRefusal) {
+		t.Errorf("Run() error = %v, want an archive refusal, not a space refusal", err)
+	}
+}
+
 // Exit 1 and 2 are ordinary failures: only 3 marks a refusal, and every other
 // failure keeps the argv, the exit and the helper's stderr.
 func TestVolumeRunnerRunKeepsExitOneAndTwoOrdinary(t *testing.T) {
