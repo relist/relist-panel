@@ -1,8 +1,9 @@
-// Package dockerexec implements the system's Docker ports by talking to the
-// host's mounted Docker socket: composes.ComposeRunner by shelling out to
-// the `docker compose` CLI (ADR-0002), and hostmetrics.ContainerSource by
-// calling the stats API over the same socket (ADR-0006) — one adapter
-// package for the ports declared in their consumers (ADR-0003).
+// Package dockerexec implements the system's Docker ports: composes.ComposeRunner
+// by shelling out to the `docker compose` CLI (ADR-0002), volumes.Runner by one
+// `docker run --rm` per Volume operation over the same CLI (ADR-0010), and
+// hostmetrics.ContainerSource by calling the stats API over the mounted Docker
+// socket (ADR-0006) — one adapter package for the ports declared in their
+// consumers (ADR-0003).
 package dockerexec
 
 import (

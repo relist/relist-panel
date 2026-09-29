@@ -1,0 +1,55 @@
+// Package faketest provides the test double for volumes.Runner that the
+// spec's Testing Decisions call for: HTTP-seam tests install it in place of
+// the real `docker run --rm` adapter, script the helper's answers, and assert
+// exactly what would have run — all with no Docker in them. It lives in its
+// own package so nothing but tests imports it.
+package faketest
+
+import (
+	"context"
+	"io"
+
+	"relist-panel/internal/volumes"
+)
+
+// Call is one Run the fake served: the Request as it was passed (source,
+// user, op, path, read-only) plus the bytes drained from stdin. Stdout is not
+// recorded — tests script it.
+type Call struct {
+	Request volumes.Request
+	Stdin   []byte
+}
+
+// Runner is a scripted volumes.Runner. Its zero value records calls and
+// answers with an empty stdout and no error.
+type Runner struct {
+	// Calls records every Run, in order.
+	Calls []Call
+	// Stdout is written to the caller's writer on every Run, and Err
+	// returned after it. Tests mutate both between calls to script a
+	// sequence.
+	Stdout string
+	Err    error
+}
+
+// Run implements volumes.Runner.
+func (f *Runner) Run(_ context.Context, req volumes.Request, stdin io.Reader, stdout io.Writer) error {
+	call := Call{Request: req}
+	if stdin != nil {
+		data, err := io.ReadAll(stdin)
+		if err != nil {
+			return err
+		}
+		call.Stdin = data
+	}
+	f.Calls = append(f.Calls, call)
+
+	if f.Stdout != "" && stdout != nil {
+		if _, err := io.WriteString(stdout, f.Stdout); err != nil {
+			return err
+		}
+	}
+	return f.Err
+}
+
+var _ volumes.Runner = (*Runner)(nil)
