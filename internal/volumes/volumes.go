@@ -50,6 +50,12 @@ type Request struct {
 // streams the operation's bytes over stdin/stdout — write and extract consume
 // stdin, read and archive produce stdout — and returns an error with the
 // helper's stderr folded in. Nothing is staged on either side of it.
+//
+// Available reports whether the feature can work at all: the helper runs out
+// of the panel's own image, so a panel running as a bare binary or without
+// the Docker socket must say so — with a message the UI can show — before any
+// screen offers the Explorer.
 type Runner interface {
+	Available(ctx context.Context) error
 	Run(ctx context.Context, req Request, stdin io.Reader, stdout io.Writer) error
 }

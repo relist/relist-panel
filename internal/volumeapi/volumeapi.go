@@ -1,0 +1,206 @@
+// Package volumeapi owns the Volume Explorer's read HTTP surface: one
+// Compose's resolved Volumes with their pre-flight status, the uid/gid an
+// operation per Service would run as, and whether the feature can run at all.
+// It owns no SQL and derives no paths — composes.ComposeRunRequest carries the
+// Compose's deploy identity and volumes.Resolver does the reading through the
+// Compose CLI (ADR-0010).
+package volumeapi
+
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strconv"
+
+	"relist-panel/internal/composes"
+	"relist-panel/internal/volumes"
+)
+
+// Service is the HTTP surface over one Compose's resolved Volumes.
+type Service struct {
+	composes *composes.Service
+	resolver *volumes.Resolver
+	runner   volumes.Runner
+}
+
+// New constructs the Volume Explorer's read service. composeService loads a
+// Compose's deploy identity; resolver is the read side (resolution and
+// pre-flight); runner is the operation seam whose Available probe gates the
+// feature.
+func New(composeService *composes.Service, resolver *volumes.Resolver, runner volumes.Runner) *Service {
+	return &Service{composes: composeService, resolver: resolver, runner: runner}
+}
+
+// RegisterRoutes adds the authenticated Volume Explorer read endpoints to mux.
+func (s *Service) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes", s.list)
+}
+
+// list answers one Compose's resolved Volumes and every Service's operation
+// identity. Availability comes first: without a containerized panel there is
+// nothing the UI can do, so the reason is the answer rather than a failed
+// resolution. The resolution itself is the Compose CLI's — the panel never
+// parses YAML for paths — and a resolution failure, `couldn't find env file`
+// before the first deploy included, surfaces the CLI's own message with a Bad
+// Gateway status, like every other runner failure.
+func (s *Service) list(w http.ResponseWriter, r *http.Request) {
+	projectID, environmentID, err := routeIDs(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	composeID, err := parsePositiveID(r.PathValue("composeID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
+		return
+	}
+
+	req, err := s.composes.ComposeRunRequest(r.Context(), projectID, environmentID, composeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "compose not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return
+	}
+
+	if err := s.runner.Available(r.Context()); err != nil {
+		writeJSON(w, http.StatusOK, response{
+			Available: false,
+			Reason:    err.Error(),
+			Volumes:   []volumeResponse{},
+			Services:  []serviceResponse{},
+		})
+		return
+	}
+
+	resolution, err := s.resolver.Resolve(r.Context(), volumes.ComposeRef{
+		ProjectName:     req.ProjectName,
+		ComposeFilePath: req.ComposeFilePath,
+		EnvFilePath:     req.EnvFilePath,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "volume resolution failed: "+err.Error())
+		return
+	}
+
+	resolvedVolumes := make([]volumeResponse, 0, len(resolution.Volumes))
+	for _, volume := range resolution.Volumes {
+		preflight, err := s.resolver.Preflight(r.Context(), volume)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "volume pre-flight failed: "+err.Error())
+			return
+		}
+		resolvedVolumes = append(resolvedVolumes, volumeResponseOf(volume, preflight))
+	}
+	services := make([]serviceResponse, 0, len(resolution.Users))
+	for _, user := range resolution.Users {
+		services = append(services, serviceResponse{
+			Service: user.Service,
+			User:    user.User,
+			Source:  user.Source,
+			Warning: user.Warning,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, response{
+		Available: true,
+		Volumes:   resolvedVolumes,
+		Services:  services,
+	})
+}
+
+// response is the wire shape: the feature flag, and when available the
+// Compose's resolved Volumes and Services. Reason is present only when the
+// feature is unavailable.
+type response struct {
+	Available bool              `json:"available"`
+	Reason    string            `json:"reason,omitempty"`
+	Volumes   []volumeResponse  `json:"volumes"`
+	Services  []serviceResponse `json:"services"`
+}
+
+// volumeResponse is one Volume on the wire, camelCased like the rest of the
+// API.
+type volumeResponse struct {
+	Kind        volumes.VolumeKind `json:"kind"`
+	LogicalName string             `json:"logicalName"`
+	Source      string             `json:"source"`
+	Uses        []useResponse      `json:"uses"`
+	Preflight   preflightResponse  `json:"preflight"`
+}
+
+// useResponse is one Service's mount of a Volume.
+type useResponse struct {
+	Service  string `json:"service"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"readOnly"`
+}
+
+// preflightResponse is the mount-safety outcome for a Volume.
+type preflightResponse struct {
+	Status  volumes.PreflightStatus `json:"status"`
+	Warning string                  `json:"warning"`
+}
+
+// serviceResponse is one Service's operation identity.
+type serviceResponse struct {
+	Service string             `json:"service"`
+	User    string             `json:"user"`
+	Source  volumes.UserSource `json:"source"`
+	Warning string             `json:"warning"`
+}
+
+func volumeResponseOf(volume volumes.Volume, preflight volumes.Preflight) volumeResponse {
+	uses := make([]useResponse, 0, len(volume.Uses))
+	for _, use := range volume.Uses {
+		uses = append(uses, useResponse{
+			Service:  use.Service,
+			Target:   use.Target,
+			ReadOnly: use.ReadOnly,
+		})
+	}
+	return volumeResponse{
+		Kind:        volume.Kind,
+		LogicalName: volume.LogicalName,
+		Source:      volume.Source,
+		Uses:        uses,
+		Preflight: preflightResponse{
+			Status:  preflight.Status,
+			Warning: preflight.Warning,
+		},
+	}
+}
+
+// routeIDs parses the two parent ids the Compose routes share, with the same
+// messages they use.
+func routeIDs(r *http.Request) (int64, int64, error) {
+	projectID, err := parsePositiveID(r.PathValue("projectID"))
+	if err != nil {
+		return 0, 0, errors.New("project id must be a positive integer")
+	}
+	environmentID, err := parsePositiveID(r.PathValue("environmentID"))
+	if err != nil {
+		return 0, 0, errors.New("environment id must be a positive integer")
+	}
+	return projectID, environmentID, nil
+}
+
+func parsePositiveID(value string) (int64, error) {
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, errors.New("id must be a positive integer")
+	}
+	return id, nil
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
+}

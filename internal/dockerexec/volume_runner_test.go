@@ -298,3 +298,43 @@ func TestVolumeRunnerRunStopsWhenTheImageCannotBeResolved(t *testing.T) {
 		t.Errorf("Run() error = %v, want the image resolution failure", err)
 	}
 }
+
+// Available is the feature-availability probe: it resolves the panel image,
+// the one thing every helper run needs before it can start.
+func TestVolumeRunnerAvailableResolvesThePanelImage(t *testing.T) {
+	resolved := false
+	runner := &VolumeRunner{
+		resolveImage: func(context.Context) (string, error) {
+			resolved = true
+			return testImage, nil
+		},
+	}
+
+	if err := runner.Available(context.Background()); err != nil {
+		t.Fatalf("Available() error = %v", err)
+	}
+	if !resolved {
+		t.Error("Available() did not resolve the image")
+	}
+}
+
+// A native binary run or a missing Docker socket must say the feature needs a
+// containerized panel, in words the UI can show, rather than failing on the
+// first operation.
+func TestVolumeRunnerAvailableNeedsAContainerizedPanel(t *testing.T) {
+	runner := &VolumeRunner{
+		resolveImage: func(context.Context) (string, error) {
+			return "", errors.New("could not resolve the panel image: docker inspect failed and RELIST_IMAGE is unset")
+		},
+	}
+
+	err := runner.Available(context.Background())
+	if err == nil {
+		t.Fatal("Available() = nil error, want the image resolution failure")
+	}
+	for _, want := range []string{"containerized panel", "RELIST_IMAGE"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Available() error = %v, want it to contain %q", err, want)
+		}
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"relist-panel/internal/hostmetrics"
 	"relist-panel/internal/httpapi"
 	"relist-panel/internal/metrics"
+	"relist-panel/internal/volumes"
 )
 
 func main() {
@@ -75,9 +76,12 @@ func main() {
 		log.Fatal(err)
 	}
 
+	volumeRunner := dockerexec.NewVolumeRunner()
+	volumeResolver := volumes.NewResolver(dockerexec.NewVolumeResolver(), cfg.DataDir)
+
 	server := &http.Server{
 		Addr:    cfg.Address(),
-		Handler: httpapi.NewHandler(db, dockerexec.New(), cfg.DataDir, sampler, collector),
+		Handler: httpapi.NewHandler(db, dockerexec.New(), cfg.DataDir, sampler, collector, volumeRunner, volumeResolver),
 	}
 
 	log.Printf("relist-panel listening on %s", cfg.Address())

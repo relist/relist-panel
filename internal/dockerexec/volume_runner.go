@@ -37,6 +37,18 @@ func NewVolumeRunner() *VolumeRunner {
 	return &VolumeRunner{resolveImage: panelImage, runDocker: execDocker}
 }
 
+// Available reports whether the Volume Explorer can work at all. The helper
+// runs out of the panel's own image on the host's Docker daemon, so resolving
+// that image is the check: a bare binary, a missing Docker socket or a host
+// that never saw the image fails here, with the reason the UI shows, rather
+// than failing on the first operation.
+func (r *VolumeRunner) Available(ctx context.Context) error {
+	if _, err := r.resolveImage(ctx); err != nil {
+		return fmt.Errorf("volume files need a containerized panel whose image the host's Docker can see: %w", err)
+	}
+	return nil
+}
+
 // Run runs one operation and returns when it has ended. stdin and stdout
 // carry the operation's bytes; stderr is captured into the returned error.
 func (r *VolumeRunner) Run(ctx context.Context, req volumes.Request, stdin io.Reader, stdout io.Writer) error {

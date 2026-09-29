@@ -6,11 +6,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,6 +23,8 @@ import (
 	"relist-panel/internal/composes"
 	"relist-panel/internal/database"
 	"relist-panel/internal/httpapi"
+	"relist-panel/internal/volumes"
+	"relist-panel/internal/volumes/faketest"
 )
 
 func TestHealthz(t *testing.T) {
@@ -862,6 +866,235 @@ func TestComposesRequireExistingProjectAndEnvironment(t *testing.T) {
 	}
 }
 
+// The Volumes listing is the Explorer's first read: one CLI resolution call
+// for the Compose, one pre-flight per Volume, every Service's uid/gid, and
+// the full response shape the UI consumes — with no helper run.
+func TestComposeVolumesListsResolvedVolumesAndServices(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Volume Co", "")
+	production := productionEnvironment(t, server, project)
+	compose := createCompose(t, server, project.ID, production.ID, "web")
+
+	present := filepath.Join(server.dataDir, "app", "data")
+	if err := os.MkdirAll(present, 0o755); err != nil {
+		t.Fatalf("create bind source: %v", err)
+	}
+	missing := filepath.Join(server.dataDir, "app", "retired")
+
+	server.volumeCLI.VolumeExistsByName = map[string]bool{"demoapp_pgdata": true}
+	server.volumeCLI.ComposeConfigOutput = []byte(fmt.Sprintf(`{
+		"services": {
+			"db": {
+				"user": "999:998",
+				"volumes": [
+					{"type": "volume", "source": "pgdata", "target": "/var/lib/postgresql/data"},
+					{"type": "bind", "source": %q, "target": "/data"},
+					{"type": "bind", "source": %q, "target": "/retired", "read_only": true},
+					{"type": "bind", "source": "/srv/media", "target": "/media", "read_only": true}
+				]
+			},
+			"web": {
+				"volumes": [
+					{"type": "volume", "source": "pgdata", "target": "/pgdata", "read_only": true}
+				]
+			}
+		},
+		"volumes": {"pgdata": {"name": "demoapp_pgdata"}}
+	}`, present, missing))
+
+	response := server.request(t, http.MethodGet, composeVolumesPath(project.ID, production.ID, compose.ID), nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("volumes status = %d, want %d, body = %s", response.StatusCode, http.StatusOK, body)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read volumes body: %v", err)
+	}
+	var got composeVolumesResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode volumes: %v", err)
+	}
+
+	want := composeVolumesResponse{
+		Available: true,
+		Volumes: []composeVolumeResponse{
+			{
+				Kind:        "volume",
+				LogicalName: "pgdata",
+				Source:      "demoapp_pgdata",
+				Uses: []volumeUseResponse{
+					{Service: "db", Target: "/var/lib/postgresql/data"},
+					{Service: "web", Target: "/pgdata", ReadOnly: true},
+				},
+				Preflight: volumePreflightResponse{Status: "ok"},
+			},
+			{
+				Kind:      "bind",
+				Source:    present,
+				Uses:      []volumeUseResponse{{Service: "db", Target: "/data"}},
+				Preflight: volumePreflightResponse{Status: "ok"},
+			},
+			{
+				Kind:      "bind",
+				Source:    missing,
+				Uses:      []volumeUseResponse{{Service: "db", Target: "/retired", ReadOnly: true}},
+				Preflight: volumePreflightResponse{Status: "missing"},
+			},
+			{
+				Kind:      "bind",
+				Source:    "/srv/media",
+				Uses:      []volumeUseResponse{{Service: "db", Target: "/media", ReadOnly: true}},
+				Preflight: volumePreflightResponse{Status: "unverifiable"},
+			},
+		},
+		Services: []serviceUserResponse{
+			{Service: "db", User: "999:998", Source: "compose"},
+			{Service: "web", User: "0:0", Source: "fallback"},
+		},
+	}
+
+	if warning := got.Volumes[2].Preflight.Warning; !strings.Contains(warning, "does not exist") {
+		t.Errorf("missing bind warning = %q, want it to say the source does not exist", warning)
+	}
+	if warning := got.Volumes[3].Preflight.Warning; !strings.Contains(warning, "outside the data directory") {
+		t.Errorf("unverifiable bind warning = %q, want it to say the source is outside the data directory", warning)
+	}
+	if warning := got.Services[1].Warning; !strings.Contains(warning, "0:0") || !strings.Contains(warning, "root-owned") {
+		t.Errorf("root fallback warning = %q, want the 0:0 consequence spelled out", warning)
+	}
+	for i := range got.Volumes {
+		got.Volumes[i].Preflight.Warning = ""
+	}
+	for i := range got.Services {
+		got.Services[i].Warning = ""
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("volumes response =\n\t%+v\nwant\n\t%+v", got, want)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("decode volumes as map: %v", err)
+	}
+	if reason, ok := raw["reason"]; ok {
+		t.Errorf("available response carries reason = %s, want it omitted", reason)
+	}
+
+	// Resolution is the derived deploy identity (ADR-0005) and nothing else:
+	// one config call, one existence check for the named volume, and no
+	// helper run for a listing.
+	wantRef := volumes.ComposeRef{
+		ProjectName:     "volume-co-production-web",
+		ComposeFilePath: filepath.Join(server.dataDir, "volume-co", "production", "web", "docker-compose.yml"),
+		EnvFilePath:     filepath.Join(server.dataDir, "volume-co", "production", "web", ".env"),
+	}
+	if !reflect.DeepEqual(server.volumeCLI.ComposeConfigRefs, []volumes.ComposeRef{wantRef}) {
+		t.Errorf("ComposeConfig refs = %+v, want exactly %+v", server.volumeCLI.ComposeConfigRefs, wantRef)
+	}
+	if !reflect.DeepEqual(server.volumeCLI.VolumeExistsNames, []string{"demoapp_pgdata"}) {
+		t.Errorf("VolumeExists names = %+v, want exactly the named volume", server.volumeCLI.VolumeExistsNames)
+	}
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none: a listing resolves and checks, it never runs the helper", server.volumeRunner.Calls)
+	}
+}
+
+// Without a containerized panel the feature is unavailable, and the reason —
+// not a failed CLI call — is what the response carries.
+func TestComposeVolumesReportsTheFeatureUnavailable(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Volume Co", "")
+	production := productionEnvironment(t, server, project)
+	compose := createCompose(t, server, project.ID, production.ID, "web")
+
+	server.volumeRunner.AvailableErr = errors.New("volume files need a containerized panel")
+
+	response := server.request(t, http.MethodGet, composeVolumesPath(project.ID, production.ID, compose.ID), nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("volumes status = %d, want %d, body = %s", response.StatusCode, http.StatusOK, body)
+	}
+	var got composeVolumesResponse
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
+		t.Fatalf("decode volumes: %v", err)
+	}
+	if got.Available {
+		t.Error("available = true, want false")
+	}
+	if got.Reason != "volume files need a containerized panel" {
+		t.Errorf("reason = %q, want the availability error", got.Reason)
+	}
+	if got.Volumes == nil || len(got.Volumes) != 0 || got.Services == nil || len(got.Services) != 0 {
+		t.Errorf("volumes = %+v, services = %+v, want empty lists (never null)", got.Volumes, got.Services)
+	}
+	if len(server.volumeCLI.ComposeConfigRefs) != 0 {
+		t.Errorf("ComposeConfig calls = %+v, want none while unavailable", server.volumeCLI.ComposeConfigRefs)
+	}
+}
+
+// Before the first deploy the Compose CLI refuses with `couldn't find env
+// file`; the response must carry that message — the UI has nothing else to
+// tell the operator why the tab is dark.
+func TestComposeVolumesSurfacesTheCLIsNotDeployedError(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Volume Co", "")
+	production := productionEnvironment(t, server, project)
+	compose := createCompose(t, server, project.ID, production.ID, "web")
+
+	server.volumeCLI.ComposeConfigErr = errors.New("docker compose -p volume-co-production-web -f /data/volume-co/production/web/docker-compose.yml --env-file /data/volume-co/production/web/.env config --format json: exit status 1: couldn't find env file: /data/volume-co/production/web/.env")
+
+	response := server.request(t, http.MethodGet, composeVolumesPath(project.ID, production.ID, compose.ID), nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("volumes status = %d, want %d", response.StatusCode, http.StatusBadGateway)
+	}
+	var failure map[string]string
+	if err := json.NewDecoder(response.Body).Decode(&failure); err != nil {
+		t.Fatalf("decode volumes failure: %v", err)
+	}
+	for _, want := range []string{"volume resolution failed", "couldn't find env file"} {
+		if !strings.Contains(failure["error"], want) {
+			t.Errorf("volumes failure = %q, want it to contain %q", failure["error"], want)
+		}
+	}
+}
+
+// The route is a normal child of the Compose routes: an unknown Project,
+// Environment or Compose all answer 404.
+func TestComposeVolumesRequiresAKnownComposeAndParents(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Volume Co", "")
+	production := productionEnvironment(t, server, project)
+	compose := createCompose(t, server, project.ID, production.ID, "web")
+	otherProject := createProject(t, server, "Other Co", "")
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "unknown compose", path: composeVolumesPath(project.ID, production.ID, 999)},
+		{name: "unknown environment", path: composeVolumesPath(project.ID, 999, compose.ID)},
+		{name: "compose under another project", path: composeVolumesPath(otherProject.ID, production.ID, compose.ID)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := server.request(t, http.MethodGet, tt.path, nil)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusNotFound {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusNotFound, body)
+			}
+		})
+	}
+}
+
 func TestAuthenticatedAdminCanDeployCompose(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
@@ -1156,12 +1389,16 @@ func TestComposeDeployRecordsDeployedAtOnSuccessOnly(t *testing.T) {
 	// The stamp is row state, not server memory: a fresh handler over the same
 	// database — a panel restart — still serves it.
 	restartedRunner := newFakeComposeRunner()
+	restartedVolumeCLI := &faketest.CLI{}
+	restartedVolumeRunner := &faketest.Runner{}
 	restarted := &testServer{
-		handler: httpapi.NewHandler(server.db, restartedRunner, server.dataDir, newFakeHostHistory(), newFakeServiceFacts()),
-		db:      server.db,
-		dataDir: server.dataDir,
-		runner:  restartedRunner,
-		cookies: server.cookies,
+		handler:      httpapi.NewHandler(server.db, restartedRunner, server.dataDir, newFakeHostHistory(), newFakeServiceFacts(), restartedVolumeRunner, volumes.NewResolver(restartedVolumeCLI, server.dataDir)),
+		db:           server.db,
+		dataDir:      server.dataDir,
+		runner:       restartedRunner,
+		volumeCLI:    restartedVolumeCLI,
+		volumeRunner: restartedVolumeRunner,
+		cookies:      server.cookies,
 	}
 	restartedGet := restarted.request(t, http.MethodGet, composePath(project.ID, production.ID, compose.ID), nil)
 	defer restartedGet.Body.Close()
@@ -2201,14 +2438,50 @@ type composeStatusResponse struct {
 	Total   int `json:"total"`
 }
 
+// composeVolumesResponse mirrors the Volume Explorer's listing endpoint.
+type composeVolumesResponse struct {
+	Available bool                    `json:"available"`
+	Reason    string                  `json:"reason"`
+	Volumes   []composeVolumeResponse `json:"volumes"`
+	Services  []serviceUserResponse   `json:"services"`
+}
+
+type composeVolumeResponse struct {
+	Kind        string                  `json:"kind"`
+	LogicalName string                  `json:"logicalName"`
+	Source      string                  `json:"source"`
+	Uses        []volumeUseResponse     `json:"uses"`
+	Preflight   volumePreflightResponse `json:"preflight"`
+}
+
+type volumeUseResponse struct {
+	Service  string `json:"service"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"readOnly"`
+}
+
+type volumePreflightResponse struct {
+	Status  string `json:"status"`
+	Warning string `json:"warning"`
+}
+
+type serviceUserResponse struct {
+	Service string `json:"service"`
+	User    string `json:"user"`
+	Source  string `json:"source"`
+	Warning string `json:"warning"`
+}
+
 type testServer struct {
-	handler http.Handler
-	db      *sql.DB
-	dataDir string
-	runner  *fakeComposeRunner
-	history *fakeHostHistory
-	facts   *fakeServiceFacts
-	cookies map[string]*http.Cookie
+	handler      http.Handler
+	db           *sql.DB
+	dataDir      string
+	runner       *fakeComposeRunner
+	history      *fakeHostHistory
+	facts        *fakeServiceFacts
+	volumeRunner *faketest.Runner
+	volumeCLI    *faketest.CLI
+	cookies      map[string]*http.Cookie
 }
 
 func newTestServer(t *testing.T) *testServer {
@@ -2222,14 +2495,18 @@ func newTestServer(t *testing.T) *testServer {
 	runner := newFakeComposeRunner()
 	history := newFakeHostHistory()
 	facts := newFakeServiceFacts()
+	volumeRunner := &faketest.Runner{}
+	volumeCLI := &faketest.CLI{}
 	return &testServer{
-		handler: httpapi.NewHandler(db, runner, dataDir, history, facts),
-		db:      db,
-		dataDir: dataDir,
-		runner:  runner,
-		history: history,
-		facts:   facts,
-		cookies: make(map[string]*http.Cookie),
+		handler:      httpapi.NewHandler(db, runner, dataDir, history, facts, volumeRunner, volumes.NewResolver(volumeCLI, dataDir)),
+		db:           db,
+		dataDir:      dataDir,
+		runner:       runner,
+		history:      history,
+		facts:        facts,
+		volumeRunner: volumeRunner,
+		volumeCLI:    volumeCLI,
+		cookies:      make(map[string]*http.Cookie),
 	}
 }
 
@@ -2459,4 +2736,8 @@ func composeRestartPath(projectID, environmentID, composeID int64) string {
 
 func composeLogsPath(projectID, environmentID, composeID int64) string {
 	return composePath(projectID, environmentID, composeID) + "/logs"
+}
+
+func composeVolumesPath(projectID, environmentID, composeID int64) string {
+	return composePath(projectID, environmentID, composeID) + "/volumes"
 }

@@ -567,6 +567,27 @@ func (s *Service) resolveDeployedCompose(w http.ResponseWriter, r *http.Request,
 	return compose, req, true
 }
 
+// ComposeRunRequest resolves one Compose's deploy identity for a sibling
+// domain that must act on its files but owns neither the lookup nor the path
+// derivation: the Project and Environment are checked exactly as the Compose
+// routes check them, the row comes from repository.findByID and the identity
+// from runRequestFor. A missing Project, Environment or Compose is reported
+// as sql.ErrNoRows — including the lookup's own error, passed through
+// unchanged — so the caller keeps a single 404 path.
+func (s *Service) ComposeRunRequest(ctx context.Context, projectID, environmentID, composeID int64) (RunRequest, error) {
+	if err := s.requireEnvironment(ctx, projectID, environmentID); err != nil {
+		if errors.Is(err, errProjectNotFound) || errors.Is(err, errEnvironmentNotFound) {
+			return RunRequest{}, sql.ErrNoRows
+		}
+		return RunRequest{}, err
+	}
+	compose, err := s.repository.findByID(ctx, environmentID, composeID)
+	if err != nil {
+		return RunRequest{}, err
+	}
+	return runRequestFor(s.dataDir, compose), nil
+}
+
 // withRefreshedStatus re-reads a Compose's live status immediately after a
 // runner action (deploy/stop/restart) so the response reflects the outcome
 // without a separate round-trip; best-effort like withStatus/withStatuses.

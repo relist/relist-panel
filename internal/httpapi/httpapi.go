@@ -13,6 +13,8 @@ import (
 	"relist-panel/internal/environmentvariables"
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/projects"
+	"relist-panel/internal/volumeapi"
+	"relist-panel/internal/volumes"
 	"relist-panel/internal/webassets"
 )
 
@@ -23,7 +25,9 @@ import (
 // *hostmetrics.Sampler and *hostmetrics.ServiceCollector in production,
 // fakes at the HTTP seam); they may be nil, in which case the metrics
 // endpoints stay unregistered (an unwired panel has nothing to serve).
-func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts) http.Handler {
+// volumeRunner and volumeResolver are the Volume Explorer's operation seam
+// and its read side (ADR-0010).
+func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts, volumeRunner volumes.Runner, volumeResolver *volumes.Resolver) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
 	authService := auth.New(db)
@@ -36,6 +40,7 @@ func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, histo
 	environmentVariablesService.RegisterRoutes(mux)
 	composesService := composes.New(db, runner, dataDir)
 	composesService.RegisterRoutes(mux)
+	volumeapi.New(composesService, volumeResolver, volumeRunner).RegisterRoutes(mux)
 	if history != nil && services != nil {
 		metricsService := metrics.New(metrics.NewStore(db), history, services)
 		metricsService.RegisterRoutes(mux)

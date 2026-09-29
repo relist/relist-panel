@@ -1,8 +1,8 @@
-// Package faketest provides the test double for volumes.Runner that the
-// spec's Testing Decisions call for: HTTP-seam tests install it in place of
-// the real `docker run --rm` adapter, script the helper's answers, and assert
-// exactly what would have run — all with no Docker in them. It lives in its
-// own package so nothing but tests imports it.
+// Package faketest provides the test doubles for the volumes package's ports
+// that the spec's Testing Decisions call for: HTTP-seam tests install them in
+// place of the real `docker run --rm` adapter and the real Docker CLI, script
+// their answers, and assert exactly what would have run — all with no Docker
+// in them. It lives in its own package so nothing but tests imports it.
 package faketest
 
 import (
@@ -21,7 +21,7 @@ type Call struct {
 }
 
 // Runner is a scripted volumes.Runner. Its zero value records calls and
-// answers with an empty stdout and no error.
+// answers with an empty stdout, no error and the feature available.
 type Runner struct {
 	// Calls records every Run, in order.
 	Calls []Call
@@ -30,6 +30,14 @@ type Runner struct {
 	// sequence.
 	Stdout string
 	Err    error
+	// AvailableErr is returned by Available; the zero value — nil — answers
+	// that the feature is available.
+	AvailableErr error
+}
+
+// Available implements volumes.Runner.
+func (f *Runner) Available(_ context.Context) error {
+	return f.AvailableErr
 }
 
 // Run implements volumes.Runner.
