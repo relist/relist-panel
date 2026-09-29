@@ -9,7 +9,7 @@ the sharpest edge in the feature, so this lands last.
 **Status:** ready-for-agent
 
 - [x] `internal/volfs` gains `extract`: every entry is validated **before it is written** — names relative and free of `..` segments, no absolute paths, symlink and hardlink entries refused outright — and a refusal aborts the rest of the stream
-- [ ] The helper gains `extract -- <relpath>`, consuming the tar.gz on stdin; the target is a directory relative to `/data` that must already exist, directories inside the archive are created, existing files are overwritten and directories merge
+- [x] The helper gains `extract -- <relpath>`, consuming the tar.gz on stdin; the target is a directory relative to `/data` that must already exist, directories inside the archive are created, existing files are overwritten and directories merge
 - [ ] One HTTP endpoint streams the request body straight into the run's stdin with the Volume mounted `:rw` — upload and extract are one operation, and nothing is staged on the panel's disk
 - [ ] Caps enforced end to end: compressed ≤ 1 GiB on the request body, uncompressed ≤ 4 GiB and ≤ 10k entries counted by the helper as it streams
 - [ ] The UI discloses, before the operator runs it, that a stream that fails mid-way leaves the entries already written in place — extraction is partial, there is no transaction across a stream — and names the target directory
@@ -49,3 +49,21 @@ a 13-byte body treated as an ordinary `unexpected EOF`, not a size refusal; miss
 non-directory, `..` and absolute targets; empty, garbage and gzip-but-not-tar streams; and the
 partial case where entry 2 is unsafe while entry 1 stays. Still open: the helper's
 `extract -- <relpath>` (session 2/3) and the streaming endpoint plus the UI disclosure (session 3/3).
+
+**session 2/3:** the helper's `extract -- <relpath>` landed, and `volfs` now classifies a body that is
+not a usable tar.gz. `ErrInvalidArchive` joins `ErrUnsafeArchive` and `ErrArchiveTooLarge`:
+gzip/tar parse failures and entries cut off mid-body wrap it (a marker around the tar body reader
+keeps clean ends clean), while a failed write into the Volume stays an ordinary error. The helper
+registers `extract` with the same `-- <relpath>` shape as every other op — relative-only, an
+absolute path refused before `os.OpenRoot` — calls `volfs.Extract(target, stdin)` with the spec's
+default limits, and maps a refusal to **4**, the new `exitArchiveRefused`: unsafe entry, cap
+exceeded, or not a usable tar.gz, with the offending entry in the message. Targets, I/O and space
+stay 1; malformed invocations stay 2. No new flags, no signal-handler changes. Tests through
+`run(...)` against `t.TempDir()`: a `volfs.Archive` round trip into a subdirectory and into `.`; an
+unsafe second entry exits 4 with the first left in place (partial semantics); 10,001 hand-built
+entries trip the real 10k default cap with exit 4 — no injection seam needed, the helper's call
+site keeps the production defaults; garbage stdin exits 4; a missing target exits 1 with stdin
+proven unread; an absolute path exits 2. Spec: the op list already carried `extract` from 873200b;
+the Protocol paragraph gained exit 4. Evidence under `golang:1.27-alpine`: `gofmt -l .`
+silent, `go vet ./...` clean, `go test ./...` all green. Still open: the streaming endpoint and the
+UI disclosure (session 3/3).

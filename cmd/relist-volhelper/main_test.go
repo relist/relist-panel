@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -470,10 +471,14 @@ func TestAbsolutePathsAreRefusedBeforeAnyFilesystemCall(t *testing.T) {
 		t.Errorf("list absolute stderr = %q, want the refusal before any filesystem call", stderr)
 	}
 
-	// The refusal applies to every op, write included.
+	// The refusal applies to every op, write and extract included.
 	code, _, stderr = runHelper(t, missingRoot, []byte("x"), "write", "--", "/etc/passwd")
 	if code == 0 || !strings.Contains(stderr, "absolute path") {
 		t.Errorf("write absolute = exit %d, stderr %q; want the refusal", code, stderr)
+	}
+	code, _, stderr = runHelper(t, missingRoot, nil, "extract", "--", "/etc/passwd")
+	if code != exitUsage || !strings.Contains(stderr, "absolute path") {
+		t.Errorf("extract absolute = exit %d, stderr %q; want %d and the refusal", code, stderr, exitUsage)
 	}
 }
 
@@ -576,6 +581,219 @@ func TestArchivePinsTheFormatAndStreamsTarGz(t *testing.T) {
 	}
 }
 
+// archivedTree archives files planted under a fresh Volume root, using the
+// same writer production uses, so the extract happy paths exercise the real
+// Archive/Extract pair rather than a hand-built stream.
+func archivedTree(t *testing.T, name string, files map[string]string) []byte {
+	t.Helper()
+	src := t.TempDir()
+	for rel, content := range files {
+		plant(t, src, rel, []byte(content))
+	}
+	vol, err := volfs.Open(src)
+	if err != nil {
+		t.Fatalf("open source root: %v", err)
+	}
+	defer vol.Close()
+
+	var buf bytes.Buffer
+	if err := vol.Archive(name, &buf); err != nil {
+		t.Fatalf("Archive(%q) error = %v", name, err)
+	}
+	return buf.Bytes()
+}
+
+// archiveEntry is one hand-built tar entry: the header as planted, with its
+// body (nil for entries that carry none). Hand-built entries let a test plant
+// shapes volfs.Archive never produces, like a name that climbs out or an
+// archive past the entry cap.
+type archiveEntry struct {
+	header tar.Header
+	body   []byte
+}
+
+// tarGz builds a tar.gz from entries exactly as given.
+func tarGz(t *testing.T, entries ...archiveEntry) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	for _, e := range entries {
+		hdr := e.header
+		if e.body != nil {
+			hdr.Size = int64(len(e.body))
+		}
+		if err := tw.WriteHeader(&hdr); err != nil {
+			t.Fatalf("write header %q: %v", hdr.Name, err)
+		}
+		if len(e.body) > 0 {
+			if _, err := tw.Write(e.body); err != nil {
+				t.Fatalf("write body %q: %v", hdr.Name, err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// TestExtractWritesAnArchivedTreeIntoASubdirectoryAndTheRoot drives extract
+// through the helper: a real tar.gz produced by volfs.Archive lands under an
+// existing subdirectory, and the Volume root itself — also an existing
+// directory — is a legal target.
+func TestExtractWritesAnArchivedTreeIntoASubdirectoryAndTheRoot(t *testing.T) {
+	archive := archivedTree(t, ".", map[string]string{
+		"notes/readme.txt": "hello, volume\n",
+		"top.txt":          "top",
+	})
+
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := runHelper(t, root, archive, "extract", "--", "target")
+	if code != exitOK {
+		t.Fatalf("extract into target exit = %d, stderr = %q", code, stderr)
+	}
+	if len(stdout) != 0 {
+		t.Errorf("extract stdout = %q, want nothing", stdout)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "target", "notes", "readme.txt")); err != nil || string(got) != "hello, volume\n" {
+		t.Errorf("target/notes/readme.txt = %q, %v; want the archived bytes", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "target", "top.txt")); err != nil || string(got) != "top" {
+		t.Errorf("target/top.txt = %q, %v; want the archived bytes", got, err)
+	}
+
+	code, _, stderr = runHelper(t, root, archive, "extract", "--", ".")
+	if code != exitOK {
+		t.Fatalf("extract into the root exit = %d, stderr = %q", code, stderr)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "notes", "readme.txt")); err != nil || string(got) != "hello, volume\n" {
+		t.Errorf("notes/readme.txt = %q, %v; want the archived bytes", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "top.txt")); err != nil || string(got) != "top" {
+		t.Errorf("top.txt = %q, %v; want the archived bytes", got, err)
+	}
+}
+
+// TestExtractRefusesAnUnsafeEntryWithExitFour: a name that climbs out is the
+// client's archive's fault and exits 4 — not the operation failure 1 — with
+// the entry named, and the entries before it stay: extraction is partial,
+// there is no transaction across a stream.
+func TestExtractRefusesAnUnsafeEntryWithExitFour(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	archive := tarGz(t,
+		archiveEntry{header: tar.Header{Name: "kept.txt", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("kept")},
+		archiveEntry{header: tar.Header{Name: "../escape", Typeflag: tar.TypeReg, Mode: 0o644}, body: []byte("escape")},
+	)
+
+	code, stdout, stderr := runHelper(t, root, archive, "extract", "--", "target")
+	if code != exitArchiveRefused {
+		t.Fatalf("extract exit = %d, stderr = %q; want %d", code, stderr, exitArchiveRefused)
+	}
+	if len(stdout) != 0 {
+		t.Errorf("extract stdout = %q, want nothing", stdout)
+	}
+	for _, want := range []string{"unsafe archive entry", "../escape"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("extract stderr = %q, want it to contain %q", stderr, want)
+		}
+	}
+
+	got, err := os.ReadFile(filepath.Join(root, "target", "kept.txt"))
+	if err != nil || string(got) != "kept" {
+		t.Errorf("target/kept.txt = %q, %v; want the earlier entry left in place", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "escape")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the refused entry escaped: Lstat error = %v", err)
+	}
+}
+
+// TestExtractRefusesTheEntryCapWithExitFour builds 10,001 entries by hand —
+// past the spec's 10k cap, which the helper applies through its real default
+// limits — and pins the refusal: exit 4, the entry named, the entries before
+// it written.
+func TestExtractRefusesTheEntryCapWithExitFour(t *testing.T) {
+	hand := make([]archiveEntry, 10_001)
+	for i := range hand {
+		hand[i] = archiveEntry{header: tar.Header{
+			Name:     fmt.Sprintf("f%05d", i),
+			Typeflag: tar.TypeReg,
+			Mode:     0o644,
+		}}
+	}
+	archive := tarGz(t, hand...)
+
+	root := t.TempDir()
+	code, stdout, stderr := runHelper(t, root, archive, "extract", "--", ".")
+	if code != exitArchiveRefused {
+		t.Fatalf("extract exit = %d, stderr = %q; want %d", code, stderr, exitArchiveRefused)
+	}
+	if len(stdout) != 0 {
+		t.Errorf("extract stdout = %q, want nothing", stdout)
+	}
+	for _, want := range []string{"entry 10001", "f10000", "10000-entry cap"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("extract stderr = %q, want it to contain %q", stderr, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "f00000")); err != nil {
+		t.Errorf("the first entry was not written: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "f10000")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the entry past the cap was written: Lstat error = %v", err)
+	}
+}
+
+// TestExtractRefusesAMalformedBodyWithExitFour: a body that is not a usable
+// tar.gz is the client's, so it exits 4, naming the malformation, and writes
+// nothing.
+func TestExtractRefusesAMalformedBodyWithExitFour(t *testing.T) {
+	root := t.TempDir()
+
+	code, stdout, stderr := runHelper(t, root, []byte("this is not a tar.gz"), "extract", "--", ".")
+	if code != exitArchiveRefused {
+		t.Fatalf("extract exit = %d, stderr = %q; want %d", code, stderr, exitArchiveRefused)
+	}
+	if len(stdout) != 0 {
+		t.Errorf("extract stdout = %q, want nothing", stdout)
+	}
+	if !strings.Contains(stderr, "not a usable tar.gz") {
+		t.Errorf("extract stderr = %q, want the malformed body named", stderr)
+	}
+}
+
+// TestExtractNeedsAnExistingTargetAndReportsItAsAnOperationFailure: a target
+// that does not exist is not the archive's fault, so it stays exit 1, and the
+// target is checked before the body is read — the unread reader fails the
+// test if stdin is touched.
+func TestExtractNeedsAnExistingTargetAndReportsItAsAnOperationFailure(t *testing.T) {
+	root := t.TempDir()
+
+	code, stdout, stderr := runHelperWith(t, root, &unreadReader{t: t}, (*volfs.FS).FreeBytes, "extract", "--", "missing")
+	if code != exitError {
+		t.Fatalf("extract missing target exit = %d, stderr = %q; want %d", code, stderr, exitError)
+	}
+	if len(stdout) != 0 {
+		t.Errorf("extract stdout = %q, want nothing", stdout)
+	}
+	if !strings.Contains(stderr, "no such file") {
+		t.Errorf("extract stderr = %q, want the missing target named", stderr)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "missing")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the missing target was created: Lstat error = %v", err)
+	}
+}
+
 // TestMalformedInvocationsPrintUsageAndFail: unknown operations, missing
 // arguments and wrong shapes are refused with usage on stderr, a non-zero
 // exit and nothing on stdout.
@@ -593,6 +811,9 @@ func TestMalformedInvocationsPrintUsageAndFail(t *testing.T) {
 		{"archive", "--format", "tar.gz", "--"},
 		{"archive", "--format", "tar.gz", "file.txt"},
 		{"archive"},
+		{"extract"},
+		{"extract", "file.txt"},
+		{"extract", "--format", "tar.gz", "--", "file.txt"},
 		{"frobnicate", "--", "file.txt"},
 	}
 	for _, args := range malformed {

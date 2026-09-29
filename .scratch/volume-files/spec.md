@@ -159,7 +159,9 @@ Read operations mount `:ro`; `write`, `delete` and `extract` mount `:rw`.
 The helper exits `0` on success, `1` on an operation failure and `2` on a malformed invocation. A
 `write` also exits **3** when it is refused for want of space, naming need vs available: `--expect`'s
 declared size cannot fit the Volume — refused before any stdin is read — or the stream overran the
-free space measured when it began, in which case the partial file is removed best-effort.
+free space measured when it began, in which case the partial file is removed best-effort. An
+`extract` exits **4** when the archive was refused — an unsafe entry, a cap exceeded, or not a
+usable tar.gz — so the panel answers 4xx instead of 502: the body is the client's, not the Volume's.
 
 Every filesystem call goes through **`os.Root`** (`os.OpenRoot("/data")`), which refuses to resolve a
 name outside the root and rejects absolute symlinks. This is defense in depth *behind* the panel's

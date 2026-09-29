@@ -10,13 +10,14 @@
 //	relist-volhelper write   [--expect <bytes>] -- <path>
 //	relist-volhelper delete  -- <path>
 //	relist-volhelper archive --format tar.gz -- <path>
+//	relist-volhelper extract -- <path>
 //
 // Paths are relative to /data and are only ever read after `--`, so a name
 // starting with `-` cannot be taken for a flag. list and stat answer with
-// JSON on stdout, read and archive with raw bytes, and write consumes stdin;
-// every failure goes to stderr with a non-zero exit. All the dispatch lives
-// in run, below the process boundary, so the whole protocol is tested without
-// a container.
+// JSON on stdout, read and archive with raw bytes, and write and extract
+// consume stdin; every failure goes to stderr with a non-zero exit. All the
+// dispatch lives in run, below the process boundary, so the whole protocol is
+// tested without a container.
 package main
 
 import (
@@ -44,19 +45,23 @@ const usage = `usage:
   relist-volhelper write   [--expect <bytes>] -- <path>
   relist-volhelper delete  -- <path>
   relist-volhelper archive --format tar.gz -- <path>
+  relist-volhelper extract -- <path>
 <path> is relative to the Volume root mounted at /data.
 --expect is a write's declared size in bytes, checked against the Volume's free space before stdin is read.
+extract consumes a tar.gz on stdin and writes it into the existing directory <path>.
 `
 
 // The helper's exit codes: 0 for success, 1 when an operation failed, 2 when
 // the invocation itself was refused, 3 when a write is refused for want of
-// space. Any non-zero code is a failure to the panel; the split only sharpens
-// the helper's own diagnostics.
+// space, and 4 when an extract refuses the client's archive. Any non-zero
+// code is a failure to the panel; the split only sharpens the helper's own
+// diagnostics.
 const (
-	exitOK      = 0
-	exitError   = 1
-	exitUsage   = 2
-	exitRefused = 3
+	exitOK             = 0
+	exitError          = 1
+	exitUsage          = 2
+	exitRefused        = 3
+	exitArchiveRefused = 4
 )
 
 func main() {
@@ -122,6 +127,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, rootDir strin
 	case "archive":
 		// parse pinned the format: tar.gz is the only one the helper speaks.
 		return failOn(stderr, vol.Archive(cmd.name, stdout))
+	case "extract":
+		return runExtract(stderr, vol, stdin, cmd)
 	default:
 		// Unreachable while parse and this switch agree; a failure here is a
 		// bug, and must still be a non-zero exit, not a silent success.
@@ -154,7 +161,7 @@ func parse(args []string) (command, error) {
 	rest := args[1:]
 
 	switch cmd.op {
-	case "list", "stat", "read", "delete":
+	case "list", "stat", "read", "delete", "extract":
 		// No extra flags: the path follows immediately after `--`.
 	case "write":
 		// An upload's declared byte count, so the helper can refuse a write
@@ -217,6 +224,28 @@ func runWrite(stderr io.Writer, vol *volfs.FS, stdin io.Reader, cmd command, fre
 		return fail(stderr, err)
 	}
 	return exitOK
+}
+
+// runExtract is extract's dispatch: the client's tar.gz streams from stdin
+// into the target through volfs.Extract with the spec's default restore caps
+// (10k entries, 4 GiB uncompressed; the 1 GiB compressed cap belongs to the
+// HTTP layer, on the request body). A refusal — an unsafe entry, a cap
+// exceeded, or a body that is not a usable tar.gz — is the client's input's
+// fault, not the Volume's, so it exits 4 for the panel to answer with a 4xx;
+// an I/O, target or space failure stays exit 1. The message names the
+// offending entry where one is known.
+func runExtract(stderr io.Writer, vol *volfs.FS, stdin io.Reader, cmd command) int {
+	err := vol.Extract(cmd.name, stdin)
+	if err == nil {
+		return exitOK
+	}
+	if errors.Is(err, volfs.ErrUnsafeArchive) ||
+		errors.Is(err, volfs.ErrArchiveTooLarge) ||
+		errors.Is(err, volfs.ErrInvalidArchive) {
+		fmt.Fprintf(stderr, "relist-volhelper: %v\n", err)
+		return exitArchiveRefused
+	}
+	return fail(stderr, err)
 }
 
 // spaceGuard wraps a write's source and stops it delivering more bytes than

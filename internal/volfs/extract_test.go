@@ -358,8 +358,8 @@ func TestExtractEnforcesTheUncompressedByteCap(t *testing.T) {
 
 // truncatedArchive is one entry whose header declares 1 GiB but carries 13
 // bytes: the stream ends mid-entry. The cap is counted from bytes actually
-// written, so this is a malformed archive — an ordinary failure — not a size
-// refusal based on a header's claim.
+// written, so this is a malformed archive — classified ErrInvalidArchive —
+// not a size refusal based on a header's claim.
 func truncatedArchive(t *testing.T) []byte {
 	t.Helper()
 	var raw bytes.Buffer
@@ -386,17 +386,20 @@ func truncatedArchive(t *testing.T) []byte {
 }
 
 // A declared size larger than the cap, with a stream that ends before the
-// declaration, is an ordinary stream failure, and the bytes that did arrive
-// stay written.
-func TestExtractTreatsATruncatedEntryAsAnOrdinaryFailure(t *testing.T) {
+// declaration, is a malformed archive — ErrInvalidArchive — and the bytes
+// that did arrive stay written.
+func TestExtractClassifiesATruncatedEntryAsInvalidArchive(t *testing.T) {
 	f := newFixture(t)
 
 	err := f.Extract(".", bytes.NewReader(truncatedArchive(t)), ExtractLimits{MaxEntries: 10, MaxBytes: 1 << 20})
 	if err == nil {
 		t.Fatal("Extract() = nil, want the truncated entry to fail")
 	}
+	if !errors.Is(err, ErrInvalidArchive) {
+		t.Errorf("truncated entry error = %v, want ErrInvalidArchive", err)
+	}
 	if errors.Is(err, ErrArchiveTooLarge) || errors.Is(err, ErrUnsafeArchive) {
-		t.Errorf("truncated entry error = %v, want an ordinary stream failure", err)
+		t.Errorf("truncated entry error = %v, want no other refusal class", err)
 	}
 
 	got, readErr := os.ReadFile(f.path("huge.bin"))
@@ -425,7 +428,7 @@ func TestExtractNeedsAnExistingDirectoryTarget(t *testing.T) {
 			if err == nil {
 				t.Fatalf("Extract(%q) = nil, want an error", target)
 			}
-			if errors.Is(err, ErrUnsafeArchive) || errors.Is(err, ErrArchiveTooLarge) {
+			if errors.Is(err, ErrUnsafeArchive) || errors.Is(err, ErrArchiveTooLarge) || errors.Is(err, ErrInvalidArchive) {
 				t.Errorf("Extract(%q) error = %v, want an ordinary failure", target, err)
 			}
 		})
@@ -442,10 +445,14 @@ func TestExtractNeedsAnExistingDirectoryTarget(t *testing.T) {
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("Extract(missing, failing reader) error = %v, want fs.ErrNotExist", err)
 	}
+	if errors.Is(err, ErrInvalidArchive) {
+		t.Errorf("Extract(missing, failing reader) error = %v, want the target checked before the stream", err)
+	}
 }
 
 // An empty stream, plain garbage and a gzip stream that is not a tar are all
-// ordinary failures rather than refusals, and none of them writes anything.
+// classified ErrInvalidArchive — the body is not a usable tar.gz — rather
+// than as an unsafe entry or a size refusal, and none of them writes anything.
 func TestExtractRefusesMalformedStreams(t *testing.T) {
 	for _, tc := range []struct {
 		what   string
@@ -473,8 +480,11 @@ func TestExtractRefusesMalformedStreams(t *testing.T) {
 			if err == nil {
 				t.Fatal("Extract() = nil, want a malformed stream to fail")
 			}
+			if !errors.Is(err, ErrInvalidArchive) {
+				t.Errorf("Extract() error = %v, want ErrInvalidArchive", err)
+			}
 			if errors.Is(err, ErrUnsafeArchive) || errors.Is(err, ErrArchiveTooLarge) {
-				t.Errorf("Extract() error = %v, want an ordinary failure", err)
+				t.Errorf("Extract() error = %v, want no other refusal class", err)
 			}
 			if got := tree(t, f.out); !reflect.DeepEqual(got, before) {
 				t.Errorf("a malformed stream changed the tree: %q, want %q", got, before)

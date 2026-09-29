@@ -29,10 +29,10 @@ func DefaultExtractLimits() ExtractLimits {
 	return ExtractLimits{MaxEntries: 10_000, MaxBytes: 4 << 30}
 }
 
-// The two refusals an extraction can make, kept apart from an ordinary
-// failure so the helper can map each to its own exit code. The offending
-// entry is wrapped around the sentinel, never baked into it, so errors.Is
-// matches every refusal of a class.
+// The refusals an extraction can make, kept apart from an ordinary failure
+// so the helper can map each to its own exit code. The offending entry — or
+// the malformed stream — is wrapped around the sentinel, never baked into it,
+// so errors.Is matches every refusal of a class.
 var (
 	// ErrUnsafeArchive refuses an entry that must not be written: a name
 	// that is absolute or climbs out, or a type that is not a regular file
@@ -40,6 +40,12 @@ var (
 	ErrUnsafeArchive = errors.New("unsafe archive entry")
 	// ErrArchiveTooLarge refuses a stream that runs past a restore cap.
 	ErrArchiveTooLarge = errors.New("archive exceeds the restore limits")
+	// ErrInvalidArchive refuses a body that is not a usable tar.gz: a
+	// malformed gzip stream, a malformed tar header, or an entry whose
+	// declared body never arrived. The caller's own bytes are at fault, so
+	// this stays distinguishable from an I/O failure while writing into the
+	// Volume.
+	ErrInvalidArchive = errors.New("archive is not a usable tar.gz")
 )
 
 // Extract streams a tar.gz from src into target, a directory relative to the
@@ -57,8 +63,10 @@ var (
 // applied, and nothing else is ever deleted.
 //
 // A refusal aborts the rest of the stream and wraps the offending entry
-// around ErrUnsafeArchive or ErrArchiveTooLarge; an ordinary failure — a
-// malformed gzip, a truncated entry, a failed write — is returned as itself.
+// around ErrUnsafeArchive or ErrArchiveTooLarge. A body that is not a usable
+// tar.gz — a malformed gzip stream, a malformed header, an entry cut off
+// mid-body — wraps ErrInvalidArchive, because those bytes are the caller's;
+// a failed write into the Volume stays an ordinary error.
 //
 // There is no transaction across a stream: entries already written when a
 // later header is refused, or when the stream dies, stay written, and a file
@@ -95,7 +103,7 @@ func (fs *FS) Extract(target string, src io.Reader, limits ...ExtractLimits) err
 			// An empty stream is a truncated one, not a clean end.
 			err = io.ErrUnexpectedEOF
 		}
-		return fmt.Errorf("extract %q: open gzip: %w", target, err)
+		return fmt.Errorf("extract %q: %w: open gzip: %w", target, ErrInvalidArchive, err)
 	}
 	defer zr.Close()
 
@@ -111,7 +119,7 @@ func (fs *FS) Extract(target string, src io.Reader, limits ...ExtractLimits) err
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("extract %q: %w", target, err)
+			return fmt.Errorf("extract %q: %w: %w", target, ErrInvalidArchive, err)
 		}
 
 		entries++
@@ -127,7 +135,7 @@ func (fs *FS) Extract(target string, src io.Reader, limits ...ExtractLimits) err
 
 		switch hdr.Typeflag {
 		case tar.TypeReg, tar.TypeRegA:
-			n, err := fs.extractFile(name, tr, headerPerm(hdr), lim.MaxBytes-written)
+			n, err := fs.extractFile(name, archiveBody{tr}, headerPerm(hdr), lim.MaxBytes-written)
 			written += n
 			if errors.Is(err, errCapReached) {
 				return fmt.Errorf("extract %q: %w: entry %q is past the %d-byte uncompressed cap",
@@ -196,6 +204,22 @@ func (fs *FS) extractFile(name string, body io.Reader, perm fs.FileMode, remaini
 		return n, err
 	}
 	return n, nil
+}
+
+// archiveBody is one entry's body as a reader, with every failure that comes
+// out of the tar stream marked as ErrInvalidArchive: a body cut off before
+// its declared size, a corrupt gzip stream, a checksum that does not add up.
+// io.EOF passes through untouched — a body that ends exactly at its declared
+// size is the clean end io.Copy expects — and a failure writing into the
+// Volume never comes through here, so the two stay distinguishable.
+type archiveBody struct{ src io.Reader }
+
+func (b archiveBody) Read(p []byte) (int, error) {
+	n, err := b.src.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		err = fmt.Errorf("%w: %w", ErrInvalidArchive, err)
+	}
+	return n, err
 }
 
 // errCapReached says a body still had bytes when the uncompressed budget ran
