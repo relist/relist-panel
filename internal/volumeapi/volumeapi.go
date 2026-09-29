@@ -1,9 +1,10 @@
-// Package volumeapi owns the Volume Explorer's read HTTP surface: one
-// Compose's resolved Volumes with their pre-flight status, the uid/gid an
-// operation per Service would run as, and whether the feature can run at all.
-// It owns no SQL and derives no paths — composes.ComposeRunRequest carries the
-// Compose's deploy identity and volumes.Resolver does the reading through the
-// Compose CLI (ADR-0010).
+// Package volumeapi owns the Volume Explorer's HTTP surface: one Compose's
+// resolved Volumes with their pre-flight status, the uid/gid an operation per
+// Service would run as, whether the feature can run at all, and the read
+// operations themselves — list, stat and read, each one `docker run --rm`
+// through the volumes.Runner seam (ADR-0010). It owns no SQL and derives no
+// paths — composes.ComposeRunRequest carries the Compose's deploy identity and
+// volumes.Resolver does the reading through the Compose CLI.
 package volumeapi
 
 import (
@@ -32,9 +33,13 @@ func New(composeService *composes.Service, resolver *volumes.Resolver, runner vo
 	return &Service{composes: composeService, resolver: resolver, runner: runner}
 }
 
-// RegisterRoutes adds the authenticated Volume Explorer read endpoints to mux.
+// RegisterRoutes adds the authenticated Volume Explorer endpoints to mux: the
+// listing of a Compose's resolved Volumes and the per-operation reads.
 func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes", s.list)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/list", s.listFiles)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/stat", s.statFile)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/read", s.readFile)
 }
 
 // list answers one Compose's resolved Volumes and every Service's operation
@@ -45,23 +50,8 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 // before the first deploy included, surfaces the CLI's own message with a Bad
 // Gateway status, like every other runner failure.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
-	projectID, environmentID, err := routeIDs(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	composeID, err := parsePositiveID(r.PathValue("composeID"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
-		return
-	}
-
-	req, err := s.composes.ComposeRunRequest(r.Context(), projectID, environmentID, composeID)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "compose not found")
-		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
+	req, ok := s.composeRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -109,6 +99,34 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		Volumes:   resolvedVolumes,
 		Services:  services,
 	})
+}
+
+// composeRequest parses the three route ids and loads the Compose's deploy
+// identity, answering the same 400/404/500 the Compose routes use. Every
+// Volume Explorer route starts here, so an unknown Project, Environment or
+// Compose — or a non-numeric id — is refused identically and no CLI or runner
+// call happens.
+func (s *Service) composeRequest(w http.ResponseWriter, r *http.Request) (composes.RunRequest, bool) {
+	projectID, environmentID, err := routeIDs(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return composes.RunRequest{}, false
+	}
+	composeID, err := parsePositiveID(r.PathValue("composeID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
+		return composes.RunRequest{}, false
+	}
+
+	req, err := s.composes.ComposeRunRequest(r.Context(), projectID, environmentID, composeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "compose not found")
+		return composes.RunRequest{}, false
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return composes.RunRequest{}, false
+	}
+	return req, true
 }
 
 // response is the wire shape: the feature flag, and when available the
