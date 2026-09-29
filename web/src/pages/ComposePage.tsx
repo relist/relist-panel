@@ -37,11 +37,12 @@ import {
   theme,
 } from 'antd';
 import type { MenuProps } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
 import { paths } from '../app/paths';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
+import { ComposeVolumesTab } from '../components/ComposeVolumesTab';
 import { DangerModal } from '../components/DangerModal';
 import { FullscreenEditor } from '../components/FullscreenEditor';
 import {
@@ -55,26 +56,28 @@ import {
 } from '../components/primitives';
 import { ServiceMonitor } from '../components/ServiceMonitor';
 import { YamlEditor } from '../components/YamlEditor';
+import { volumeArchiveUrl } from '../data/api';
 import { usePanel } from '../data/store';
+import type { ComposeVolumes } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
 import { activeComposeTab, composeLinkIsStale, deploySteps, filterLogLines, hasUnsavedChanges } from './compose-view';
 
 const { Text, Paragraph, Title } = Typography;
 
 /**
- * Compose detail (GUIDELINES §4.6), the port of the prototype's Compose page
- * onto the real store: lifecycle actions are graded by weight (one primary,
- * one "More"), the `Editor | Monitor` tab lives in the path so both are
- * linkable, and the right rail answers "what is running right now, and where
- * does this thing live on the host?" without leaving the screen. The Monitor
- * tab answers the third question — how has this Service been behaving — and
- * lands with the host-monitoring feature; its tab row and URL are already real.
+ * Compose detail (GUIDELINES §4.6–4.7), the port of the prototype's Compose
+ * page onto the real store: lifecycle actions are graded by weight (one
+ * primary, one "More"), the `Editor | Monitor | Volumes` tab lives in the path
+ * so each one is linkable, and the right rail answers "what is running right
+ * now, and where does this thing live on the host?" without leaving the screen.
+ * The Monitor tab answers how a Service has been behaving, fed by the same
+ * Services endpoint as the rail's rows; the Volumes tab lists the Volumes this
+ * Compose resolves to and offers each one's tar.gz backup — read-only, and
+ * hidden outright when the panel cannot run the feature at all.
  *
  * The page scrolls as one document. The editor and the rail stretch to the same
  * height, so the editor is as tall as the status rail next to it (never shorter
- * than `LAYOUT.editorMinHeight`); the rail simply continues below the fold. The
- * Monitor tab answers the third question — how has this Service been behaving —
- * fed by the same Services endpoint as the rail's rows.
+ * than `LAYOUT.editorMinHeight`); the rail simply continues below the fold.
  */
 export function ComposePage() {
   const { composeId: composeParam, environmentId: environmentParam, projectId: projectParam, tab } = useParams();
@@ -90,6 +93,7 @@ export function ComposePage() {
     loadLogs,
     loadVariables,
     loadServices,
+    loadVolumes,
     projects,
     refreshStatus,
     restartCompose,
@@ -118,6 +122,17 @@ export function ComposePage() {
   const fail = (reason: unknown) =>
     setActionError(reason instanceof Error ? reason.message : 'Something went wrong');
 
+  // The Volumes tab's resolution is fetched once here: the tab is hidden when
+  // the feature cannot run at all (`available: false`), and that is a
+  // page-level decision, so the page owns the fetch and hands the result down.
+  // State is keyed to its Compose so a slow answer never shows on another one,
+  // and the request counter drops the answer outright.
+  const [volumes, setVolumes] = useState<{ composeId: number; payload?: ComposeVolumes; error?: string }>();
+  const volumesRequest = useRef(0);
+  const volumesForCompose = volumes?.composeId === composeId ? volumes : undefined;
+  const volumesPayload = volumesForCompose?.payload;
+  const volumesError = volumesForCompose?.error;
+
   useEffect(() => {
     setDraft(compose?.yamlContent ?? '');
   }, [compose?.id, compose?.yamlContent]);
@@ -145,11 +160,18 @@ export function ComposePage() {
   // parent, hand-edited URL) is redirected to the canonical one — tab included,
   // or the redirect would drop the operator back on the Editor.
   const activeTab = activeComposeTab(tab);
+  // `available: false` means the feature cannot run at all — a bare binary, no
+  // Docker socket — and the tab is hidden rather than shown dead. A URL that
+  // still names it redirects to the Editor along with every other stale link.
+  const volumesUnavailable = volumesPayload !== undefined && !volumesPayload.available;
+  const canonicalTab =
+    activeTab === 'editor' || (activeTab === 'volumes' && volumesUnavailable) ? undefined : activeTab;
   const canonicalPath =
     compose && environment && project
-      ? paths.compose(project.id, environment.id, compose.id, activeTab === 'monitor' ? 'monitor' : undefined)
+      ? paths.compose(project.id, environment.id, compose.id, canonicalTab)
       : undefined;
-  const pathIsStale = composeLinkIsStale(location, projectId, environmentId);
+  const pathIsStale =
+    composeLinkIsStale(location, projectId, environmentId) || (activeTab === 'volumes' && volumesUnavailable);
   useEffect(() => {
     if (pathIsStale && canonicalPath) {
       navigate(canonicalPath);
@@ -168,6 +190,28 @@ export function ComposePage() {
     });
   }, [composeId, loadServices]);
 
+  // One resolution per page load (the spec: ~30 ms through the Compose CLI),
+  // refetched on Retry and after a deploy writes the env file. A retry clears
+  // the payload, so the tab shows its skeleton rather than a stale list.
+  const fetchVolumes = useCallback(() => {
+    const request = ++volumesRequest.current;
+    setVolumes({ composeId });
+    return loadVolumes(composeId)
+      .then((payload) => {
+        if (volumesRequest.current === request) {
+          setVolumes({ composeId, payload });
+        }
+      })
+      .catch((reason: unknown) => {
+        if (volumesRequest.current === request) {
+          setVolumes({
+            composeId,
+            error: reason instanceof Error ? reason.message : 'Could not resolve this Compose’s Volumes',
+          });
+        }
+      });
+  }, [composeId, loadVolumes]);
+
   // The rows follow the containers: load once the deep link has resolved its
   // Compose (the tree ships later than this page on a cold URL — the same gate
   // the variables load uses), and again whenever the host may have changed.
@@ -177,6 +221,16 @@ export function ComposePage() {
       fetchServices();
     }
   }, [fetchServices, knownComposeId]);
+
+  // The Volumes tab cannot ask for its own data — whether the tab exists at
+  // all depends on the answer — so the page loads it once per Compose, behind
+  // the same deep-link gate as the Services rows.
+  useEffect(() => {
+    if (knownComposeId !== undefined) {
+      void fetchVolumes();
+    }
+  }, [fetchVolumes, knownComposeId]);
+
   const logsLoading = isPending(`logs:${composeId}`);
   const logLineCount = logsText ? logsText.split('\n').length : 0;
   const visibleLogLines = filterLogLines(logsText, logServices, logLines);
@@ -229,8 +283,10 @@ export function ComposePage() {
         }
       }
       message.success(`Deployed ${compose.name}`);
-      // A deploy mints new containers; the rail's rows follow.
+      // A deploy mints new containers; the rail's rows follow, and the env
+      // file it wrote is what the Volumes resolution needs.
       fetchServices();
+      void fetchVolumes();
     } catch (reason: unknown) {
       fail(reason);
     }
@@ -613,9 +669,34 @@ export function ComposePage() {
             key: 'monitor',
             label: 'Monitor',
           },
+          // Hidden outright when the feature cannot run at all — a bare binary
+          // or no Docker socket — per the spec's security decision 10.
+          ...(volumesUnavailable
+            ? []
+            : [
+                {
+                  children: (
+                    <ComposeVolumesTab
+                      archiveHref={(volume) =>
+                        volumeArchiveUrl(
+                          { composeId: compose.id, environmentId: environment.id, projectId: project.id },
+                          volume.source,
+                        )
+                      }
+                      deploying={isPending(`deploy:${compose.id}`)}
+                      error={volumesError}
+                      onDeploy={() => void deploy()}
+                      onRetry={() => void fetchVolumes()}
+                      payload={volumesPayload}
+                    />
+                  ),
+                  key: 'volumes',
+                  label: 'Volumes',
+                },
+              ]),
         ]}
         onChange={(key) =>
-          navigate(paths.compose(project.id, environment.id, compose.id, key === 'monitor' ? 'monitor' : undefined))
+          navigate(paths.compose(project.id, environment.id, compose.id, key === 'editor' ? undefined : key))
         }
       />
 

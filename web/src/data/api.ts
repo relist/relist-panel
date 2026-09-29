@@ -6,7 +6,16 @@
  * directly.
  */
 
-import type { Compose, Environment, EnvironmentVariable, HostMetrics, Project, ServiceFacts, ServiceMetrics } from './types';
+import type {
+  Compose,
+  ComposeVolumes,
+  Environment,
+  EnvironmentVariable,
+  HostMetrics,
+  Project,
+  ServiceFacts,
+  ServiceMetrics,
+} from './types';
 import type { MetricWindow } from './types';
 
 export type AuthStatus = {
@@ -127,6 +136,13 @@ export const api = {
   hostMetrics: (window: MetricWindow) => request<HostMetrics>(`/api/host/metrics?window=${window}`),
   /** The Compose's Services, from the container collector's cache. */
   listServices: (location: ComposePath) => request<ServiceFacts[]>(`${composePath(location)}/services`),
+  /**
+   * The Compose's resolved Volumes, each one's pre-flight status, and every
+   * Service's operation identity. `available: false` carries the reason the
+   * feature cannot run; before the first deploy the API answers 502 with the
+   * CLI's own `couldn't find env file`.
+   */
+  listVolumes: (location: ComposePath) => request<ComposeVolumes>(`${composePath(location)}/volumes`),
   serviceMetrics: (location: ComposePath, service: string, window: MetricWindow) =>
     request<ServiceMetrics>(`${composePath(location)}/services/${encodeURIComponent(service)}/metrics?window=${window}`),
 };
@@ -151,4 +167,14 @@ function composesPath(projectId: number, environmentId: number): string {
 
 function composePath(location: ComposePath): string {
   return `${composesPath(location.projectId, location.environmentId)}/${location.composeId}`;
+}
+
+/**
+ * The direct download URL for one Volume's whole-tree tar.gz backup
+ * (`path: "."`). It is handed to the browser as an `<a href>` — the archive
+ * streams from the helper straight to disk, potentially for gigabytes, so it
+ * must never pass through a `fetch` and a blob in the tab's memory.
+ */
+export function volumeArchiveUrl(location: ComposePath, source: string): string {
+  return `${composePath(location)}/volumes/archive?source=${encodeURIComponent(source)}&path=.`;
 }

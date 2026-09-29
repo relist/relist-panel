@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { Credentials, ProjectInput } from './api';
-import type { Compose, ComposeService, EnvironmentVariable, HostMetrics, MetricWindow, Project, ServiceMetrics } from './types';
+import type { Compose, ComposeService, ComposeVolumes, EnvironmentVariable, HostMetrics, MetricWindow, Project, ServiceMetrics } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
@@ -17,7 +17,7 @@ import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from '
  *  - Loading is exposed through `isPending(key)` under the prototype's keys
  *    (`save-compose:3`, `deploy:3`, `status:3`, …), plus the data loads
  *    (`projects`, `auth-status`, `variables:<environmentId>`, `logs:<composeId>`,
- *    `metrics:<window>`, `services:<composeId>`,
+ *    `metrics:<window>`, `services:<composeId>`, `volumes:<composeId>`,
  *    `service-metrics:<composeId>:<service>:<window>`).
  *  - Every method is a stable `useCallback`, so an effect that depends on one
  *    never refires when pending or data state changes — the prototype hit an
@@ -67,6 +67,8 @@ type PanelValue = {
   loadServiceMetrics: (composeId: number, service: string, metricWindow: MetricWindow) => Promise<ServiceMetrics>;
   /** The Compose's per-Service rows, from the container collector's cache. */
   loadServices: (composeId: number) => Promise<void>;
+  /** The Compose's resolved Volumes and pre-flight statuses, from the Compose CLI. */
+  loadVolumes: (composeId: number) => Promise<ComposeVolumes>;
   loadVariables: (environmentId: number) => Promise<void>;
   projects: Project[];
   /** Per-Service rows per Compose, from the Services endpoint. */
@@ -571,6 +573,26 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [track],
   );
 
+  // The resolution carries no tree state either: it is a fact about the
+  // Compose's files on disk, read fresh each time, and the page owns the result
+  // so the Volumes tab and the page-level tab-hiding decision share one fetch
+  // (the spec: one `docker compose config` per page load, ~30 ms, no caching).
+  const loadVolumes = useCallback(
+    (composeId: number) =>
+      track(`volumes:${composeId}`, async () => {
+        const location = findComposeLocation(projectsRef.current, composeId);
+        if (!location) {
+          throw new Error('Compose not found');
+        }
+        return api.listVolumes({
+          projectId: location.project.id,
+          environmentId: location.environment.id,
+          composeId,
+        });
+      }),
+    [track],
+  );
+
   const loadVariables = useCallback(
     async (environmentId: number) => {
       await track(`variables:${environmentId}`, async () => {
@@ -606,6 +628,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       loadServiceMetrics,
       loadServices,
       loadVariables,
+      loadVolumes,
       projects,
       refreshStatus,
       replaceVariables,
@@ -638,6 +661,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       loadServiceMetrics,
       loadServices,
       loadVariables,
+      loadVolumes,
       pending,
       projects,
       refreshStatus,

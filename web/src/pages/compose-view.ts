@@ -7,11 +7,14 @@ import type { ComposeLocation } from '../data/types';
  * are testable without a router or a store.
  */
 
-export type ComposeTab = 'editor' | 'monitor';
+export type ComposeTab = 'editor' | 'monitor' | 'volumes';
 
 /** The tab a path segment resolves to; an unknown segment falls back to Editor (GUIDELINES §4.6). */
 export function activeComposeTab(tab?: string): ComposeTab {
-  return tab === 'monitor' ? 'monitor' : 'editor';
+  if (tab === 'monitor' || tab === 'volumes') {
+    return tab;
+  }
+  return 'editor';
 }
 
 /** The unsaved-changes rule behind the header tag, the `Modified` marker and the banner. */

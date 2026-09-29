@@ -5,6 +5,7 @@ import { activeComposeTab, composeLinkIsStale, deploySteps, filterLogLines, hasU
 describe('activeComposeTab', () => {
   it('resolves the tab segment the design links to', () => {
     expect(activeComposeTab('monitor')).toBe('monitor');
+    expect(activeComposeTab('volumes')).toBe('volumes');
     expect(activeComposeTab('editor')).toBe('editor');
   });
 

@@ -311,3 +311,70 @@ export type HostMetrics = MetricsEnvelope<MetricSample>;
 
 /** The Service envelope's one source is the Docker stats API sweep. */
 export type ServiceMetrics = MetricsEnvelope<ServiceSample>;
+
+// ---- Volume files (.scratch/volume-files) ------------------------------------
+//
+// One Compose's resolved Volumes, from `GET .../composes/{c}/volumes`. Every
+// path here comes from `docker compose config --format json` — the panel never
+// parses YAML for a source and never accepts a host path from a form — and the
+// pre-flight is the API's check of whether the source may be mounted at all.
+
+/** How a Volume is realised on the host, matching the Compose CLI's `type`. */
+export type VolumeKind = 'volume' | 'bind';
+
+/** One Volume's pre-flight outcome: checked and present, checked and absent, or not checkable. */
+export type VolumePreflightStatus = 'ok' | 'missing' | 'unverifiable';
+
+/** One Service's declaration of a Volume: the container-side path and whether that mount is `:ro`. */
+export type VolumeUse = {
+  service: string;
+  target: string;
+  readOnly: boolean;
+};
+
+/**
+ * One Volume's pre-flight result. `warning` is the API's own explanation —
+ * empty for `ok`, and naming the consequence otherwise (an unverifiable bind
+ * becomes `root:root 0755` if a mount creates it).
+ */
+export type VolumePreflight = {
+  status: VolumePreflightStatus;
+  warning: string;
+};
+
+/**
+ * One source a Compose mounts, grouped across its Services. For a named
+ * volume, `logicalName` is its key in the top-level `volumes:` map and
+ * `source` is its real Docker name; for a bind, `logicalName` is empty and
+ * `source` is the resolved absolute host path.
+ */
+export type ComposeVolume = {
+  kind: VolumeKind;
+  logicalName: string;
+  source: string;
+  uses: VolumeUse[];
+  preflight: VolumePreflight;
+};
+
+/** Where a Service's operation identity came from. */
+export type VolumeUserSource = 'compose' | 'fallback';
+
+/** One Service's uid/gid resolution; `warning` is non-empty only for the `0:0` fallback. */
+export type VolumeServiceUser = {
+  service: string;
+  user: string;
+  source: VolumeUserSource;
+  warning: string;
+};
+
+/**
+ * One Compose's resolved Volumes and Service identities. `available: false`
+ * means the feature cannot run at all — a bare binary or no Docker socket —
+ * and `reason` says why; the Volumes tab is hidden in that case.
+ */
+export type ComposeVolumes = {
+  available: boolean;
+  reason?: string;
+  volumes: ComposeVolume[];
+  services: VolumeServiceUser[];
+};
