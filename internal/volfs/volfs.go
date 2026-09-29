@@ -170,6 +170,20 @@ func owner(info fs.FileInfo) (uid, gid uint32) {
 	return 0, 0
 }
 
+// FreeBytes reports the free space, in bytes, of the filesystem that holds
+// the Volume root, via statfs on the directory the root was opened from. The
+// helper uses it to refuse an upload the Volume cannot hold before it reads a
+// byte (the spec's Caps). Bavail, not Bfree, is the honest number: the helper
+// runs as an explicit --user that is usually not root, and the root-reserved
+// blocks cannot take its write.
+func (fs *FS) FreeBytes() (uint64, error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(fs.root.Name(), &stat); err != nil {
+		return 0, fmt.Errorf("statfs volume root %q: %w", fs.root.Name(), err)
+	}
+	return uint64(stat.Bavail) * uint64(stat.Bsize), nil
+}
+
 // Read streams one file's bytes into dst. A symlink is followed only if the
 // root can resolve it — one that points outside fails with os.Root's "path
 // escapes from parent" — and a directory is refused by the kernel.

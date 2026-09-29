@@ -15,21 +15,24 @@ import (
 const testImage = "relist-panel:latest"
 
 // The spec's argv, op by op: one run per operation, the read ops mounted
-// `:ro`, the write ops at Docker's default read-write, and archive the only
-// op that carries an extra flag.
+// `:ro`, and the write ops at Docker's default read-write. archive carries
+// `--format tar.gz`, and a write with a declared size carries `--expect <n>`;
+// both sit before `--`, where parse expects them.
 func TestVolumeArgvForEveryOp(t *testing.T) {
 	tests := []struct {
-		name       string
-		op         volumes.Op
-		readOnly   bool
-		wantMount  string
-		wantOpArgs []string
+		name          string
+		op            volumes.Op
+		readOnly      bool
+		declaredBytes int64
+		wantMount     string
+		wantOpArgs    []string
 	}{
 		{name: "list", op: volumes.OpList, readOnly: true, wantMount: "demo_pgdata:/data:ro", wantOpArgs: []string{"list"}},
 		{name: "stat", op: volumes.OpStat, readOnly: true, wantMount: "demo_pgdata:/data:ro", wantOpArgs: []string{"stat"}},
 		{name: "read", op: volumes.OpRead, readOnly: true, wantMount: "demo_pgdata:/data:ro", wantOpArgs: []string{"read"}},
 		{name: "archive", op: volumes.OpArchive, readOnly: true, wantMount: "demo_pgdata:/data:ro", wantOpArgs: []string{"archive", "--format", "tar.gz"}},
 		{name: "write", op: volumes.OpWrite, wantMount: "demo_pgdata:/data", wantOpArgs: []string{"write"}},
+		{name: "write with a declared size", op: volumes.OpWrite, declaredBytes: 1048576, wantMount: "demo_pgdata:/data", wantOpArgs: []string{"write", "--expect", "1048576"}},
 		{name: "delete", op: volumes.OpDelete, wantMount: "demo_pgdata:/data", wantOpArgs: []string{"delete"}},
 		{name: "extract", op: volumes.OpExtract, wantMount: "demo_pgdata:/data", wantOpArgs: []string{"extract"}},
 	}
@@ -37,11 +40,12 @@ func TestVolumeArgvForEveryOp(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := volumes.Request{
-				Source:   "demo_pgdata",
-				User:     "1000:1000",
-				Op:       tt.op,
-				Path:     "uploads/notes.txt",
-				ReadOnly: tt.readOnly,
+				Source:        "demo_pgdata",
+				User:          "1000:1000",
+				Op:            tt.op,
+				Path:          "uploads/notes.txt",
+				DeclaredBytes: tt.declaredBytes,
+				ReadOnly:      tt.readOnly,
 			}
 
 			got := volumeArgv(testImage, req)

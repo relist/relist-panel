@@ -146,7 +146,7 @@ with `-` cannot be read as a flag. The container's command is the helper invocat
 relist-volhelper list    -- <relpath>
 relist-volhelper stat    -- <relpath>
 relist-volhelper read    -- <relpath>                 # bytes on stdout
-relist-volhelper write   -- <relpath>                 # bytes on stdin
+relist-volhelper write   [--expect <bytes>] -- <relpath> # bytes on stdin
 relist-volhelper delete  -- <relpath>                 # file or whole tree
 relist-volhelper archive --format tar.gz -- <relpath> # bytes on stdout
 relist-volhelper extract -- <relpath>                 # tar.gz on stdin
@@ -155,6 +155,11 @@ relist-volhelper extract -- <relpath>                 # tar.gz on stdin
 Paths are **relative to `/data`**, always. The helper rejects absolute paths outright. Metadata
 operations return JSON on stdout; `read` and `archive` return raw bytes and `extract` consumes them.
 Read operations mount `:ro`; `write`, `delete` and `extract` mount `:rw`.
+
+The helper exits `0` on success, `1` on an operation failure and `2` on a malformed invocation. A
+`write` also exits **3** when it is refused for want of space, naming need vs available: `--expect`'s
+declared size cannot fit the Volume — refused before any stdin is read — or the stream overran the
+free space measured when it began, in which case the partial file is removed best-effort.
 
 Every filesystem call goes through **`os.Root`** (`os.OpenRoot("/data")`), which refuses to resolve a
 name outside the root and rejects absolute symlinks. This is defense in depth *behind* the panel's
@@ -370,7 +375,7 @@ is an invitation to turn them off:
 
 | | limit |
 | --- | --- |
-| upload | 1 GiB, and refused when it exceeds the Volume's free space (the helper checks `statfs`) |
+| upload | 1 GiB, and refused when it exceeds the Volume's free space (the helper checks `statfs`: a declared size is checked before stdin is read, and a stream that still overruns is aborted, its partial file removed) |
 | editable text file | 1 MB |
 | archive stream | 10 minute timeout |
 | restore, compressed | ≤ 1 GiB, enforced on the request body |

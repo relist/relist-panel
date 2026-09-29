@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"relist-panel/internal/volumes"
@@ -100,9 +101,14 @@ func volumeArgv(image string, req volumes.Request) []string {
 		image,
 		string(req.Op),
 	}
-	if req.Op == volumes.OpArchive {
-		// archive is the protocol's only op carrying an extra flag.
+	switch {
+	case req.Op == volumes.OpArchive:
+		// archive's pinned format, before the path.
 		argv = append(argv, "--format", "tar.gz")
+	case req.Op == volumes.OpWrite && req.DeclaredBytes > 0:
+		// write accepts the upload's declared size, so the helper can refuse
+		// it before reading a byte of stdin (the spec's Caps).
+		argv = append(argv, "--expect", strconv.FormatInt(req.DeclaredBytes, 10))
 	}
 	return append(argv, "--", req.Path)
 }

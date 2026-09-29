@@ -20,9 +20,26 @@ import (
 // real protocol without a process or a container.
 func runHelper(t *testing.T, root string, stdin []byte, args ...string) (code int, stdout []byte, stderr string) {
 	t.Helper()
+	return runHelperWith(t, root, bytes.NewReader(stdin), (*volfs.FS).FreeBytes, args...)
+}
+
+// runHelperWith is runHelper with the free-space lookup injected: a test can
+// pin a tiny filesystem without filling the real one, and stdin can be any
+// reader — including one that fails the test if the helper reads it.
+func runHelperWith(t *testing.T, root string, stdin io.Reader, freeSpace func(*volfs.FS) (uint64, error), args ...string) (code int, stdout []byte, stderr string) {
+	t.Helper()
 	var out, errOut bytes.Buffer
-	code = run(args, bytes.NewReader(stdin), &out, &errOut, root)
+	code = run(args, stdin, &out, &errOut, root, freeSpace)
 	return code, out.Bytes(), errOut.String()
+}
+
+// unreadReader fails the test if anything reads it: the pre-flight refusal
+// must happen before stdin is touched.
+type unreadReader struct{ t *testing.T }
+
+func (r *unreadReader) Read([]byte) (int, error) {
+	r.t.Error("stdin was read, want the refusal before any read")
+	return 0, errors.New("stdin read")
 }
 
 // plant writes a file directly under the root: fixture setup, not the code
@@ -238,6 +255,165 @@ func TestWriteStreamsStdinAndRoundTrips(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "no such file") {
 		t.Errorf("write to a missing directory stderr = %q", stderr)
+	}
+}
+
+// TestWriteRefusesADeclaredSizeThatCannotFit: with --expect the helper
+// measures the Volume's free space before it reads any stdin or opens the
+// target. A declared size over the free space exits 3 — distinct from the
+// operation-failure 1 and the usage 2 — with a message naming need and
+// available, and leaves the target exactly as it was.
+func TestWriteRefusesADeclaredSizeThatCannotFit(t *testing.T) {
+	root := t.TempDir()
+	plant(t, root, "notes.txt", []byte("original"))
+
+	free := func(*volfs.FS) (uint64, error) { return 10, nil }
+	code, stdout, stderr := runHelperWith(t, root, &unreadReader{t: t}, free, "write", "--expect", "100", "--", "notes.txt")
+	if code != exitRefused {
+		t.Fatalf("write exit = %d, stderr = %q; want %d", code, stderr, exitRefused)
+	}
+	if len(stdout) != 0 {
+		t.Errorf("write stdout = %q, want nothing", stdout)
+	}
+	for _, want := range []string{"needs 100 bytes", "only 10 free"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("write stderr = %q, want it to contain %q", stderr, want)
+		}
+	}
+	onDisk, err := os.ReadFile(filepath.Join(root, "notes.txt"))
+	if err != nil {
+		t.Fatalf("reading the target after the refusal: %v", err)
+	}
+	if string(onDisk) != "original" {
+		t.Errorf("target = %q after the refusal, want it untouched", onDisk)
+	}
+
+	// A target that does not exist yet is not created either.
+	code, _, stderr = runHelperWith(t, root, &unreadReader{t: t}, free, "write", "--expect", "11", "--", "new.bin")
+	if code != exitRefused {
+		t.Fatalf("write to a new path exit = %d, stderr = %q; want %d", code, stderr, exitRefused)
+	}
+	if _, err := os.Stat(filepath.Join(root, "new.bin")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the refused write created new.bin: %v", err)
+	}
+}
+
+// TestWriteAcceptsADeclaredSizeThatFits: a declared size within the free
+// space writes normally, including a stream that ends exactly at the budget —
+// which is not an overflow — and a write with no --expect at all still works
+// under the stream guard.
+func TestWriteAcceptsADeclaredSizeThatFits(t *testing.T) {
+	root := t.TempDir()
+	free := func(*volfs.FS) (uint64, error) { return 10, nil }
+
+	exact := []byte("0123456789")
+	code, _, stderr := runHelperWith(t, root, bytes.NewReader(exact), free, "write", "--expect", "10", "--", "exact.bin")
+	if code != exitOK {
+		t.Fatalf("exact-fit write exit = %d, stderr = %q", code, stderr)
+	}
+	onDisk, err := os.ReadFile(filepath.Join(root, "exact.bin"))
+	if err != nil || !bytes.Equal(onDisk, exact) {
+		t.Errorf("exact-fit file = %q, %v; want %q", onDisk, err, exact)
+	}
+
+	code, _, stderr = runHelperWith(t, root, bytes.NewReader([]byte("hi")), free, "write", "--expect", "2", "--", "spare.bin")
+	if code != exitOK {
+		t.Fatalf("write with room to spare exit = %d, stderr = %q", code, stderr)
+	}
+	if onDisk, err := os.ReadFile(filepath.Join(root, "spare.bin")); err != nil || string(onDisk) != "hi" {
+		t.Errorf("spare.bin = %q, %v; want %q", onDisk, err, "hi")
+	}
+
+	code, _, stderr = runHelperWith(t, root, bytes.NewReader([]byte("undeclared")), free, "write", "--", "plain.bin")
+	if code != exitOK {
+		t.Fatalf("write without --expect exit = %d, stderr = %q", code, stderr)
+	}
+	if onDisk, err := os.ReadFile(filepath.Join(root, "plain.bin")); err != nil || string(onDisk) != "undeclared" {
+		t.Errorf("plain.bin = %q, %v; want %q", onDisk, err, "undeclared")
+	}
+}
+
+// TestWriteAbortsWhenTheStreamOverrunsTheFreeSpace: the guard delivers at
+// most the budget measured at the start. A stream that runs past it aborts
+// with exit 3 and the partial file is removed — for a declared upload whose
+// declared size lied, and without --expect too, where the guard is the only
+// protection.
+func TestWriteAbortsWhenTheStreamOverrunsTheFreeSpace(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "with --expect", args: []string{"write", "--expect", "5", "--", "upload.bin"}},
+		{name: "without --expect", args: []string{"write", "--", "upload.bin"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			plant(t, root, "upload.bin", []byte("original"))
+
+			free := func(*volfs.FS) (uint64, error) { return 10, nil }
+			code, stdout, stderr := runHelperWith(t, root, bytes.NewReader(bytes.Repeat([]byte("x"), 100)), free, tt.args...)
+			if code != exitRefused {
+				t.Fatalf("overrunning write exit = %d, stderr = %q; want %d", code, stderr, exitRefused)
+			}
+			if len(stdout) != 0 {
+				t.Errorf("overrunning write stdout = %q, want nothing", stdout)
+			}
+			if !strings.Contains(stderr, "free space") {
+				t.Errorf("overrunning write stderr = %q, want the free-space refusal", stderr)
+			}
+			if _, err := os.Stat(filepath.Join(root, "upload.bin")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the partial file survived the abort: %v", err)
+			}
+		})
+	}
+}
+
+// TestWriteReportsAFailedFreeSpaceLookupAsAnOperationFailure: a free-space
+// lookup that fails is not a refusal — there is no space answer to name — so
+// it stays the operation failure 1.
+func TestWriteReportsAFailedFreeSpaceLookupAsAnOperationFailure(t *testing.T) {
+	root := t.TempDir()
+	broken := func(*volfs.FS) (uint64, error) { return 0, errors.New("statfs: boom") }
+
+	code, _, stderr := runHelperWith(t, root, bytes.NewReader([]byte("x")), broken, "write", "--expect", "1", "--", "f.bin")
+	if code != exitError {
+		t.Errorf("write exit = %d, stderr = %q; want %d", code, stderr, exitError)
+	}
+	if !strings.Contains(stderr, "boom") {
+		t.Errorf("write stderr = %q, want the lookup failure", stderr)
+	}
+}
+
+// TestWriteRefusesAMalformedExpect: --expect's value must be a non-negative
+// integer in the panel's exact shape; anything else is the usage error 2,
+// before any file is touched.
+func TestWriteRefusesAMalformedExpect(t *testing.T) {
+	root := t.TempDir()
+
+	malformed := [][]string{
+		{"write", "--expect", "abc", "--", "f.bin"},
+		{"write", "--expect", "-1", "--", "f.bin"},
+		{"write", "--expect", "1.5", "--", "f.bin"},
+		{"write", "--expect", "--", "f.bin"},
+		{"write", "--expect", ""},
+		{"write", "--expect"},
+		{"read", "--expect", "5", "--", "f.bin"},
+	}
+	for _, args := range malformed {
+		code, stdout, stderr := runHelper(t, root, []byte("x"), args...)
+		if code != exitUsage {
+			t.Errorf("%v exit = %d, want %d", args, code, exitUsage)
+		}
+		if len(stdout) != 0 {
+			t.Errorf("%v stdout = %q, want empty", args, stdout)
+		}
+		if !strings.Contains(stderr, "usage:") {
+			t.Errorf("%v stderr = %q, want the usage block", args, stderr)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "f.bin")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a malformed invocation created f.bin: %v", err)
 	}
 }
 

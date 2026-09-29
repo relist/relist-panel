@@ -381,6 +381,21 @@ type errorReader struct{}
 
 func (errorReader) Read([]byte) (int, error) { return 0, errors.New("boom") }
 
+// FreeBytes answers with the root's own filesystem: a real temp directory has
+// room, and a zero would mean the helper had nothing to compare an upload
+// against.
+func TestFreeBytesReportsTheRootsFilesystem(t *testing.T) {
+	f := newFixture(t)
+
+	free, err := f.FreeBytes()
+	if err != nil {
+		t.Fatalf("FreeBytes() error = %v", err)
+	}
+	if free == 0 {
+		t.Error("FreeBytes() = 0, want the temp directory's free space")
+	}
+}
+
 // Delete removes a file and a whole tree, removes a symlink without touching
 // its target, refuses the root itself, and treats an already-absent path as
 // the no-op RemoveAll is.

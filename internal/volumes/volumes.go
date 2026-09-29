@@ -36,14 +36,18 @@ const (
 // a named volume's real name or a bind mount's absolute host path — and it is
 // the only thing ever mounted (ADR-0010). User is the explicit `--user` value
 // (`<uid>:<gid>`), root included only as a deliberate opt-in. Path is relative
-// to the Volume root, which the helper sees as `/data`. ReadOnly is the
-// read/write choice: true mounts `:ro`, and the kernel is the enforcer.
+// to the Volume root, which the helper sees as `/data`. DeclaredBytes is an
+// upload's declared size, when the endpoint knows it, passed to `write` as
+// `--expect <n>` so the helper can refuse a write that cannot fit before it
+// streams; zero means no declared size. ReadOnly is the read/write choice:
+// true mounts `:ro`, and the kernel is the enforcer.
 type Request struct {
-	Source   string
-	User     string
-	Op       Op
-	Path     string
-	ReadOnly bool
+	Source        string
+	User          string
+	Op            Op
+	Path          string
+	DeclaredBytes int64
+	ReadOnly      bool
 }
 
 // Runner is the seam that turns one operation into one helper run. Run

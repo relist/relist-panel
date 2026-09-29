@@ -7,7 +7,7 @@
 //	relist-volhelper list    -- <path>
 //	relist-volhelper stat    -- <path>
 //	relist-volhelper read    -- <path>
-//	relist-volhelper write   -- <path>
+//	relist-volhelper write   [--expect <bytes>] -- <path>
 //	relist-volhelper delete  -- <path>
 //	relist-volhelper archive --format tar.gz -- <path>
 //
@@ -26,6 +26,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"relist-panel/internal/volfs"
 )
@@ -40,19 +41,22 @@ const usage = `usage:
   relist-volhelper list    -- <path>
   relist-volhelper stat    -- <path>
   relist-volhelper read    -- <path>
-  relist-volhelper write   -- <path>
+  relist-volhelper write   [--expect <bytes>] -- <path>
   relist-volhelper delete  -- <path>
   relist-volhelper archive --format tar.gz -- <path>
 <path> is relative to the Volume root mounted at /data.
+--expect is a write's declared size in bytes, checked against the Volume's free space before stdin is read.
 `
 
 // The helper's exit codes: 0 for success, 1 when an operation failed, 2 when
-// the invocation itself was refused. Any non-zero code is a failure to the
-// panel; the split only sharpens the helper's own diagnostics.
+// the invocation itself was refused, 3 when a write is refused for want of
+// space. Any non-zero code is a failure to the panel; the split only sharpens
+// the helper's own diagnostics.
 const (
-	exitOK    = 0
-	exitError = 1
-	exitUsage = 2
+	exitOK      = 0
+	exitError   = 1
+	exitUsage   = 2
+	exitRefused = 3
 )
 
 func main() {
@@ -60,14 +64,16 @@ func main() {
 	// default SIGTERM behaviour — die immediately — so a stop stays fast:
 	// measured at ~1.1 s, against ~10.1 s when pid1 traps or ignores SIGTERM
 	// (the spec's execution costs). Nothing here calls signal.Notify.
-	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, dataDir))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, dataDir, (*volfs.FS).FreeBytes))
 }
 
 // run is the helper's whole protocol: parse one argv, refuse an absolute path
 // before any filesystem call, open the Volume root once, and dispatch exactly
-// one operation. It returns the process exit code.
-func run(args []string, stdin io.Reader, stdout, stderr io.Writer, rootDir string) int {
-	op, name, err := parse(args)
+// one operation. It returns the process exit code. freeSpace reads the
+// Volume's free space — volfs's statfs query in production, injected in tests
+// so a refusal and a mid-stream abort are exercised without filling a disk.
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer, rootDir string, freeSpace func(*volfs.FS) (uint64, error)) int {
+	cmd, err := parse(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "relist-volhelper: %v\n\n%s", err, usage)
 		return exitUsage
@@ -76,8 +82,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, rootDir strin
 	// Absolute paths are refused here, before os.OpenRoot, so the refusal
 	// never depends on the mount existing or on os.Root having to catch it.
 	// os.Root would refuse the path too — defense in depth, not the guard.
-	if filepath.IsAbs(name) {
-		fmt.Fprintf(stderr, "relist-volhelper: absolute path %q is not allowed: paths are relative to the Volume root\n", name)
+	if filepath.IsAbs(cmd.name) {
+		fmt.Fprintf(stderr, "relist-volhelper: absolute path %q is not allowed: paths are relative to the Volume root\n", cmd.name)
 		return exitUsage
 	}
 
@@ -88,9 +94,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, rootDir strin
 	}
 	defer vol.Close()
 
-	switch op {
+	switch cmd.op {
 	case "list":
-		entries, err := vol.List(name)
+		entries, err := vol.List(cmd.name)
 		if err != nil {
 			return fail(stderr, err)
 		}
@@ -99,7 +105,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, rootDir strin
 		}
 		return exitOK
 	case "stat":
-		entry, err := vol.Stat(name)
+		entry, err := vol.Stat(cmd.name)
 		if err != nil {
 			return fail(stderr, err)
 		}
@@ -108,51 +114,141 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, rootDir strin
 		}
 		return exitOK
 	case "read":
-		return failOn(stderr, vol.Read(name, stdout))
+		return failOn(stderr, vol.Read(cmd.name, stdout))
 	case "write":
-		return failOn(stderr, vol.Write(name, stdin))
+		return runWrite(stderr, vol, stdin, cmd, freeSpace)
 	case "delete":
-		return failOn(stderr, vol.Delete(name))
+		return failOn(stderr, vol.Delete(cmd.name))
 	case "archive":
 		// parse pinned the format: tar.gz is the only one the helper speaks.
-		return failOn(stderr, vol.Archive(name, stdout))
+		return failOn(stderr, vol.Archive(cmd.name, stdout))
 	default:
 		// Unreachable while parse and this switch agree; a failure here is a
 		// bug, and must still be a non-zero exit, not a silent success.
-		fmt.Fprintf(stderr, "relist-volhelper: unhandled operation %q\n\n%s", op, usage)
+		fmt.Fprintf(stderr, "relist-volhelper: unhandled operation %q\n\n%s", cmd.op, usage)
 		return exitUsage
 	}
 }
 
-// parse accepts exactly one argv shape per op: `-- <path>` for every op, and
-// `--format tar.gz -- <path>` for archive. `--` is mandatory, so a name
-// starting with `-` is always a path and never a flag; the flag order is
-// fixed because the panel is the only caller and emits precisely this shape.
-func parse(args []string) (op, name string, err error) {
-	if len(args) == 0 {
-		return "", "", errors.New("missing operation")
-	}
-	op, rest := args[0], args[1:]
+// command is one parsed helper invocation: the op, the path after `--`, and —
+// for write — the declared upload size from `--expect`, when the panel knows
+// it. The value alone cannot say whether the flag was given, because zero is a
+// legal declared size, so declared records its presence.
+type command struct {
+	op       string
+	name     string
+	expect   int64
+	declared bool
+}
 
-	switch op {
-	case "list", "stat", "read", "write", "delete":
+// parse accepts exactly one argv shape per op: `-- <path>` for every op,
+// `--expect <bytes> -- <path>` additionally for write, and `--format tar.gz --
+// <path>` for archive. `--` is mandatory, so a name starting with `-` is
+// always a path and never a flag; the flag order is fixed because the panel is
+// the only caller and emits precisely these shapes.
+func parse(args []string) (command, error) {
+	if len(args) == 0 {
+		return command{}, errors.New("missing operation")
+	}
+	cmd := command{op: args[0]}
+	rest := args[1:]
+
+	switch cmd.op {
+	case "list", "stat", "read", "delete":
 		// No extra flags: the path follows immediately after `--`.
+	case "write":
+		// An upload's declared byte count, so the helper can refuse a write
+		// that cannot fit before it reads any stdin.
+		if len(rest) >= 2 && rest[0] == "--expect" {
+			expect, err := strconv.ParseInt(rest[1], 10, 64)
+			if err != nil || expect < 0 {
+				return command{}, fmt.Errorf("--expect takes a non-negative byte count, got %q", rest[1])
+			}
+			cmd.expect, cmd.declared = expect, true
+			rest = rest[2:]
+		}
 	case "archive":
 		if len(rest) < 2 || rest[0] != "--format" {
-			return "", "", errors.New("archive requires --format tar.gz")
+			return command{}, errors.New("archive requires --format tar.gz")
 		}
 		if rest[1] != "tar.gz" {
-			return "", "", fmt.Errorf("unsupported archive format %q: the only format is tar.gz", rest[1])
+			return command{}, fmt.Errorf("unsupported archive format %q: the only format is tar.gz", rest[1])
 		}
 		rest = rest[2:]
 	default:
-		return "", "", fmt.Errorf("unknown operation %q", op)
+		return command{}, fmt.Errorf("unknown operation %q", cmd.op)
 	}
 
 	if len(rest) != 2 || rest[0] != "--" {
-		return "", "", fmt.Errorf("%s takes `-- <path>`", op)
+		return command{}, fmt.Errorf("%s takes `-- <path>`", cmd.op)
 	}
-	return op, rest[1], nil
+	cmd.name = rest[1]
+	return cmd, nil
+}
+
+// errNoSpace is the guard's own refusal, a sentinel so runWrite can tell a
+// mid-stream overflow — which removes the partial file and exits 3 — from any
+// other io failure, which stays exit 1.
+var errNoSpace = errors.New("stream exceeds the Volume's free space")
+
+// runWrite is the protocol's only consuming operation. It measures the
+// Volume's free space once, refuses a declared size that cannot fit before
+// stdin or the target is touched (the spec's Caps), then guards the stream
+// against the same measurement. volfs.Write creates and truncates the target
+// before the copy, so a guarded abort removes the partial file rather than
+// leaving a truncated one; the removal is best-effort, and the refusal still
+// exits 3.
+func runWrite(stderr io.Writer, vol *volfs.FS, stdin io.Reader, cmd command, freeSpace func(*volfs.FS) (uint64, error)) int {
+	free, err := freeSpace(vol)
+	if err != nil {
+		return fail(stderr, fmt.Errorf("write %q: check free space: %w", cmd.name, err))
+	}
+	if cmd.declared && uint64(cmd.expect) > free {
+		fmt.Fprintf(stderr, "relist-volhelper: write %q needs %d bytes but the Volume has only %d free\n", cmd.name, cmd.expect, free)
+		return exitRefused
+	}
+
+	if err := vol.Write(cmd.name, &spaceGuard{src: stdin, free: free}); err != nil {
+		if errors.Is(err, errNoSpace) {
+			_ = vol.Delete(cmd.name)
+			fmt.Fprintf(stderr, "relist-volhelper: write %q exceeded the Volume's free space (only %d bytes free when it began)\n", cmd.name, free)
+			return exitRefused
+		}
+		return fail(stderr, err)
+	}
+	return exitOK
+}
+
+// spaceGuard wraps a write's source and stops it delivering more bytes than
+// the free space measured when the write began. It is a budget check, not a
+// reservation — another writer can still take the space — and the budget can
+// be consumed to the last byte: a stream that ends exactly at the limit is
+// not an overflow.
+type spaceGuard struct {
+	src     io.Reader
+	free    uint64
+	written uint64
+}
+
+// Read delivers at most the bytes left in the budget. At the limit it probes
+// the source with a single byte so an exactly-sized stream can end in EOF
+// while one more byte is refused as the overflow it would be.
+func (g *spaceGuard) Read(p []byte) (int, error) {
+	rem := g.free - g.written
+	if rem == 0 {
+		var probe [1]byte
+		n, err := g.src.Read(probe[:])
+		if n > 0 {
+			return 0, errNoSpace
+		}
+		return 0, err
+	}
+	if rem < uint64(len(p)) {
+		p = p[:rem]
+	}
+	n, err := g.src.Read(p)
+	g.written += uint64(n)
+	return n, err
 }
 
 // fail reports one operation's error on stderr — the only place errors go,
