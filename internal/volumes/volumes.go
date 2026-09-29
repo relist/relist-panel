@@ -1,9 +1,11 @@
 // Package volumes owns the Volume file operations of ADR-0010: one helper
 // container run per operation, driven over argv and the container's
-// stdin/stdout. It declares the Runner port — in the consumer, per ADR-0003 —
-// implemented for real in the leaf package `dockerexec` and faked in tests by
-// `volumes/faketest`. Resolving which source a Volume is, and the uid/gid
-// pre-flight, land with the endpoints that need them.
+// stdin/stdout; the resolution of which Volumes a Compose mounts and what
+// uid/gid an operation runs as; and the pre-flight that decides whether a
+// source may be mounted at all. It declares both of its ports — in the
+// consumer, per ADR-0003 — the Runner, implemented for real in the leaf
+// package `dockerexec` and faked in tests by `volumes/faketest`, and the CLI
+// that resolution and pre-flight speak to Docker through.
 package volumes
 
 import (
