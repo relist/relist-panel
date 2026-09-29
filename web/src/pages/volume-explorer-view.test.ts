@@ -24,6 +24,14 @@ import {
   parentPath,
   pathSegments,
   requiresConfirmation,
+  RESTORE_MAX_COMPRESSED_BYTES,
+  RESTORE_MAX_ENTRIES,
+  RESTORE_MAX_UNCOMPRESSED_BYTES,
+  restoreDisclosure,
+  restoreFailure,
+  restoreIntent,
+  restoreTarget,
+  restoreTooLarge,
   runningWriteWarning,
   uploadFailure,
   uploadTooLarge,
@@ -474,5 +482,140 @@ describe('editFailure', () => {
     const failure = editFailure(new ApiError(502, 'volume write failed: docker: exit status 1: permission denied'));
     expect(failure.message).toBe('Save failed');
     expect(failure.description).toBe('volume write failed: docker: exit status 1: permission denied');
+  });
+});
+
+describe('restoreTarget', () => {
+  it('is `.` at the Volume root and the relative path everywhere else', () => {
+    expect(restoreTarget('')).toBe('.');
+    expect(restoreTarget('invoices')).toBe('invoices');
+    expect(restoreTarget('invoices/2026-09')).toBe('invoices/2026-09');
+  });
+});
+
+describe('restoreTooLarge', () => {
+  it('lets an archive that exactly fills the compressed cap through, and refuses one byte more', () => {
+    expect(restoreTooLarge({ name: 'at-cap.tar.gz', size: RESTORE_MAX_COMPRESSED_BYTES })).toBeUndefined();
+
+    const refused = restoreTooLarge({ name: 'over-cap.tgz', size: RESTORE_MAX_COMPRESSED_BYTES + 1 });
+    expect(refused?.message).toBe('The archive exceeds the 1 GiB compressed cap');
+    expect(refused?.description).toContain('over-cap.tgz');
+    expect(refused?.description).toContain('1 GiB');
+    expect(refused?.description).toContain('never sent');
+  });
+});
+
+describe('restoreIntent', () => {
+  it('confirms an archive within the cap, carrying the disclosure that names the target', () => {
+    const intent = restoreIntent({ name: 'backup.tar.gz', size: 1024 }, 'invoices/2026-09');
+    expect(intent.status).toBe('confirm');
+    if (intent.status === 'confirm') {
+      expect(intent.disclosure.target).toBe('invoices/2026-09');
+      expect(intent.disclosure.title).toBe('Extract backup.tar.gz?');
+    }
+  });
+
+  it('refuses one byte past the cap without opening a confirmation', () => {
+    const intent = restoreIntent({ name: 'huge.tgz', size: RESTORE_MAX_COMPRESSED_BYTES + 1 }, '');
+    expect(intent).toEqual({
+      status: 'refused',
+      failure: {
+        message: 'The archive exceeds the 1 GiB compressed cap',
+        description: expect.stringContaining('huge.tgz'),
+      },
+    });
+  });
+});
+
+describe('restoreDisclosure', () => {
+  it('names the Volume root as `.`', () => {
+    const disclosure = restoreDisclosure({ name: 'backup.tar.gz' }, '');
+    expect(disclosure.target).toBe('.');
+    expect(disclosure.points[0]).toContain('the current directory, .');
+  });
+
+  it('names a nested target by its relative path', () => {
+    const disclosure = restoreDisclosure({ name: 'backup.tar.gz' }, 'invoices/2026-09');
+    expect(disclosure.target).toBe('invoices/2026-09');
+    expect(disclosure.points[0]).toContain('invoices/2026-09');
+  });
+
+  it('carries every fact the operator must decide on before anything is sent', () => {
+    const copy = restoreDisclosure({ name: 'backup.tar.gz' }, 'invoices').points.join('\n');
+    expect(copy).toContain('overwritten');
+    expect(copy).toContain('directories merge');
+    expect(copy).toContain('nothing else is deleted');
+    expect(copy).toContain('one operation');
+    expect(copy).toContain('never stored');
+    expect(copy).toContain('partial');
+    expect(copy).toContain('no transaction');
+    expect(copy).toContain('entries already written stay');
+    expect(copy).toContain('1 GiB compressed');
+    expect(copy).toContain('4 GiB uncompressed');
+    expect(copy).toContain('10,000 entries');
+  });
+
+  it('states the caps from the constants the client check uses', () => {
+    expect(RESTORE_MAX_COMPRESSED_BYTES).toBe(1 << 30);
+    expect(RESTORE_MAX_UNCOMPRESSED_BYTES).toBe(4 * (1 << 30));
+    expect(RESTORE_MAX_ENTRIES).toBe(10_000);
+  });
+});
+
+describe('restoreFailure', () => {
+  it('names the 1 GiB compressed cap the API refused the body for', () => {
+    const failure = restoreFailure(new ApiError(413, 'restore exceeds the 1 GiB compressed cap'));
+    expect(failure.message).toBe('The archive exceeds the 1 GiB compressed cap');
+    expect(failure.description).toContain('1 GiB');
+    expect(failure.description).toContain('nothing was extracted');
+    expect(failure.description).toContain('restore exceeds the 1 GiB compressed cap');
+  });
+
+  it('keeps the helper’s archive refusal and states that extraction is partial', () => {
+    const refusal =
+      'volume extract refused: relist-volhelper: extract "restored": unsafe archive entry: entry "../escape" has a ".." segment';
+    const failure = restoreFailure(new ApiError(422, refusal));
+    expect(failure.message).toBe('The Volume refused the archive');
+    expect(failure.description).toContain('../escape');
+    expect(failure.description).toContain('partial');
+    expect(failure.description).toContain('entries already written stay');
+  });
+
+  it('names the space refusal and keeps the helper’s need-vs-available numbers', () => {
+    const refusal =
+      'volume extract refused: relist-volhelper: extract "restored" needs 2147483648 bytes but the Volume has only 1048576 free';
+    const failure = restoreFailure(new ApiError(507, refusal));
+    expect(failure.message).toBe('The Volume is out of space');
+    expect(failure.description).toContain('needs 2147483648 bytes');
+    expect(failure.description).toContain('1048576 free');
+    expect(failure.description).toContain('no rollback');
+    // The write family's promise — a refused write removes its partial file —
+    // is not true of an extraction.
+    expect(failure.description).not.toContain('removes its partial file');
+  });
+
+  it('explains the 409 missing source instead of leaving a bare conflict', () => {
+    const failure = restoreFailure(
+      new ApiError(409, 'volume demo_pgdata is missing: named volume "demo_pgdata" does not exist'),
+    );
+    expect(failure.message).toBe('This Volume’s source is missing');
+    expect(failure.description).toContain('does not exist');
+    expect(failure.description).toContain('mounting it is what would create it');
+  });
+
+  it('keeps the API’s 400 wording for a request the shape rules refused', () => {
+    const failure = restoreFailure(new ApiError(400, 'path must be relative to the volume root'));
+    expect(failure.message).toBe('The restore was refused');
+    expect(failure.description).toBe('path must be relative to the volume root');
+  });
+
+  it('falls back to the API’s own message for an unmapped failure', () => {
+    const failure = restoreFailure(new ApiError(502, 'volume extract failed: docker: exit status 1: permission denied'));
+    expect(failure.message).toBe('Restore failed');
+    expect(failure.description).toBe('volume extract failed: docker: exit status 1: permission denied');
+  });
+
+  it('says something for a rejection that is not an Error', () => {
+    expect(restoreFailure('boom').description).toBe('boom');
   });
 });

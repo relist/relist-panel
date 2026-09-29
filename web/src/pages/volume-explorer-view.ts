@@ -423,6 +423,152 @@ export function runningWriteWarning(
   };
 }
 
+// ---- Restore (ticket 12) ------------------------------------------------------
+//
+// Restore's pure decisions: the compressed cap's client-side fast path, what a
+// picked archive earns — a confirmation carrying the whole disclosure, or a
+// refusal that never opens one — and the failure mapping, whose 422 and 507
+// wording carries the partial-extraction truth the operation must disclose.
+// Upload and extract are one operation, so there is no separate upload state
+// to model, and the archive is never stored.
+
+/**
+ * The compressed cap (spec: Caps — "restore, compressed ≤ 1 GiB, enforced on
+ * the request body"), repeated here only for the fast path; the API's own 413
+ * is the enforcer and the browser is not the limit.
+ */
+export const RESTORE_MAX_COMPRESSED_BYTES = 1 << 30;
+
+/** The uncompressed cap the helper counts as it extracts (the API answers 422). */
+export const RESTORE_MAX_UNCOMPRESSED_BYTES = 4 * (1 << 30);
+
+/** The entry cap the helper counts as it extracts (the API answers 422). */
+export const RESTORE_MAX_ENTRIES = 10_000;
+
+/** The target directory as the copy names it: the Volume root is `.`. */
+export function restoreTarget(path: string): string {
+  return path === '' ? '.' : path;
+}
+
+/**
+ * The client-side half of the compressed cap: an archive already over 1 GiB is
+ * refused before the confirmation opens and before a byte is sent, because
+ * sending it would only earn the API's own 413. The server's check is the one
+ * that counts.
+ */
+export function restoreTooLarge(file: { name: string; size: number }): VolumeFailure | undefined {
+  if (file.size <= RESTORE_MAX_COMPRESSED_BYTES) {
+    return undefined;
+  }
+  return {
+    message: 'The archive exceeds the 1 GiB compressed cap',
+    description: `${file.name} is ${formatBytes(file.size)} — larger than the 1 GiB compressed cap on a restore, so it was never sent.`,
+  };
+}
+
+/**
+ * What the confirmation says, derived once so every fact an operator must
+ * decide on is stated before anything is sent (spec: Restore):
+ *
+ *  - the target, named by the current directory's relative path (`.` at the root);
+ *  - files with the same path are overwritten, directories merge, nothing else
+ *    is deleted;
+ *  - upload and extract are one operation and the archive is never stored;
+ *  - a stream that fails part-way leaves the entries already written — there
+ *    is no transaction;
+ *  - the caps it can hit: 1 GiB compressed, and 4 GiB uncompressed / 10,000
+ *    entries counted during extraction.
+ */
+export type RestoreDisclosure = {
+  /** The target directory as the copy names it: `.` at the Volume root. */
+  target: string;
+  /** The confirmation's title, naming the picked archive. */
+  title: string;
+  /** The disclosure, one point per line, in order. */
+  points: string[];
+};
+
+export function restoreDisclosure(file: { name: string }, path: string): RestoreDisclosure {
+  const target = restoreTarget(path);
+  const compressed = RESTORE_MAX_COMPRESSED_BYTES / (1 << 30);
+  const uncompressed = RESTORE_MAX_UNCOMPRESSED_BYTES / (1 << 30);
+  const entries = RESTORE_MAX_ENTRIES.toLocaleString('en-US');
+  return {
+    target,
+    title: `Extract ${file.name}?`,
+    points: [
+      `The archive is extracted into the current directory, ${target}. Files with the same path are overwritten and directories merge — nothing else is deleted.`,
+      'Upload and extract are one operation: the archive streams straight into the Volume and is never stored — nothing is staged on the panel’s disk.',
+      'Extraction is partial, with no transaction: if the stream fails part-way, the entries already written stay.',
+      `Limits: ${compressed} GiB compressed, refused before anything is read; ${uncompressed} GiB uncompressed and ${entries} entries, counted by the helper as it extracts.`,
+    ],
+  };
+}
+
+/**
+ * What a picked archive leads to before anything is sent: an archive within
+ * the compressed cap earns the confirmation, which carries the disclosure; one
+ * past it is refused on the spot. Nothing else can start a restore — cancelling
+ * the confirmation drops the file and sends nothing.
+ */
+export type RestoreIntent =
+  | { status: 'confirm'; disclosure: RestoreDisclosure }
+  | { status: 'refused'; failure: VolumeFailure };
+
+export function restoreIntent(file: { name: string; size: number }, path: string): RestoreIntent {
+  const refused = restoreTooLarge(file);
+  if (refused !== undefined) {
+    return { status: 'refused', failure: refused };
+  }
+  return { status: 'confirm', disclosure: restoreDisclosure(file, path) };
+}
+
+/**
+ * The alert copy for a failed restore. 413 names the compressed cap, 422 the
+ * helper's archive refusal (an unsafe entry, a cap reached, or a body that is
+ * not a usable tar.gz), 507 the space refusal including the helper's
+ * need-vs-available numbers, 409 the missing source, and 400 the API's own
+ * request-shape refusal. The 422 and 507 wording states the partial semantics
+ * rather than the write family's "removes its partial file": a refusal aborts
+ * the rest of the stream, and the entries already written stay.
+ */
+export function restoreFailure(error: unknown): VolumeFailure {
+  const status = error instanceof ApiError ? error.status : undefined;
+  const api = error instanceof Error ? error.message : String(error);
+  switch (status) {
+    case 413:
+      return {
+        message: 'The archive exceeds the 1 GiB compressed cap',
+        description: `The panel caps one compressed restore at 1 GiB on the request body, so nothing was extracted. The API said: ${api}`,
+      };
+    case 422:
+      return {
+        message: 'The Volume refused the archive',
+        description: `${api} — an unsafe entry, a cap reached while extracting, or not a usable tar.gz. Extraction is partial: entries already written stay.`,
+      };
+    case 507:
+      return {
+        message: 'The Volume is out of space',
+        description: `The extract was refused for want of space, and extraction is partial — entries already written stay, with no rollback. The API said: ${api}`,
+      };
+    case 409:
+      return {
+        message: 'This Volume’s source is missing',
+        description: `${api} — mounting it is what would create it, so the panel refuses.`,
+      };
+    case 400:
+      return {
+        message: 'The restore was refused',
+        description: api,
+      };
+    default:
+      return {
+        message: 'Restore failed',
+        description: api,
+      };
+  }
+}
+
 /** A relative path normalized without touching the filesystem (`..` at the root is kept). */
 function normalize(path: string): string {
   const out: string[] = [];

@@ -77,6 +77,12 @@ type PanelValue = {
   writeVolumeFile: (composeId: number, source: string, path: string, file: Blob) => Promise<void>;
   /** Deletes one entry, or a whole tree, inside a resolved Volume. Permanent. */
   deleteVolumeEntry: (composeId: number, source: string, path: string) => Promise<void>;
+  /**
+   * Streams a tar.gz into one directory of a resolved Volume: upload and
+   * extract are one operation, so there is no separate upload step and the
+   * archive is never stored. Rejects with the API's message.
+   */
+  restoreVolume: (composeId: number, source: string, path: string, file: Blob) => Promise<void>;
   loadVariables: (environmentId: number) => Promise<void>;
   projects: Project[];
   /** Per-Service rows per Compose, from the Services endpoint. */
@@ -690,6 +696,27 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [track],
   );
 
+  // A restore carries no tree state either: the extract writes files the
+  // Explorer re-reads. The pending key names the target directory
+  // (`volume-restore:<compose>:<source>:<path>`), so the toolbar's action
+  // spins for its own request.
+  const restoreVolume = useCallback(
+    (composeId: number, source: string, path: string, file: Blob) =>
+      track(`volume-restore:${composeId}:${source}:${path}`, async () => {
+        const location = findComposeLocation(projectsRef.current, composeId);
+        if (!location) {
+          throw new Error('Compose not found');
+        }
+        await api.restoreVolume(
+          { projectId: location.project.id, environmentId: location.environment.id, composeId },
+          source,
+          path,
+          file,
+        );
+      }),
+    [track],
+  );
+
   const isPending = useCallback((key: string) => Boolean(pending[key]), [pending]);
 
   const value = useMemo<PanelValue>(
@@ -720,6 +747,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       refreshStatus,
       replaceVariables,
       restartCompose,
+      restoreVolume,
       saveCompose,
       saveVariable,
       services,
@@ -759,6 +787,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       services,
       replaceVariables,
       restartCompose,
+      restoreVolume,
       saveCompose,
       saveVariable,
       signIn,

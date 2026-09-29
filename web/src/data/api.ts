@@ -198,6 +198,20 @@ export const api = {
    */
   deleteVolumeEntry: (location: ComposePath, source: string, path: string) =>
     request<void>(volumeContentUrl(location, source, path), { method: 'DELETE' }),
+  /**
+   * Restores a tar.gz into one resolved Volume directory: the archive is the
+   * request body, streamed straight into the helper's `extract`, so upload and
+   * extract are one operation and nothing is staged on the panel's disk. The
+   * browser's `File` declares its length, which the API requires (a body
+   * without one is a 411). `path` names the target directory, which must
+   * already exist (the Volume root, `.`, is legal here unlike the write
+   * family). A compressed archive above 1 GiB is refused with 413, an unsafe,
+   * cap-breaking or unusable archive with 422 carrying the helper's own
+   * message, out of space with 507, and a missing source with 409. Success is
+   * 204.
+   */
+  restoreVolume: (location: ComposePath, source: string, path: string, file: Blob) =>
+    request<void>(volumeRestoreUrl(location, source, path), { body: file, method: 'PUT' }),
   serviceMetrics: (location: ComposePath, service: string, window: MetricWindow) =>
     request<ServiceMetrics>(`${composePath(location)}/services/${encodeURIComponent(service)}/metrics?window=${window}`),
 };
@@ -261,4 +275,14 @@ export function volumeReadUrl(location: ComposePath, source: string, path: strin
  */
 export function volumeContentUrl(location: ComposePath, source: string, path: string): string {
   return `${composePath(location)}/volumes/content?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`;
+}
+
+/**
+ * The restore endpoint's URL for one target directory — the current directory
+ * in the Explorer, and `.` at the Volume root, where `extract` merges rather
+ * than refusing the way the write family does. The body is the archive, so the
+ * URL never carries content.
+ */
+export function volumeRestoreUrl(location: ComposePath, source: string, path = '.'): string {
+  return `${composePath(location)}/volumes/restore?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path || '.')}`;
 }

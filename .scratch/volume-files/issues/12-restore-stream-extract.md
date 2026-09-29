@@ -6,14 +6,14 @@ the sharpest edge in the feature, so this lands last.
 
 **Blocked by:** 02, 03, 13, 05
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
 - [x] `internal/volfs` gains `extract`: every entry is validated **before it is written** — names relative and free of `..` segments, no absolute paths, symlink and hardlink entries refused outright — and a refusal aborts the rest of the stream
 - [x] The helper gains `extract -- <relpath>`, consuming the tar.gz on stdin; the target is a directory relative to `/data` that must already exist, directories inside the archive are created, existing files are overwritten and directories merge
 - [x] One HTTP endpoint streams the request body straight into the run's stdin with the Volume mounted `:rw` — upload and extract are one operation, and nothing is staged on the panel's disk
 - [x] Caps enforced end to end: compressed ≤ 1 GiB on the request body, uncompressed ≤ 4 GiB and ≤ 10k entries counted by the helper as it streams
-- [ ] The UI discloses, before the operator runs it, that a stream that fails mid-way leaves the entries already written in place — extraction is partial, there is no transaction across a stream — and names the target directory
-- [ ] Tests against malicious archives: `..` entries, absolute entries, symlink and hardlink entries, and the entry-count and uncompressed-size caps
+- [x] The UI discloses, before the operator runs it, that a stream that fails mid-way leaves the entries already written in place — extraction is partial, there is no transaction across a stream — and names the target directory
+- [x] Tests against malicious archives: `..` entries, absolute entries, symlink and hardlink entries, and the entry-count and uncompressed-size caps
 
 ## Comments
 
@@ -85,3 +85,22 @@ a leading-`/` 400; and the pipeline refusals (unknown Compose, undeclared source
 volume/bind, unavailable feature) each with no run. Evidence under `golang:1.27-alpine`:
 `gofmt -l .` silent, `go vet ./...` clean, `go test ./...` all green. Still open: the UI disclosure
 (session 4/4).
+
+**session 4/4 (UI):** the Explorer's restore landed. The toolbar gains **Restore tar.gz**: a hidden
+`.tar.gz`/`.tgz` input, a client-side check of the 1 GiB compressed cap, and — before anything is
+sent — a confirmation modal carrying the whole disclosure, target named by its relative path (`.`
+at the root): files overwritten and directories merged with nothing else deleted; upload and extract
+one operation with the archive never stored; partial extraction on a failed stream, with no
+transaction; and the three caps it can hit (1 GiB compressed, 4 GiB uncompressed, 10,000 entries
+counted by the helper during extraction). Cancel sends nothing. Confirming streams the picked `File`
+as the `PUT` body through `api.restoreVolume`; the toolbar action spins while it runs, success names
+the archive and target and re-reads the directory, and failures land in the Explorer's established
+alert via `restoreFailure`: 413 names the compressed cap, 422 the archive refusal with the helper's
+words and the partial truth, 507 the space refusal with the helper's need-vs-available text and no
+rollback claim, 409 the missing source, and 400 the API's message. The pure helpers
+(`restoreTarget`, `restoreTooLarge`, `restoreDisclosure`, `restoreIntent`, `restoreFailure`) live in
+`web/src/pages/volume-explorer-view.ts` with 15 new tests, and `volumeRestoreUrl` is pinned in
+`web/src/data/api.test.ts`. Evidence under `node:24-alpine`: `pnpm typecheck` clean, `pnpm test` all
+green (13 files, 230 tests). The malicious-archive tests box was already evidenced by sessions 1–2
+(15 unsafe names; symlink/hardlink/FIFO/character/block entries refused unwritten; entry and byte
+caps) and is ticked with this close.

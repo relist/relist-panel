@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { volumeArchiveUrl, volumeContentUrl, volumeReadApiUrl, volumeReadUrl } from './api';
+import { volumeArchiveUrl, volumeContentUrl, volumeReadApiUrl, volumeReadUrl, volumeRestoreUrl } from './api';
 
 /**
  * The two direct-download URLs the Explorer hands to an `<a href>`. They are
@@ -44,6 +44,23 @@ describe('volumeContentUrl', () => {
   it('targets the write endpoint with source and path encoded whole', () => {
     expect(volumeContentUrl(location, '/srv/legacy images', 'reports/a b\nc.txt')).toBe(
       '/api/projects/1/environments/2/composes/3/volumes/content?source=%2Fsrv%2Flegacy%20images&path=reports%2Fa%20b%0Ac.txt',
+    );
+  });
+});
+
+describe('volumeRestoreUrl', () => {
+  it('targets the restore endpoint with source and path encoded; the Volume root is `.`', () => {
+    expect(volumeRestoreUrl(location, 'demo_pgdata')).toBe(
+      '/api/projects/1/environments/2/composes/3/volumes/restore?source=demo_pgdata&path=.',
+    );
+    expect(volumeRestoreUrl(location, 'demo_pgdata', '')).toBe(
+      '/api/projects/1/environments/2/composes/3/volumes/restore?source=demo_pgdata&path=.',
+    );
+  });
+
+  it('extracts into a named directory, path encoded whole', () => {
+    expect(volumeRestoreUrl(location, '/srv/legacy images', 'invoices/2026-09')).toBe(
+      '/api/projects/1/environments/2/composes/3/volumes/restore?source=%2Fsrv%2Flegacy%20images&path=invoices%2F2026-09',
     );
   });
 });

@@ -6,6 +6,7 @@ import {
   EditOutlined,
   FileOutlined,
   FolderOutlined,
+  ImportOutlined,
   LinkOutlined,
   LockOutlined,
   ReloadOutlined,
@@ -43,7 +44,7 @@ import { usePanel } from '../data/store';
 import type { ComposeVolumes, VolumeEntry } from '../data/types';
 import { findComposeLocation } from '../data/types';
 import { composeLinkIsStale } from './compose-view';
-import type { EntryFacts, VolumeFailure } from './volume-explorer-view';
+import type { EntryFacts, RestoreDisclosure, VolumeFailure } from './volume-explorer-view';
 import {
   deleteFailure,
   editFailure,
@@ -60,6 +61,9 @@ import {
   parentPath,
   pathSegments,
   requiresConfirmation,
+  restoreFailure,
+  restoreIntent,
+  restoreTarget,
   runningWriteWarning,
   uploadFailure,
   uploadTooLarge,
@@ -74,7 +78,9 @@ type Row = { entry: VolumeEntry; facts: EntryFacts };
  * route in its own browser tab, listing one directory at a time, downloading a
  * file or the current directory as a tar.gz, and — ticket 08's write slice —
  * uploading a file into the current directory, editing a text file in Monaco,
- * and deleting a file or a whole directory tree.
+ * and deleting a file or a whole directory tree. Ticket 12 adds the restore:
+ * picking a tar.gz and streaming it into the current directory, one operation
+ * that extracts as it uploads and stores the archive nowhere.
  *
  * The editor is the full screen treatment the Compose YAML screen uses
  * (`VolumeFileEditor`, following `FullscreenEditor`). Opening is an explicit
@@ -110,8 +116,16 @@ export function VolumeExplorerPage() {
   const navigate = useNavigate();
   const { token } = theme.useToken();
   const { message } = App.useApp();
-  const { deleteVolumeEntry, isPending, listVolumeEntries, loadVolumes, projects, readVolumeFile, writeVolumeFile } =
-    usePanel();
+  const {
+    deleteVolumeEntry,
+    isPending,
+    listVolumeEntries,
+    loadVolumes,
+    projects,
+    readVolumeFile,
+    restoreVolume,
+    writeVolumeFile,
+  } = usePanel();
 
   const projectId = Number(projectParam);
   const environmentId = Number(environmentParam);
@@ -198,7 +212,13 @@ export function VolumeExplorerPage() {
   const [editorRefusal, setEditorRefusal] = useState<{ failure: VolumeFailure; path: string }>();
   const [saveError, setSaveError] = useState<VolumeFailure>();
   const [uploading, setUploading] = useState(false);
+  // The restore: the picked archive waits behind a confirmation carrying the
+  // whole disclosure, and only a confirm runs it. Cancelling drops the file
+  // and sends nothing.
+  const [restoring, setRestoring] = useState(false);
+  const [restore, setRestore] = useState<{ disclosure: RestoreDisclosure; file: File }>();
   const fileInput = useRef<HTMLInputElement>(null);
+  const restoreInput = useRef<HTMLInputElement>(null);
   const listRequest = useRef(0);
 
   const loadList = useCallback(async () => {
@@ -233,6 +253,9 @@ export function VolumeExplorerPage() {
     setWriteError(undefined);
     setEditorRefusal(undefined);
     setSaveError(undefined);
+    // A picked archive belongs to the directory it was picked in; a
+    // navigation (browser back included) drops it unconfirmed.
+    setRestore(undefined);
   }, [listingKey]);
 
   const rows = useMemo<Row[]>(
@@ -322,6 +345,47 @@ export function VolumeExplorerPage() {
     },
     [composeId, loadList, message, path, source, writeVolumeFile],
   );
+
+  // ---- The restore actions -----------------------------------------------------
+  //
+  // Picking an archive decides, before anything is sent, whether it earns the
+  // confirmation — which carries the whole disclosure, target named — or a
+  // refusal from the client-side compressed-cap fast path. Only a confirm runs
+  // the PUT; cancelling the modal drops the file. The extract is one held-open
+  // request, so the toolbar's action spins and the listing refreshes when it
+  // lands.
+
+  const pickRestore = useCallback(
+    (file: File) => {
+      setWriteError(undefined);
+      const intent = restoreIntent(file, path);
+      if (intent.status === 'refused') {
+        setWriteError(intent.failure);
+        return;
+      }
+      setRestore({ disclosure: intent.disclosure, file });
+    },
+    [path],
+  );
+
+  const runRestore = useCallback(async () => {
+    const picked = restore;
+    if (picked === undefined) {
+      return;
+    }
+    setRestore(undefined);
+    setWriteError(undefined);
+    setRestoring(true);
+    try {
+      await restoreVolume(composeId, source, path, picked.file);
+      message.success(`Extracted ${picked.file.name} into ${restoreTarget(path)}`);
+      await loadList();
+    } catch (reason: unknown) {
+      setWriteError(restoreFailure(reason));
+    } finally {
+      setRestoring(false);
+    }
+  }, [composeId, loadList, message, path, restore, restoreVolume, source]);
 
   const removeEntry = useCallback(
     async (entry: VolumeEntry) => {
@@ -438,9 +502,9 @@ export function VolumeExplorerPage() {
 
   // ---- The toolbar -----------------------------------------------------------
   //
-  // Upload is the toolbar's one write control; editing and deletion belong to
-  // the row whose file they touch. The download actions stay anchors or a
-  // re-read, and a missing source disables everything with the API's own
+  // Upload and restore are the toolbar's write controls; editing and deletion
+  // belong to the row whose file they touch. The download actions stay anchors
+  // or a re-read, and a missing source disables everything with the API's own
   // reason rather than letting a mount recreate it. A write is a PUT or a
   // DELETE, never a GET, so the session cookie keeps it CSRF-safe.
 
@@ -459,6 +523,21 @@ export function VolumeExplorerPage() {
           onClick={() => fileInput.current?.click()}
         >
           Upload
+        </Button>
+      </Tooltip>
+      <Tooltip
+        title={
+          refusal ??
+          'Extracts a tar.gz into this directory. Upload and extract are one operation, the archive is never stored, and a stream that fails part-way leaves the entries it already wrote.'
+        }
+      >
+        <Button
+          disabled={refusal !== undefined}
+          icon={<ImportOutlined />}
+          loading={restoring}
+          onClick={() => restoreInput.current?.click()}
+        >
+          Restore tar.gz
         </Button>
       </Tooltip>
       <Tooltip
@@ -811,6 +890,18 @@ export function VolumeExplorerPage() {
           ref={fileInput}
           type="file"
         />
+        <input
+          accept=".tar.gz,.tgz"
+          hidden
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) pickRestore(file);
+            // The same file can be picked again after a cancel or a refusal.
+            event.target.value = '';
+          }}
+          ref={restoreInput}
+          type="file"
+        />
         <Card
           extra={gated ? toolbar : undefined}
           title={<Crumbs onGo={goTo} path={path} root={volumeLabel(view.volume)} />}
@@ -890,6 +981,28 @@ export function VolumeExplorerPage() {
             <Paragraph style={{ marginBottom: 0, marginTop: LAYOUT.gutterSmall }} type="secondary">
               Continuing mounts this path for every read and every write. If it is missing, Docker creates it as{' '}
               <Text code>root:root 0755</Text>.
+            </Paragraph>
+          </>
+        )}
+      </Modal>
+
+      <Modal
+        cancelText="Cancel"
+        okText="Extract"
+        onCancel={() => setRestore(undefined)}
+        onOk={() => void runRestore()}
+        open={restore !== undefined}
+        title={restore?.disclosure.title}
+      >
+        {restore && (
+          <>
+            <ul style={{ marginBottom: 0, paddingInlineStart: 20 }}>
+              {restore.disclosure.points.map((point) => (
+                <li key={point}>{point}</li>
+              ))}
+            </ul>
+            <Paragraph style={{ marginBottom: 0, marginTop: LAYOUT.gutterSmall }} type="secondary">
+              Nothing is sent until you confirm; Cancel leaves the Volume untouched.
             </Paragraph>
           </>
         )}
