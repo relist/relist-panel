@@ -9,13 +9,12 @@ delete action (compose-panel ticket 11) can *remove* a Compose's volumes; nothin
 
 The operator wants: on a Compose's page, a tab listing **only the Volumes that Compose mounts**; a
 file manager over one of them — browse, edit, upload, rename, delete; and download of a directory as
-**tar.gz or zip**. It must match the panel's Ant Design theme, and it must not make the panel heavy.
+**tar.gz**. It must match the panel's Ant Design theme, and it must not make the panel heavy.
 The reference point is Dokploy, whose panel idles at 1–2 GB RSS, which is what makes small VPSs
 painful.
 
 Vocabulary is `CONTEXT.md`'s: a **Volume** is one entry in a Compose's `volumes:` list (named volume
-or bind mount — the panel treats both alike), a **Volume Handle** is the panel's temporary grant of
-access to one Volume, and the **Volume Explorer** is the screen.
+or bind mount — the panel treats both alike), and the **Volume Explorer** is the screen.
 
 ## Decision
 
@@ -26,16 +25,16 @@ Build the file manager ourselves, in two pieces:
 - The **UI inside the panel's existing SPA** — Ant Design components and the Monaco editor the panel
   already ships (`web/src/monaco.ts`).
 
-The panel drives the helper with `docker exec`, one exec per operation, streaming file bytes over
-the exec's stdin/stdout. See **ADR-0008** for the architectural decision and its rejected
-alternatives.
+The panel drives the helper with **one `docker run --rm` per operation**, streaming file bytes over
+the container's stdin/stdout. No container outlives the operation it serves, and nothing is ever
+sent to a container started earlier. See **ADR-0010**, which revises ADR-0008's container lifetime;
+ADR-0008's measurements, hardening flags and helper design carry over.
 
 ### Why build it rather than embed an off-the-shelf file manager
 
-1. **Nothing off the shelf does tar.gz.** Measured: `sigoden/dufs` serves folder archives as zip
-   only — `?zip` returns `content-type: application/zip` and
-   `content-disposition: attachment; filename="data.zip"`, while `?tar` and `?tgz` fall through to
-   the HTML listing. `filebrowser` ships zip. tar.gz is a stated requirement.
+1. **Nothing off the shelf does tar.gz.** Measured: `sigoden/dufs` has no tar.gz folder archive —
+   `?tar` and `?tgz` fall through to its HTML listing — and `filebrowser` ships no tar.gz either.
+   tar.gz is a stated requirement.
 2. **Any off-the-shelf file manager is a second HTTP server with a second auth system** — a login
    session the panel's logout does not end, and a port that has to be reachable from the panel.
    That reachability is the single risk worth engineering away, and it is the one thing a
@@ -44,12 +43,12 @@ alternatives.
 
 ### Measured (this host, 2026-09-24)
 
-| | RSS idle | tar.gz | zip | Network surface | New dependency |
-| --- | --- | --- | --- | --- | --- |
-| `filebrowser/filebrowser:latest` | 14.73 MiB | ✗ | ✓ | HTTP server, must be proxied | yes |
-| `sigoden/dufs:latest` | 1.65 MiB | ✗ (zip only) | ✓ | HTTP server, must be proxied | yes |
-| Panel binary, idle → after one request | 14.35 MB → 15.42 MB | — | — | — | — |
-| Minimal Go helper (stdin loop, no HTTP) | **2.21 MB** | ✓ stdlib | ✓ stdlib | **none** | none |
+| | RSS idle | tar.gz | Network surface | New dependency |
+| --- | --- | --- | --- | --- |
+| `filebrowser/filebrowser:latest` | 14.73 MiB | ✗ | HTTP server, must be proxied | yes |
+| `sigoden/dufs:latest` | 1.65 MiB | ✗ | HTTP server, must be proxied | yes |
+| Panel binary, idle → after one request | 14.35 MB → 15.42 MB | — | — | — |
+| Minimal Go helper (stdin loop, no HTTP) | **2.21 MB** | ✓ stdlib | **none** | none |
 
 Two corrections this table forces:
 
@@ -77,14 +76,17 @@ Two corrections this table forces:
 
 Three consequences:
 
-- **The persistent-container model is settled by measurement, not preference.** One exec is 33 ms;
-  one `docker run` is 365–594 ms, with a 2.1 s outlier — a 10x penalty on every directory listing,
-  and an outlier that would read as a hang. The hardening flags (`--cap-drop ALL`, `--read-only`,
-  `--security-opt no-new-privileges`) and the Volume mount add nothing measurable (0.365 s vs
-  0.373 s), so they cost nothing to include.
-- **The helper must die on SIGTERM without trapping it.** `docker stop` costs 10.1 s when pid1
-  ignores SIGTERM and 1.1 s when it handles it. A Go binary as pid1 dies on SIGTERM by default, so
-  the rule is: install no signal handler, and Stop stays fast.
+- **The gap between the two models is real and accepted.** One exec is 33 ms; one `docker run` is
+  365–594 ms, with a 2.11 s outlier — a 10x penalty on every directory listing, and an outlier that
+  would read as a hang. This feature's operations are not interactive file management: a backup, an
+  occasional config edit, a restore. Paying 0.4–0.6 s per operation buys zero idle cost, no standing
+  state, and a strictly smaller exposure window. The hardening flags (`--cap-drop ALL`,
+  `--read-only`, `--security-opt no-new-privileges`) and the Volume mount add nothing measurable
+  (0.365 s vs 0.373 s), so they cost nothing to include.
+- **The helper inherits the fast-stop property.** `docker stop` costs 10.1 s when pid1 ignores
+  SIGTERM and 1.1 s when it does not. A Go binary as pid1 dies on SIGTERM by default, and the helper
+  installs no signal handler, so any stop stays fast. Nothing in this design issues `docker stop`
+  (see No standing state); the property is kept deliberately.
 - **`docker compose config` is cheap enough to run per page load** (30 ms) — no caching needed.
 
 ### Mounting creates whatever is missing
@@ -98,53 +100,60 @@ a browse view would therefore mutate the host unless something stops it. See **P
 ### Run spec
 
 ```
-docker run -d --rm \
-  --name relist-vol-<handle> \
-  --label relist.handle=<handle> --label relist.compose=<compose-id> \
+docker run --rm -i \
   --network none \
   --user <uid>:<gid> \
   --read-only --tmpfs /tmp \
   --cap-drop ALL --security-opt no-new-privileges \
   -v <resolved source>:/data[:ro] \
   --entrypoint /usr/local/bin/relist-volhelper \
-  <panel image> idle
+  <panel image> <op> -- <relpath>
 ```
 
 Every flag is load-bearing:
 
+- `--rm` — the container removes itself when the operation ends. Nothing to reap at panel start,
+  nothing to adopt across an upgrade.
+- `-i` — stdin is the pipe that carries `write` and `extract` bytes in, and its close is how a
+  helper that is mid-operation learns the caller is gone. Never `-t`: a TTY rewrites the stream
+  (line discipline, no reliable EOF) and breaks binary both ways.
 - `--network none` — no ingress, no egress. This is why the feature needs no proxy, no shared token,
   no new Docker network, and no change to the ADR-0002 bootstrap.
 - **Exactly one mount**, the declared source, at `/data`. Never the Docker socket, never another
   host path.
 - `--user` always explicit. Root is a deliberate opt-in, not a default (see UID/GID).
-- `:ro` unless the handle was explicitly opened for writing.
+- `:ro` unless the operation writes.
 - `--read-only` rootfs plus `--tmpfs /tmp` — so nothing can stage a copy of the data, including the
   helper itself.
-- The labels are how every live handle is found on panel start (see Lifecycle).
+- `--entrypoint ... <op> -- <relpath>` — the helper's argv is the operation and its path, and
+  nothing else.
 
 The image is the panel's own, so the host already has it from `docker compose build` — no registry,
 no runtime pull, no version skew between panel and helper. The panel resolves its own image name
 with `docker inspect $(hostname)` → `.Config.Image` (Docker sets hostname to the container ID by
 default), falling back to a `RELIST_IMAGE` env var.
 
+A cancelled HTTP request kills the `docker` CLI child the panel started; the helper's pipe closes
+and it dies on `EPIPE`/`EOF`; `--rm` then removes the container. Nothing lingers.
+
 ### Protocol
 
-One `docker exec` per operation, path as an argv element, `--` before any path so a name starting
-with `-` cannot be read as a flag:
+One `docker run --rm` per operation, path as an argv element, `--` before any path so a name starting
+with `-` cannot be read as a flag. The container's command is the helper invocation:
 
 ```
-docker exec -i relist-vol-<handle> relist-volhelper list    -- <relpath>
-docker exec -i relist-vol-<handle> relist-volhelper stat    -- <relpath>
-docker exec -i relist-vol-<handle> relist-volhelper read    -- <relpath>     # bytes on stdout
-docker exec -i relist-vol-<handle> relist-volhelper write   -- <relpath>     # bytes on stdin
-docker exec -i relist-vol-<handle> relist-volhelper mkdir   -- <relpath>
-docker exec -i relist-vol-<handle> relist-volhelper rename  -- <relpath> <relpath>
-docker exec -i relist-vol-<handle> relist-volhelper delete  -- <relpath>
-docker exec -i relist-vol-<handle> relist-volhelper archive --format tar.gz|zip -- <relpath>
+relist-volhelper list    -- <relpath>
+relist-volhelper stat    -- <relpath>
+relist-volhelper read    -- <relpath>                 # bytes on stdout
+relist-volhelper write   -- <relpath>                 # bytes on stdin
+relist-volhelper delete  -- <relpath>                 # file or whole tree
+relist-volhelper archive --format tar.gz -- <relpath> # bytes on stdout
+relist-volhelper extract -- <relpath>                 # tar.gz on stdin
 ```
 
 Paths are **relative to `/data`**, always. The helper rejects absolute paths outright. Metadata
-operations return JSON on stdout; `read` and `archive` return raw bytes.
+operations return JSON on stdout; `read` and `archive` return raw bytes and `extract` consumes them.
+Read operations mount `:ro`; `write`, `delete` and `extract` mount `:rw`.
 
 Every filesystem call goes through **`os.Root`** (`os.OpenRoot("/data")`), which refuses to resolve a
 name outside the root and rejects absolute symlinks. This is defense in depth *behind* the panel's
@@ -183,14 +192,11 @@ is out of scope.
 
 ### Why the helper does the work in Go, not by shelling out
 
-`docker exec` is the **transport**; the helper binary is the **implementation**. These are two
-layers, not two competing designs. The alternative — each exec running `ls`, `cat`, `cp`, or `tar`
+`docker run` is the **transport**; the helper binary is the **implementation**. These are two
+layers, not two competing designs. The alternative — each run executing `ls`, `cat`, `cp`, or `tar`
 inside the container, the way a hand-rolled `docker run alpine tar` recipe does — was tested against
-this image and rejected on three counts:
+this image and rejected on two counts:
 
-- **It cannot produce zip at all.** The panel's `docker:27-cli` base is Alpine: `tar` is **busybox
-  1.37.0** and `zip` is **not installed** (only `unzip` is). Shelling out cannot meet the
-  requirement.
 - **busybox tar returns the wrong file with a success status.** `tar -czf - -C /data -- /etc/passwd`
   exits **0** and yields the *container's* `/etc/passwd` — busybox strips the leading `/` and
   archives it as `etc/passwd`. A download that silently returns something the operator did not ask
@@ -246,51 +252,48 @@ earlier either — the panel uses the presence of the Compose file as its "is de
 
 ### Pre-flight
 
-Because mounting creates what is missing, the handle is refused before it can mutate the host:
+Because a `docker run` with a missing source creates it, the panel checks before it mounts:
 
-- **Named volume**: refuse unless `docker volume inspect` finds it (10 ms, exact).
+- **Named volume**: `docker volume inspect` (10 ms, exact) runs before the first operation of an
+  Explorer session, and again before `archive` and `extract` — so a Volume deleted underneath the
+  session is reported, not silently recreated empty.
 - **Bind source inside the data directory**: the panel can `os.Stat` it directly (identical-path
-  mount, ADR-0002), so refuse if absent.
+  mount, ADR-0002), so it checks before every operation and refuses if it is absent.
 - **Bind source outside the data directory**: the panel cannot stat it, and probing it with a mount
   would create it. The start dialog states plainly that the path does not exist or cannot be
   checked, and that continuing will create it as `root:root 0755`, and the operator decides.
 
 ## UID/GID
 
-Default resolution order, first hit wins:
+One rule, resolved before the first operation and passed to every `docker run` as `--user`:
 
-1. The resolved `user:` for a service the operator picks, from `docker compose config` (verified
-   present in that output).
-2. `docker inspect` the service's container `.Config.User`.
-3. `stat -c '%u:%g' /data` from a root helper run — the Volume root's owner.
-4. `0:0`, opt-in only, with a warning.
+- **The resolved `user:` for a service the operator picks**, from `docker compose config` (verified
+  present in that output). The stack's files belong to that account, so files the helper writes stay
+  usable by the stack.
+- **Otherwise `0:0`, with a visible warning** — files it creates become root-owned, and a stack that
+  runs as uid 999 may then fail to start.
 
-Step 2 is deliberately `docker inspect` rather than "exec into the container and run `id`". Inspect
-needs no `exec` binary in the target, works on distroless and scratch images, works when the
-container is stopped, and cannot be blocked by the target's own security policy. The exec-based
-button is strictly worse on every axis.
-
-The UI shows the resolved value and lets the operator override it. Choosing root carries a visible
-warning: files it creates become root-owned, and a stack that runs as uid 999 may then fail to
-start.
+Root is a deliberate opt-in, never a default. The UI shows the resolved value and lets the operator
+override it.
 
 ## Archives
 
-Both formats are **stdlib only** — `archive/tar`, `archive/zip`, `compress/gzip`, no external
-module. Both write to a non-seekable writer, verified end to end: a tree of three files (a 1 MB
-random binary, a 4 KB nested file, a text file) was streamed through an `io.Pipe` — the same shape as
-an HTTP response body — and read back out of that pipe, all three entries byte-identical by sha256 in
-both formats. Nested paths survive as relative, slash-separated names (`sub/nested.bin`).
+The archive is **stdlib only** — `archive/tar` and `compress/gzip`, no external module. It writes
+to a non-seekable writer, verified end to end: a tree of three files (a 1 MB random binary, a 4 KB
+nested file, a text file) was streamed through an `io.Pipe` — the same shape as an HTTP response
+body — and read back out of that pipe, all three entries byte-identical by sha256. Nested paths
+survive as relative, slash-separated names (`sub/nested.bin`).
 
-The archive is produced by the helper and piped straight through the exec's stdout into the HTTP
-response. Nothing is staged on the panel's disk, so a 50 GB Volume never becomes a 50 GB file in the
-data directory.
+The archive is produced by the helper and piped straight through the container's stdout into the
+HTTP response. Nothing is staged on the panel's disk, so a 50 GB Volume never becomes a 50 GB file
+in the data directory.
 
 Rules:
 
 - **Entry names are set explicitly.** `tar.FileInfoHeader` fills in only the base name; it must be
   overwritten with the path relative to the Volume root, slash-separated, never absolute. A leading
-  `/` or `..` in an entry name is how a *download* becomes a zip-slip write on whoever extracts it.
+  `/` or `..` in an entry name is how a *download* becomes a write outside the destination on
+  whoever extracts it.
 - **Symlinks are stored as symlinks**, faithfully. The alternative silently produces an archive that
   differs from the Volume, and a restore from it loses data without saying so. Because the tree is
   walked anyway, the Explorer can state before the download how many symlinks the archive will hold
@@ -305,42 +308,18 @@ Rules:
 - A single file and a directory are both downloadable; a single file is served as a plain download,
   not wrapped in an archive.
 
-Both formats must be fully received before extraction (zip's central directory is at the end; gzip
-must be decompressed sequentially), so neither can show a size-based progress bar. That is inherent
-to streaming, not a bug. Resumable downloads would need a staged file with `Range` support, which
-costs disk and is out of scope.
+A tar.gz must be fully received before extraction — gzip decompresses sequentially — so the download
+cannot show a size-based progress bar. That is inherent to streaming, not a bug. Resumable downloads
+would need a staged file with `Range` support, which costs disk and is out of scope.
 
-## Lifecycle
+## No standing state
 
-- **Start is explicit.** Opening the Volume Explorer does not auto-start a handle; the operator
-  presses Start.
-- **Stop is explicit** — a button on the Compose's Volumes tab and in the dashboard list.
-- **Idle auto-stop**: on by default at **30 minutes**, measured from that handle's last HTTP
-  request, configurable via `RELIST_VOLUME_IDLE_TIMEOUT`, `0` disables it. Relying on the operator to
-  remember is not a control, and this is what actually delivers "does not eat resources". The
-  dashboard shows the remaining time counting down so a handle never vanishes unannounced. Closing
-  the browser tab does **not** count as idle: the panel has no websocket and no heartbeat by scope,
-  so a closed tab is indistinguishable from an idle one.
-- **Dashboard warning.** A banner listing live handles, plus a badge on the Volumes tab. The warning
-  is about exposure as much as resources: a live handle is a container holding a Volume that exists
-  because someone opened it and did not close it.
-- **Panel start stops every handle.** Any container carrying the `relist.handle` label is stopped on
-  startup; nothing is adopted. Adopting would have to reason about a handle created by the *previous*
-  build — after an upgrade the panel could exec an operation the older helper does not implement,
-  which is a bug that only ever appears during an upgrade. Stopping is one unambiguous rule, and
-  reopening costs one click.
-- **Compose delete stops its handles first.** A live helper holding the Volume makes `down -v` fail
-  or silently leave the Volume behind. Order: stop handles → `down -v` → delete files.
-- **A Compose edit that removes a Volume** stops that Volume's handle, since its source no longer
-  exists in the resolved list.
-- **One handle per Volume.** Two writers on one Volume is a corruption path. Pressing Open on a
-  Volume that already has a live handle focuses that handle rather than creating a second.
-- **Warn when the stack is running and allow the write anyway.** Editing files under a live database
-  can corrupt it, and the Compose's status is already known on that page. The write is deliberately
-  **not** gated behind an acknowledgement, so the banner is the only control here and must be built
-  to be read rather than dismissed: it names the consequence and the affected Services, not "be
-  careful". The legitimate case it protects is real — fixing a mounted config file while the stack
-  runs, then restarting it.
+A container exists only while its operation runs. Panel start has nothing to reconcile — there is no
+long-lived container to find or stop, and `--rm` leaves nothing behind when an operation ends. An
+upgrade has nothing to adopt for the same reason: every operation runs the helper out of the image
+the panel is running, so panel and helper cannot skew. The only lifecycle duty is killing an
+in-flight `docker` child when the operator's HTTP request is cancelled; the helper follows it down
+(see Run spec).
 
 ## v1 operation set
 
@@ -403,14 +382,12 @@ The Explorer shows resolved paths — the host path for a bind source, and
 2. `--cap-drop ALL`, `--security-opt no-new-privileges`, `--read-only` rootfs, `--tmpfs /tmp`.
 3. Exactly one mount: the declared source. Never the Docker socket, never another host path.
 4. `--user` always explicit; root opt-in with a warning.
-5. `:ro` unless the handle was explicitly opened for writing. Enforced at the mount flag, not in the
-   UI — the kernel is the enforcer.
+5. `:ro` unless the operation writes. Enforced at the mount flag, not in the UI — the kernel is the
+   enforcer.
 6. Paths as argv with `--`, relative-only, plus `os.Root` in the helper as defense in depth.
 7. The caps above, and the free-space check before an upload is accepted.
-8. **Audit rows only, no viewer in v1.** Start, stop, write, delete and archive each append a row:
-   who, when, handle, path, bytes. Not logging loses that history irrecoverably, while not displaying
-   it only defers a read of data already held — so the rows go in now and the screen comes if anyone
-   asks. The live view is the dashboard banner.
+8. **Audit rows, deferred.** v1 is a single admin and no viewer screen exists, so the rows — who,
+   when, operation, path, bytes — have nowhere to be read yet; recording them later is additive.
 9. The README must state that this feature assumes TLS on the panel's domain. A volume file manager
    over plain HTTP is a data-exfiltration channel.
 10. The panel must be running in a container for this feature (it needs the panel image on the host
