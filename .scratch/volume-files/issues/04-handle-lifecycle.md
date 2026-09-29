@@ -5,7 +5,7 @@ made of — the whole lifetime of a container the panel owns outside any Compose
 
 **Blocked by:** 01, 02
 
-**Status:** needs-triage
+**Status:** wontfix
 
 - [ ] Start runs the documented `docker run` with `--network none`, `--cap-drop ALL`, `--security-opt no-new-privileges`, `--read-only`, `--tmpfs /tmp`, exactly one `-v <source>:/data`, and an explicit `--user`
 - [ ] The mount is `:ro` unless the handle was explicitly opened for writing — enforced at the mount flag, never in the UI
@@ -19,3 +19,9 @@ made of — the whole lifetime of a container the panel owns outside any Compose
 - [ ] Starting a handle is refused, and the Volumes tab hidden, when the panel is not running in a container — the feature needs both the panel image on the host and the Docker socket
 - [ ] The panel never mounts the Docker socket or any other host path into a handle container
 - [ ] HTTP-seam tests with a faked Docker CLI: start, stop, idle expiry, the startup sweep, one-handle-per-volume, and the Compose-delete ordering
+
+## Comments
+
+Closed `wontfix` by the re-plan (ADR-0010): the new model has no persistent container, so
+there is no lifecycle to build. The part of this ticket that survives — the runner seam —
+moved to ticket 13.

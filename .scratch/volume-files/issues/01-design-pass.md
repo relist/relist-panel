@@ -11,7 +11,7 @@ Every other ticket in this feature is blocked by this one, because the review ga
 design pass regularly changes decisions that cascade into the spec, and it is much cheaper to find
 that out on a mock than in Go.
 
-**Status:** needs-triage
+**Status:** wontfix
 
 ## Screens
 
@@ -92,3 +92,9 @@ at. It is in the list now. Building the gallery is what surfaced it, because the
 and the script's route list are the same set written twice.
 
 **Not yet done:** the review. Nothing blocks on tickets 02+ until this is read screen by screen.
+
+**Closed `wontfix` by the re-plan.** The design-review gate this ticket carried is moot: the mock
+it would have reviewed was retired per **ADR-0009**, and its build tickets stay in
+`.scratch/design-board/` as the record. Review now happens in `web/` during implementation, with
+the annotated tag `design-mock` as the visual reference — not a gate. Nothing blocks on this any
+more.
