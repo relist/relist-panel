@@ -235,14 +235,19 @@ export function deleteFailure(error: unknown): VolumeFailure {
   return writeFailure('delete', error);
 }
 
-function writeFailure(action: 'upload' | 'delete', error: unknown): VolumeFailure {
+/** The same mapping for a failed edit-save: the write family's statuses, worded for a save. */
+export function editFailure(error: unknown): VolumeFailure {
+  return writeFailure('edit', error);
+}
+
+function writeFailure(action: 'upload' | 'delete' | 'edit', error: unknown): VolumeFailure {
   const status = error instanceof ApiError ? error.status : undefined;
   const api = error instanceof Error ? error.message : String(error);
   switch (status) {
     case 413:
       return {
-        message: 'Upload exceeds the 1 GiB cap',
-        description: `The panel caps one upload at 1 GiB, so nothing was written. The API said: ${api}`,
+        message: action === 'upload' ? 'Upload exceeds the 1 GiB cap' : 'The save exceeds the 1 GiB cap',
+        description: `The panel caps one write at 1 GiB, so nothing was written. The API said: ${api}`,
       };
     case 507:
       return {
@@ -251,7 +256,8 @@ function writeFailure(action: 'upload' | 'delete', error: unknown): VolumeFailur
       };
     case 400:
       return {
-        message: action === 'upload' ? 'The upload was refused' : 'The delete was refused',
+        message:
+          action === 'upload' ? 'The upload was refused' : action === 'delete' ? 'The delete was refused' : 'The save was refused',
         description: api,
       };
     case 409:
@@ -268,10 +274,108 @@ function writeFailure(action: 'upload' | 'delete', error: unknown): VolumeFailur
       };
     default:
       return {
-        message: action === 'upload' ? 'Upload failed' : 'Delete failed',
+        message: action === 'upload' ? 'Upload failed' : action === 'delete' ? 'Delete failed' : 'Save failed',
         description: api,
       };
   }
+}
+
+// ---- The editor (ticket 08) ---------------------------------------------------
+//
+// The text editor's pure decisions: the 1 MB entry gate, the rule that decides
+// whether fetched bytes are text, dirty as a draft/original comparison, and the
+// save's state. The page and the editor component read these; no DOM is needed
+// to test any of them.
+
+/**
+ * The editor's cap (spec: Caps — "editable text file 1 MB"). A file at exactly
+ * the cap opens; one byte more is refused before it is fetched, because the
+ * whole file is held as a JavaScript string and Monaco would be unusable well
+ * before the API's 1 GiB write cap.
+ */
+export const EDITOR_MAX_BYTES = 1 << 20;
+
+/** How much of a file's head decides "binary": the first 8 KiB, the `file(1)`-style glance. */
+export const EDITOR_SNIFF_BYTES = 8192;
+
+/**
+ * The entry-level gate, applied before any fetch: a file above 1 MB is never
+ * read. `path` is the relative target the message names. A smaller file passes
+ * — the content check happens once its bytes are in hand.
+ */
+export function editorGate(entry: VolumeEntry, path: string): VolumeFailure | undefined {
+  if (entry.size <= EDITOR_MAX_BYTES) {
+    return undefined;
+  }
+  return {
+    message: 'Too large to edit',
+    description: `${path} is ${formatBytes(entry.size)} — past the 1 MB the editor opens, so it was not opened. Download it instead.`,
+  };
+}
+
+/** The fetched file, or why it will not be edited. */
+export type EditorContent = { status: 'editable'; text: string } | { status: 'refused'; failure: VolumeFailure };
+
+/**
+ * Whether fetched bytes are a text file the editor can hold, and the decoded
+ * text when they are. The rule, decided once and documented here:
+ *
+ *  - a NUL byte anywhere in the first 8 KiB marks the file binary — the
+ *    classic sniff, and NUL is the one byte no text format uses;
+ *  - otherwise the bytes must be valid UTF-8. The editor's model is Unicode
+ *    text, so decoding invalid bytes would substitute replacement characters
+ *    and a save would write those replacements back: data loss disguised as an
+ *    edit. A file that fails either check is refused, never rendered as
+ *    mojibake.
+ */
+export function editorContent(path: string, bytes: Uint8Array): EditorContent {
+  if (bytes.subarray(0, EDITOR_SNIFF_BYTES).includes(0)) {
+    return {
+      status: 'refused',
+      failure: {
+        message: 'This file is not text',
+        description: `${path} holds a NUL byte in its first ${formatBytes(EDITOR_SNIFF_BYTES)}, so it is binary — the editor refuses it rather than show mojibake. Download it instead.`,
+      },
+    };
+  }
+  try {
+    return { status: 'editable', text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
+  } catch {
+    return {
+      status: 'refused',
+      failure: {
+        message: 'This file is not UTF-8 text',
+        description: `${path} is not valid UTF-8. Showing it would replace bytes the editor cannot represent, and saving would write the replacements — so it was not opened. Download it instead.`,
+      },
+    };
+  }
+}
+
+/** Dirty is the one comparison that matters: the draft against the last saved state. */
+export function isDirty(original: string, draft: string): boolean {
+  return original !== draft;
+}
+
+/**
+ * The editor's save state, derived from the three facts the page holds. A save
+ * in flight outranks everything (the buttons must not race it) and a failure
+ * outranks dirty (the draft is still unsaved, and the error stays on screen
+ * until the next attempt).
+ */
+export type EditorSaveStatus = 'clean' | 'dirty' | 'saving' | 'failed';
+
+export function editorSaveStatus(state: {
+  dirty: boolean;
+  failure: VolumeFailure | undefined;
+  saving: boolean;
+}): EditorSaveStatus {
+  if (state.saving) {
+    return 'saving';
+  }
+  if (state.failure !== undefined) {
+    return 'failed';
+  }
+  return state.dirty ? 'dirty' : 'clean';
 }
 
 /**

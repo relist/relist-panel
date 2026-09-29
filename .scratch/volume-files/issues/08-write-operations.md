@@ -5,10 +5,10 @@ the safety story for it.
 
 **Blocked by:** 02, 03, 13, 05
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
 - [x] Upload a file into the selected directory: 1 GiB cap, and refused before the stream starts when it exceeds the Volume's free space — the helper checks `statfs`. A full disk is a host-wide failure, not a panel one
-- [ ] Edit a text file and save, with Monaco reused from the Compose YAML screen; a file above 1 MB is not opened in the editor and the Explorer says so
+- [x] Edit a text file and save, with Monaco reused from the Compose YAML screen; a file above 1 MB is not opened in the editor and the Explorer says so
 - [x] Delete a file or a whole directory tree, permanent and confirmed by a `Popconfirm` naming the path (`docs/GUIDELINES.md` §6). There is no trash: a hidden trash directory inside the Volume would be visible to the application using it
 - [x] Every write is POST, PUT or DELETE — never GET — so the `SameSite=Lax` session cookie keeps them CSRF-safe
 - [x] When any Service in the Compose is running, the Explorer states that writing can corrupt a live stack, naming the consequence and the affected Services. The write is deliberately **not** gated behind an acknowledgement, so this banner is the only control here: it must name the consequence rather than say "be careful"
@@ -100,3 +100,39 @@ for 413/507/400/409/422/502 and a non-`Error` rejection, `runningWriteWarning`'s
 deduplicated service list, no-uses fallback and consequence copy, and `volumeContentUrl`'s
 encoding). No DOM testing library; the decisions stay pure helpers. No rebuilt
 `internal/webassets/dist` is committed.
+
+**session 4 (UI 2/2, the text editor):** the Explorer's editor slice. Opening is an explicit
+per-row action — a file row's `Edit` button, loading on the store's new
+`volume-read:<compose>:<source>:<path>` pending key — while the row click keeps selecting a file
+for download, so nothing about a click silently becomes "edit". The 1 MB rule is the pure
+`editorGate(entry, path)` (`EDITOR_MAX_BYTES = 1 << 20`, boundary exact): a file above it is
+**not fetched**, and the screen says "Too large to edit", names the file and its size against the
+1 MB limit, and offers the download as the alternative. Fetched bytes go through
+`editorContent(path, bytes)`, whose documented rule refuses binary-ish content rather than
+rendering mojibake: a NUL byte anywhere in the first 8 KiB, or bytes that are not valid UTF-8
+(which the editor could only show as replacement characters and a save would write back) — both
+refusals say so and point at the download. `readVolumeFile` was added to `api.ts` (plain `read`,
+no `download` marker, bytes held whole under the gate) and to the store; `api.ts`'s URL builder
+was split so `volumeReadUrl` is the same URL plus `download=1`.
+
+The editor itself is `VolumeFileEditor`, following `FullscreenEditor`'s full screen treatment:
+full-viewport modal, a 56px toolbar carrying the file's relative path as the title and the
+`Modified` marker, `Discard`, `Save` and close, and the error `Alert` inside the modal so a
+failure stays on screen. The page owns the draft (`original`/`draft`); `isDirty` is the
+comparison, `editorSaveStatus` derives clean/dirty/saving/failed (a save in flight outranks a
+previous failure), and Discard and close both ask through `modal.confirm` when there are unsaved
+changes. Saving is one `PUT …/volumes/content` with the draft as a `Blob` (the browser declares
+the length); success says `Saved <path>`, moves `original` to the draft so the file is never
+re-read, and patches the row's size and mtime in place rather than re-listing the directory.
+Failures use `editFailure`, the existing `writeFailure` mapping worded for a save: 413 the 1 GiB
+write cap, 507 the helper's need-vs-available and the partial-file clean-up, 409 the missing
+source, 400 the API's own refusal, 422 the helper's, anything else the API's message. Monaco is
+reused through a ported `TextFileEditor` (same `MONACO_OPTIONS`/theme/`monaco.ts`; language from
+the filename; model keyed `volume:<path>`), so no editor dependency was added.
+
+Evidence: `pnpm typecheck && pnpm test` under `node:24-alpine` (frozen lockfile, warm pnpm store) —
+tsc clean, **213/213 green** (17 new: `editorGate`'s exact boundary, `editorContent` for valid
+UTF-8/empty/NUL-in-window/NUL-past-window/invalid UTF-8, `isDirty`, `editorSaveStatus`'s
+precedence, `editFailure` for 413/507/400/409/422/502, and `volumeReadApiUrl`'s encoding). No DOM
+testing library; the decisions stay pure helpers. No rebuilt `internal/webassets/dist` is
+committed.

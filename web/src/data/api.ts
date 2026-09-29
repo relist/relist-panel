@@ -171,6 +171,18 @@ export const api = {
       `${composePath(location)}/volumes/list?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`,
     ),
   /**
+   * One file's bytes, for the editor: `read` without the `download` marker,
+   * held whole because the caller's 1 MB editor gate has already refused
+   * anything larger. A failure carries the API's own message like every read.
+   */
+  readVolumeFile: async (location: ComposePath, source: string, path: string): Promise<Uint8Array> => {
+    const response = await fetch(volumeReadApiUrl(location, source, path), { credentials: 'same-origin' });
+    if (!response.ok) {
+      throw new ApiError(response.status, await responseError(response));
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  },
+  /**
    * Uploads (or overwrites) one file: the `File` is the request body, so the
    * browser declares its length for it — which the API requires, because the
    * length becomes the helper's `--expect`. `path` must name the file, never
@@ -225,12 +237,21 @@ export function volumeArchiveUrl(location: ComposePath, source: string, path = '
 }
 
 /**
+ * The read URL with no download marker: the bytes come back inline, which is
+ * what the editor's `fetch` wants. `volumeReadUrl` adds `download=1` for the
+ * toolbar's `<a href>`.
+ */
+export function volumeReadApiUrl(location: ComposePath, source: string, path: string): string {
+  return `${composePath(location)}/volumes/read?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`;
+}
+
+/**
  * The direct download URL for one file — `read` with `download=1`, so the
  * response is an attachment and the anchor never navigates the tab. Same rule
  * as the archive: an `<a href>`, never a fetch/blob.
  */
 export function volumeReadUrl(location: ComposePath, source: string, path: string): string {
-  return `${composePath(location)}/volumes/read?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}&download=1`;
+  return `${volumeReadApiUrl(location, source, path)}&download=1`;
 }
 
 /**

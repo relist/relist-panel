@@ -3,6 +3,7 @@ import {
   CloudDownloadOutlined,
   DeleteOutlined,
   DownloadOutlined,
+  EditOutlined,
   FileOutlined,
   FolderOutlined,
   LinkOutlined,
@@ -35,6 +36,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { paths } from '../app/paths';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { CodeValue, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
+import { VolumeFileEditor } from '../components/VolumeFileEditor';
 import { resolvedVolumePath, volumeLabel } from '../components/volumes-view';
 import { volumeArchiveUrl, volumeReadUrl } from '../data/api';
 import { usePanel } from '../data/store';
@@ -44,6 +46,9 @@ import { composeLinkIsStale } from './compose-view';
 import type { EntryFacts, VolumeFailure } from './volume-explorer-view';
 import {
   deleteFailure,
+  editFailure,
+  editorContent,
+  editorGate,
   entryFacts,
   explorerView,
   isEscapeRefusal,
@@ -68,8 +73,15 @@ type Row = { entry: VolumeEntry; facts: EntryFacts };
  * The Volume Explorer (GUIDELINES §4.7): a Compose's Volume opened as its own
  * route in its own browser tab, listing one directory at a time, downloading a
  * file or the current directory as a tar.gz, and — ticket 08's write slice —
- * uploading a file into the current directory and deleting a file or a whole
- * directory tree. The text editor is the next session; Monaco is not here yet.
+ * uploading a file into the current directory, editing a text file in Monaco,
+ * and deleting a file or a whole directory tree.
+ *
+ * The editor is the full screen treatment the Compose YAML screen uses
+ * (`VolumeFileEditor`, following `FullscreenEditor`). Opening is an explicit
+ * per-row action, never the row click's meaning: a file above the 1 MB editor
+ * cap is refused before it is fetched, fetched bytes are refused when they are
+ * binary (see `editorContent`), and a save is one PUT that updates the row in
+ * place — no re-read of the file or the directory.
  *
  * The screen states its own identity (the Volume's label, its resolved host
  * path, and every Service's container-side target), because a Volume is
@@ -98,7 +110,8 @@ export function VolumeExplorerPage() {
   const navigate = useNavigate();
   const { token } = theme.useToken();
   const { message } = App.useApp();
-  const { deleteVolumeEntry, isPending, listVolumeEntries, loadVolumes, projects, writeVolumeFile } = usePanel();
+  const { deleteVolumeEntry, isPending, listVolumeEntries, loadVolumes, projects, readVolumeFile, writeVolumeFile } =
+    usePanel();
 
   const projectId = Number(projectParam);
   const environmentId = Number(environmentParam);
@@ -177,6 +190,13 @@ export function VolumeExplorerPage() {
   // A refused or failed write stays on this screen as an Alert (GUIDELINES §8),
   // carrying the API's words with the limit that was hit named.
   const [writeError, setWriteError] = useState<VolumeFailure>();
+  // The editor: the one open file, the entry-level refusals (too large,
+  // binary) shown above the list, and the last save's failure shown inside
+  // the editor. `original` is the file as it was opened or last saved; the
+  // draft is the page's, handed to the editor on every change.
+  const [editing, setEditing] = useState<{ draft: string; original: string; path: string }>();
+  const [editorRefusal, setEditorRefusal] = useState<{ failure: VolumeFailure; path: string }>();
+  const [saveError, setSaveError] = useState<VolumeFailure>();
   const [uploading, setUploading] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const listRequest = useRef(0);
@@ -211,6 +231,8 @@ export function VolumeExplorerPage() {
     setSelected(undefined);
     setOpenError(undefined);
     setWriteError(undefined);
+    setEditorRefusal(undefined);
+    setSaveError(undefined);
   }, [listingKey]);
 
   const rows = useMemo<Row[]>(
@@ -270,9 +292,11 @@ export function VolumeExplorerPage() {
 
   // ---- The write actions -----------------------------------------------------
   //
-  // Both target the current directory (`path`), both refresh the listing on
-  // success rather than patching it — the Volume is the server's — and both
-  // keep a failure on screen with the API's own words.
+  // Upload and delete both target the current directory (`path`), both
+  // refresh the listing on success rather than patching it — the Volume is
+  // the server's — and both keep a failure on screen with the API's own
+  // words. The editor's save is the third: it patches its one row instead,
+  // because a save re-reads nothing.
 
   const upload = useCallback(
     async (file: File) => {
@@ -317,6 +341,73 @@ export function VolumeExplorerPage() {
     [composeId, deleteVolumeEntry, loadList, message, path, selected, source],
   );
 
+  // ---- The editor ------------------------------------------------------------
+  //
+  // Opening is the row action's meaning, never the row click's; the 1 MB gate
+  // runs before the fetch, and the fetched bytes are decoded by the view
+  // helper's binary rule. Any read failure keeps the screen's established
+  // presentation (the API's own words in the open alert).
+
+  const editEntry = useCallback(
+    async (entry: VolumeEntry) => {
+      setOpenError(undefined);
+      setEditorRefusal(undefined);
+      setSaveError(undefined);
+      const target = joinPath(path, entry.name);
+      const tooLarge = editorGate(entry, target);
+      if (tooLarge !== undefined) {
+        setEditorRefusal({ failure: tooLarge, path: target });
+        return;
+      }
+      try {
+        const content = editorContent(target, await readVolumeFile(composeId, source, target));
+        if (content.status === 'refused') {
+          setEditorRefusal({ failure: content.failure, path: target });
+          return;
+        }
+        setEditing({ draft: content.text, original: content.text, path: target });
+      } catch (reason: unknown) {
+        setOpenError({ entry, error: failureMessage(reason) });
+      }
+    },
+    [composeId, path, readVolumeFile, source],
+  );
+
+  // A save is one PUT. On success the draft becomes what the file was saved
+  // as — so nothing is re-read — and the listing's row takes the new size and
+  // time in place, which keeps the screen in sync without a second operation.
+  const saveFile = useCallback(async () => {
+    if (editing === undefined) {
+      return;
+    }
+    setSaveError(undefined);
+    try {
+      await writeVolumeFile(
+        composeId,
+        source,
+        editing.path,
+        new Blob([editing.draft], { type: 'text/plain;charset=utf-8' }),
+      );
+      const size = new TextEncoder().encode(editing.draft).length;
+      const name = editing.path.slice(editing.path.lastIndexOf('/') + 1);
+      setEditing((current) => (current === undefined ? current : { ...current, original: current.draft }));
+      setListing((current) => {
+        if (current === undefined || current.key !== listingKey || current.entries === undefined) {
+          return current;
+        }
+        return {
+          ...current,
+          entries: current.entries.map((entry) =>
+            entry.name === name ? { ...entry, mtime: new Date().toISOString(), size } : entry,
+          ),
+        };
+      });
+      message.success(`Saved ${editing.path}`);
+    } catch (reason: unknown) {
+      setSaveError(editFailure(reason));
+    }
+  }, [composeId, editing, listingKey, message, source, writeVolumeFile]);
+
   if (!compose || !environment || !project) {
     // A new tab can land before the Project tree has loaded; a loading card
     // covers that window, the design's not-found covers a stale link.
@@ -347,8 +438,9 @@ export function VolumeExplorerPage() {
 
   // ---- The toolbar -----------------------------------------------------------
   //
-  // Upload is the one write control here; the download actions stay anchors or
-  // a re-read, and a missing source disables everything with the API's own
+  // Upload is the toolbar's one write control; editing and deletion belong to
+  // the row whose file they touch. The download actions stay anchors or a
+  // re-read, and a missing source disables everything with the API's own
   // reason rather than letting a mount recreate it. A write is a PUT or a
   // DELETE, never a GET, so the session cookie keeps it CSRF-safe.
 
@@ -524,10 +616,25 @@ export function VolumeExplorerPage() {
         // A delete is permanent and there is no trash, because a hidden one
         // inside the Volume would be visible to the application using it — so
         // the confirm names the exact path it removes, whole tree included.
+        // Edit is an explicit per-row action of its own: the row's click
+        // selects a file for download, and it must never silently edit.
         return (
           // The row itself navigates on click; the action column must not
           // bubble, or opening a directory would be what a delete click means.
-          <Flex justify="flex-end" onClick={(event) => event.stopPropagation()}>
+          <Flex align="center" gap={4} justify="flex-end" onClick={(event) => event.stopPropagation()}>
+            {row.entry.kind === 'file' && (
+              <Tooltip title={refusal ?? 'Open this file in the editor'}>
+                <Button
+                  aria-label={`Edit ${target}`}
+                  disabled={refusal !== undefined}
+                  icon={<EditOutlined />}
+                  loading={isPending(`volume-read:${composeId}:${source}:${target}`)}
+                  onClick={() => void editEntry(row.entry)}
+                  size="small"
+                  type="text"
+                />
+              </Tooltip>
+            )}
             <Popconfirm
               cancelText="Keep it"
               description={
@@ -548,7 +655,7 @@ export function VolumeExplorerPage() {
         );
       },
       title: '',
-      width: 56,
+      width: 88,
     },
   ];
 
@@ -666,6 +773,22 @@ export function VolumeExplorerPage() {
             type={openError && isSymlink(openError.entry) && isEscapeRefusal(openError.error) ? 'warning' : 'error'}
           />
         )}
+        {editorRefusal && (
+          <Alert
+            action={
+              <Button href={volumeReadUrl(composePath, source, editorRefusal.path)} size="small">
+                Download
+              </Button>
+            }
+            afterClose={() => setEditorRefusal(undefined)}
+            closable
+            description={editorRefusal.failure.description}
+            message={editorRefusal.failure.message}
+            showIcon
+            style={{ marginBottom: LAYOUT.gutterSmall }}
+            type="info"
+          />
+        )}
         {writeError && (
           <Alert
             afterClose={() => setWriteError(undefined)}
@@ -734,9 +857,10 @@ export function VolumeExplorerPage() {
             />
           )}
           <Paragraph style={{ marginBottom: 0, marginTop: 12 }} type="secondary">
-            Uploads land in this directory and deletes are permanent — there is no trash. Paths come from this
-            Compose’s own resolution, so the panel never accepts a host path from a form, and downloads stream
-            straight to disk.
+            Uploads land in this directory and deletes are permanent — there is no trash. A file opens in the editor
+            through its own Edit action; files past the editor’s 1 MB cap and binary files are refused there rather
+            than opened. Paths come from this Compose’s own resolution, so the panel never accepts a host path from a
+            form, and downloads stream straight to disk.
           </Paragraph>
         </Card>
       </>
@@ -770,6 +894,25 @@ export function VolumeExplorerPage() {
           </>
         )}
       </Modal>
+
+      <VolumeFileEditor
+        draft={editing?.draft ?? ''}
+        failure={saveError}
+        onChange={(draft) => setEditing((current) => (current === undefined ? current : { ...current, draft }))}
+        onClose={() => {
+          setEditing(undefined);
+          setSaveError(undefined);
+        }}
+        onDiscard={() => {
+          setSaveError(undefined);
+          setEditing((current) => (current === undefined ? current : { ...current, draft: current.original }));
+        }}
+        onSave={() => void saveFile()}
+        open={editing !== undefined}
+        original={editing?.original ?? ''}
+        path={editing?.path ?? ''}
+        saving={editing !== undefined && isPending(`volume-write:${composeId}:${source}:${editing.path}`)}
+      />
     </>
   );
 }

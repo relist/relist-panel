@@ -4,9 +4,16 @@ import { ApiError } from '../data/api';
 import type { ComposeStatus, ComposeVolume, ComposeVolumes, VolumeEntry } from '../data/types';
 import {
   deleteFailure,
+  EDITOR_MAX_BYTES,
+  EDITOR_SNIFF_BYTES,
+  editFailure,
+  editorContent,
+  editorGate,
+  editorSaveStatus,
   entryFacts,
   explorerView,
   formatMode,
+  isDirty,
   isEscapeRefusal,
   isNotDirectoryRefusal,
   isSymlink,
@@ -346,5 +353,126 @@ describe('runningWriteWarning', () => {
     const warning = runningWriteWarning(status(1), volume({ uses: [] }));
     expect(warning?.services).toEqual([]);
     expect(warning?.message).toContain('a live Service');
+  });
+});
+
+describe('editorGate', () => {
+  it('opens a file that exactly fills the 1 MB cap, and refuses one byte more', () => {
+    expect(editorGate(entry({ size: EDITOR_MAX_BYTES }), 'notes.txt')).toBeUndefined();
+
+    const refused = editorGate(entry({ size: EDITOR_MAX_BYTES + 1 }), 'invoices/export.csv');
+    expect(refused?.message).toBe('Too large to edit');
+    expect(refused?.description).toContain('invoices/export.csv');
+    expect(refused?.description).toContain('1 MB');
+    expect(refused?.description).toContain('not opened');
+  });
+});
+
+describe('editorContent', () => {
+  const text = (value: string) => new TextEncoder().encode(value);
+
+  it('decodes valid UTF-8 text unchanged', () => {
+    expect(editorContent('notes.txt', text('héllo\nworld\n'))).toEqual({
+      status: 'editable',
+      text: 'héllo\nworld\n',
+    });
+  });
+
+  it('treats an empty file as editable text', () => {
+    expect(editorContent('empty.txt', new Uint8Array())).toEqual({ status: 'editable', text: '' });
+  });
+
+  it('refuses a NUL byte anywhere in the first 8 KiB', () => {
+    const bytes = new Uint8Array(EDITOR_SNIFF_BYTES).fill(0x61);
+    bytes[EDITOR_SNIFF_BYTES - 1] = 0;
+    const refused = editorContent('dump.bin', bytes);
+    expect(refused.status).toBe('refused');
+    if (refused.status === 'refused') {
+      expect(refused.failure.message).toBe('This file is not text');
+      expect(refused.failure.description).toContain('dump.bin');
+      expect(refused.failure.description).toContain('NUL');
+    }
+  });
+
+  it('sniffs exactly the first 8 KiB — a NUL past the window is not the sniff’s business', () => {
+    const bytes = new Uint8Array(EDITOR_SNIFF_BYTES + 1).fill(0x61);
+    bytes[EDITOR_SNIFF_BYTES] = 0;
+    expect(editorContent('late-nul.bin', bytes).status).toBe('editable');
+  });
+
+  it('refuses bytes that are not valid UTF-8, so a save cannot write replacements back', () => {
+    const refused = editorContent('latin1.conf', new Uint8Array([0xff, 0xfe, 0x61]));
+    expect(refused.status).toBe('refused');
+    if (refused.status === 'refused') {
+      expect(refused.failure.message).toBe('This file is not UTF-8 text');
+      expect(refused.failure.description).toContain('latin1.conf');
+    }
+  });
+});
+
+describe('isDirty', () => {
+  it('is a strict comparison of the draft against the last saved state', () => {
+    expect(isDirty('a\n', 'a\n')).toBe(false);
+    expect(isDirty('a\n', 'a\n ')).toBe(true);
+    expect(isDirty('', 'x')).toBe(true);
+    expect(isDirty('x', '')).toBe(true);
+  });
+});
+
+describe('editorSaveStatus', () => {
+  const clean = { dirty: false, failure: undefined, saving: false };
+
+  it('is clean only when nothing changed and nothing failed', () => {
+    expect(editorSaveStatus(clean)).toBe('clean');
+  });
+
+  it('is dirty while the draft differs from the file', () => {
+    expect(editorSaveStatus({ ...clean, dirty: true })).toBe('dirty');
+  });
+
+  it('reports the failure while the draft is still unsaved', () => {
+    expect(editorSaveStatus({ ...clean, dirty: true, failure: { message: 'Save failed', description: 'x' } })).toBe(
+      'failed',
+    );
+  });
+
+  it('lets a save in flight outrank both dirty and a previous failure', () => {
+    expect(
+      editorSaveStatus({ dirty: true, failure: { message: 'Save failed', description: 'x' }, saving: true }),
+    ).toBe('saving');
+  });
+});
+
+describe('editFailure', () => {
+  it('names the 1 GiB write cap the API refused the save for', () => {
+    const failure = editFailure(new ApiError(413, 'upload exceeds the 1 GiB cap'));
+    expect(failure.message).toBe('The save exceeds the 1 GiB cap');
+    expect(failure.description).toContain('1 GiB');
+  });
+
+  it('names the Volume’s free space and the partial-file clean-up', () => {
+    const failure = editFailure(new ApiError(507, 'write refused: needs 2097152 bytes but the Volume has 1024 free'));
+    expect(failure.message).toBe('The Volume is out of space');
+    expect(failure.description).toContain('partial file');
+    expect(failure.description).toContain('needs 2097152 bytes');
+  });
+
+  it('keeps the API’s 400 wording for the root-path refusal', () => {
+    const failure = editFailure(new ApiError(400, 'path must name a file or directory, not the volume root'));
+    expect(failure.message).toBe('The save was refused');
+    expect(failure.description).toBe('path must name a file or directory, not the volume root');
+  });
+
+  it('explains the 409 missing source instead of leaving a bare conflict', () => {
+    const failure = editFailure(new ApiError(409, 'volume demo_pgdata is missing: named volume "demo_pgdata" does not exist'));
+    expect(failure.message).toBe('This Volume’s source is missing');
+    expect(failure.description).toContain('does not exist');
+  });
+
+  it('maps a 422 to the helper’s refusal and a 502 to the API’s own words', () => {
+    expect(editFailure(new ApiError(422, 'volume write refused: not text')).message).toBe('The Volume refused the file');
+    const failure = editFailure(new ApiError(502, 'volume write failed: docker: exit status 1: permission denied'));
+    expect(failure.message).toBe('Save failed');
+    expect(failure.description).toBe('volume write failed: docker: exit status 1: permission denied');
   });
 });

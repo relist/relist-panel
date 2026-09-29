@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { volumeArchiveUrl, volumeContentUrl, volumeReadUrl } from './api';
+import { volumeArchiveUrl, volumeContentUrl, volumeReadApiUrl, volumeReadUrl } from './api';
 
 /**
  * The two direct-download URLs the Explorer hands to an `<a href>`. They are
@@ -20,6 +20,14 @@ describe('volumeArchiveUrl', () => {
   it('archives one directory of the Volume and encodes the path whole', () => {
     expect(volumeArchiveUrl(location, '/srv/legacy images', 'invoices/2026-09')).toBe(
       '/api/projects/1/environments/2/composes/3/volumes/archive?source=%2Fsrv%2Flegacy%20images&path=invoices%2F2026-09',
+    );
+  });
+});
+
+describe('volumeReadApiUrl', () => {
+  it('reads one file inline — no download marker — with source and path encoded', () => {
+    expect(volumeReadApiUrl(location, '/srv/legacy images', 'reports/a b\nc.txt')).toBe(
+      '/api/projects/1/environments/2/composes/3/volumes/read?source=%2Fsrv%2Flegacy%20images&path=reports%2Fa%20b%0Ac.txt',
     );
   });
 });
