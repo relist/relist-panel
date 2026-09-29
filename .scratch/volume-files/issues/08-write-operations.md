@@ -9,11 +9,11 @@ the safety story for it.
 
 - [x] Upload a file into the selected directory: 1 GiB cap, and refused before the stream starts when it exceeds the Volume's free space — the helper checks `statfs`. A full disk is a host-wide failure, not a panel one
 - [ ] Edit a text file and save, with Monaco reused from the Compose YAML screen; a file above 1 MB is not opened in the editor and the Explorer says so
-- [ ] Delete a file or a whole directory tree, permanent and confirmed by a `Popconfirm` naming the path (`docs/GUIDELINES.md` §6). There is no trash: a hidden trash directory inside the Volume would be visible to the application using it
+- [x] Delete a file or a whole directory tree, permanent and confirmed by a `Popconfirm` naming the path (`docs/GUIDELINES.md` §6). There is no trash: a hidden trash directory inside the Volume would be visible to the application using it
 - [x] Every write is POST, PUT or DELETE — never GET — so the `SameSite=Lax` session cookie keeps them CSRF-safe
-- [ ] When any Service in the Compose is running, the Explorer states that writing can corrupt a live stack, naming the consequence and the affected Services. The write is deliberately **not** gated behind an acknowledgement, so this banner is the only control here: it must name the consequence rather than say "be careful"
+- [x] When any Service in the Compose is running, the Explorer states that writing can corrupt a live stack, naming the consequence and the affected Services. The write is deliberately **not** gated behind an acknowledgement, so this banner is the only control here: it must name the consequence rather than say "be careful"
 - [ ] Deliberately not in v1: create an empty file, mkdir, rename or move, copy/duplicate, a chmod/chown editor, search, previews, multi-select, drag-and-drop, symlink creation
-- [ ] HTTP-seam tests with a faked runner asserting the argv for each write, and that the running-stack banner's condition is computed from the Compose's own status
+- [x] HTTP-seam tests with a faked runner asserting the argv for each write, and that the running-stack banner's condition is computed from the Compose's own status
 
 ## Comments
 
@@ -67,3 +67,36 @@ from a scripted refusal, 502 for ordinary write/delete failures, 400 for the roo
 verbs, membership 404 and pre-flight 409 with no run, 503 while unavailable, 204 success, and
 GET/POST of `/content` matching no route and running nothing. Still open on this ticket: the
 editor (1 MB rule), the upload UI and the delete `Popconfirm`, and the running-stack banner.
+
+**session 3 (UI, write actions and the running-stack banner):** the Explorer gains its write
+slice. `api.ts` gains `ApiError`, which carries the HTTP status on every non-2xx response while
+still being an `Error` the existing callers read `.message` from, plus `writeVolumeFile` (PUT with
+the `File` itself as the body, so the browser declares its length — the API requires it) and
+`deleteVolumeEntry` (DELETE), both built by the one `volumeContentUrl`; `store.tsx` exposes them
+under the per-entry pending keys `volume-write:<compose>:<source>:<path>` and
+`volume-delete:<compose>:<source>:<path>`. The toolbar gains `Upload` onto the current directory:
+the hidden file input hands its `File` straight to the API, a client-side `uploadTooLarge` fast
+path refuses a file over 1 GiB before any request (the API's 413 stays the enforcer), success says
+`Uploaded <path>` and re-reads the directory, and a failure stays on screen as an Alert whose copy
+comes from `uploadFailure`/`deleteFailure`: 413 names the 1 GiB cap, 507 names the Volume's free
+space with the helper's own need-vs-available message and that a refused write removes its partial
+file, 400/409/422 keep the API's words (409 adds that mounting the missing source is what would
+create it), and anything else falls back to the API's message. Every row gains a danger delete
+action, confirmed by a `Popconfirm` that names the full relative path — a directory adds "and
+everything under it" — and states there is no trash and no undo; 204 says `Deleted <path>` and
+re-reads the listing, and the action column stops the row's click so a delete never navigates.
+A Compose with any Service running raises a warning banner above the write controls, derived by
+the pure `runningWriteWarning(compose.status, volume)`: the condition is the Compose's own
+`status.running > 0` and the names are the Services that mount this Volume, deduplicated and in
+declaration order; the copy names the consequence (a live database's data directory above all) and
+says outright that there is no confirmation gate. It is deliberately not an acknowledgement — the
+write proceeds. The unverifiable-bind confirmation now covers reads and writes, and the screen's
+footnote no longer claims to be read-only. No editor, restore, mkdir, rename or new-file control;
+the editor (1 MB rule) stays for session 2.
+
+Evidence: `pnpm typecheck && pnpm test` under `node:24-alpine` (frozen lockfile, warm pnpm store) —
+tsc clean, **196/196 green** (14 new: `uploadTooLarge`'s cap boundary, `uploadFailure`/`deleteFailure`
+for 413/507/400/409/422/502 and a non-`Error` rejection, `runningWriteWarning`'s condition,
+deduplicated service list, no-uses fallback and consequence copy, and `volumeContentUrl`'s
+encoding). No DOM testing library; the decisions stay pure helpers. No rebuilt
+`internal/webassets/dist` is committed.

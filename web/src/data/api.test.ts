@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { volumeArchiveUrl, volumeReadUrl } from './api';
+import { volumeArchiveUrl, volumeContentUrl, volumeReadUrl } from './api';
 
 /**
  * The two direct-download URLs the Explorer hands to an `<a href>`. They are
@@ -28,6 +28,14 @@ describe('volumeReadUrl', () => {
   it('marks the file an attachment and encodes source and path', () => {
     expect(volumeReadUrl(location, 'demo_pgdata', 'reports/a b\nc.txt')).toBe(
       '/api/projects/1/environments/2/composes/3/volumes/read?source=demo_pgdata&path=reports%2Fa%20b%0Ac.txt&download=1',
+    );
+  });
+});
+
+describe('volumeContentUrl', () => {
+  it('targets the write endpoint with source and path encoded whole', () => {
+    expect(volumeContentUrl(location, '/srv/legacy images', 'reports/a b\nc.txt')).toBe(
+      '/api/projects/1/environments/2/composes/3/volumes/content?source=%2Fsrv%2Flegacy%20images&path=reports%2Fa%20b%0Ac.txt',
     );
   });
 });

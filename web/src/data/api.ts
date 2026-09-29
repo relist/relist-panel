@@ -62,6 +62,22 @@ type ErrorResponse = {
   error?: string;
 };
 
+/**
+ * A non-2xx API response: the API's own message, plus the HTTP status. The
+ * write family's view helpers map the status to the limit that was hit (413's
+ * 1 GiB cap, 507's free space); every other caller keeps reading `.message`
+ * exactly as it did before the status existed.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 async function responseError(response: Response): Promise<string> {
   try {
     const payload = (await response.json()) as ErrorResponse;
@@ -77,7 +93,7 @@ async function responseError(response: Response): Promise<string> {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { credentials: 'same-origin', ...init });
   if (!response.ok) {
-    throw new Error(await responseError(response));
+    throw new ApiError(response.status, await responseError(response));
   }
   // Deletes (and logout) answer 204 with no body to parse.
   if (response.status === 204) {
@@ -154,6 +170,22 @@ export const api = {
     request<VolumeEntry[]>(
       `${composePath(location)}/volumes/list?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`,
     ),
+  /**
+   * Uploads (or overwrites) one file: the `File` is the request body, so the
+   * browser declares its length for it — which the API requires, because the
+   * length becomes the helper's `--expect`. `path` must name the file, never
+   * the Volume root (400); a size above the 1 GiB cap is refused with 413, and
+   * a write the helper refuses for want of space with 507 carrying its own
+   * need-vs-available message. Success is 204.
+   */
+  writeVolumeFile: (location: ComposePath, source: string, path: string, file: Blob) =>
+    request<void>(volumeContentUrl(location, source, path), { body: file, method: 'PUT' }),
+  /**
+   * Deletes one entry, or a whole directory tree: permanent, no trash, and
+   * the API's own refusal when the path is the Volume root. Success is 204.
+   */
+  deleteVolumeEntry: (location: ComposePath, source: string, path: string) =>
+    request<void>(volumeContentUrl(location, source, path), { method: 'DELETE' }),
   serviceMetrics: (location: ComposePath, service: string, window: MetricWindow) =>
     request<ServiceMetrics>(`${composePath(location)}/services/${encodeURIComponent(service)}/metrics?window=${window}`),
 };
@@ -199,4 +231,13 @@ export function volumeArchiveUrl(location: ComposePath, source: string, path = '
  */
 export function volumeReadUrl(location: ComposePath, source: string, path: string): string {
   return `${composePath(location)}/volumes/read?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}&download=1`;
+}
+
+/**
+ * The write endpoint's URL for one entry — both PUT (upload or edit) and
+ * DELETE share it, with the same `source` + `path` grammar as the read URLs.
+ * The body of a PUT is the file's bytes, so the URL never carries content.
+ */
+export function volumeContentUrl(location: ComposePath, source: string, path: string): string {
+  return `${composePath(location)}/volumes/content?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`;
 }

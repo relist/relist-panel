@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ComposeVolume, ComposeVolumes, VolumeEntry } from '../data/types';
+import { ApiError } from '../data/api';
+import type { ComposeStatus, ComposeVolume, ComposeVolumes, VolumeEntry } from '../data/types';
 import {
+  deleteFailure,
   entryFacts,
   explorerView,
   formatMode,
@@ -15,6 +17,10 @@ import {
   parentPath,
   pathSegments,
   requiresConfirmation,
+  runningWriteWarning,
+  uploadFailure,
+  uploadTooLarge,
+  UPLOAD_MAX_BYTES,
 } from './volume-explorer-view';
 
 function volume(overrides: Partial<ComposeVolume> = {}): ComposeVolume {
@@ -242,5 +248,103 @@ describe('openFailure', () => {
   it('recognizes the kernel’s "not a directory" as a file link, distinct from an escape', () => {
     expect(isNotDirectoryRefusal('relist-volhelper: list "link": readdirent /data/link: not a directory')).toBe(true);
     expect(isNotDirectoryRefusal('openat link: path escapes from parent')).toBe(false);
+  });
+});
+
+describe('uploadTooLarge', () => {
+  it('lets a file that exactly fills the cap through, and refuses one byte more', () => {
+    expect(uploadTooLarge({ name: 'at-cap.bin', size: UPLOAD_MAX_BYTES })).toBeUndefined();
+    const refused = uploadTooLarge({ name: 'over-cap.bin', size: UPLOAD_MAX_BYTES + 1 });
+    expect(refused?.message).toBe('Upload exceeds the 1 GiB cap');
+    expect(refused?.description).toContain('over-cap.bin');
+    expect(refused?.description).toContain('1 GiB');
+  });
+});
+
+describe('uploadFailure / deleteFailure', () => {
+  it('names the 1 GiB cap the API refused the upload for', () => {
+    const failure = uploadFailure(new ApiError(413, 'upload exceeds the 1 GiB cap'));
+    expect(failure.message).toBe('Upload exceeds the 1 GiB cap');
+    expect(failure.description).toContain('1 GiB');
+    expect(failure.description).toContain('upload exceeds the 1 GiB cap');
+  });
+
+  it('names the Volume’s free space the helper refused the write for', () => {
+    const refusal =
+      'volume write refused: relist-volhelper: write "backup.tar" needs 2147483648 bytes but the Volume has only 1048576 free';
+    const failure = uploadFailure(new ApiError(507, refusal));
+    expect(failure.message).toBe('The Volume is out of space');
+    expect(failure.description).toContain(refusal);
+    expect(failure.description).toContain('partial file');
+  });
+
+  it('keeps the API’s 400 wording for a request the shape rules refused', () => {
+    const failure = deleteFailure(new ApiError(400, 'path must name a file or directory, not the volume root'));
+    expect(failure.message).toBe('The delete was refused');
+    expect(failure.description).toBe('path must name a file or directory, not the volume root');
+  });
+
+  it('explains the 409 missing source instead of leaving a bare conflict', () => {
+    const failure = uploadFailure(
+      new ApiError(409, 'volume demo_pgdata is missing: named volume "demo_pgdata" does not exist'),
+    );
+    expect(failure.message).toBe('This Volume’s source is missing');
+    expect(failure.description).toContain('does not exist');
+    expect(failure.description).toContain('mounting it is what would create it');
+  });
+
+  it('maps a 422 to the helper’s refusal, keeping the API’s words', () => {
+    const failure = uploadFailure(new ApiError(422, 'volume extract refused: archive entry "../etc/passwd" escapes'));
+    expect(failure.message).toBe('The Volume refused the file');
+    expect(failure.description).toContain('escapes');
+  });
+
+  it('falls back to the API’s own message for an unmapped failure', () => {
+    const failure = deleteFailure(new ApiError(502, 'volume delete failed: docker: exit status 1: permission denied'));
+    expect(failure.message).toBe('Delete failed');
+    expect(failure.description).toBe('volume delete failed: docker: exit status 1: permission denied');
+  });
+
+  it('says something for a rejection that is not an Error', () => {
+    expect(deleteFailure('boom').description).toBe('boom');
+  });
+});
+
+describe('runningWriteWarning', () => {
+  const status = (running: number, total = 3): ComposeStatus => ({ running, total });
+
+  it('is silent while no Service in the Compose is running', () => {
+    expect(runningWriteWarning(status(0), volume())).toBeUndefined();
+    expect(runningWriteWarning(undefined, volume())).toBeUndefined();
+  });
+
+  it('raises on a partly running Compose too — any Service up is enough', () => {
+    expect(runningWriteWarning(status(1, 3), volume())).toBeDefined();
+  });
+
+  it('names the Services that mount this Volume once each, in declaration order', () => {
+    const shared = volume({
+      uses: [
+        { service: 'api', target: '/app/uploads', readOnly: false },
+        { service: 'worker', target: '/work', readOnly: true },
+        { service: 'api', target: '/app/incoming', readOnly: false },
+      ],
+    });
+    const warning = runningWriteWarning(status(1, 3), shared);
+    expect(warning?.services).toEqual(['api', 'worker']);
+    expect(warning?.message).toBe('This Compose is running — writing can corrupt api, worker');
+  });
+
+  it('names the consequence rather than telling the operator to be careful', () => {
+    const warning = runningWriteWarning(status(2), volume());
+    expect(warning?.description).toContain('database');
+    expect(warning?.description).toContain('no confirmation gate');
+    expect(warning?.description).not.toMatch(/be careful/i);
+  });
+
+  it('still warns without a named Service when the Volume declares no use', () => {
+    const warning = runningWriteWarning(status(1), volume({ uses: [] }));
+    expect(warning?.services).toEqual([]);
+    expect(warning?.message).toContain('a live Service');
   });
 });

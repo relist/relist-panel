@@ -71,6 +71,10 @@ type PanelValue = {
   loadVolumes: (composeId: number) => Promise<ComposeVolumes>;
   /** One directory inside a resolved Volume, for the Explorer's current path. */
   listVolumeEntries: (composeId: number, source: string, path: string) => Promise<VolumeEntry[]>;
+  /** Uploads or overwrites one file inside a resolved Volume. Rejects with the API's message. */
+  writeVolumeFile: (composeId: number, source: string, path: string, file: Blob) => Promise<void>;
+  /** Deletes one entry, or a whole tree, inside a resolved Volume. Permanent. */
+  deleteVolumeEntry: (composeId: number, source: string, path: string) => Promise<void>;
   loadVariables: (environmentId: number) => Promise<void>;
   projects: Project[];
   /** Per-Service rows per Compose, from the Services endpoint. */
@@ -628,6 +632,43 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [track],
   );
 
+  // A write carries no tree state either: the Volume's contents are the
+  // server's, and the Explorer re-reads the directory it wrote into. The
+  // pending key names the exact entry (`volume-write:<compose>:<source>:<path>`),
+  // so a control spins only for the write it started.
+  const writeVolumeFile = useCallback(
+    (composeId: number, source: string, path: string, file: Blob) =>
+      track(`volume-write:${composeId}:${source}:${path}`, async () => {
+        const location = findComposeLocation(projectsRef.current, composeId);
+        if (!location) {
+          throw new Error('Compose not found');
+        }
+        await api.writeVolumeFile(
+          { projectId: location.project.id, environmentId: location.environment.id, composeId },
+          source,
+          path,
+          file,
+        );
+      }),
+    [track],
+  );
+
+  const deleteVolumeEntry = useCallback(
+    (composeId: number, source: string, path: string) =>
+      track(`volume-delete:${composeId}:${source}:${path}`, async () => {
+        const location = findComposeLocation(projectsRef.current, composeId);
+        if (!location) {
+          throw new Error('Compose not found');
+        }
+        await api.deleteVolumeEntry(
+          { projectId: location.project.id, environmentId: location.environment.id, composeId },
+          source,
+          path,
+        );
+      }),
+    [track],
+  );
+
   const isPending = useCallback((key: string) => Boolean(pending[key]), [pending]);
 
   const value = useMemo<PanelValue>(
@@ -641,6 +682,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteEnvironment,
       deleteProject,
       deleteVariable,
+      deleteVolumeEntry,
       deployCompose,
       isPending,
       loadAuthStatus,
@@ -664,6 +706,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       signUp,
       stopCompose,
       updateProject,
+      writeVolumeFile,
     }),
     [
       addEnvironment,
@@ -675,6 +718,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteEnvironment,
       deleteProject,
       deleteVariable,
+      deleteVolumeEntry,
       deployCompose,
       isPending,
       loadAuthStatus,
@@ -699,6 +743,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       signUp,
       stopCompose,
       updateProject,
+      writeVolumeFile,
     ],
   );
 

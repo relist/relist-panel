@@ -1,6 +1,7 @@
 import { formatBytes } from '../components/MetricChart';
 import { cliMessage, isNotDeployed } from '../components/volumes-view';
-import type { ComposeVolume, ComposeVolumes, VolumeEntry } from '../data/types';
+import { ApiError } from '../data/api';
+import type { ComposeStatus, ComposeVolume, ComposeVolumes, VolumeEntry } from '../data/types';
 
 /**
  * The Volume Explorer's pure decisions: how the URL's source resolves against
@@ -186,6 +187,136 @@ export function openFailure(entry: VolumeEntry, error: string): { message: strin
     };
   }
   return { message: `Could not open ${entry.name}`, description: error };
+}
+
+// ---- Writes (ticket 08) -------------------------------------------------------
+//
+// The write actions' pure decisions: the 1 GiB upload cap as a client-side fast
+// path, the alert copy for a refused upload or delete — the API's own words
+// with the limit that was hit named — and the running-stack warning's condition
+// and Service list.
+
+/** The API's hard-coded `uploadCap`, repeated here only for the fast path; the server stays the enforcer. */
+export const UPLOAD_MAX_BYTES = 1 << 30;
+
+/** One failed write's alert copy, ready for an `Alert`'s `message` and `description`. */
+export type VolumeFailure = {
+  message: string;
+  description: string;
+};
+
+/**
+ * The client-side half of the upload cap: a file already over 1 GiB is refused
+ * before a request is made, because sending it would only earn the API's own
+ * 413. The API's check is the one that counts — the browser is not the limit.
+ */
+export function uploadTooLarge(file: { name: string; size: number }): VolumeFailure | undefined {
+  if (file.size <= UPLOAD_MAX_BYTES) {
+    return undefined;
+  }
+  return {
+    message: 'Upload exceeds the 1 GiB cap',
+    description: `${file.name} is ${formatBytes(file.size)} — larger than the 1 GiB cap on one upload, so it was never sent.`,
+  };
+}
+
+/**
+ * The alert copy for a failed upload. The API's status picks the limit that was
+ * hit — 413 the 1 GiB cap, 507 the Volume's free space — and the API's own
+ * message is kept in the description, because it carries the helper's
+ * need-vs-available numbers and the operator can act on those.
+ */
+export function uploadFailure(error: unknown): VolumeFailure {
+  return writeFailure('upload', error);
+}
+
+/** The same mapping for a failed delete: 400 is the root-path refusal the API worded. */
+export function deleteFailure(error: unknown): VolumeFailure {
+  return writeFailure('delete', error);
+}
+
+function writeFailure(action: 'upload' | 'delete', error: unknown): VolumeFailure {
+  const status = error instanceof ApiError ? error.status : undefined;
+  const api = error instanceof Error ? error.message : String(error);
+  switch (status) {
+    case 413:
+      return {
+        message: 'Upload exceeds the 1 GiB cap',
+        description: `The panel caps one upload at 1 GiB, so nothing was written. The API said: ${api}`,
+      };
+    case 507:
+      return {
+        message: 'The Volume is out of space',
+        description: `The write was refused rather than left half-done — a refused write removes its partial file. The API said: ${api}`,
+      };
+    case 400:
+      return {
+        message: action === 'upload' ? 'The upload was refused' : 'The delete was refused',
+        description: api,
+      };
+    case 409:
+      return {
+        message: 'This Volume’s source is missing',
+        description: `${api} — mounting it is what would create it, so the panel refuses.`,
+      };
+    case 422:
+      // The restore family's refusal (an archive the helper will not extract);
+      // mapped here so a future caller gets the helper's own words.
+      return {
+        message: 'The Volume refused the file',
+        description: api,
+      };
+    default:
+      return {
+        message: action === 'upload' ? 'Upload failed' : 'Delete failed',
+        description: api,
+      };
+  }
+}
+
+/**
+ * The running-stack warning: whether it appears, and which Services it names.
+ *
+ * The condition is the Compose's own `status.running` — the field the API
+ * refreshes from Docker on every read — so any Service up raises the banner.
+ * The names are the Services that declare a use of this Volume, deduplicated:
+ * those are the ones a write can reach. `GUIDELINES` §8 is why the copy names
+ * the consequence rather than telling the operator to be careful, and why this
+ * is a warning and never a gate.
+ */
+export type RunningWriteWarning = {
+  /** Services this Volume is mounted by, in declaration order, each named once. */
+  services: string[];
+  message: string;
+  description: string;
+};
+
+export function runningWriteWarning(
+  status: ComposeStatus | undefined,
+  volume: ComposeVolume | undefined,
+): RunningWriteWarning | undefined {
+  if (status === undefined || status.running <= 0) {
+    return undefined;
+  }
+  const services = volume ? Array.from(new Set(volume.uses.map((use) => use.service))) : [];
+  const consequence = (object: string) =>
+    `Writing files a live process is using — a database’s data directory above all — can corrupt ${object}. ` +
+    'There is no confirmation gate on a write: this banner is the whole warning.';
+  if (services.length === 0) {
+    return {
+      description: `A Service in this Compose is up. ${consequence('it')}`,
+      message: 'This Compose is running — writing can corrupt a live Service',
+      services,
+    };
+  }
+  const named = services.join(', ');
+  const verb = services.length === 1 ? 'mounts' : 'mount';
+  const object = services.length === 1 ? 'it' : 'them';
+  return {
+    description: `${named} ${verb} this Volume, and the Compose is up. ${consequence(object)}`,
+    message: `This Compose is running — writing can corrupt ${named}`,
+    services,
+  };
 }
 
 /** A relative path normalized without touching the filesystem (`..` at the root is kept). */
