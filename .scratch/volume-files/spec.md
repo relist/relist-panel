@@ -169,6 +169,9 @@ free space measured when it began, in which case the partial file is removed bes
 usable tar.gz — so the panel answers 4xx instead of 502: the body is the client's, not the Volume's.
 A `mkdir` or `create` exits **5** when the name is already taken — neither ever merges an existing
 directory nor replaces an existing file — so the panel answers 409 Conflict rather than 502.
+A missing entry, and a symlink that escapes the Volume, stay ordinary exit-1 failures answered 502
+with the helper's message: the panel's only consumer is its own Explorer, which tells the escape
+case apart by that message, so no exit code is spent on the distinction.
 
 Every filesystem call goes through **`os.Root`** (`os.OpenRoot("/data")`), which refuses to resolve a
 name outside the root and rejects absolute symlinks. This is defense in depth *behind* the panel's
@@ -402,7 +405,9 @@ is an invitation to turn them off:
 | restore, entries | ≤ 10,000, counted by the helper as it streams |
 
 The free-space check is the part no OS default provides, and a full disk is a host-wide failure, not
-a panel one.
+a panel one. It is deliberately conservative: measured before the target is opened, so the replaced
+file's own blocks are not counted and an edit that would fit after they are freed can still be
+refused with 507.
 
 ## What the Explorer shows
 
