@@ -90,7 +90,7 @@ export function MonitoringPage() {
       {error && (
         <Alert
           action={<Button onClick={() => void load(metricWindow)}>Retry</Button>}
-          message={error}
+          title={error}
           showIcon
           style={{ marginBottom: 16 }}
           type="error"

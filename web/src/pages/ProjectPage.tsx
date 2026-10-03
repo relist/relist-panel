@@ -280,9 +280,8 @@ export function ProjectPage() {
 
       {actionError && (
         <Alert
-          afterClose={() => setActionError(undefined)}
-          closable
-          message={actionError}
+          closable={{ afterClose: () => setActionError(undefined) }}
+          title={actionError}
           showIcon
           style={{ marginBottom: 16 }}
           type="error"
@@ -556,7 +555,7 @@ export function ProjectPage() {
           <YamlEditor height={320} onChange={setComposeYAML} path="new-compose.yml" value={composeYAML} />
         </div>
         <Alert
-          message="The panel joins every service to the shared Traefik network on deploy. Routing is yours to declare with labels."
+          title="The panel joins every service to the shared Traefik network on deploy. Routing is yours to declare with labels."
           showIcon
           style={{ marginTop: 12 }}
           type="info"

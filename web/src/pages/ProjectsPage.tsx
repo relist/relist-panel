@@ -135,9 +135,8 @@ export function ProjectsPage() {
 
       {actionError && (
         <Alert
-          afterClose={() => setActionError(undefined)}
-          closable
-          message={actionError}
+          closable={{ afterClose: () => setActionError(undefined) }}
+          title={actionError}
           showIcon
           style={{ marginBottom: 16 }}
           type="error"

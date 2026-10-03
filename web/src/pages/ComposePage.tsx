@@ -407,9 +407,8 @@ export function ComposePage() {
 
       {actionError && (
         <Alert
-          afterClose={() => setActionError(undefined)}
-          closable
-          message={actionError}
+          closable={{ afterClose: () => setActionError(undefined) }}
+          title={actionError}
           showIcon
           style={{ marginBottom: LAYOUT.gutterSmall }}
           type="error"
@@ -482,7 +481,7 @@ export function ComposePage() {
                           </Space>
                         }
                         banner
-                        message="You have unsaved changes. Deploying will save them first."
+                        title="You have unsaved changes. Deploying will save them first."
                         type="warning"
                       />
                     )}
@@ -579,7 +578,7 @@ export function ComposePage() {
                       {state === 'partial' && (
                         <Alert
                           description="Open the Logs drawer and filter to the service that exited."
-                          message="Some containers are not running"
+                          title="Some containers are not running"
                           showIcon
                           style={{ marginTop: 12 }}
                           type="warning"

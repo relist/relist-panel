@@ -284,7 +284,7 @@ export function AppShell() {
             {loadError && (
               <Alert
                 action={<Button onClick={() => void loadTree()}>Retry</Button>}
-                message={loadError}
+                title={loadError}
                 showIcon
                 style={{ marginBottom: LAYOUT.gutter }}
                 type="error"

@@ -205,7 +205,7 @@ export function ServiceMonitor({ compose, onOpenEditor }: { compose: Compose; on
               void load(service.name, metricWindow);
             }}>Retry</Button>
           }
-          message={error}
+          title={error}
           showIcon
           style={{ marginBottom: 16 }}
           type="error"

@@ -112,9 +112,9 @@ function AuthLayout({
 function AuthError({ message }: { message: string }) {
   return (
     <Alert
-      message={message}
       showIcon
       style={{ marginBottom: 16 }}
+      title={message}
       type="error"
     />
   );
@@ -198,9 +198,9 @@ export function SignInPage() {
       </Form>
       <Alert
         description="Sessions are cookie-based and survive a reload; signing out clears the session server-side."
-        message="Staying signed in"
         showIcon
         style={{ marginTop: 16 }}
+        title="Staying signed in"
         type="info"
       />
     </AuthLayout>

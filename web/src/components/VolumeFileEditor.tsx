@@ -161,7 +161,7 @@ export function VolumeFileEditor({
       {failure && (
         <Alert
           description={failure.description}
-          message={failure.message}
+          title={failure.message}
           showIcon
           style={{ flex: 'none', margin: LAYOUT.gutterSmall, marginBottom: 0 }}
           type="error"

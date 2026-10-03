@@ -45,7 +45,7 @@ export function RequireAuth() {
                   Retry
                 </Button>
               }
-              message="Could not contact the panel"
+              title="Could not contact the panel"
               showIcon
               type="error"
             />

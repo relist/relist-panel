@@ -59,7 +59,7 @@ export function ComposeVolumesTab({
     return (
       <Alert
         description={view.reason}
-        message="Volume files are unavailable"
+        title="Volume files are unavailable"
         showIcon
         type="warning"
       />
@@ -89,7 +89,7 @@ export function ComposeVolumesTab({
       <Alert
         action={<Button onClick={onRetry}>Retry</Button>}
         description={view.message}
-        message="Could not resolve this Compose’s Volumes"
+        title="Could not resolve this Compose’s Volumes"
         showIcon
         type="error"
       />
@@ -113,7 +113,7 @@ export function ComposeVolumesTab({
         <Alert
           description={warning.message}
           key={`${warning.status}:${warning.volume.source}`}
-          message={
+          title={
             warning.status === 'missing'
               ? `${volumeLabel(warning.volume)} — the source is missing`
               : `${volumeLabel(warning.volume)} — the panel cannot check this path`

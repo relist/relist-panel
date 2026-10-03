@@ -154,7 +154,7 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
       </Paragraph>
 
       <Alert
-        message="Values are stored in the panel's SQLite database and written to a mode-600 env file on deploy."
+        title="Values are stored in the panel's SQLite database and written to a mode-600 env file on deploy."
         showIcon
         style={{ marginBottom: 16 }}
         type="info"
@@ -271,7 +271,7 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
         title={editing ? `Edit ${editing.key}` : 'New Environment Variable'}
       >
         {formError && (
-          <Alert message={formError} showIcon style={{ marginBottom: 16 }} type="error" />
+          <Alert title={formError} showIcon style={{ marginBottom: 16 }} type="error" />
         )}
         <Form
           form={form}
@@ -342,7 +342,7 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
         />
         {duplicated.length > 0 && (
           <Alert
-            message={`Duplicate keys: ${duplicated.join(', ')}`}
+            title={`Duplicate keys: ${duplicated.join(', ')}`}
             showIcon
             style={{ marginTop: 12 }}
             type="error"
@@ -350,7 +350,7 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
         )}
         {invalid.length > 0 && (
           <Alert
-            message={`Keys a Compose file cannot reference: ${invalid.join(', ')}`}
+            title={`Keys a Compose file cannot reference: ${invalid.join(', ')}`}
             description="Use letters, digits and underscores, not starting with a digit — otherwise ${KEY} cannot pick the value up."
             showIcon
             style={{ marginTop: 12 }}
@@ -358,7 +358,7 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
           />
         )}
         {bulkError && (
-          <Alert message={bulkError} showIcon style={{ marginTop: 12 }} type="error" />
+          <Alert title={bulkError} showIcon style={{ marginTop: 12 }} type="error" />
         )}
         {parsed.length > 0 && !bulkBlocked && (
           <div style={{ marginTop: 12 }}>

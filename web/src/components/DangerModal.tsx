@@ -68,7 +68,7 @@ export function DangerModal({
         showIcon
         style={{ margin: '16px -24px -20px' }}
         type="warning"
-        message="This action cannot be undone."
+        title="This action cannot be undone."
       />
     </Modal>
   );

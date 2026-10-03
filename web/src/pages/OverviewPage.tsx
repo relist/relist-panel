@@ -102,7 +102,7 @@ export function OverviewPage() {
                 </Button>
               }
               description="Partly running, or stopped after a successful deploy. They are listed below with the service that dropped out."
-              message={`${attention.length} ${attention.length === 1 ? 'Compose needs' : 'Composes need'} attention`}
+              title={`${attention.length} ${attention.length === 1 ? 'Compose needs' : 'Composes need'} attention`}
               showIcon
               style={{ marginBottom: 16 }}
               type="warning"
