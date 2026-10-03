@@ -836,3 +836,65 @@ func TestMalformedInvocationsPrintUsageAndFail(t *testing.T) {
 		t.Errorf("unknown op stderr = %q, want the op named", stderr)
 	}
 }
+
+// mkdir creates one directory and refuses a name already taken with exit 5 —
+// its own exit code, so the panel can answer a conflict rather than a bad
+// gateway — and nothing is merged.
+func TestMkdirCreatesOneDirectoryAndRefusesAnExistingName(t *testing.T) {
+	root := t.TempDir()
+
+	code, stdout, stderr := runHelper(t, root, nil, "mkdir", "--", "uploads")
+	if code != exitOK {
+		t.Fatalf("mkdir exit = %d, stderr = %q, want 0", code, stderr)
+	}
+	if len(stdout) != 0 || stderr != "" {
+		t.Errorf("mkdir stdout = %q stderr = %q, want neither", stdout, stderr)
+	}
+	info, err := os.Stat(filepath.Join(root, "uploads"))
+	if err != nil || !info.IsDir() {
+		t.Fatalf("Stat(uploads) = %v, %v; want a directory", info, err)
+	}
+
+	code, _, stderr = runHelper(t, root, nil, "mkdir", "--", "uploads")
+	if code != exitExists {
+		t.Fatalf("second mkdir exit = %d, stderr = %q, want %d", code, stderr, exitExists)
+	}
+	if !strings.Contains(stderr, "file exists") {
+		t.Errorf("exists stderr = %q, want the kernel's own words", stderr)
+	}
+}
+
+// create creates one empty file and refuses a name already taken with exit 5;
+// the existing file's bytes are untouched, because create is O_EXCL rather
+// than the truncating write.
+func TestCreateCreatesAnEmptyFileAndNeverTruncates(t *testing.T) {
+	root := t.TempDir()
+	keep := plant(t, root, "notes.txt", []byte("keep me"))
+
+	code, stdout, stderr := runHelper(t, root, nil, "create", "--", "fresh.txt")
+	if code != exitOK {
+		t.Fatalf("create exit = %d, stderr = %q, want 0", code, stderr)
+	}
+	if len(stdout) != 0 || stderr != "" {
+		t.Errorf("create stdout = %q stderr = %q, want neither", stdout, stderr)
+	}
+	info, err := os.Stat(filepath.Join(root, "fresh.txt"))
+	if err != nil {
+		t.Fatalf("Stat(fresh.txt) error = %v", err)
+	}
+	if info.Size() != 0 {
+		t.Errorf("fresh.txt size = %d, want 0", info.Size())
+	}
+
+	code, _, stderr = runHelper(t, root, nil, "create", "--", "notes.txt")
+	if code != exitExists {
+		t.Fatalf("create over an existing file exit = %d, stderr = %q, want %d", code, stderr, exitExists)
+	}
+	content, err := os.ReadFile(keep)
+	if err != nil {
+		t.Fatalf("read notes.txt: %v", err)
+	}
+	if string(content) != "keep me" {
+		t.Errorf("notes.txt = %q, want the original content intact", content)
+	}
+}

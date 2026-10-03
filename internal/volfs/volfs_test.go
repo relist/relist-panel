@@ -446,3 +446,64 @@ func TestOpenRefusesAMissingDirectory(t *testing.T) {
 		t.Fatal("Open(missing) = nil error, want a failure")
 	}
 }
+
+// Mkdir creates exactly one directory and refuses a name already taken: a
+// folder may never adopt or merge an existing entry, so an existing name is
+// fs.ErrExist rather than a silent success.
+func TestMkdirCreatesOneDirectoryAndRefusesAnExistingName(t *testing.T) {
+	f := newFixture(t)
+
+	// One level only: the parent must exist, exactly the Explorer's rule that
+	// the dialog creates into the directory it is showing.
+	if err := f.Mkdir("uploads/incoming", 0o755); err == nil {
+		t.Error("Mkdir(nested new parent) = nil, want a failure")
+	}
+
+	if err := f.Mkdir("uploads", 0o755); err != nil {
+		t.Fatalf("Mkdir(uploads) error = %v", err)
+	}
+	entry, err := f.Stat("uploads")
+	if err != nil {
+		t.Fatalf("Stat(uploads) error = %v", err)
+	}
+	if entry.Kind != KindDir || entry.Mode.Perm()&0o700 != 0o700 {
+		t.Errorf("Stat(uploads) = %+v, want an owner-writable directory", entry)
+	}
+
+	if err := f.Mkdir("uploads", 0o755); !errors.Is(err, fs.ErrExist) {
+		t.Errorf("Mkdir(existing) error = %v, want fs.ErrExist", err)
+	}
+	if err := f.Mkdir("../escape", 0o755); err == nil {
+		t.Error("Mkdir(../escape) = nil, want the root's escape refusal")
+	}
+}
+
+// Create creates exactly one empty file and never truncates: a name already
+// taken fails with fs.ErrExist and the existing content survives untouched.
+// That O_EXCL is the whole reason New file is not the write endpoint.
+func TestCreateCreatesAnEmptyFileAndNeverTruncates(t *testing.T) {
+	f := newFixture(t)
+	f.plant(t, "notes.txt", "keep me")
+
+	if err := f.Create("fresh.txt", 0o644); err != nil {
+		t.Fatalf("Create(fresh.txt) error = %v", err)
+	}
+	entry, err := f.Stat("fresh.txt")
+	if err != nil {
+		t.Fatalf("Stat(fresh.txt) error = %v", err)
+	}
+	if entry.Kind != KindFile || entry.Size != 0 {
+		t.Errorf("Stat(fresh.txt) = %+v, want an empty file", entry)
+	}
+
+	if err := f.Create("notes.txt", 0o644); !errors.Is(err, fs.ErrExist) {
+		t.Errorf("Create(existing) error = %v, want fs.ErrExist", err)
+	}
+	content, err := os.ReadFile(f.path("notes.txt"))
+	if err != nil {
+		t.Fatalf("read notes.txt: %v", err)
+	}
+	if string(content) != "keep me" {
+		t.Errorf("notes.txt = %q, want the original content intact", content)
+	}
+}

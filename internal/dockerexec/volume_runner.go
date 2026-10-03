@@ -36,6 +36,12 @@ const helperRefusedExitCode = 3
 // the run carries a volumes.ArchiveRefusedError for the HTTP layer's 422.
 const helperArchiveRefusedExitCode = 4
 
+// helperExistsExitCode is the helper's exitExists (5): the mkdir or create
+// named an entry that is already there, so the run carries a
+// volumes.ExistsError for the HTTP layer's 409 — the name is the request's,
+// not the Volume's failure.
+const helperExistsExitCode = 5
+
 // exitCoder is the shape a failed child leaves behind: *exec.ExitError
 // carries the exit code docker propagated from the helper. It is declared as
 // an interface so the mapping is scriptable without a process.
@@ -74,8 +80,9 @@ func (r *VolumeRunner) Available(ctx context.Context) error {
 // Run runs one operation and returns when it has ended. stdin and stdout
 // carry the operation's bytes; stderr is captured into the returned error.
 // A helper refusal — exit 3, before any work — comes back as a
-// *volumes.RefusalError, and an archive refusal — exit 4 — as a
-// *volumes.ArchiveRefusedError; every other failure is a plain error.
+// *volumes.RefusalError, an archive refusal — exit 4 — as a
+// *volumes.ArchiveRefusedError, and an existing name — exit 5 — as a
+// *volumes.ExistsError; every other failure is a plain error.
 func (r *VolumeRunner) Run(ctx context.Context, req volumes.Request, stdin io.Reader, stdout io.Writer) error {
 	image, err := r.resolveImage(ctx)
 	if err != nil {
@@ -102,6 +109,11 @@ func (r *VolumeRunner) Run(ctx context.Context, req volumes.Request, stdin io.Re
 				// client's, and the HTTP layer answers 422 rather than
 				// 502.
 				return &volumes.ArchiveRefusedError{Message: message}
+			case helperExistsExitCode:
+				// A create found the name taken (the spec's v1 operation
+				// set): mkdir merges nothing and create never overwrites, so
+				// the HTTP layer answers 409 rather than 502.
+				return &volumes.ExistsError{Message: message}
 			}
 		}
 		// A cancelled operator request kills the docker CLI child

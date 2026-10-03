@@ -276,6 +276,10 @@ UI — is the enforcer.
   written until it is pressed; root and an unverifiable bind each need their own acknowledgement first. A change to
   the form keeps the confirmed snapshot in force until Confirm is pressed again. The Volumes tab only launches the
   Explorer; it starts no archive itself.
+- **Creating entries is one operation per dialog.** New folder (`mkdir`) and New file (`create`) are one dialog
+  with two titles, created as the confirmed operation user, one level at a time, and owned by that uid:gid.
+  `create` is O_EXCL, so an existing name is refused — in the dialog against the listing, and with a 409 when it
+  still races — never replaced the way a truncating upload would.
 - **Restore discloses partial extraction.** Every entry is validated before it is written, but there is no
   transaction across a stream: entries written before a failure stay written, and the confirmation says so before
   the operator starts.

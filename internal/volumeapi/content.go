@@ -66,11 +66,21 @@ func (s *Service) deleteFile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// writeRunFailure answers a failed write or delete: a helper refusal — exit
-// 3, so the operation was not carried out — is 507 Insufficient Storage
-// carrying the helper's own message; every other failure stays the 502 the
+// writeRunFailure answers a failed write, delete or create: a helper refusal
+// — exit 3, so the operation was not carried out — is 507 Insufficient
+// Storage carrying the helper's own message, a create that found the name
+// taken — exit 5 — is 409 Conflict, and every other failure stays the 502 the
 // read operations use.
 func writeRunFailure(w http.ResponseWriter, op volumes.Op, err error) {
+	var exists *volumes.ExistsError
+	if errors.As(err, &exists) {
+		kind := "directory"
+		if op == volumes.OpCreate {
+			kind = "file"
+		}
+		writeError(w, http.StatusConflict, kind+" already exists: "+exists.Error())
+		return
+	}
 	var refusal *volumes.RefusalError
 	if errors.As(err, &refusal) {
 		writeError(w, http.StatusInsufficientStorage, "volume "+string(op)+" refused: "+refusal.Error())

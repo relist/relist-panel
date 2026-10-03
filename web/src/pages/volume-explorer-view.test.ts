@@ -15,10 +15,13 @@ import {
   formatMode,
   isDirty,
   isEscapeRefusal,
+  isExistsRefusal,
   isNotDirectoryRefusal,
   isSymlink,
   joinPath,
   linkEscapes,
+  newEntryFailure,
+  newEntryNameError,
   openFailure,
   operationRefusal,
   parentPath,
@@ -617,5 +620,69 @@ describe('restoreFailure', () => {
 
   it('says something for a rejection that is not an Error', () => {
     expect(restoreFailure('boom').description).toBe('boom');
+  });
+});
+
+describe('newEntryNameError', () => {
+  const entries = [
+    entry({ name: 'notes.txt' }),
+    entry({ name: 'incoming', kind: 'directory', mode: 0o040755 }),
+  ];
+
+  it('silently keeps Create disabled while the name is empty', () => {
+    expect(newEntryNameError('directory', '', entries)).toBeUndefined();
+    expect(newEntryNameError('file', '', entries)).toBeUndefined();
+  });
+
+  it('accepts any name that is one new entry', () => {
+    expect(newEntryNameError('directory', 'uploads', entries)).toBeUndefined();
+    expect(newEntryNameError('file', 'a b\nc.txt', entries)).toBeUndefined();
+    expect(newEntryNameError('directory', 'x'.repeat(255), entries)).toBeUndefined();
+  });
+
+  it('refuses a name that could never be one entry, naming the kind', () => {
+    expect(newEntryNameError('directory', '   ', entries)).toBe('Enter a folder name.');
+    expect(newEntryNameError('file', '   ', entries)).toBe('Enter a file name.');
+    expect(newEntryNameError('directory', 'a/b', entries)).toContain('“/”');
+    expect(newEntryNameError('file', 'a/b', entries)).toContain('one file at a time');
+    expect(newEntryNameError('file', '.', entries)).toBe('“.” is not a name.');
+    expect(newEntryNameError('file', '..', entries)).toBe('“..” is not a name.');
+    expect(newEntryNameError('directory', 'x'.repeat(256), entries)).toBe('Use 255 characters or fewer.');
+  });
+
+  it('refuses a name the listing already shows, file or directory', () => {
+    expect(newEntryNameError('file', 'notes.txt', entries)).toBe('An entry named “notes.txt” already exists here.');
+    expect(newEntryNameError('directory', 'incoming', entries)).toBe('An entry named “incoming” already exists here.');
+  });
+});
+
+describe('newEntryFailure', () => {
+  it('words an exists collision as the actionable refusal it is, per kind', () => {
+    const api = 'directory already exists: relist-volhelper: mkdir "uploads": file exists';
+    expect(newEntryFailure('directory', new ApiError(409, api))).toEqual({
+      message: 'A folder with that name already exists',
+      description: `${api} — names in a directory are unique, so the create was refused rather than replacing what was there.`,
+    });
+    expect(newEntryFailure('file', new ApiError(409, 'file already exists: create "notes.txt": file exists')).message).toBe(
+      'A file with that name already exists',
+    );
+    expect(isExistsRefusal(api)).toBe(true);
+    expect(isExistsRefusal('volume demo_pgdata is missing: no such volume')).toBe(false);
+  });
+
+  it('keeps the write family’s wording for the other statuses', () => {
+    expect(newEntryFailure('directory', new ApiError(507, 'out of space')).message).toBe('The Volume is out of space');
+    expect(newEntryFailure('file', new ApiError(409, 'volume demo_pgdata is missing: gone'))).toEqual({
+      message: 'This Volume’s source is missing',
+      description: 'volume demo_pgdata is missing: gone — mounting it is what would create it, so the panel refuses.',
+    });
+    expect(newEntryFailure('file', new ApiError(400, 'path must name a file or directory, not the volume root')).message).toBe(
+      'The new file was refused',
+    );
+    expect(newEntryFailure('directory', new ApiError(502, 'volume mkdir failed: permission denied'))).toEqual({
+      message: 'New folder failed',
+      description: 'volume mkdir failed: permission denied',
+    });
+    expect(newEntryFailure('file', new Error('boom')).message).toBe('New file failed');
   });
 });

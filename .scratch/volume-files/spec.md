@@ -148,13 +148,15 @@ relist-volhelper stat    -- <relpath>
 relist-volhelper read    -- <relpath>                 # bytes on stdout
 relist-volhelper write   [--expect <bytes>] -- <relpath> # bytes on stdin
 relist-volhelper delete  -- <relpath>                 # file or whole tree
+relist-volhelper mkdir   -- <relpath>                 # one new directory
+relist-volhelper create  -- <relpath>                 # one new empty file
 relist-volhelper archive --format tar.gz -- <relpath> # bytes on stdout
 relist-volhelper extract -- <relpath>                 # tar.gz on stdin
 ```
 
 Paths are **relative to `/data`**, always. The helper rejects absolute paths outright. Metadata
 operations return JSON on stdout; `read` and `archive` return raw bytes and `extract` consumes them.
-Read operations mount `:ro`; `write`, `delete` and `extract` mount `:rw`.
+Read operations mount `:ro`; `write`, `delete`, `extract`, `mkdir` and `create` mount `:rw`.
 
 The helper exits `0` on success, `1` on an operation failure and `2` on a malformed invocation. A
 `write` also exits **3** when it is refused for want of space, naming need vs available: `--expect`'s
@@ -162,6 +164,8 @@ declared size cannot fit the Volume — refused before any stdin is read — or 
 free space measured when it began, in which case the partial file is removed best-effort. An
 `extract` exits **4** when the archive was refused — an unsafe entry, a cap exceeded, or not a
 usable tar.gz — so the panel answers 4xx instead of 502: the body is the client's, not the Volume's.
+A `mkdir` or `create` exits **5** when the name is already taken — neither ever merges an existing
+directory nor replaces an existing file — so the panel answers 409 Conflict rather than 502.
 
 Every filesystem call goes through **`os.Root`** (`os.OpenRoot("/data")`), which refuses to resolve a
 name outside the root and rejects absolute symlinks. This is defense in depth *behind* the panel's
@@ -360,15 +364,16 @@ in-flight `docker` child when the operator's HTTP request is cancelled; the help
 Read: list a directory (name, size, mtime, owner uid/gid, mode, kind); `stat` one entry; download a
 single file; download a directory as tar.gz.
 
-Write: upload a file into the current directory; edit a text file and save (Monaco); delete a file or
-a whole directory tree.
+Write: upload a file into the current directory; edit a text file and save (Monaco); create one
+folder (`mkdir`) or one empty file (`create`, O_EXCL: an existing name is refused, never replaced);
+delete a file or a whole directory tree.
 
 Restore: extract an uploaded tar.gz into a directory that already exists.
 
-Deliberately **not** in v1 — all of these are additive later: create an empty file, mkdir, rename or
-move, copy/duplicate, a chmod/chown editor, search, image or media preview, multi-select or
-drag-and-drop, symlink creation, and zip in either direction. Each lands as another operation on the
-same per-operation API rather than as rework.
+Deliberately **not** in v1 — all of these are additive later: rename or move, copy/duplicate, a
+chmod/chown editor, search, image or media preview, multi-select or drag-and-drop, symlink creation,
+and zip in either direction. Each lands as another operation on the same per-operation API rather
+than as rework; `mkdir` and `create` were the first, added without touching the pipeline.
 
 Delete is permanent, with a `Popconfirm` naming the path — no trash. A hidden trash directory inside
 the Volume would be visible to the application using it, which is worse than the operator having to
@@ -405,6 +410,9 @@ The Explorer shows resolved paths — the host path for a bind source, and
   Service (or numeric uid:gid) and its required acknowledgements are one confirmed snapshot that
   every list, read, download and write uses. Changing the form afterwards keeps the confirmed
   snapshot in force until Confirm is pressed again.
+- New folder and New file are one dialog with two titles. The name is checked in the dialog against
+  the listing it can see — one entry, never empty, never `.` or `..` — and the create runs as the
+  confirmed operation user; when the dialog's check is raced, the API's 409 is the refusal.
 - The Volume Explorer opens in a new browser tab, as its own route in the panel SPA, behind the
   panel's existing session auth. It is not a separate web app and has no nav entry of its own —
   a Volume is meaningless without its Compose as context.

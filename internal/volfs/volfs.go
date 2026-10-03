@@ -220,6 +220,33 @@ func (fs *FS) Write(name string, src io.Reader) error {
 	return nil
 }
 
+// Mkdir creates exactly one directory — the Explorer's New folder. A name
+// already taken is an error, never a merge: the root's Mkdir is the O_EXCL of
+// directories, so an existing entry is reported instead of being adopted.
+// Containment is the root's, like every other call here.
+func (fs *FS) Mkdir(name string, perm fs.FileMode) error {
+	if err := fs.root.Mkdir(name, perm); err != nil {
+		return fmt.Errorf("mkdir %q: %w", name, err)
+	}
+	return nil
+}
+
+// Create creates exactly one empty file — the Explorer's New file — and
+// refuses a name that already exists rather than truncating it: O_EXCL is the
+// point, because an overwriting create would silently destroy the file the
+// operator meant to keep. The handle is closed here; nothing of the empty file
+// needs to outlive the call.
+func (fs *FS) Create(name string, perm fs.FileMode) error {
+	f, err := fs.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return fmt.Errorf("create %q: %w", name, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("create %q: %w", name, err)
+	}
+	return nil
+}
+
 // Delete removes one path: a file, a symlink, or a whole directory tree. The
 // root itself is never deletable — os.Root refuses — and a path that does not
 // exist is a no-op, both matching RemoveAll.

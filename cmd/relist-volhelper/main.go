@@ -9,6 +9,8 @@
 //	relist-volhelper read    -- <path>
 //	relist-volhelper write   [--expect <bytes>] -- <path>
 //	relist-volhelper delete  -- <path>
+//	relist-volhelper mkdir   -- <path>
+//	relist-volhelper create  -- <path>
 //	relist-volhelper archive --format tar.gz -- <path>
 //	relist-volhelper extract -- <path>
 //
@@ -25,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -44,24 +47,28 @@ const usage = `usage:
   relist-volhelper read    -- <path>
   relist-volhelper write   [--expect <bytes>] -- <path>
   relist-volhelper delete  -- <path>
+  relist-volhelper mkdir   -- <path>
+  relist-volhelper create  -- <path>
   relist-volhelper archive --format tar.gz -- <path>
   relist-volhelper extract -- <path>
 <path> is relative to the Volume root mounted at /data.
 --expect is a write's declared size in bytes, checked against the Volume's free space before stdin is read.
+mkdir creates one directory; create creates one empty file. Neither replaces an existing entry.
 extract consumes a tar.gz on stdin and writes it into the existing directory <path>.
 `
 
 // The helper's exit codes: 0 for success, 1 when an operation failed, 2 when
 // the invocation itself was refused, 3 when a write is refused for want of
-// space, and 4 when an extract refuses the client's archive. Any non-zero
-// code is a failure to the panel; the split only sharpens the helper's own
-// diagnostics.
+// space, 4 when an extract refuses the client's archive, and 5 when a create
+// refuses a name that is already taken. Any non-zero code is a failure to the
+// panel; the split only sharpens the helper's own diagnostics.
 const (
 	exitOK             = 0
 	exitError          = 1
 	exitUsage          = 2
 	exitRefused        = 3
 	exitArchiveRefused = 4
+	exitExists         = 5
 )
 
 func main() {
@@ -124,6 +131,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, rootDir strin
 		return runWrite(stderr, vol, stdin, cmd, freeSpace)
 	case "delete":
 		return failOn(stderr, vol.Delete(cmd.name))
+	case "mkdir":
+		return runNewEntry(stderr, vol.Mkdir(cmd.name, 0o755))
+	case "create":
+		return runNewEntry(stderr, vol.Create(cmd.name, 0o644))
 	case "archive":
 		// parse pinned the format: tar.gz is the only one the helper speaks.
 		return failOn(stderr, vol.Archive(cmd.name, stdout))
@@ -161,7 +172,7 @@ func parse(args []string) (command, error) {
 	rest := args[1:]
 
 	switch cmd.op {
-	case "list", "stat", "read", "delete", "extract":
+	case "list", "stat", "read", "delete", "extract", "mkdir", "create":
 		// No extra flags: the path follows immediately after `--`.
 	case "write":
 		// An upload's declared byte count, so the helper can refuse a write
@@ -278,6 +289,18 @@ func (g *spaceGuard) Read(p []byte) (int, error) {
 	n, err := g.src.Read(p)
 	g.written += uint64(n)
 	return n, err
+}
+
+// runNewEntry is mkdir's and create's dispatch: a name already taken is the
+// one expected refusal of a create — mkdir merges nothing and create never
+// overwrites — so it exits 5, which the panel answers 409 Conflict rather
+// than 502. Every other failure is an ordinary operation failure.
+func runNewEntry(stderr io.Writer, err error) int {
+	if errors.Is(err, fs.ErrExist) {
+		fmt.Fprintf(stderr, "relist-volhelper: %v\n", err)
+		return exitExists
+	}
+	return failOn(stderr, err)
 }
 
 // fail reports one operation's error on stderr — the only place errors go,

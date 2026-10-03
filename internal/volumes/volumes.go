@@ -18,9 +18,9 @@ import (
 type Op string
 
 // The v1 operation set (the spec's Protocol). The mount is read-only for
-// list, stat, read and archive, and read-write for write, delete and extract;
-// Request.ReadOnly carries that choice into the mount flag, where the kernel
-// enforces it.
+// list, stat, read and archive, and read-write for write, delete, extract,
+// mkdir and create; Request.ReadOnly carries that choice into the mount flag,
+// where the kernel enforces it.
 const (
 	OpList    Op = "list"
 	OpStat    Op = "stat"
@@ -29,6 +29,8 @@ const (
 	OpDelete  Op = "delete"
 	OpArchive Op = "archive"
 	OpExtract Op = "extract"
+	OpMkdir   Op = "mkdir"
+	OpCreate  Op = "create"
 )
 
 // Request is one fully resolved Volume operation: everything a Runner needs
@@ -86,6 +88,24 @@ type ArchiveRefusedError struct {
 func (e *ArchiveRefusedError) Error() string {
 	if e.Message == "" {
 		return "the helper refused the archive"
+	}
+	return e.Message
+}
+
+// ExistsError is a helper refusal of a create: the helper exited 5 because the
+// name it was asked to create is already taken — mkdir and create never merge
+// or overwrite — and Message is the helper's own explanation. It has its own
+// type so the HTTP layer can answer 409 Conflict with the truth instead of the
+// 502 every other run failure gets.
+type ExistsError struct {
+	Message string
+}
+
+// Error implements error. A collision that somehow carried no message still
+// reads as a collision rather than as an empty failure.
+func (e *ExistsError) Error() string {
+	if e.Message == "" {
+		return "the name already exists"
 	}
 	return e.Message
 }

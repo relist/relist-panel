@@ -280,6 +280,96 @@ function writeFailure(action: 'upload' | 'delete' | 'edit', error: unknown): Vol
   }
 }
 
+// ---- Creating entries (New folder / New file) --------------------------------
+//
+// The create dialog's pure decisions: the name rule its Create button obeys —
+// what could never be one entry, and what the listing already shows — and the
+// alert copy for a refused create. The dialog's duplicate check is the fast
+// path; the API's own 409 is the enforcer.
+
+/** Which entry the create dialog is making. */
+export type NewEntryKind = 'directory' | 'file';
+
+/** The API's own wording for a create refused because the name is taken. */
+export function isExistsRefusal(message: string): boolean {
+  return message.includes('already exists');
+}
+
+/**
+ * Why a name cannot be created in the current directory, or undefined when it
+ * can. The empty name is not an error — it silently keeps Create disabled —
+ * while a name that could never be one entry, or that the listing already
+ * shows, is refused with its reason. The listing check is the fast path, not
+ * the rule: the API's 409 is what a race still earns.
+ */
+export function newEntryNameError(
+  kind: NewEntryKind,
+  name: string,
+  entries: readonly VolumeEntry[],
+): string | undefined {
+  if (name === '') {
+    return undefined;
+  }
+  const noun = kind === 'directory' ? 'folder' : 'file';
+  if (name.trim() === '') {
+    return `Enter a ${noun} name.`;
+  }
+  if (name.includes('/')) {
+    return `A name cannot contain “/” — create one ${noun} at a time.`;
+  }
+  if (name === '.' || name === '..') {
+    return `“${name}” is not a name.`;
+  }
+  if (name.length > 255) {
+    return 'Use 255 characters or fewer.';
+  }
+  if (entries.some((entry) => entry.name === name)) {
+    return `An entry named “${name}” already exists here.`;
+  }
+  return undefined;
+}
+
+/**
+ * The alert copy for a failed create. A 409 whose message is the API's
+ * "already exists" is the collision the dialog could not prevent — a race, or
+ * a listing that was stale — and is worded as the actionable thing it is; any
+ * other 409 is the write family's missing source. The remaining statuses keep
+ * the write family's wording, with create's nouns.
+ */
+export function newEntryFailure(kind: NewEntryKind, error: unknown): VolumeFailure {
+  const status = error instanceof ApiError ? error.status : undefined;
+  const api = error instanceof Error ? error.message : String(error);
+  const noun = kind === 'directory' ? 'folder' : 'file';
+  if (status === 409 && isExistsRefusal(api)) {
+    return {
+      message: `A ${noun} with that name already exists`,
+      description: `${api} — names in a directory are unique, so the create was refused rather than replacing what was there.`,
+    };
+  }
+  switch (status) {
+    case 507:
+      return {
+        message: 'The Volume is out of space',
+        description: `The create was refused for want of space. The API said: ${api}`,
+      };
+    case 409:
+      return {
+        message: 'This Volume’s source is missing',
+        description: `${api} — mounting it is what would create it, so the panel refuses.`,
+      };
+    case 400:
+      return {
+        message: `The new ${noun} was refused`,
+        description: api,
+      };
+    default:
+      return {
+        message: kind === 'directory' ? 'New folder failed' : 'New file failed',
+        description: api,
+      };
+  }
+}
+
 // ---- The editor (ticket 08) ---------------------------------------------------
 //
 // The text editor's pure decisions: the 1 MB entry gate, the rule that decides

@@ -77,6 +77,10 @@ type PanelValue = {
   writeVolumeFile: (composeId: number, source: string, path: string, file: Blob, access?: VolumeAccess) => Promise<void>;
   /** Deletes one entry, or a whole tree, inside a resolved Volume. Permanent. */
   deleteVolumeEntry: (composeId: number, source: string, path: string, access?: VolumeAccess) => Promise<void>;
+  /** Creates one directory inside a resolved Volume, as the confirmed operation user. */
+  createVolumeDirectory: (composeId: number, source: string, path: string, access?: VolumeAccess) => Promise<void>;
+  /** Creates one empty file inside a resolved Volume, refusing a name already taken. */
+  createVolumeFile: (composeId: number, source: string, path: string, access?: VolumeAccess) => Promise<void>;
   /**
    * Streams a tar.gz into one directory of a resolved Volume: upload and
    * extract are one operation, so there is no separate upload step and the
@@ -700,6 +704,45 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [track],
   );
 
+  // A create carries no tree state either: the Explorer re-reads the
+  // directory it created into. The pending key names the exact entry
+  // (`volume-mkdir:<compose>:<source>:<path>` and
+  // `volume-create:<compose>:<source>:<path>`), so the dialog's action spins
+  // only for its own request.
+  const createVolumeDirectory = useCallback(
+    (composeId: number, source: string, path: string, access?: VolumeAccess) =>
+      track(`volume-mkdir:${composeId}:${source}:${path}`, async () => {
+        const location = findComposeLocation(projectsRef.current, composeId);
+        if (!location) {
+          throw new Error('Compose not found');
+        }
+        await api.createVolumeDirectory(
+          { projectId: location.project.id, environmentId: location.environment.id, composeId },
+          source,
+          path,
+          access,
+        );
+      }),
+    [track],
+  );
+
+  const createVolumeFile = useCallback(
+    (composeId: number, source: string, path: string, access?: VolumeAccess) =>
+      track(`volume-create:${composeId}:${source}:${path}`, async () => {
+        const location = findComposeLocation(projectsRef.current, composeId);
+        if (!location) {
+          throw new Error('Compose not found');
+        }
+        await api.createVolumeFile(
+          { projectId: location.project.id, environmentId: location.environment.id, composeId },
+          source,
+          path,
+          access,
+        );
+      }),
+    [track],
+  );
+
   // A restore carries no tree state either: the extract writes files the
   // Explorer re-reads. The pending key names the target directory
   // (`volume-restore:<compose>:<source>:<path>`), so the toolbar's action
@@ -731,6 +774,8 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       checkedAt,
       createCompose,
       createProject,
+      createVolumeDirectory,
+      createVolumeFile,
       deleteCompose,
       deleteEnvironment,
       deleteProject,
@@ -769,6 +814,8 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       checkedAt,
       createCompose,
       createProject,
+      createVolumeDirectory,
+      createVolumeFile,
       deleteCompose,
       deleteEnvironment,
       deleteProject,

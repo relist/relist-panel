@@ -200,6 +200,21 @@ export const api = {
   deleteVolumeEntry: (location: ComposePath, source: string, path: string, access?: VolumeAccess) =>
     request<void>(volumeContentUrl(location, source, path, access), { method: 'DELETE' }),
   /**
+   * Creates one directory (the Explorer's New folder) as the confirmed
+   * operation user. One helper run, no body; an existing name is refused with
+   * 409 rather than merged. Success is 204.
+   */
+  createVolumeDirectory: (location: ComposePath, source: string, path: string, access?: VolumeAccess) =>
+    request<void>(volumeDirectoryUrl(location, source, path, access), { method: 'PUT' }),
+  /**
+   * Creates one empty file (the Explorer's New file). Deliberately not the
+   * write endpoint: `create` fails with 409 on a name that already exists
+   * instead of truncating it, so New file can never wipe the file it
+   * collided with. Success is 204.
+   */
+  createVolumeFile: (location: ComposePath, source: string, path: string, access?: VolumeAccess) =>
+    request<void>(volumeFileUrl(location, source, path, access), { method: 'PUT' }),
+  /**
    * Restores a tar.gz into one resolved Volume directory: the archive is the
    * request body, streamed straight into the helper's `extract`, so upload and
    * extract are one operation and nothing is staged on the panel's disk. The
@@ -276,6 +291,25 @@ export function volumeReadUrl(location: ComposePath, source: string, path: strin
  */
 export function volumeContentUrl(location: ComposePath, source: string, path: string, access?: VolumeAccess): string {
   return `${composePath(location)}/volumes/content?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}${volumeAccessQuery(access)}`;
+}
+
+/**
+ * The create endpoints' URLs: one entry per request, never the Volume root.
+ * `directory` answers PUT with the helper's `mkdir` and `file` with
+ * `create` — an empty file that refuses an existing name, unlike the
+ * truncating `write` behind `volumeContentUrl`. Neither carries a body, so
+ * nothing about the name rides anywhere but the query.
+ */
+export function volumeDirectoryUrl(location: ComposePath, source: string, path: string, access?: VolumeAccess): string {
+  return volumeCreateUrl(location, 'directory', source, path, access);
+}
+
+export function volumeFileUrl(location: ComposePath, source: string, path: string, access?: VolumeAccess): string {
+  return volumeCreateUrl(location, 'file', source, path, access);
+}
+
+function volumeCreateUrl(location: ComposePath, endpoint: string, source: string, path: string, access?: VolumeAccess): string {
+  return `${composePath(location)}/volumes/${endpoint}?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}${volumeAccessQuery(access)}`;
 }
 
 /**

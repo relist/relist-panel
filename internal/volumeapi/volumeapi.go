@@ -38,9 +38,10 @@ func New(composeService *composes.Service, resolver *volumes.Resolver, runner vo
 // RegisterRoutes adds the authenticated Volume Explorer endpoints to mux: the
 // listing of a Compose's resolved Volumes, the per-operation reads (archive
 // included), and the per-operation writes — content answers PUT for an
-// upload or edit and DELETE for a file or a tree, and restore answers PUT
-// for a tar.gz streamed into extract — never GET, so the SameSite=Lax
-// session cookie keeps them CSRF-safe.
+// upload or edit and DELETE for a file or a tree, directory and file answer
+// PUT to create one entry (never replacing an existing one), and restore
+// answers PUT for a tar.gz streamed into extract — never GET, so the
+// SameSite=Lax session cookie keeps them CSRF-safe.
 func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes", s.list)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/list", s.listFiles)
@@ -49,6 +50,8 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/archive", s.archive)
 	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/content", s.writeFile)
 	mux.HandleFunc("DELETE /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/content", s.deleteFile)
+	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/directory", s.mkdir)
+	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/file", s.createFile)
 	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/restore", s.restore)
 }
 

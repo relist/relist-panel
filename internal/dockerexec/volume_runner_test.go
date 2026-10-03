@@ -35,6 +35,8 @@ func TestVolumeArgvForEveryOp(t *testing.T) {
 		{name: "write", op: volumes.OpWrite, wantMount: "demo_pgdata:/data", wantOpArgs: []string{"write"}},
 		{name: "write with a declared size", op: volumes.OpWrite, declaredBytes: 1048576, wantMount: "demo_pgdata:/data", wantOpArgs: []string{"write", "--expect", "1048576"}},
 		{name: "delete", op: volumes.OpDelete, wantMount: "demo_pgdata:/data", wantOpArgs: []string{"delete"}},
+		{name: "mkdir", op: volumes.OpMkdir, wantMount: "demo_pgdata:/data", wantOpArgs: []string{"mkdir"}},
+		{name: "create", op: volumes.OpCreate, wantMount: "demo_pgdata:/data", wantOpArgs: []string{"create"}},
 		{name: "extract", op: volumes.OpExtract, wantMount: "demo_pgdata:/data", wantOpArgs: []string{"extract"}},
 	}
 
@@ -329,6 +331,35 @@ func TestVolumeRunnerRunMapsArchiveRefusal(t *testing.T) {
 	var spaceRefusal *volumes.RefusalError
 	if errors.As(err, &spaceRefusal) {
 		t.Errorf("Run() error = %v, want an archive refusal, not a space refusal", err)
+	}
+}
+
+// Exit 5 is the helper's exists refusal — a mkdir or create found the name
+// taken — so the run comes back as a typed ExistsError carrying the helper's
+// own message, which is what the HTTP layer maps to 409 rather than 502. It
+// is not a space refusal.
+func TestVolumeRunnerRunMapsExistsRefusal(t *testing.T) {
+	runner := &VolumeRunner{
+		resolveImage: func(context.Context) (string, error) { return testImage, nil },
+		runDocker: func(_ context.Context, _ []string, _ io.Reader, _, stderr io.Writer) error {
+			_, _ = io.WriteString(stderr, "relist-volhelper: mkdir \"uploads\": file exists\n")
+			return exitCodeError(5)
+		},
+	}
+
+	err := runner.Run(context.Background(), volumes.Request{Op: volumes.OpMkdir, Path: "uploads"}, nil, io.Discard)
+	var exists *volumes.ExistsError
+	if !errors.As(err, &exists) {
+		t.Fatalf("Run() error = %v, want a *volumes.ExistsError", err)
+	}
+	for _, want := range []string{"mkdir", `"uploads"`, "file exists"} {
+		if !strings.Contains(exists.Error(), want) {
+			t.Errorf("exists = %q, want it to contain %q", exists.Error(), want)
+		}
+	}
+	var spaceRefusal *volumes.RefusalError
+	if errors.As(err, &spaceRefusal) {
+		t.Errorf("Run() error = %v, want an exists refusal, not a space refusal", err)
 	}
 }
 

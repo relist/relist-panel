@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { volumeArchiveUrl, volumeContentUrl, volumeReadApiUrl, volumeReadUrl, volumeRestoreUrl } from './api';
+import {
+  volumeArchiveUrl,
+  volumeContentUrl,
+  volumeDirectoryUrl,
+  volumeFileUrl,
+  volumeReadApiUrl,
+  volumeReadUrl,
+  volumeRestoreUrl,
+} from './api';
 
 /**
  * The two direct-download URLs the Explorer hands to an `<a href>`. They are
@@ -44,6 +52,22 @@ describe('volumeContentUrl', () => {
   it('targets the write endpoint with source and path encoded whole', () => {
     expect(volumeContentUrl(location, '/srv/legacy images', 'reports/a b\nc.txt')).toBe(
       '/api/projects/1/environments/2/composes/3/volumes/content?source=%2Fsrv%2Flegacy%20images&path=reports%2Fa%20b%0Ac.txt',
+    );
+  });
+});
+
+describe('volumeDirectoryUrl', () => {
+  it('targets the mkdir endpoint with source and path encoded whole', () => {
+    expect(volumeDirectoryUrl(location, '/srv/legacy images', 'invoices/2026-09')).toBe(
+      '/api/projects/1/environments/2/composes/3/volumes/directory?source=%2Fsrv%2Flegacy%20images&path=invoices%2F2026-09',
+    );
+  });
+});
+
+describe('volumeFileUrl', () => {
+  it('targets the create endpoint with source and path encoded whole', () => {
+    expect(volumeFileUrl(location, 'demo_pgdata', 'notes/a b.txt')).toBe(
+      '/api/projects/1/environments/2/composes/3/volumes/file?source=demo_pgdata&path=notes%2Fa%20b.txt',
     );
   });
 });

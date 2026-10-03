@@ -4,7 +4,9 @@ import {
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
+  FileAddOutlined,
   FileOutlined,
+  FolderAddOutlined,
   FolderOutlined,
   ImportOutlined,
   LinkOutlined,
@@ -47,7 +49,7 @@ import { usePanel } from '../data/store';
 import type { ComposeVolumes, VolumeAccess, VolumeEntry } from '../data/types';
 import { findComposeLocation } from '../data/types';
 import { composeLinkIsStale } from './compose-view';
-import type { EntryFacts, RestoreDisclosure, VolumeFailure } from './volume-explorer-view';
+import type { EntryFacts, NewEntryKind, RestoreDisclosure, VolumeFailure } from './volume-explorer-view';
 import {
   savedEditorState,
   editorSessionCurrent,
@@ -62,6 +64,8 @@ import {
   isNotDirectoryRefusal,
   isSymlink,
   joinPath,
+  newEntryFailure,
+  newEntryNameError,
   openFailure,
   operationRefusal,
   parentPath,
@@ -123,6 +127,9 @@ const UNCONFIRMED_ACCESS: VolumeAccess = {};
  * session cookie keeps them CSRF-safe. A delete is permanent — there is no
  * trash, because a hidden one inside the Volume would be visible to the
  * application using it — so it is confirmed by a `Popconfirm` naming the path.
+ * A new folder or file is one dialog and one helper run, created as the
+ * confirmed operation user; `create` is O_EXCL, so a name already taken is
+ * refused rather than replaced, unlike an upload's overwriting write.
  * A Compose that is running raises a banner naming the consequence and the
  * Services using this Volume; the write is deliberately not gated behind it.
  */
@@ -133,6 +140,8 @@ export function VolumeExplorerPage() {
   const { token } = theme.useToken();
   const { message } = App.useApp();
   const {
+    createVolumeDirectory,
+    createVolumeFile,
     deleteVolumeEntry,
     isPending,
     listVolumeEntries,
@@ -245,6 +254,11 @@ export function VolumeExplorerPage() {
   const access = applied?.access ?? UNCONFIRMED_ACCESS;
   const confirmed = applied !== undefined;
   const confirmedLabel = applied?.access.user ?? applied?.access.service;
+  // The uid:gid the create dialog states as the new entry's owner: the
+  // override itself, or the confirmed Service's resolved user. Undefined only
+  // in the instant before a service's resolution is in hand.
+  const confirmedUser =
+    applied?.access.user ?? mountingUsers.find((user) => user.service === applied?.access.service)?.user;
   const confirmOperationUser = useCallback(() => {
     setApplied({ access: draftAccess, query: draftQuery });
   }, [draftAccess, draftQuery]);
@@ -298,6 +312,11 @@ export function VolumeExplorerPage() {
   // and sends nothing.
   const [restoring, setRestoring] = useState(false);
   const [restore, setRestore] = useState<{ disclosure: RestoreDisclosure; file: File }>();
+  // The create dialog: one component for New folder and New file, whose name
+  // rule is the pure `newEntryNameError`. Nothing is sent until Create;
+  // success re-reads the directory, and a failure keeps the screen's alert.
+  const [newEntry, setNewEntry] = useState<{ kind: NewEntryKind; name: string }>();
+  const [creating, setCreating] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const restoreInput = useRef<HTMLInputElement>(null);
   const listRequest = useRef(0);
@@ -486,6 +505,44 @@ export function VolumeExplorerPage() {
     [access, composeId, deleteVolumeEntry, loadList, message, path, selected, source],
   );
 
+  // ---- The create actions (New folder / New file) ----------------------------
+  //
+  // The dialog's name rule is the pure `newEntryNameError`: the empty name
+  // keeps Create disabled, a duplicate in the listing is refused before a
+  // request, and the API's own 409 is what a race still earns. A create runs
+  // as the confirmed operation user, success says `Created <path>` and re-reads
+  // the directory rather than patching it, and a failure stays on screen as an
+  // Alert. `create` is O_EXCL: it never replaces the entry it collided with,
+  // unlike an upload's write.
+
+  const newEntryError =
+    newEntry === undefined ? undefined : newEntryNameError(newEntry.kind, newEntry.name, currentListing?.entries ?? []);
+
+  const createEntry = useCallback(async () => {
+    const pending = newEntry;
+    if (pending === undefined || pending.name === '' || newEntryError !== undefined) {
+      return;
+    }
+    const target = joinPath(path, pending.name);
+    setWriteError(undefined);
+    setCreating(true);
+    try {
+      if (pending.kind === 'directory') {
+        await createVolumeDirectory(composeId, source, target, access);
+      } else {
+        await createVolumeFile(composeId, source, target, access);
+      }
+      setNewEntry(undefined);
+      message.success(`Created ${target}`);
+      await loadList();
+    } catch (reason: unknown) {
+      setNewEntry(undefined);
+      setWriteError(newEntryFailure(pending.kind, reason));
+    } finally {
+      setCreating(false);
+    }
+  }, [access, composeId, createVolumeDirectory, createVolumeFile, loadList, message, newEntry, newEntryError, path, source]);
+
   // ---- The editor ------------------------------------------------------------
   //
   // Opening is the row action's meaning, never the row click's; the 1 MB gate
@@ -597,14 +654,42 @@ export function VolumeExplorerPage() {
 
   // ---- The toolbar -----------------------------------------------------------
   //
-  // Upload and restore are the toolbar's write controls; editing and deletion
-  // belong to the row whose file they touch. The download actions stay anchors
-  // or a re-read, and a missing source disables everything with the API's own
-  // reason rather than letting a mount recreate it. A write is a PUT or a
-  // DELETE, never a GET, so the session cookie keeps it CSRF-safe.
+  // New folder, New file, upload and restore are the toolbar's write controls;
+  // editing and deletion belong to the row whose file they touch. The download
+  // actions stay anchors or a re-read, and a missing source disables
+  // everything with the API's own reason rather than letting a mount recreate
+  // it. A write is a PUT or a DELETE, never a GET, so the session cookie keeps
+  // it CSRF-safe.
 
   const toolbar = (
     <Flex gap={8} wrap>
+      <Tooltip
+        title={
+          refusal ?? 'Creates a folder in this directory, owned by the operation user you confirmed.'
+        }
+      >
+        <Button
+          disabled={refusal !== undefined}
+          icon={<FolderAddOutlined />}
+          onClick={() => setNewEntry({ kind: 'directory', name: '' })}
+        >
+          New folder
+        </Button>
+      </Tooltip>
+      <Tooltip
+        title={
+          refusal ??
+          'Creates an empty file in this directory, owned by the operation user you confirmed. An existing name is refused, never replaced.'
+        }
+      >
+        <Button
+          disabled={refusal !== undefined}
+          icon={<FileAddOutlined />}
+          onClick={() => setNewEntry({ kind: 'file', name: '' })}
+        >
+          New file
+        </Button>
+      </Tooltip>
       <Tooltip
         title={
           refusal ??
@@ -1030,10 +1115,11 @@ export function VolumeExplorerPage() {
             />
           )}
           <Paragraph style={{ marginBottom: 0, marginTop: 12 }} type="secondary">
-            Uploads land in this directory and deletes are permanent — there is no trash. A file opens in the editor
-            through its own Edit action; files past the editor’s 1 MB cap and binary files are refused there rather
-            than opened. Paths come from this Compose’s own resolution, so the panel never accepts a host path from a
-            form, and downloads stream straight to disk.
+            New folders and files are created here as the confirmed operation user, uploads land in this directory,
+            and deletes are permanent — there is no trash. A file opens in the editor through its own Edit action;
+            files past the editor’s 1 MB cap and binary files are refused there rather than opened. Paths come from
+            this Compose’s own resolution, so the panel never accepts a host path from a form, and downloads stream
+            straight to disk.
           </Paragraph>
         </Card>
       </>
@@ -1130,6 +1216,38 @@ export function VolumeExplorerPage() {
               Nothing is sent until you confirm; Cancel leaves the Volume untouched.
             </Paragraph>
           </>
+        )}
+      </Modal>
+
+      <Modal
+        cancelText="Cancel"
+        confirmLoading={creating}
+        okButtonProps={{ disabled: (newEntry?.name ?? '') === '' || newEntryError !== undefined }}
+        okText="Create"
+        onCancel={() => setNewEntry(undefined)}
+        onOk={() => void createEntry()}
+        open={newEntry !== undefined}
+        title={newEntry?.kind === 'directory' ? 'New folder' : 'New file'}
+      >
+        {newEntry && (
+          <Flex gap={8} vertical>
+            <Text type="secondary">
+              Creates a {newEntry.kind === 'directory' ? 'folder' : 'file'} in{' '}
+              <Text code>{restoreTarget(path)}</Text>. The entry is owned by{' '}
+              <Text code>{confirmedUser ?? 'the confirmed operation user'}</Text> — the operation user you
+              confirmed.
+            </Text>
+            <Input
+              autoFocus
+              maxLength={255}
+              onChange={(event) => setNewEntry((current) => current && { ...current, name: event.target.value })}
+              onPressEnter={() => void createEntry()}
+              placeholder={newEntry.kind === 'directory' ? 'Folder name' : 'File name'}
+              status={newEntryError ? 'error' : undefined}
+              value={newEntry.name}
+            />
+            {newEntryError && <Text type="danger">{newEntryError}</Text>}
+          </Flex>
         )}
       </Modal>
 

@@ -830,6 +830,22 @@ func contentPath(f explorerCompose, query url.Values) string {
 	return composeVolumesPath(f.project.ID, f.production.ID, f.compose.ID) + "/content?" + query.Encode()
 }
 
+// createPath builds one create-operation URL — the directory (mkdir) endpoint
+// or the file (create) endpoint — with its query encoded the way the SPA
+// sends it.
+func createPath(f explorerCompose, endpoint string, query url.Values) string {
+	if !query.Has("service") && !query.Has("user") {
+		query.Set("service", "db")
+	}
+	if !query.Has("rootConfirmed") {
+		query.Set("rootConfirmed", "1")
+	}
+	if !query.Has("bindConfirmed") {
+		query.Set("bindConfirmed", "1")
+	}
+	return composeVolumesPath(f.project.ID, f.production.ID, f.compose.ID) + "/" + endpoint + "?" + query.Encode()
+}
+
 // sendUpload sends a write the way the SPA does: the file's bytes as the raw
 // request body, no JSON envelope, with an explicit Content-Length. length
 // overrides the declared length — the 413 test declares more than it sends —
@@ -1047,6 +1063,235 @@ func TestVolumeDeleteFailureIsBadGateway(t *testing.T) {
 		t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusBadGateway, body)
 	}
 	assertErrorContains(t, response, "volume delete failed", "permission denied")
+}
+
+// A new folder and a new file are each exactly one read-write helper run,
+// consuming nothing on stdin, and answer 204.
+func TestVolumeCreateRunsOneReadWriteRun(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	tests := []struct {
+		endpoint string
+		op       volumes.Op
+		path     string
+	}{
+		{endpoint: "directory", op: volumes.OpMkdir, path: "uploads"},
+		{endpoint: "file", op: volumes.OpCreate, path: "uploads/notes.txt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.endpoint, func(t *testing.T) {
+			response := server.request(t, http.MethodPut, createPath(fixture, tt.endpoint, url.Values{
+				"source": {"demoapp_pgdata"},
+				"path":   {tt.path},
+			}), nil)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusNoContent {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusNoContent, body)
+			}
+		})
+	}
+
+	want := []faketest.Call{
+		{Request: volumes.Request{
+			Source:   "demoapp_pgdata",
+			User:     "999:998",
+			Op:       volumes.OpMkdir,
+			Path:     "uploads",
+			ReadOnly: false,
+		}},
+		{Request: volumes.Request{
+			Source:   "demoapp_pgdata",
+			User:     "999:998",
+			Op:       volumes.OpCreate,
+			Path:     "uploads/notes.txt",
+			ReadOnly: false,
+		}},
+	}
+	if !reflect.DeepEqual(server.volumeRunner.Calls, want) {
+		t.Errorf("runner calls =\n\t%+v\nwant\n\t%+v", server.volumeRunner.Calls, want)
+	}
+}
+
+// A create that collides is the helper's exit 5 turned into a 409 with the
+// helper's own words — not the 502 every ordinary run failure gets — and the
+// kind is named from the endpoint: a directory for mkdir, a file for create.
+func TestVolumeCreateConflictIsAConflict(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	tests := []struct {
+		endpoint string
+		kind     string
+	}{
+		{endpoint: "directory", kind: "directory"},
+		{endpoint: "file", kind: "file"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.endpoint, func(t *testing.T) {
+			server.volumeRunner.Err = &volumes.ExistsError{Message: `relist-volhelper: mkdir "uploads": file exists`}
+			response := server.request(t, http.MethodPut, createPath(fixture, tt.endpoint, url.Values{
+				"source": {"demoapp_pgdata"},
+				"path":   {"uploads"},
+			}), nil)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusConflict {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusConflict, body)
+			}
+			assertErrorContains(t, response, tt.kind+" already exists", "file exists")
+		})
+	}
+}
+
+// The create routes share the write family's path rule: the Volume root is
+// refused as a 400 before any run, on both endpoints.
+func TestVolumeCreateRefusesTheRootPath(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	cases := []struct {
+		name  string
+		query url.Values
+	}{
+		{name: "absent", query: url.Values{"source": {"demoapp_pgdata"}}},
+		{name: "empty", query: url.Values{"source": {"demoapp_pgdata"}, "path": {""}}},
+		{name: "dot", query: url.Values{"source": {"demoapp_pgdata"}, "path": {"."}}},
+	}
+	for _, endpoint := range []string{"directory", "file"} {
+		for _, tt := range cases {
+			t.Run(endpoint+"/"+tt.name, func(t *testing.T) {
+				response := server.request(t, http.MethodPut, createPath(fixture, endpoint, tt.query), nil)
+				defer response.Body.Close()
+				if response.StatusCode != http.StatusBadRequest {
+					body, _ := io.ReadAll(response.Body)
+					t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusBadRequest, body)
+				}
+			})
+		}
+	}
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none for a refused root path", server.volumeRunner.Calls)
+	}
+}
+
+// The create routes ride the shared pipeline: an undeclared source is a 404
+// and a missing one a 409, each before any run, and while the feature is
+// unavailable a 503 with the reason.
+func TestVolumeCreateSharesThePipelinesRefusals(t *testing.T) {
+	for _, endpoint := range []string{"directory", "file"} {
+		t.Run("undeclared source/"+endpoint, func(t *testing.T) {
+			server := newTestServer(t)
+			setupAndLogin(t, server)
+			fixture := setupExplorerCompose(t, server)
+
+			response := server.request(t, http.MethodPut, createPath(fixture, endpoint, url.Values{
+				"source": {"host-etc"},
+				"path":   {"notes.txt"},
+			}), nil)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusNotFound {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusNotFound, body)
+			}
+			assertErrorContains(t, response, "unknown volume")
+			if len(server.volumeRunner.Calls) != 0 {
+				t.Errorf("runner calls = %+v, want none for an undeclared source", server.volumeRunner.Calls)
+			}
+		})
+
+		t.Run("missing volume/"+endpoint, func(t *testing.T) {
+			server := newTestServer(t)
+			setupAndLogin(t, server)
+			fixture := setupExplorerCompose(t, server)
+			server.volumeCLI.VolumeExistsByName["demoapp_pgdata"] = false
+
+			response := server.request(t, http.MethodPut, createPath(fixture, endpoint, url.Values{
+				"source": {"demoapp_pgdata"},
+				"path":   {"notes.txt"},
+			}), nil)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusConflict {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusConflict, body)
+			}
+			assertErrorContains(t, response, "demoapp_pgdata", "does not exist")
+			if len(server.volumeRunner.Calls) != 0 {
+				t.Errorf("runner calls = %+v, want none for a missing source", server.volumeRunner.Calls)
+			}
+		})
+
+		t.Run("unavailable/"+endpoint, func(t *testing.T) {
+			server := newTestServer(t)
+			setupAndLogin(t, server)
+			fixture := setupExplorerCompose(t, server)
+			server.volumeRunner.AvailableErr = errors.New("volume files need a containerized panel whose image the host's Docker can see")
+
+			response := server.request(t, http.MethodPut, createPath(fixture, endpoint, url.Values{
+				"source": {"demoapp_pgdata"},
+				"path":   {"notes.txt"},
+			}), nil)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusServiceUnavailable {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusServiceUnavailable, body)
+			}
+			assertErrorContains(t, response, "volume files unavailable", "containerized panel")
+			if len(server.volumeRunner.Calls) != 0 {
+				t.Errorf("runner calls = %+v, want none while unavailable", server.volumeRunner.Calls)
+			}
+		})
+	}
+}
+
+// Every create answers PUT only — never GET — so the SameSite=Lax session
+// cookie keeps it CSRF-safe; a GET or POST matches no route at all.
+func TestVolumeCreateNeverAnswersGET(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	for _, endpoint := range []string{"directory", "file"} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			t.Run(endpoint+"/"+method, func(t *testing.T) {
+				response := server.request(t, method, createPath(fixture, endpoint, url.Values{
+					"source": {"demoapp_pgdata"},
+					"path":   {"uploads"},
+				}), nil)
+				defer response.Body.Close()
+				if response.StatusCode != http.StatusNotFound {
+					body, _ := io.ReadAll(response.Body)
+					t.Fatalf("status = %d, want %d: no route may answer a create, body = %s", response.StatusCode, http.StatusNotFound, body)
+				}
+			})
+		}
+	}
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none for a non-PUT method", server.volumeRunner.Calls)
+	}
+}
+
+// The create routes ride the same middleware as everything else: without a
+// session they are a 401 and nothing runs.
+func TestVolumeCreateRequiresAuthentication(t *testing.T) {
+	server := newTestServer(t)
+
+	for _, endpoint := range []string{"directory", "file"} {
+		t.Run(endpoint, func(t *testing.T) {
+			response := server.request(t, http.MethodPut, "/api/projects/1/environments/1/composes/1/volumes/"+endpoint+"?source=demoapp_pgdata&path=uploads", nil)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusUnauthorized)
+			}
+		})
+	}
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none without a session", server.volumeRunner.Calls)
+	}
 }
 
 // The Volume root is not an entry to overwrite or delete: absent, empty and

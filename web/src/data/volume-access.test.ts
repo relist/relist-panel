@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { volumeAccessReady } from '../components/volumes-view';
 import { editorReadCurrent, editorSessionCurrent, savedEditorState } from '../pages/volume-explorer-view';
-import { api, volumeAccessQuery, volumeArchiveUrl, volumeContentUrl, volumeReadUrl, volumeRestoreUrl } from './api';
+import { api, volumeAccessQuery, volumeArchiveUrl, volumeContentUrl, volumeDirectoryUrl, volumeFileUrl, volumeReadUrl, volumeRestoreUrl } from './api';
 
 describe('Volume operation identity', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('forwards the selected override and acknowledgements for list, read, upload, delete and restore', async () => {
+  it('forwards the selected override and acknowledgements for list, read, upload, delete, create and restore', async () => {
     const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('[]', { status: 200 }));
     vi.stubGlobal('fetch', fetch);
     const location = { projectId: 1, environmentId: 2, composeId: 3 };
@@ -15,8 +15,10 @@ describe('Volume operation identity', () => {
     await api.readVolumeFile(location, 'data', 'config', access);
     await api.writeVolumeFile(location, 'data', 'config', new Blob(['bytes']), access);
     await api.deleteVolumeEntry(location, 'data', 'config', access);
+    await api.createVolumeDirectory(location, 'data', 'config', access);
+    await api.createVolumeFile(location, 'data', 'config', access);
     await api.restoreVolume(location, 'data', 'config', new Blob(['archive']), access);
-    expect(fetch).toHaveBeenCalledTimes(5);
+    expect(fetch).toHaveBeenCalledTimes(7);
     for (const call of fetch.mock.calls) {
       const query = new URL(String(call[0]), 'http://panel').searchParams;
       expect(query.get('user')).toBe('0:1000');
@@ -38,7 +40,7 @@ describe('Volume operation identity', () => {
   it('carries identity and acknowledgements through every operation URL', () => {
     const location = { projectId: 1, environmentId: 2, composeId: 3 };
     const access = { service: 'worker', rootConfirmed: true, bindConfirmed: true };
-    for (const builder of [volumeArchiveUrl, volumeContentUrl, volumeReadUrl, volumeRestoreUrl]) {
+    for (const builder of [volumeArchiveUrl, volumeContentUrl, volumeDirectoryUrl, volumeFileUrl, volumeReadUrl, volumeRestoreUrl]) {
       const query = new URL(builder(location, 'data', 'config', access), 'http://panel').searchParams;
       expect(query.get('service')).toBe('worker');
       expect(query.get('rootConfirmed')).toBe('1');
