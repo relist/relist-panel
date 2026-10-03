@@ -11,7 +11,7 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { CODE_FONT_STACK } from '../app/theme';
+import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import type { ComposeVolume, ComposeVolumes } from '../data/types';
 import { CodeValue, EmptyState } from './primitives';
 import { downloadRefusal, resolvedVolumePath, volumeLabel, volumesView } from './volumes-view';
@@ -119,7 +119,7 @@ export function ComposeVolumesTab({
               : `${volumeLabel(warning.volume)} — the panel cannot check this path`
           }
           showIcon
-          style={{ marginBottom: 12 }}
+          style={{ marginBottom: LAYOUT.gutterSmall }}
           type={warning.status === 'missing' ? 'error' : 'warning'}
         />
       ))}
@@ -209,7 +209,7 @@ export function ComposeVolumesTab({
         tableLayout="fixed"
       />
 
-      <Paragraph style={{ marginBottom: 0, marginTop: 12 }} type="secondary">
+      <Paragraph style={{ marginBottom: 0, marginTop: LAYOUT.gutterSmall }} type="secondary">
         Volume list resolved from <Text code>docker compose config</Text> — a bind source is shown at its resolved host
         path, a named Volume at <Text code>/var/lib/docker/volumes/&lt;name&gt;/_data</Text>. The panel never accepts a
         host path from a form: a Volume can only be one this Compose already declares. Downloads and writes happen in

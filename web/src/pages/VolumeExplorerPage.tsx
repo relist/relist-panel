@@ -1112,7 +1112,7 @@ export function VolumeExplorerPage() {
               size="middle"
             />
           )}
-          <Paragraph style={{ marginBottom: 0, marginTop: 12 }} type="secondary">
+          <Paragraph style={{ marginBottom: 0, marginTop: LAYOUT.gutterSmall }} type="secondary">
             New folders and files are created here as the confirmed operation user, uploads land in this directory,
             and deletes are permanent — there is no trash. A file opens in the editor through its own Edit action;
             files past the editor’s 1 MB cap and binary files are refused there rather than opened. Paths come from
@@ -1283,7 +1283,6 @@ function Crumbs({ onGo, path, root }: { onGo: (path: string) => void; path: stri
         disabled={crumbs.length === 0}
         icon={<ArrowLeftOutlined />}
         onClick={() => onGo(parentPath(path))}
-        size="small"
         type="text"
       />
       <Text
