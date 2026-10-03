@@ -136,3 +136,8 @@ UTF-8/empty/NUL-in-window/NUL-past-window/invalid UTF-8, `isDirty`, `editorSaveS
 precedence, `editFailure` for 413/507/400/409/422/502, and `volumeReadApiUrl`'s encoding). No DOM
 testing library; the decisions stay pure helpers. No rebuilt `internal/webassets/dist` is
 committed.
+
+**Provenance (third review):** New folder and New file were requested by the operator during the
+volume-files branch work and shipped in `dbfd35b`; the operation-user confirmation was requested in
+the same stretch and shipped in `b3af0b5`. This ticket and the spec's v1 operation set are the
+record; no separate ADR exists because both reuse the existing per-operation pipeline.

@@ -164,8 +164,10 @@ Read operations mount `:ro`; `write`, `delete`, `extract`, `mkdir` and `create` 
 The helper exits `0` on success, `1` on an operation failure and `2` on a malformed invocation. A
 `write` also exits **3** when it is refused for want of space, naming need vs available: `--expect`'s
 declared size cannot fit the Volume — refused before any stdin is read — or the stream overran the
-free space measured when it began, in which case the partial file is removed best-effort. An
-`extract` exits **4** when the archive was refused — an unsafe entry, a cap exceeded, or not a
+free space measured when it began, in which case the partial file is removed best-effort. `write`
+creates or truncates its target before it streams, so a write that fails partway has already
+replaced the original; the clean-up removes the partial target rather than restoring it (ticket 19).
+An `extract` exits **4** when the archive was refused — an unsafe entry, a cap exceeded, or not a
 usable tar.gz — so the panel answers 4xx instead of 502: the body is the client's, not the Volume's.
 A `mkdir` or `create` exits **5** when the name is already taken — neither ever merges an existing
 directory nor replaces an existing file — so the panel answers 409 Conflict rather than 502.
@@ -397,7 +399,7 @@ is an invitation to turn them off:
 
 | | limit |
 | --- | --- |
-| upload | 1 GiB, and refused when it exceeds the Volume's free space (the helper checks `statfs`: a declared size is checked before stdin is read, and a stream that still overruns is aborted, its partial file removed) |
+| upload | 1 GiB, and refused when it exceeds the Volume's free space (the helper checks `statfs`: a declared size is checked before stdin is read, and a stream that still overruns is aborted, its partial file removed — the target is created or truncated first, so a failed edit has already replaced the original; ticket 19) |
 | editable text file | 1 MB |
 | archive stream | 10 minute timeout |
 | restore, compressed | ≤ 1 GiB, enforced on the request body |
