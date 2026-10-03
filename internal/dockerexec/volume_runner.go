@@ -24,12 +24,6 @@ const helperEntrypoint = "/usr/local/bin/relist-volhelper"
 // `docker inspect` cannot answer (ADR-0010): the operator names it directly.
 const panelImageEnv = "RELIST_IMAGE"
 
-// The refusal exit codes are volumes' (RefusalExitCode, ArchiveRefusedExitCode,
-// ExistsExitCode), next to the error types each maps to, so helper and runner
-// share one source. Exit 1 and 2 — operation failure and malformed invocation —
-// stay ordinary failures, and docker run propagates the container's own exit
-// code.
-
 // exitCoder is the shape a failed child leaves behind: *exec.ExitError
 // carries the exit code docker propagated from the helper. It is declared as
 // an interface so the mapping is scriptable without a process.

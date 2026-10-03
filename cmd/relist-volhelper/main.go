@@ -215,9 +215,9 @@ var errNoSpace = errors.New("stream exceeds the Volume's free space")
 // Volume's free space once, refuses a declared size that cannot fit before
 // stdin or the target is touched (the spec's Caps), then guards the stream
 // against the same measurement. volfs.Write creates and truncates the target
-// before the copy, so a guarded abort removes the partial file rather than
-// leaving a truncated one; the removal is best-effort, and the refusal still
-// exits 3.
+// before the copy, so the original is already replaced once the copy begins: a
+// guarded abort removes the partial file rather than leaving a truncated one,
+// the removal is best-effort, and the refusal still exits 3.
 func runWrite(stderr io.Writer, vol *volfs.FS, stdin io.Reader, cmd command, freeSpace func(*volfs.FS) (uint64, error)) int {
 	free, err := freeSpace(vol)
 	if err != nil {
