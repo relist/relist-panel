@@ -25,7 +25,7 @@ func (s *Service) requireUniqueIdentity(ctx context.Context, compose Compose) er
 			return err
 		}
 		if other.ID != compose.ID && other.DeployProjectName() == compose.DeployProjectName() {
-			return fmt.Errorf("legacy deploy identity %q is shared by Composes %d and %d; resolve the collision before operating on either stack", compose.DeployProjectName(), compose.ID, other.ID)
+			return fmt.Errorf("legacy deploy identity %q is shared by Composes %d and %d; resolve the collision before operating on either Compose", compose.DeployProjectName(), compose.ID, other.ID)
 		}
 	}
 	return rows.Err()

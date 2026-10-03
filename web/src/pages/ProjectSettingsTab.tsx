@@ -100,7 +100,7 @@ export function ProjectSettingsTab({
             requiredMark={false}
           >
             <Form.Item
-              extra="Renaming does not move already-deployed stacks — deploy identity is frozen at Compose creation (ADR-0011)."
+              extra="Renaming does not move already-deployed Composes — deploy identity is frozen at Compose creation (ADR-0011)."
               label="Name"
               name="name"
               rules={[

@@ -20,7 +20,7 @@ export function TeardownDetails({ directories }: { directories: string[] }) {
       )}
       <Paragraph type="secondary">
         If teardown fails, the Project, Environment and Compose records are kept so you can retry.
-        Child stacks already removed stay removed; their deleted volumes and files are not restored.
+        Child Composes already removed stay removed; their deleted volumes and files are not restored.
       </Paragraph>
     </>
   );
