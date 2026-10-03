@@ -286,7 +286,8 @@ Root is a deliberate opt-in, never a default. The UI shows the resolved value an
 override it. Every operation accepts `service` or a numeric `user=uid:gid`; the chosen
 Service must mount the requested Volume. UID 0 requires `rootConfirmed=1`, and an
 unverifiable bind requires `bindConfirmed=1`, checked before the helper runs.
-The Explorer and direct archive downloads both ask for these acknowledgements.
+The Explorer asks for these acknowledgements once, behind its Operation user Confirm; it is the
+only place an archive starts, and nothing is listed or downloaded before the operator confirms.
 
 ## Archives
 
@@ -398,7 +399,12 @@ The Explorer shows resolved paths — the host path for a bind source, and
 ## Screen rules
 
 - The Volumes tab lists only the Volumes that Compose mounts, with kind, source, target, and the
-  container-side path each Service uses.
+  container-side path each Service uses. It is a launcher: each row opens the Explorer, and no
+  archive starts from the tab.
+- The Explorer's Operation user card applies an identity only when the operator presses Confirm: the
+  Service (or numeric uid:gid) and its required acknowledgements are one confirmed snapshot that
+  every list, read, download and write uses. Changing the form afterwards keeps the confirmed
+  snapshot in force until Confirm is pressed again.
 - The Volume Explorer opens in a new browser tab, as its own route in the panel SPA, behind the
   panel's existing session auth. It is not a separate web app and has no nav entry of its own —
   a Volume is meaningless without its Compose as context.

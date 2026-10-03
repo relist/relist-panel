@@ -11,7 +11,7 @@ Source: system review at `8c924a6`; user authorized all eight fixes on 2026-10-0
 5. Restore validates gzip through EOF, including checksum/footer, with bounded trailing decompression under the remaining uncompressed budget. Failures retain partial extracted files.
 6. Explorer and direct backup require a mounting Service or valid numeric uid:gid override. UID 0 requires visible explicit acknowledgement; unverifiable binds require separate acknowledgement. Forward identity and acknowledgements through every operation URL; enforce them before mounting at the API too.
 7. File Save records the submitted snapshot as original and preserves text typed while the request is running. Later text remains dirty. Editor sessions and pending read contexts are guarded so navigation, identity changes and reopening a same-named file cannot apply old content to a new editor.
-8. Direct backup from the Volumes tab uses the same root/bind acknowledgement requirements before starting the browser download.
+8. Direct backup from the Volumes tab uses the same root/bind acknowledgement requirements before starting the browser download. *(Superseded: the Volumes tab's direct download was later removed — archives start only from the Volume Explorer, behind its Operation user Confirm.)*
 
 Tests use the existing public HTTP seam with Docker fakes, exported filesystem operations and frontend decision/API helpers. The dotenv regression also uses the real Docker Compose parser without creating containers.
 

@@ -1,15 +1,10 @@
-import { CloudDownloadOutlined, ExportOutlined, LockOutlined, RocketOutlined } from '@ant-design/icons';
-import { useState } from 'react';
+import { ExportOutlined, LockOutlined, RocketOutlined } from '@ant-design/icons';
 import {
   Alert,
   Button,
   Card,
-  Checkbox,
   Flex,
-  Input,
-  Modal,
   Result,
-  Select,
   Skeleton,
   Table,
   Tag,
@@ -17,16 +12,9 @@ import {
   Typography,
 } from 'antd';
 import { CODE_FONT_STACK } from '../app/theme';
-import type { ComposeVolume, ComposeVolumes, VolumeAccess } from '../data/types';
+import type { ComposeVolume, ComposeVolumes } from '../data/types';
 import { CodeValue, EmptyState } from './primitives';
-import {
-  downloadRefusal,
-  resolvedVolumePath,
-  volumeAccessReady,
-  volumeIdentityValid,
-  volumeLabel,
-  volumesView,
-} from './volumes-view';
+import { downloadRefusal, resolvedVolumePath, volumeLabel, volumesView } from './volumes-view';
 
 const { Text, Paragraph } = Typography;
 
@@ -37,12 +25,12 @@ const { Text, Paragraph } = Typography;
  *
  * The page owns the one fetch — `available: false` hides the whole tab, which
  * is a page-level decision — so this component receives the resolution rather
- * than asking for it, and a re-render never refetches. Every row offers the
- * Volume Explorer (its own route, opened in a new browser tab) and the
- * whole-tree archive; nothing here writes.
+ * than asking for it, and a re-render never refetches. Every row opens the
+ * Volume Explorer (its own route, opened in a new browser tab), where browsing,
+ * downloads, writes and restores live: nothing here writes, and no archive is
+ * started from this tab.
  */
 export function ComposeVolumesTab({
-  archiveHref,
   deploying,
   error,
   explorerHref,
@@ -50,8 +38,6 @@ export function ComposeVolumesTab({
   onRetry,
   payload,
 }: {
-  /** Builds the direct download URL for one Volume's whole-tree tar.gz. */
-  archiveHref: (volume: ComposeVolume, access: VolumeAccess) => string;
   /** The page's deploy is in flight, so the state's affordance spins with it. */
   deploying: boolean;
   error?: string;
@@ -61,25 +47,6 @@ export function ComposeVolumesTab({
   onRetry: () => void;
   payload?: ComposeVolumes;
 }) {
-  const [download, setDownload] = useState<ComposeVolume>();
-  const [service, setService] = useState('');
-  const [override, setOverride] = useState('');
-  const [rootConfirmed, setRootConfirmed] = useState(false);
-  const [bindConfirmed, setBindConfirmed] = useState(false);
-  const users = (payload?.services ?? []).filter((candidate) =>
-    download?.uses.some((use) => use.service === candidate.service),
-  );
-  const chosen = users.find((user) => user.service === service);
-  const user = service === '__override' ? override : chosen?.user;
-  const valid = volumeIdentityValid(user);
-  const root = valid && Number(user?.split(':')[0]) === 0;
-  const bind = download?.preflight.status === 'unverifiable';
-  const allowed = volumeAccessReady(user, Boolean(bind), { rootConfirmed, bindConfirmed });
-  const access = {
-    ...(service === '__override' ? { user: override } : { service }),
-    rootConfirmed,
-    bindConfirmed,
-  };
   const view = volumesView(payload, error);
 
   if (view.status === 'loading') {
@@ -142,61 +109,6 @@ export function ComposeVolumesTab({
 
   return (
     <>
-      <Modal
-        footer={null}
-        onCancel={() => setDownload(undefined)}
-        open={download !== undefined}
-        title="Download Volume archive"
-      >
-        <Flex gap={12} vertical>
-          <Select
-            onChange={(value) => {
-              setService(value);
-              setRootConfirmed(false);
-              setBindConfirmed(false);
-            }}
-            options={[
-              ...users.map((candidate) => ({
-                value: candidate.service,
-                label: `${candidate.service} — ${candidate.user}`,
-              })),
-              { value: '__override', label: 'Numeric uid:gid override' },
-            ]}
-            placeholder="Choose a mounting Service or numeric uid:gid"
-            value={service || undefined}
-          />
-          {service === '__override' && (
-            <Input
-              onChange={(event) => {
-                setOverride(event.target.value);
-                setRootConfirmed(false);
-                setBindConfirmed(false);
-              }}
-              placeholder="1000:1000"
-              value={override}
-            />
-          )}
-          {chosen?.warning && <Alert message={chosen.warning} showIcon type="warning" />}
-          {root && (
-            <Checkbox checked={rootConfirmed} onChange={(event) => setRootConfirmed(event.target.checked)}>
-              Use root (UID 0). Files created by these operations will be root-owned.
-            </Checkbox>
-          )}
-          {bind && (
-            <Checkbox checked={bindConfirmed} onChange={(event) => setBindConfirmed(event.target.checked)}>
-              Mount this unverifiable bind. If missing, Docker creates it as root:root 0755.{' '}
-              {download?.preflight.warning}
-            </Checkbox>
-          )}
-          <Button
-            disabled={!allowed}
-            href={allowed && download ? archiveHref(download, access) : undefined}
-            type="primary"
-          >
-            Download tar.gz
-          </Button>
-        </Flex>
-      </Modal>
       {view.warnings.map((warning) => (
         <Alert
           description={warning.message}
@@ -283,27 +195,11 @@ export function ComposeVolumesTab({
                       Open
                     </Button>
                   </Tooltip>
-                  <Tooltip title={refusal ?? 'Downloads the whole Volume as a tar.gz archive, straight to disk.'}>
-                    <Button
-                      disabled={Boolean(refusal)}
-                      onClick={() => {
-                        setDownload(volume);
-                        setService('');
-                        setOverride('');
-                        setRootConfirmed(false);
-                        setBindConfirmed(false);
-                      }}
-                      icon={<CloudDownloadOutlined />}
-                      size="small"
-                    >
-                      Download tar.gz
-                    </Button>
-                  </Tooltip>
                 </Flex>
               );
             },
             title: '',
-            width: 260,
+            width: 110,
           },
         ]}
         dataSource={view.volumes}
@@ -316,7 +212,8 @@ export function ComposeVolumesTab({
       <Paragraph style={{ marginBottom: 0, marginTop: 12 }} type="secondary">
         Volume list resolved from <Text code>docker compose config</Text> — a bind source is shown at its resolved host
         path, a named Volume at <Text code>/var/lib/docker/volumes/&lt;name&gt;/_data</Text>. The panel never accepts a
-        host path from a form: a Volume can only be one this Compose already declares.
+        host path from a form: a Volume can only be one this Compose already declares. Downloads and writes happen in
+        each Volume’s Explorer, behind its Operation user Confirm.
       </Paragraph>
     </>
   );

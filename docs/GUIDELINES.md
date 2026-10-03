@@ -271,6 +271,11 @@ UI — is the enforcer.
 - **tar.gz is the only archive format, in both directions.** Download streams the helper's stdout straight to the
   browser, restore streams the upload straight into `extract`: nothing is staged on the panel's disk. Zip is out —
   a zip restore would need random access, and a download-only format would have no restore story.
+- **The operation user is confirmed, not inferred.** The Explorer resolves the `--user` identity — a mounting
+  Service's resolved `user:`, or a numeric uid:gid — behind an explicit Confirm, and nothing is listed, read or
+  written until it is pressed; root and an unverifiable bind each need their own acknowledgement first. A change to
+  the form keeps the confirmed snapshot in force until Confirm is pressed again. The Volumes tab only launches the
+  Explorer; it starts no archive itself.
 - **Restore discloses partial extraction.** Every entry is validated before it is written, but there is no
   transaction across a stream: entries written before a failure stay written, and the confirmation says so before
   the operator starts.

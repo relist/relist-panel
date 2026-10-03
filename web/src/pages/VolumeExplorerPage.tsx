@@ -44,7 +44,7 @@ import { VolumeFileEditor } from '../components/VolumeFileEditor';
 import { resolvedVolumePath, volumeLabel, volumeAccessReady, volumeIdentityValid } from '../components/volumes-view';
 import { volumeAccessQuery, volumeArchiveUrl, volumeReadUrl } from '../data/api';
 import { usePanel } from '../data/store';
-import type { ComposeVolumes, VolumeEntry } from '../data/types';
+import type { ComposeVolumes, VolumeAccess, VolumeEntry } from '../data/types';
 import { findComposeLocation } from '../data/types';
 import { composeLinkIsStale } from './compose-view';
 import type { EntryFacts, RestoreDisclosure, VolumeFailure } from './volume-explorer-view';
@@ -79,6 +79,9 @@ const { Paragraph, Text } = Typography;
 
 type Row = { entry: VolumeEntry; facts: EntryFacts };
 
+/** What every operation sends until the Operation user card is confirmed: nothing. */
+const UNCONFIRMED_ACCESS: VolumeAccess = {};
+
 /**
  * The Volume Explorer (GUIDELINES §4.7): a Compose's Volume opened as its own
  * route in its own browser tab, listing one directory at a time, downloading a
@@ -99,6 +102,13 @@ type Row = { entry: VolumeEntry; facts: EntryFacts };
  * path, and every Service's container-side target), because a Volume is
  * meaningless without its Compose as context. The file list runs long and
  * the page scrolls as one document; nothing here is a nested scroller.
+ *
+ * The Operation user card is a form with an explicit Confirm: the identity
+ * every operation runs as — a mounting Service's resolved `user:`, or a
+ * numeric uid:gid override — and the acknowledgements it requires are applied
+ * in one step. Nothing is listed, read, downloaded or written until Confirm,
+ * so a half-typed uid:gid never reaches the API and a changed selection cannot
+ * silently switch the identity a click already meant.
  *
  * Two pre-flight outcomes decide what the screen refuses:
  *
@@ -200,6 +210,11 @@ export function VolumeExplorerPage() {
   const [override, setOverride] = useState('');
   const [bindAck, setBindAck] = useState('');
   const [rootAck, setRootAck] = useState('');
+  // The card's form is a draft; `applied` is the snapshot Confirm froze. Every
+  // operation — list, read, download, upload, restore, delete — runs as the
+  // applied identity, so nothing is sent under a half-chosen one and editing
+  // the form afterwards cannot silently switch what a click already meant.
+  const [applied, setApplied] = useState<{ access: VolumeAccess; query: string }>();
   const identityVolume = view.status === 'ready' || view.status === 'refused' ? view.volume : undefined;
   const mountingUsers = (resolved?.payload?.services ?? []).filter((candidate) =>
     identityVolume?.uses.some((use) => use.service === candidate.service),
@@ -211,11 +226,13 @@ export function VolumeExplorerPage() {
   const riskKey = `${composeId}:${source}:${identityVolume?.preflight.status}:${identityVolume?.preflight.warning}`;
   const identityKey = `${riskKey}:${identity}:${operationIdentity}`;
   const confirmationRequired = view.status === 'ready' && requiresConfirmation(view.volume);
-  const gated = volumeAccessReady(operationIdentity, confirmationRequired, {
+  // Confirm unlocks only for a complete draft: a valid identity carrying every
+  // acknowledgement it requires.
+  const formReady = volumeAccessReady(operationIdentity, confirmationRequired, {
     bindConfirmed: bindAck === riskKey,
     rootConfirmed: rootAck === identityKey,
   });
-  const access = useMemo(
+  const draftAccess = useMemo<VolumeAccess>(
     () => ({
       ...(identity === '__override' ? { user: override } : { service: identity }),
       bindConfirmed: bindAck === riskKey,
@@ -223,17 +240,29 @@ export function VolumeExplorerPage() {
     }),
     [identity, override, bindAck, rootAck, riskKey, identityKey],
   );
+  const draftQuery = volumeAccessQuery(draftAccess);
+  const appliedIsCurrent = applied !== undefined && applied.query === draftQuery;
+  const access = applied?.access ?? UNCONFIRMED_ACCESS;
+  const confirmed = applied !== undefined;
+  const confirmedLabel = applied?.access.user ?? applied?.access.service;
+  const confirmOperationUser = useCallback(() => {
+    setApplied({ access: draftAccess, query: draftQuery });
+  }, [draftAccess, draftQuery]);
   useEffect(() => {
     setIdentity('');
     setOverride('');
     setBindAck('');
     setRootAck('');
+    setApplied(undefined);
     setEditing(undefined);
   }, [composeId, source]);
 
   // ---- The listing ----------------------------------------------------------
 
-  const listingKey = `${identityKey}\u0000${path}`;
+  // The listing belongs to the confirmed identity, not the card's draft: a
+  // changed draft does not drop or refetch the directory until Confirm.
+  const confirmedQuery = applied?.query ?? '';
+  const listingKey = `${confirmedQuery}\u0000${path}`;
   const listPendingKey = `volume-list:${composeId}:${source}:${path}`;
   const [listing, setListing] = useState<{ key: string; entries?: VolumeEntry[]; error?: string }>();
   const [selected, setSelected] = useState<string>();
@@ -246,7 +275,7 @@ export function VolumeExplorerPage() {
   // the editor. `original` is the file as it was opened or last saved; the
   // draft is the page's, handed to the editor on every change.
   const editorSession = useRef(0);
-  const editorContext = `${listingKey}${volumeAccessQuery(access)}`;
+  const editorContext = listingKey;
   const editorRead = useRef({ request: 0, context: editorContext });
   // Invalidate pending reads immediately when render moves to another context.
   // Incrementing also protects navigation away and back to the same Volume.
@@ -289,7 +318,7 @@ export function VolumeExplorerPage() {
   }, [access, composeId, listVolumeEntries, listingKey, path, source]);
 
   const currentListing = listing?.key === listingKey ? listing : undefined;
-  const canList = view.status === 'ready' && gated;
+  const canList = view.status === 'ready' && confirmed;
 
   useEffect(() => {
     if (canList && currentListing === undefined) {
@@ -351,7 +380,7 @@ export function VolumeExplorerPage() {
         // The listing is already in hand: stash it so following the symlink
         // does not pay for the same read twice.
         listRequest.current += 1;
-        setListing({ key: `${identityKey}\u0000${next}`, entries });
+        setListing({ key: `${confirmedQuery}\u0000${next}`, entries });
         navigate(paths.volumeExplorer(projectId, environmentId, composeId, source, next));
       } catch (reason: unknown) {
         const refusal = failureMessage(reason);
@@ -362,7 +391,7 @@ export function VolumeExplorerPage() {
         setOpenError({ entry, error: refusal });
       }
     },
-    [access, composeId, environmentId, listVolumeEntries, navigate, path, projectId, source],
+    [access, composeId, confirmedQuery, environmentId, listVolumeEntries, navigate, path, projectId, source],
   );
 
   // ---- The write actions -----------------------------------------------------
@@ -953,12 +982,15 @@ export function VolumeExplorerPage() {
           type="file"
         />
         <Card
-          extra={gated ? toolbar : undefined}
+          extra={confirmed ? toolbar : undefined}
           title={<Crumbs onGo={goTo} path={path} root={volumeLabel(view.volume)} />}
           variant="outlined"
         >
-          {!gated ? (
-            <Skeleton active paragraph={{ rows: 6 }} title={false} />
+          {!confirmed ? (
+            <EmptyState
+              description="Pick the Service account these operations should run as — or a numeric uid:gid — acknowledge anything it requires, then press Confirm to load this directory."
+              title="Choose an operation user"
+            />
           ) : currentListing?.error !== undefined ? (
             <Alert
               action={<Button onClick={() => void loadList()}>Retry</Button>}
@@ -1012,14 +1044,23 @@ export function VolumeExplorerPage() {
     <>
       {header}
       {identityVolume && (
-        <Card style={{ marginBottom: 16 }} title="Operation user">
+        <Card
+          extra={
+            refusal === undefined ? (
+              <Button disabled={!formReady || appliedIsCurrent} onClick={confirmOperationUser} type="primary">
+                Confirm
+              </Button>
+            ) : undefined
+          }
+          style={{ marginBottom: 16 }}
+          title="Operation user"
+        >
           <Flex gap={12} vertical>
             <Select
               onChange={(value) => {
                 setIdentity(value);
                 setRootAck('');
                 setBindAck('');
-                setEditing(undefined);
               }}
               options={[
                 ...mountingUsers.map((user) => ({
@@ -1059,6 +1100,11 @@ export function VolumeExplorerPage() {
                 Mount this unverifiable bind path. If missing, Docker creates it as root:root 0755.{' '}
                 {identityVolume.preflight.warning}
               </Checkbox>
+            )}
+            {applied !== undefined && !appliedIsCurrent && (
+              <Text type="secondary">
+                The directory and its operations keep running as {confirmedLabel} until you press Confirm.
+              </Text>
             )}
           </Flex>
         </Card>

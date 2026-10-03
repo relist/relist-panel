@@ -56,7 +56,6 @@ import {
 } from '../components/primitives';
 import { ServiceMonitor } from '../components/ServiceMonitor';
 import { YamlEditor } from '../components/YamlEditor';
-import { volumeArchiveUrl } from '../data/api';
 import { usePanel } from '../data/store';
 import type { ComposeVolumes } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
@@ -677,14 +676,6 @@ export function ComposePage() {
                 {
                   children: (
                     <ComposeVolumesTab
-                      archiveHref={(volume, access) =>
-                        volumeArchiveUrl(
-                          { composeId: compose.id, environmentId: environment.id, projectId: project.id },
-                          volume.source,
-                          '.',
-                          access,
-                        )
-                      }
                       deploying={isPending(`deploy:${compose.id}`)}
                       error={volumesError}
                       explorerHref={(volume) =>
