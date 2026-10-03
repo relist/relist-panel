@@ -126,6 +126,8 @@ export type Compose = {
   /** Immutable deploy identity, per ADR-0005. */
   projectSlug: string;
   envSlug: string;
+  /** Actual Docker name and configured directory, resolved by the backend for either identity version. */
+  deployIdentity?: { projectName: string; directory: string };
   yamlContent: string;
   createdAt: string;
   updatedAt: string;
@@ -398,4 +400,12 @@ export type VolumeEntry = {
   uid: number;
   gid: number;
   link?: string;
+};
+
+/** Identity and acknowledged mount risks for every Volume operation. */
+export type VolumeAccess = {
+  service?: string;
+  user?: string;
+  rootConfirmed?: boolean;
+  bindConfirmed?: boolean;
 };

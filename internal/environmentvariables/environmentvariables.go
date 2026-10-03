@@ -414,6 +414,9 @@ func validateInput(input environmentVariableInput) (string, string, error) {
 	if input.Value == nil {
 		return "", "", errors.New("environment variable value is required")
 	}
+	if strings.ContainsRune(*input.Value, 0) {
+		return "", "", errors.New("environment variable value must not contain NUL")
+	}
 	return key, *input.Value, nil
 }
 

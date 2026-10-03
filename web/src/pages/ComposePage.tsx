@@ -60,7 +60,7 @@ import { volumeArchiveUrl } from '../data/api';
 import { usePanel } from '../data/store';
 import type { ComposeVolumes } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
-import { activeComposeTab, composeLinkIsStale, deploySteps, filterLogLines, hasUnsavedChanges } from './compose-view';
+import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, hasUnsavedChanges } from './compose-view';
 
 const { Text, Paragraph, Title } = Typography;
 
@@ -262,6 +262,7 @@ export function ComposePage() {
   }
 
   const state = composeState(compose.status, compose.lastDeployedAt);
+  const deployIdentity = composeDeployIdentity(compose);
   const checked = checkedAt[compose.id];
 
   const save = async () => {
@@ -589,7 +590,7 @@ export function ComposePage() {
 
                     <Card title="Deploy identity" variant="outlined">
                       <Paragraph style={{ fontSize: 12 }} type="secondary">
-                        Frozen at Compose creation (ADR-0005). Renaming the Project or Environment does not move what is
+                        Frozen at Compose creation (ADR-0011). Renaming the Project or Environment does not move what is
                         already deployed.
                       </Paragraph>
                       <Flex gap={10} vertical>
@@ -599,15 +600,14 @@ export function ComposePage() {
                           </Text>
                           <CodeValue
                             copyable
-                            label="dataDir/"
-                            value={`${compose.projectSlug}/${compose.envSlug}/${compose.name}`}
+                            value={deployIdentity.directory}
                           />
                         </div>
                         <div>
                           <Text strong style={{ fontSize: 12 }}>
                             docker compose project
                           </Text>
-                          <CodeValue copyable value={`${compose.projectSlug}-${compose.envSlug}-${compose.name}`} />
+                          <CodeValue copyable value={deployIdentity.projectName} />
                         </div>
                       </Flex>
                     </Card>
@@ -677,10 +677,12 @@ export function ComposePage() {
                 {
                   children: (
                     <ComposeVolumesTab
-                      archiveHref={(volume) =>
+                      archiveHref={(volume, access) =>
                         volumeArchiveUrl(
                           { composeId: compose.id, environmentId: environment.id, projectId: project.id },
                           volume.source,
+                          '.',
+                          access,
                         )
                       }
                       deploying={isPending(`deploy:${compose.id}`)}
@@ -831,7 +833,7 @@ export function ComposePage() {
             This stops and removes containers, networks and volumes created by <Text code>{compose.name}</Text>, then
             deletes its files from{' '}
             <Text code>
-              dataDir/{compose.projectSlug}/{compose.envSlug}/{compose.name}/
+              {deployIdentity.directory}
             </Text>
             .
           </Paragraph>

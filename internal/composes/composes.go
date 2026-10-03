@@ -75,20 +75,30 @@ type repository struct {
 
 // Compose is the API representation of a Compose.
 type Compose struct {
-	ID            int64     `json:"id"`
-	EnvironmentID int64     `json:"environmentId"`
-	Name          string    `json:"name"`
-	ProjectSlug   string    `json:"projectSlug"`
-	EnvSlug       string    `json:"envSlug"`
-	YAMLContent   string    `json:"yamlContent"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	DeployIdentity  *DeployIdentity `json:"deployIdentity"`
+	IdentityVersion int             `json:"-"`
+	ID              int64           `json:"id"`
+	EnvironmentID   int64           `json:"environmentId"`
+	Name            string          `json:"name"`
+	ProjectSlug     string          `json:"projectSlug"`
+	EnvSlug         string          `json:"envSlug"`
+	YAMLContent     string          `json:"yamlContent"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
 	// LastDeployedAt is a pointer so never-deployed stays distinct from every
 	// real timestamp on the wire: nil serializes as JSON null, while even a
 	// deploy at the Unix epoch is a non-nil time. Only a successful deploy
 	// ever sets it.
 	LastDeployedAt *time.Time    `json:"lastDeployedAt"`
 	Status         ComposeStatus `json:"status"`
+}
+
+// DeployIdentity is derived from the same RunRequest lifecycle actions use. It
+// lets the UI display the configured directory and both identity versions
+// without rebuilding paths from mutable names or default configuration.
+type DeployIdentity struct {
+	ProjectName string `json:"projectName"`
+	Directory   string `json:"directory"`
 }
 
 type composeCreateInput struct {
@@ -329,6 +339,10 @@ func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := s.requireUniqueIdentity(r.Context(), compose); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	req := runRequestFor(s.dataDir, compose)
 	variables, err := s.repository.listEnvironmentVariables(r.Context(), environmentID)
 	if err != nil {
@@ -547,6 +561,10 @@ func (s *Service) loadComposeAndRunRequest(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "could not load compose")
 		return Compose{}, RunRequest{}, false
 	}
+	if err := s.requireUniqueIdentity(r.Context(), compose); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return Compose{}, RunRequest{}, false
+	}
 	return compose, runRequestFor(s.dataDir, compose), true
 }
 
@@ -585,6 +603,9 @@ func (s *Service) ComposeRunRequest(ctx context.Context, projectID, environmentI
 	if err != nil {
 		return RunRequest{}, err
 	}
+	if err := s.requireUniqueIdentity(ctx, compose); err != nil {
+		return RunRequest{}, err
+	}
 	return runRequestFor(s.dataDir, compose), nil
 }
 
@@ -592,6 +613,7 @@ func (s *Service) ComposeRunRequest(ctx context.Context, projectID, environmentI
 // runner action (deploy/stop/restart) so the response reflects the outcome
 // without a separate round-trip; best-effort like withStatus/withStatuses.
 func (s *Service) withRefreshedStatus(ctx context.Context, req RunRequest, compose Compose) Compose {
+	compose = s.withDeployIdentity(compose)
 	status, err := s.runner.Status(ctx, req)
 	if err != nil {
 		status = ComposeStatus{}
@@ -604,21 +626,31 @@ func (s *Service) withRefreshedStatus(ctx context.Context, req RunRequest, compo
 // They are best-effort: a runner error (e.g. Docker is unreachable) must not
 // fail an otherwise-successful read, so it degrades to a zero-value status.
 func (s *Service) withStatus(ctx context.Context, compose Compose) Compose {
+	compose = s.withDeployIdentity(compose)
 	compose.Status = s.currentStatus(ctx, compose)
 	return compose
 }
 
 func (s *Service) withStatuses(ctx context.Context, composes []Compose) []Compose {
 	for i := range composes {
-		composes[i].Status = s.currentStatus(ctx, composes[i])
+		composes[i] = s.withStatus(ctx, composes[i])
 	}
 	return composes
+}
+
+func (s *Service) withDeployIdentity(compose Compose) Compose {
+	req := runRequestFor(s.dataDir, compose)
+	compose.DeployIdentity = &DeployIdentity{ProjectName: req.ProjectName, Directory: filepath.Dir(req.ComposeFilePath)}
+	return compose
 }
 
 // currentStatus only queries the runner once a Compose has actually been
 // deployed (its resolved compose file exists on disk); an undeployed Compose
 // always reads as a zero-value status without shelling out.
 func (s *Service) currentStatus(ctx context.Context, compose Compose) ComposeStatus {
+	if err := s.requireUniqueIdentity(ctx, compose); err != nil {
+		return ComposeStatus{}
+	}
 	req := runRequestFor(s.dataDir, compose)
 	if _, err := os.Stat(req.ComposeFilePath); err != nil {
 		return ComposeStatus{}
@@ -787,7 +819,7 @@ func BackfillLegacyIdentities(ctx context.Context, db *sql.DB) error {
 
 func (r *repository) list(ctx context.Context, environmentID int64) ([]Compose, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at
+		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at, identity_version
 		FROM composes
 		WHERE environment_id = ?
 		ORDER BY id ASC
@@ -813,8 +845,8 @@ func (r *repository) list(ctx context.Context, environmentID int64) ([]Compose, 
 
 func (r *repository) create(ctx context.Context, environmentID int64, projectSlug, envSlug, name, yamlContent string, createdAt time.Time) (Compose, error) {
 	result, err := r.db.ExecContext(ctx, `
-		INSERT INTO composes (environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO composes (environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, identity_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1)
 	`, environmentID, name, projectSlug, envSlug, yamlContent, createdAt.Unix(), createdAt.Unix())
 	if err != nil {
 		return Compose{}, err
@@ -828,7 +860,7 @@ func (r *repository) create(ctx context.Context, environmentID int64, projectSlu
 
 func (r *repository) findByID(ctx context.Context, environmentID, id int64) (Compose, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at
+		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at, identity_version
 		FROM composes
 		WHERE environment_id = ? AND id = ?
 	`, environmentID, id)
@@ -876,7 +908,7 @@ func scanComposeValues(scan func(...any) error) (Compose, error) {
 		updatedAt  int64
 		deployedAt sql.NullInt64
 	)
-	if err := scan(&compose.ID, &compose.EnvironmentID, &compose.Name, &compose.ProjectSlug, &compose.EnvSlug, &compose.YAMLContent, &createdAt, &updatedAt, &deployedAt); err != nil {
+	if err := scan(&compose.ID, &compose.EnvironmentID, &compose.Name, &compose.ProjectSlug, &compose.EnvSlug, &compose.YAMLContent, &createdAt, &updatedAt, &deployedAt, &compose.IdentityVersion); err != nil {
 		return Compose{}, err
 	}
 	compose.CreatedAt = time.Unix(createdAt, 0).UTC()
@@ -936,20 +968,25 @@ func validateComposeName(value string) (string, error) {
 	return trimmed, nil
 }
 
-// DeployProjectName is the Compose's frozen `docker compose -p` project name
-// (ADR-0005), formed from the slugs stored on its row — the identity metrics
-// collection also uses to attribute containers to Composes.
+// DeployProjectName is the Compose's immutable Docker identity (ADR-0011):
+// new rows use their database ID; legacy rows retain their frozen slugs. Metrics
+// collection uses this same identity to attribute containers to Composes.
 func (c Compose) DeployProjectName() string {
+	if c.IdentityVersion == 1 {
+		return "relist-c" + strconv.FormatInt(c.ID, 10)
+	}
 	return c.ProjectSlug + "-" + c.EnvSlug + "-" + slug.Slugify(c.Name)
 }
 
-// runRequestFor computes a Compose's deploy identity from the slugs stored on
-// its row (ADR-0005): the `docker compose -p` project name and the paths its
-// resolved files live at under dataDir (ADR-0002). The compose name slugifies
-// here because the row stores the display name only.
+// runRequestFor resolves the immutable name and paths for either identity
+// version (ADR-0011). Legacy files stay at their original slug paths; new
+// Composes use the separate .composes/<ID> namespace.
 func runRequestFor(dataDir string, compose Compose) RunRequest {
 	composeSlug := slug.Slugify(compose.Name)
 	dir := filepath.Join(dataDir, compose.ProjectSlug, compose.EnvSlug, composeSlug)
+	if compose.IdentityVersion == 1 {
+		dir = filepath.Join(dataDir, ".composes", strconv.FormatInt(compose.ID, 10))
+	}
 	return RunRequest{
 		ProjectName:     compose.DeployProjectName(),
 		ComposeFilePath: filepath.Join(dir, composeFileName),
@@ -1032,17 +1069,6 @@ func appendUnique(sequence []any, value string) []any {
 		}
 	}
 	return append(sequence, value)
-}
-
-func renderEnvFile(variables []environmentVariable) string {
-	var b strings.Builder
-	for _, variable := range variables {
-		b.WriteString(variable.Key)
-		b.WriteByte('=')
-		b.WriteString(variable.Value)
-		b.WriteByte('\n')
-	}
-	return b.String()
 }
 
 func isUniqueConstraint(err error) bool {

@@ -22,6 +22,9 @@ import {
   Popconfirm,
   Result,
   Skeleton,
+  Select,
+  Input,
+  Checkbox,
   Spin,
   Table,
   Tag,
@@ -38,14 +41,17 @@ import { paths } from '../app/paths';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { CodeValue, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { VolumeFileEditor } from '../components/VolumeFileEditor';
-import { resolvedVolumePath, volumeLabel } from '../components/volumes-view';
-import { volumeArchiveUrl, volumeReadUrl } from '../data/api';
+import { resolvedVolumePath, volumeLabel, volumeAccessReady, volumeIdentityValid } from '../components/volumes-view';
+import { volumeAccessQuery, volumeArchiveUrl, volumeReadUrl } from '../data/api';
 import { usePanel } from '../data/store';
 import type { ComposeVolumes, VolumeEntry } from '../data/types';
 import { findComposeLocation } from '../data/types';
 import { composeLinkIsStale } from './compose-view';
 import type { EntryFacts, RestoreDisclosure, VolumeFailure } from './volume-explorer-view';
 import {
+  savedEditorState,
+  editorSessionCurrent,
+  editorReadCurrent,
   deleteFailure,
   editFailure,
   editorContent,
@@ -190,13 +196,44 @@ export function VolumeExplorerPage() {
   // exists, and mounting it is what would create it. A decline pauses reads
   // rather than dismissing the screen.
 
-  const [gate, setGate] = useState<'pending' | 'accepted' | 'declined'>('pending');
+  const [identity, setIdentity] = useState('');
+  const [override, setOverride] = useState('');
+  const [bindAck, setBindAck] = useState('');
+  const [rootAck, setRootAck] = useState('');
+  const identityVolume = view.status === 'ready' || view.status === 'refused' ? view.volume : undefined;
+  const mountingUsers = (resolved?.payload?.services ?? []).filter((candidate) =>
+    identityVolume?.uses.some((use) => use.service === candidate.service),
+  );
+  const chosen = mountingUsers.find((candidate) => candidate.service === identity);
+  const operationIdentity = identity === '__override' ? override : chosen?.user;
+  const identityValid = volumeIdentityValid(operationIdentity);
+  const rootRequired = identityValid && Number(operationIdentity?.split(':')[0]) === 0;
+  const riskKey = `${composeId}:${source}:${identityVolume?.preflight.status}:${identityVolume?.preflight.warning}`;
+  const identityKey = `${riskKey}:${identity}:${operationIdentity}`;
   const confirmationRequired = view.status === 'ready' && requiresConfirmation(view.volume);
-  const gated = confirmationRequired ? gate === 'accepted' : true;
+  const gated = volumeAccessReady(operationIdentity, confirmationRequired, {
+    bindConfirmed: bindAck === riskKey,
+    rootConfirmed: rootAck === identityKey,
+  });
+  const access = useMemo(
+    () => ({
+      ...(identity === '__override' ? { user: override } : { service: identity }),
+      bindConfirmed: bindAck === riskKey,
+      rootConfirmed: rootAck === identityKey,
+    }),
+    [identity, override, bindAck, rootAck, riskKey, identityKey],
+  );
+  useEffect(() => {
+    setIdentity('');
+    setOverride('');
+    setBindAck('');
+    setRootAck('');
+    setEditing(undefined);
+  }, [composeId, source]);
 
   // ---- The listing ----------------------------------------------------------
 
-  const listingKey = `${source}\u0000${path}`;
+  const listingKey = `${identityKey}\u0000${path}`;
   const listPendingKey = `volume-list:${composeId}:${source}:${path}`;
   const [listing, setListing] = useState<{ key: string; entries?: VolumeEntry[]; error?: string }>();
   const [selected, setSelected] = useState<string>();
@@ -208,9 +245,24 @@ export function VolumeExplorerPage() {
   // binary) shown above the list, and the last save's failure shown inside
   // the editor. `original` is the file as it was opened or last saved; the
   // draft is the page's, handed to the editor on every change.
-  const [editing, setEditing] = useState<{ draft: string; original: string; path: string }>();
+  const editorSession = useRef(0);
+  const editorContext = `${listingKey}${volumeAccessQuery(access)}`;
+  const editorRead = useRef({ request: 0, context: editorContext });
+  // Invalidate pending reads immediately when render moves to another context.
+  // Incrementing also protects navigation away and back to the same Volume.
+  if (editorRead.current.context !== editorContext) {
+    editorRead.current = { request: editorRead.current.request + 1, context: editorContext };
+  }
+  const [editing, setEditing] = useState<{ session: number; draft: string; original: string; path: string }>();
+  const currentEditor = useRef(editing);
+  currentEditor.current = editing;
   const [editorRefusal, setEditorRefusal] = useState<{ failure: VolumeFailure; path: string }>();
   const [saveError, setSaveError] = useState<VolumeFailure>();
+  useEffect(() => {
+    setEditing(undefined);
+    setEditorRefusal(undefined);
+    setSaveError(undefined);
+  }, [editorContext]);
   const [uploading, setUploading] = useState(false);
   // The restore: the picked archive waits behind a confirmation carrying the
   // whole disclosure, and only a confirm runs it. Cancelling drops the file
@@ -225,7 +277,7 @@ export function VolumeExplorerPage() {
     const request = ++listRequest.current;
     const key = listingKey;
     try {
-      const entries = await listVolumeEntries(composeId, source, path);
+      const entries = await listVolumeEntries(composeId, source, path, access);
       if (listRequest.current === request) {
         setListing({ key, entries });
       }
@@ -234,7 +286,7 @@ export function VolumeExplorerPage() {
         setListing({ key, error: failureMessage(reason) });
       }
     }
-  }, [composeId, listVolumeEntries, listingKey, path, source]);
+  }, [access, composeId, listVolumeEntries, listingKey, path, source]);
 
   const currentListing = listing?.key === listingKey ? listing : undefined;
   const canList = view.status === 'ready' && gated;
@@ -295,11 +347,11 @@ export function VolumeExplorerPage() {
         return;
       }
       try {
-        const entries = await listVolumeEntries(composeId, source, next);
+        const entries = await listVolumeEntries(composeId, source, next, access);
         // The listing is already in hand: stash it so following the symlink
         // does not pay for the same read twice.
         listRequest.current += 1;
-        setListing({ key: `${source}\u0000${next}`, entries });
+        setListing({ key: `${identityKey}\u0000${next}`, entries });
         navigate(paths.volumeExplorer(projectId, environmentId, composeId, source, next));
       } catch (reason: unknown) {
         const refusal = failureMessage(reason);
@@ -310,7 +362,7 @@ export function VolumeExplorerPage() {
         setOpenError({ entry, error: refusal });
       }
     },
-    [composeId, environmentId, listVolumeEntries, navigate, path, projectId, source],
+    [access, composeId, environmentId, listVolumeEntries, navigate, path, projectId, source],
   );
 
   // ---- The write actions -----------------------------------------------------
@@ -334,7 +386,7 @@ export function VolumeExplorerPage() {
       const target = joinPath(path, file.name);
       setUploading(true);
       try {
-        await writeVolumeFile(composeId, source, target, file);
+        await writeVolumeFile(composeId, source, target, file, access);
         message.success(`Uploaded ${target}`);
         await loadList();
       } catch (reason: unknown) {
@@ -343,7 +395,7 @@ export function VolumeExplorerPage() {
         setUploading(false);
       }
     },
-    [composeId, loadList, message, path, source, writeVolumeFile],
+    [access, composeId, loadList, message, path, source, writeVolumeFile],
   );
 
   // ---- The restore actions -----------------------------------------------------
@@ -377,7 +429,7 @@ export function VolumeExplorerPage() {
     setWriteError(undefined);
     setRestoring(true);
     try {
-      await restoreVolume(composeId, source, path, picked.file);
+      await restoreVolume(composeId, source, path, picked.file, access);
       message.success(`Extracted ${picked.file.name} into ${restoreTarget(path)}`);
       await loadList();
     } catch (reason: unknown) {
@@ -385,14 +437,14 @@ export function VolumeExplorerPage() {
     } finally {
       setRestoring(false);
     }
-  }, [composeId, loadList, message, path, restore, restoreVolume, source]);
+  }, [access, composeId, loadList, message, path, restore, restoreVolume, source]);
 
   const removeEntry = useCallback(
     async (entry: VolumeEntry) => {
       setWriteError(undefined);
       const target = joinPath(path, entry.name);
       try {
-        await deleteVolumeEntry(composeId, source, target);
+        await deleteVolumeEntry(composeId, source, target, access);
         if (selected === entry.name) {
           setSelected(undefined);
         }
@@ -402,7 +454,7 @@ export function VolumeExplorerPage() {
         setWriteError(deleteFailure(reason));
       }
     },
-    [composeId, deleteVolumeEntry, loadList, message, path, selected, source],
+    [access, composeId, deleteVolumeEntry, loadList, message, path, selected, source],
   );
 
   // ---- The editor ------------------------------------------------------------
@@ -414,6 +466,7 @@ export function VolumeExplorerPage() {
 
   const editEntry = useCallback(
     async (entry: VolumeEntry) => {
+      const opening = { request: ++editorRead.current.request, context: editorContext };
       setOpenError(undefined);
       setEditorRefusal(undefined);
       setSaveError(undefined);
@@ -424,17 +477,24 @@ export function VolumeExplorerPage() {
         return;
       }
       try {
-        const content = editorContent(target, await readVolumeFile(composeId, source, target));
+        const bytes = await readVolumeFile(composeId, source, target, access);
+        if (!editorReadCurrent(opening, editorRead.current)) {
+          return;
+        }
+        const content = editorContent(target, bytes);
         if (content.status === 'refused') {
           setEditorRefusal({ failure: content.failure, path: target });
           return;
         }
-        setEditing({ draft: content.text, original: content.text, path: target });
+        setEditing({ session: ++editorSession.current, draft: content.text, original: content.text, path: target });
       } catch (reason: unknown) {
+        if (!editorReadCurrent(opening, editorRead.current)) {
+          return;
+        }
         setOpenError({ entry, error: failureMessage(reason) });
       }
     },
-    [composeId, path, readVolumeFile, source],
+    [access, composeId, editorContext, path, readVolumeFile, source],
   );
 
   // A save is one PUT. On success the draft becomes what the file was saved
@@ -451,10 +511,11 @@ export function VolumeExplorerPage() {
         source,
         editing.path,
         new Blob([editing.draft], { type: 'text/plain;charset=utf-8' }),
+        access,
       );
       const size = new TextEncoder().encode(editing.draft).length;
       const name = editing.path.slice(editing.path.lastIndexOf('/') + 1);
-      setEditing((current) => (current === undefined ? current : { ...current, original: current.draft }));
+      setEditing((current) => savedEditorState(current, editing.session, editing.draft));
       setListing((current) => {
         if (current === undefined || current.key !== listingKey || current.entries === undefined) {
           return current;
@@ -468,9 +529,14 @@ export function VolumeExplorerPage() {
       });
       message.success(`Saved ${editing.path}`);
     } catch (reason: unknown) {
-      setSaveError(editFailure(reason));
+      if (
+        editorRead.current.context === editorContext &&
+        editorSessionCurrent(currentEditor.current, editing.session)
+      ) {
+        setSaveError(editFailure(reason));
+      }
     }
-  }, [composeId, editing, listingKey, message, source, writeVolumeFile]);
+  }, [access, composeId, editing, editorContext, listingKey, message, source, writeVolumeFile]);
 
   if (!compose || !environment || !project) {
     // A new tab can land before the Project tree has loaded; a loading card
@@ -552,7 +618,7 @@ export function VolumeExplorerPage() {
           disabled={selectedRow === undefined || refusal !== undefined}
           href={
             selectedRow && refusal === undefined
-              ? volumeReadUrl(composePath, source, joinPath(path, selectedRow.entry.name))
+              ? volumeReadUrl(composePath, source, joinPath(path, selectedRow.entry.name), access)
               : undefined
           }
           icon={<DownloadOutlined />}
@@ -563,7 +629,7 @@ export function VolumeExplorerPage() {
       <Tooltip title={refusal ?? 'Downloads this directory as a tar.gz archive, straight to disk.'}>
         <Button
           disabled={refusal !== undefined}
-          href={refusal === undefined ? volumeArchiveUrl(composePath, source, path) : undefined}
+          href={refusal === undefined ? volumeArchiveUrl(composePath, source, path, access) : undefined}
           icon={<CloudDownloadOutlined />}
         >
           Download tar.gz
@@ -809,22 +875,6 @@ export function VolumeExplorerPage() {
         <Alert description={view.message} message="This Volume’s source is missing" showIcon type="error" />
       </Card>
     );
-  } else if (view.status === 'ready' && confirmationRequired && gate === 'declined') {
-    body = (
-      <Card title={<Crumbs onGo={goTo} path={path} root={volumeLabel(view.volume)} />} variant="outlined">
-        <Alert
-          action={
-            <Button onClick={() => setGate('pending')} type="primary">
-              Continue
-            </Button>
-          }
-          description={view.volume.preflight.warning}
-          message="Reads and writes are paused until you confirm"
-          showIcon
-          type="warning"
-        />
-      </Card>
-    );
   } else {
     // Any Service up raises the banner, and it names the Services that mount
     // this Volume. It is deliberately not a gate (GUIDELINES §8): the write
@@ -961,30 +1011,59 @@ export function VolumeExplorerPage() {
   return (
     <>
       {header}
+      {identityVolume && (
+        <Card style={{ marginBottom: 16 }} title="Operation user">
+          <Flex gap={12} vertical>
+            <Select
+              onChange={(value) => {
+                setIdentity(value);
+                setRootAck('');
+                setBindAck('');
+                setEditing(undefined);
+              }}
+              options={[
+                ...mountingUsers.map((user) => ({
+                  value: user.service,
+                  label: `${user.service} — ${user.user}`,
+                })),
+                { value: '__override', label: 'Numeric uid:gid override' },
+              ]}
+              placeholder="Choose a mounting Service or numeric uid:gid"
+              value={identity || undefined}
+            />
+            {identity === '__override' && (
+              <Input
+                onChange={(event) => {
+                  setOverride(event.target.value);
+                  setRootAck('');
+                  setBindAck('');
+                }}
+                placeholder="1000:1000"
+                value={override}
+              />
+            )}
+            {chosen?.warning && <Alert message={chosen.warning} showIcon type="warning" />}
+            {rootRequired && (
+              <Checkbox
+                checked={rootAck === identityKey}
+                onChange={(event) => setRootAck(event.target.checked ? identityKey : '')}
+              >
+                Use root (UID 0). Files created by these operations will be root-owned.
+              </Checkbox>
+            )}
+            {confirmationRequired && (
+              <Checkbox
+                checked={bindAck === riskKey}
+                onChange={(event) => setBindAck(event.target.checked ? riskKey : '')}
+              >
+                Mount this unverifiable bind path. If missing, Docker creates it as root:root 0755.{' '}
+                {identityVolume.preflight.warning}
+              </Checkbox>
+            )}
+          </Flex>
+        </Card>
+      )}
       {body}
-
-      <Modal
-        cancelText="Cancel"
-        okText="Continue"
-        onCancel={() => setGate('declined')}
-        onOk={() => setGate('accepted')}
-        open={confirmationRequired && gate === 'pending'}
-        title="Open this Volume?"
-      >
-        {view.status === 'ready' && (
-          <>
-            <Paragraph>
-              <Text code>{view.volume.source}</Text> is a bind mount outside the panel’s data directory, so the panel
-              cannot tell whether it exists without mounting it — and mounting it is what would create it.
-            </Paragraph>
-            <Alert message={view.volume.preflight.warning} showIcon type="warning" />
-            <Paragraph style={{ marginBottom: 0, marginTop: LAYOUT.gutterSmall }} type="secondary">
-              Continuing mounts this path for every read and every write. If it is missing, Docker creates it as{' '}
-              <Text code>root:root 0755</Text>.
-            </Paragraph>
-          </>
-        )}
-      </Modal>
 
       <Modal
         cancelText="Cancel"

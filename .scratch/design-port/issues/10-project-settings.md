@@ -85,3 +85,13 @@ Implemented in this commit (`feat: build the Project Settings tab`).
   reviewed against §4.4.
 - For a human: nothing open from this ticket. The Projects list keeps its own rename/delete
   affordances by design (§4.3); both entry points share the store methods.
+
+
+## Follow-up — 2026-10-03
+
+The record-only parent deletion decision above is superseded by the authorized
+system review fixes and ADR-0011. Project and Environment deletion now tears down
+child containers, networks, Compose-owned volumes and deployment directories
+before removing metadata. Confirmation copy states the destructive consequences
+and partial-failure behavior; actual per-Compose directories replace guessed
+parent slug paths. See `.scratch/system-hardening/spec.md`.

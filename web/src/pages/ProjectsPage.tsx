@@ -33,6 +33,8 @@ import { useNavigate } from 'react-router';
 
 import { paths } from '../app/paths';
 import { DangerModal } from '../components/DangerModal';
+import { TeardownDetails } from '../components/TeardownDetails';
+import { projectDeleteFacts } from './project-view';
 import { ComposeStatusTag, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { usePanel } from '../data/store';
 import type { Project } from '../data/types';
@@ -363,17 +365,17 @@ export function ProjectsPage() {
       <DangerModal
         confirmWord={deleting?.name ?? ''}
         consequences={
-          <Text type="secondary">
+          <div>
             {deleting && (
               <>
                 This removes {deleting.environments.length}{' '}
                 {deleting.environments.length === 1 ? 'Environment' : 'Environments'} and {projectComposes(deleting).length}{' '}
-                {projectComposes(deleting).length === 1 ? 'Compose' : 'Composes'} from the panel. Their files stay on disk under{' '}
-                <Text code>dataDir/{deleting.name}/</Text> and running containers are not stopped — delete Composes first to tear
-                down their containers, networks and volumes.
+                {projectComposes(deleting).length === 1 ? 'Compose' : 'Composes'} from the panel, after stopping and removing
+                their containers, networks, volumes and deployment files. Volume data is permanently deleted.
+                <TeardownDetails directories={projectDeleteFacts(deleting).directories} />
               </>
             )}
-          </Text>
+          </div>
         }
         description="Deleting a Project cannot be undone."
         loading={isPending(`delete-project:${deleting?.id ?? 0}`)}

@@ -1,6 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
-import { activeComposeTab, composeLinkIsStale, deploySteps, filterLogLines, hasUnsavedChanges } from './compose-view';
+import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, hasUnsavedChanges } from './compose-view';
+
+describe('composeDeployIdentity', () => {
+  it('uses the API identity including the configured absolute directory for new Composes', () => {
+    const actual = { projectName: 'relist-c42', directory: '/srv/custom panel/.composes/42' };
+    expect(composeDeployIdentity({ projectSlug: 'old-name', envSlug: 'production', name: 'Web App', deployIdentity: actual })).toEqual(actual);
+  });
+
+  it('preserves the resolved API legacy identity rather than recomputing it', () => {
+    const actual = { projectName: 'original-production-web', directory: '/opt/stacks/original/production/web' };
+    expect(composeDeployIdentity({ projectSlug: 'renamed', envSlug: 'production', name: 'web', deployIdentity: actual })).toEqual(actual);
+  });
+
+  it('falls back to the legacy slug identity only when older API data omits the field', () => {
+    expect(composeDeployIdentity({ projectSlug: 'project', envSlug: 'production', name: ' Web App! ' })).toEqual({
+      projectName: 'project-production-web-app', directory: 'dataDir/project/production/web-app',
+    });
+    expect(composeDeployIdentity({ projectSlug: 'project', envSlug: 'production', name: 'ภาษาไทย' }).projectName).toBe('project-production-x');
+  });
+});
 
 describe('activeComposeTab', () => {
   it('resolves the tab segment the design links to', () => {

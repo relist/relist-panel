@@ -206,21 +206,17 @@ func (s *Store) ServiceRollups(ctx context.Context, project, service string, fro
 // the key the collector attributes containers by. sql.ErrNoRows means no
 // such Compose under that path.
 func (s *Store) ComposeProjectName(ctx context.Context, projectID, environmentID, composeID int64) (string, error) {
-	var (
-		projectSlug string
-		envSlug     string
-		name        string
-	)
+	var compose composes.Compose
 	err := s.db.QueryRowContext(ctx, `
-		SELECT c.project_slug, c.env_slug, c.name
+		SELECT c.id, c.project_slug, c.env_slug, c.name, c.identity_version
 		FROM composes c
 		JOIN environments e ON e.id = c.environment_id
 		WHERE e.project_id = ? AND c.environment_id = ? AND c.id = ?
-	`, projectID, environmentID, composeID).Scan(&projectSlug, &envSlug, &name)
+	`, projectID, environmentID, composeID).Scan(&compose.ID, &compose.ProjectSlug, &compose.EnvSlug, &compose.Name, &compose.IdentityVersion)
 	if err != nil {
 		return "", err
 	}
-	return composes.Compose{ProjectSlug: projectSlug, EnvSlug: envSlug, Name: name}.DeployProjectName(), nil
+	return compose.DeployProjectName(), nil
 }
 
 // nullable maps NaN to SQL NULL: a field that was never honestly measured has

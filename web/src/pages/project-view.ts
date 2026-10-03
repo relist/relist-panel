@@ -1,5 +1,6 @@
 import { projectComposes } from '../data/types';
 import type { Environment, Project } from '../data/types';
+import { composeDeployIdentity } from './compose-view';
 
 /**
  * View decisions for the Project screens, kept pure so the design's rules —
@@ -50,39 +51,33 @@ export function visibleProjects(projects: Project[], query: string, sort: Projec
 
 /**
  * What an Environment delete actually tears down, for the `DangerModal`'s copy:
- * records only — files stay on disk and running containers are not stopped (the
- * ticket-10 decision). The path is read from the first Compose's frozen slugs
- * (ADR-0005: identity does not follow later renames), so it is absent when the
- * Environment holds no Composes.
+ * child infrastructure and files first, then metadata. Each Compose may use
+ * its own configured directory (including a mixture of legacy and ID identities).
  */
 export type EnvironmentDeleteFacts = {
   composes: number;
-  /** `dataDir/{projectSlug}/{envSlug}/` — the prefix the files stay under. */
-  dataDir?: string;
+  directories: string[];
 };
 
 export function environmentDeleteFacts(environment: Environment): EnvironmentDeleteFacts {
-  const first = environment.composes[0];
   return {
     composes: environment.composes.length,
-    dataDir: first ? `dataDir/${first.projectSlug}/${first.envSlug}/` : undefined,
+    directories: environment.composes.map((compose) => composeDeployIdentity(compose).directory),
   };
 }
 
-/** The same record-only facts for a Project delete, rolled up across its tree. */
+/** The same teardown facts for a Project delete, rolled up across its tree. */
 export type ProjectDeleteFacts = {
   composes: number;
-  /** `dataDir/{projectSlug}/` — absent when the Project holds no Composes. */
-  dataDir?: string;
+  directories: string[];
   environments: number;
 };
 
 export function projectDeleteFacts(project: Project): ProjectDeleteFacts {
   const composes = projectComposes(project);
-  const first = composes[0];
   return {
     composes: composes.length,
-    dataDir: first ? `dataDir/${first.projectSlug}/` : undefined,
+    directories: composes.map((compose) => composeDeployIdentity(compose).directory),
     environments: project.environments.length,
   };
 }

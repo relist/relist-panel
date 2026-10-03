@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"relist-panel/internal/volumes"
@@ -19,12 +20,6 @@ import (
 // userPattern is the only shape an explicit `user` query may take: the
 // `<uid>:<gid>` pair `--user` receives. No names, no free text.
 var userPattern = regexp.MustCompile(`^[0-9]+:[0-9]+$`)
-
-// fallbackUser is the identity the resolution reports for a Service that
-// declares no user: exactly the value `volumes` synthesizes (ADR-0010's root
-// opt-in, never a default), repeated here only for the impossible case of a
-// Volume whose first use resolves to no Service.
-const fallbackUser = "0:0"
 
 // listFiles serves one directory listing: the helper's `list` JSON.
 func (s *Service) listFiles(w http.ResponseWriter, r *http.Request) {
@@ -113,9 +108,19 @@ func (s *Service) operationOf(w http.ResponseWriter, r *http.Request, op volumes
 		return volumes.Request{}, volumes.Volume{}, false
 	}
 
+	if preflight.Status == volumes.PreflightUnverifiable && r.URL.Query().Get("bindConfirmed") != "1" {
+		writeError(w, http.StatusBadRequest, "unverifiable bind requires bindConfirmed=1 acknowledgement")
+		return volumes.Request{}, volumes.Volume{}, false
+	}
+
 	user, err := operationUser(r.URL.Query(), volume, resolution.Users)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return volumes.Request{}, volumes.Volume{}, false
+	}
+	uid, _ := strconv.ParseUint(strings.Split(user, ":")[0], 10, 32)
+	if uid == 0 && r.URL.Query().Get("rootConfirmed") != "1" {
+		writeError(w, http.StatusBadRequest, "root user requires rootConfirmed=1 acknowledgement")
 		return volumes.Request{}, volumes.Volume{}, false
 	}
 	path, err := pathOf(r.URL.Query())
@@ -146,19 +151,40 @@ func volumeBySource(resolved []volumes.Volume, source string) (volumes.Volume, b
 	return volumes.Volume{}, false
 }
 
-// operationUser applies the one UID/GID rule (spec: UID/GID): an explicit
-// `user` query wins; otherwise the named `service`'s resolved user; otherwise
-// the resolved user of the Volume's first use — the resolution's own 0:0
-// fallback included. Anything else is refused rather than guessed.
+// operationUser requires a selected mounting Service or an explicit numeric
+// uid:gid override. operationOf separately acknowledges every UID 0 result.
 func operationUser(query url.Values, volume volumes.Volume, users []volumes.ServiceUser) (string, error) {
 	if explicit := query.Get("user"); explicit != "" {
 		if !userPattern.MatchString(explicit) {
 			return "", errors.New("user must be <uid>:<gid>")
 		}
+		for _, id := range strings.Split(explicit, ":") {
+			if _, err := strconv.ParseUint(id, 10, 32); err != nil {
+				return "", errors.New("user must contain valid numeric uid:gid")
+			}
+		}
 		return explicit, nil
 	}
 
 	if service := query.Get("service"); service != "" {
+		mounted := false
+		for _, use := range volume.Uses {
+			if use.Service == service {
+				mounted = true
+			}
+		}
+		if !mounted {
+			exists := false
+			for _, candidate := range users {
+				if candidate.Service == service {
+					exists = true
+				}
+			}
+			if !exists {
+				return "", fmt.Errorf("unknown service %q", service)
+			}
+			return "", fmt.Errorf("service %q does not mount this volume", service)
+		}
 		for _, candidate := range users {
 			if candidate.Service == service {
 				return candidate.User, nil
@@ -167,14 +193,7 @@ func operationUser(query url.Values, volume volumes.Volume, users []volumes.Serv
 		return "", fmt.Errorf("unknown service %q", service)
 	}
 
-	if len(volume.Uses) > 0 {
-		for _, candidate := range users {
-			if candidate.Service == volume.Uses[0].Service {
-				return candidate.User, nil
-			}
-		}
-	}
-	return fallbackUser, nil
+	return "", errors.New("select a mounting service or explicit user <uid>:<gid>")
 }
 
 // operationPath interprets the path query exactly one way: absent or empty is

@@ -92,3 +92,25 @@ export function downloadRefusal(volume: ComposeVolume): string | undefined {
   }
   return volume.preflight.warning || `the source ${volume.source} is missing`;
 }
+
+/** Docker identities must be an explicit numeric uid:gid; never infer root. */
+export function volumeIdentityValid(user: string | undefined): user is string {
+  return (
+    user !== undefined &&
+    /^[0-9]+:[0-9]+$/.test(user) &&
+    user.split(':').every((id) => Number(id) <= 0xffffffff)
+  );
+}
+
+/** Both the Explorer and direct archive launcher gate every mount on these risks. */
+export function volumeAccessReady(
+  user: string | undefined,
+  unverifiable: boolean,
+  access: { rootConfirmed?: boolean; bindConfirmed?: boolean },
+): boolean {
+  return (
+    volumeIdentityValid(user) &&
+    (Number(user.split(':')[0]) !== 0 || access.rootConfirmed === true) &&
+    (!unverifiable || access.bindConfirmed === true)
+  );
+}

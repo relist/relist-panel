@@ -1,9 +1,32 @@
 import { CloudDownloadOutlined, ExportOutlined, LockOutlined, RocketOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Flex, Result, Skeleton, Table, Tag, Tooltip, Typography } from 'antd';
+import { useState } from 'react';
+import {
+  Alert,
+  Button,
+  Card,
+  Checkbox,
+  Flex,
+  Input,
+  Modal,
+  Result,
+  Select,
+  Skeleton,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from 'antd';
 import { CODE_FONT_STACK } from '../app/theme';
-import type { ComposeVolume, ComposeVolumes } from '../data/types';
+import type { ComposeVolume, ComposeVolumes, VolumeAccess } from '../data/types';
 import { CodeValue, EmptyState } from './primitives';
-import { downloadRefusal, resolvedVolumePath, volumeLabel, volumesView } from './volumes-view';
+import {
+  downloadRefusal,
+  resolvedVolumePath,
+  volumeAccessReady,
+  volumeIdentityValid,
+  volumeLabel,
+  volumesView,
+} from './volumes-view';
 
 const { Text, Paragraph } = Typography;
 
@@ -28,7 +51,7 @@ export function ComposeVolumesTab({
   payload,
 }: {
   /** Builds the direct download URL for one Volume's whole-tree tar.gz. */
-  archiveHref: (volume: ComposeVolume) => string;
+  archiveHref: (volume: ComposeVolume, access: VolumeAccess) => string;
   /** The page's deploy is in flight, so the state's affordance spins with it. */
   deploying: boolean;
   error?: string;
@@ -38,6 +61,25 @@ export function ComposeVolumesTab({
   onRetry: () => void;
   payload?: ComposeVolumes;
 }) {
+  const [download, setDownload] = useState<ComposeVolume>();
+  const [service, setService] = useState('');
+  const [override, setOverride] = useState('');
+  const [rootConfirmed, setRootConfirmed] = useState(false);
+  const [bindConfirmed, setBindConfirmed] = useState(false);
+  const users = (payload?.services ?? []).filter((candidate) =>
+    download?.uses.some((use) => use.service === candidate.service),
+  );
+  const chosen = users.find((user) => user.service === service);
+  const user = service === '__override' ? override : chosen?.user;
+  const valid = volumeIdentityValid(user);
+  const root = valid && Number(user?.split(':')[0]) === 0;
+  const bind = download?.preflight.status === 'unverifiable';
+  const allowed = volumeAccessReady(user, Boolean(bind), { rootConfirmed, bindConfirmed });
+  const access = {
+    ...(service === '__override' ? { user: override } : { service }),
+    rootConfirmed,
+    bindConfirmed,
+  };
   const view = volumesView(payload, error);
 
   if (view.status === 'loading') {
@@ -100,6 +142,61 @@ export function ComposeVolumesTab({
 
   return (
     <>
+      <Modal
+        footer={null}
+        onCancel={() => setDownload(undefined)}
+        open={download !== undefined}
+        title="Download Volume archive"
+      >
+        <Flex gap={12} vertical>
+          <Select
+            onChange={(value) => {
+              setService(value);
+              setRootConfirmed(false);
+              setBindConfirmed(false);
+            }}
+            options={[
+              ...users.map((candidate) => ({
+                value: candidate.service,
+                label: `${candidate.service} — ${candidate.user}`,
+              })),
+              { value: '__override', label: 'Numeric uid:gid override' },
+            ]}
+            placeholder="Choose a mounting Service or numeric uid:gid"
+            value={service || undefined}
+          />
+          {service === '__override' && (
+            <Input
+              onChange={(event) => {
+                setOverride(event.target.value);
+                setRootConfirmed(false);
+                setBindConfirmed(false);
+              }}
+              placeholder="1000:1000"
+              value={override}
+            />
+          )}
+          {chosen?.warning && <Alert message={chosen.warning} showIcon type="warning" />}
+          {root && (
+            <Checkbox checked={rootConfirmed} onChange={(event) => setRootConfirmed(event.target.checked)}>
+              Use root (UID 0). Files created by these operations will be root-owned.
+            </Checkbox>
+          )}
+          {bind && (
+            <Checkbox checked={bindConfirmed} onChange={(event) => setBindConfirmed(event.target.checked)}>
+              Mount this unverifiable bind. If missing, Docker creates it as root:root 0755.{' '}
+              {download?.preflight.warning}
+            </Checkbox>
+          )}
+          <Button
+            disabled={!allowed}
+            href={allowed && download ? archiveHref(download, access) : undefined}
+            type="primary"
+          >
+            Download tar.gz
+          </Button>
+        </Flex>
+      </Modal>
       {view.warnings.map((warning) => (
         <Alert
           description={warning.message}
@@ -189,7 +286,13 @@ export function ComposeVolumesTab({
                   <Tooltip title={refusal ?? 'Downloads the whole Volume as a tar.gz archive, straight to disk.'}>
                     <Button
                       disabled={Boolean(refusal)}
-                      href={refusal ? undefined : archiveHref(volume)}
+                      onClick={() => {
+                        setDownload(volume);
+                        setService('');
+                        setOverride('');
+                        setRootConfirmed(false);
+                        setBindConfirmed(false);
+                      }}
                       icon={<CloudDownloadOutlined />}
                       size="small"
                     >

@@ -157,6 +157,17 @@ func (fs *FS) Extract(target string, src io.Reader, limits ...ExtractLimits) err
 		}
 	}
 
+	// tar stops at its end markers without necessarily reading gzip's CRC
+	// and length trailer. Read gzip through EOF before reporting success; a
+	// close alone never validates the checksum. Any bytes after the tar end
+	// share the remaining uncompressed budget, so trailing gzip members or
+	// compressible padding cannot turn this validation into an unbounded read.
+	if _, err := copyWithin(io.Discard, zr, lim.MaxBytes-written); errors.Is(err, errCapReached) {
+		return fmt.Errorf("extract %q: %w: trailing data is past the %d-byte uncompressed cap", target, ErrArchiveTooLarge, lim.MaxBytes)
+	} else if err != nil {
+		return fmt.Errorf("extract %q: %w: gzip trailer: %w", target, ErrInvalidArchive, err)
+	}
+
 	// Deepest first: a directory takes its exact mode only after everything
 	// beneath it has been written.
 	for i := len(dirs) - 1; i >= 0; i-- {

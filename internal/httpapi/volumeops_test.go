@@ -78,6 +78,15 @@ func setupExplorerCompose(t *testing.T, server *testServer) explorerCompose {
 // volumeOpPath builds one operation URL with its query encoded the way the SPA
 // sends it.
 func volumeOpPath(f explorerCompose, op string, query url.Values) string {
+	if !query.Has("service") && !query.Has("user") {
+		query.Set("service", "db")
+	}
+	if !query.Has("rootConfirmed") {
+		query.Set("rootConfirmed", "1")
+	}
+	if !query.Has("bindConfirmed") {
+		query.Set("bindConfirmed", "1")
+	}
 	return composeVolumesPath(f.project.ID, f.production.ID, f.compose.ID) + "/" + op + "?" + query.Encode()
 }
 
@@ -259,7 +268,7 @@ func TestVolumeOperationsRefuseMissingSources(t *testing.T) {
 }
 
 // The user precedence is the spec's: explicit user, then the named Service's
-// resolved user, then the Volume's first use — and any other value is a 400
+// resolved user — an omitted identity or any other value is a 400
 // with no run.
 func TestVolumeOperationsResolveTheUser(t *testing.T) {
 	server := newTestServer(t)
@@ -288,13 +297,13 @@ func TestVolumeOperationsResolveTheUser(t *testing.T) {
 			user:  "0:0",
 		},
 		{
-			name:  "no service resolves to the volume's first use",
-			query: url.Values{"source": {"demoapp_pgdata"}},
+			name:  "selected service resolves to the volume mounting user",
+			query: url.Values{"source": {"demoapp_pgdata"}, "service": {"db"}},
 			user:  "999:998",
 		},
 		{
-			name:  "a bind resolves through its first use too",
-			query: url.Values{"source": {fixture.presentBind}},
+			name:  "a bind resolves through its selected mounting service",
+			query: url.Values{"source": {fixture.presentBind}, "service": {"db"}},
 			user:  "999:998",
 		},
 	}
@@ -809,6 +818,15 @@ const uploadCap = 1 << 30
 // contentPath builds one write operation URL with its query encoded the way
 // the SPA sends it.
 func contentPath(f explorerCompose, query url.Values) string {
+	if !query.Has("service") && !query.Has("user") {
+		query.Set("service", "db")
+	}
+	if !query.Has("rootConfirmed") {
+		query.Set("rootConfirmed", "1")
+	}
+	if !query.Has("bindConfirmed") {
+		query.Set("bindConfirmed", "1")
+	}
 	return composeVolumesPath(f.project.ID, f.production.ID, f.compose.ID) + "/content?" + query.Encode()
 }
 
@@ -1189,6 +1207,15 @@ const restoreCap = 1 << 30
 // restorePath builds one restore URL with its query encoded the way the SPA
 // sends it.
 func restorePath(f explorerCompose, query url.Values) string {
+	if !query.Has("service") && !query.Has("user") {
+		query.Set("service", "db")
+	}
+	if !query.Has("rootConfirmed") {
+		query.Set("rootConfirmed", "1")
+	}
+	if !query.Has("bindConfirmed") {
+		query.Set("bindConfirmed", "1")
+	}
 	return composeVolumesPath(f.project.ID, f.production.ID, f.compose.ID) + "/restore?" + query.Encode()
 }
 

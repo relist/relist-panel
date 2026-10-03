@@ -102,19 +102,19 @@ describe('visibleProjects', () => {
 });
 
 describe('environmentDeleteFacts', () => {
-  it('counts the Composes and names the on-disk path from the first Compose’s frozen slugs', () => {
+  it('names each actual deployment directory for mixed legacy and ID identities', () => {
     const subject = environment({
       id: 1,
       composes: [
-        compose({ id: 11, projectSlug: 'my-saas', envSlug: 'production' }),
-        compose({ id: 12, projectSlug: 'renamed-slug-is-ignored', envSlug: 'production' }),
+        compose({ id: 11, deployIdentity: { projectName: 'original-production-web', directory: '/srv/custom/original/production/web' } }),
+        compose({ id: 12, deployIdentity: { projectName: 'relist-c12', directory: '/srv/custom/.composes/12' } }),
       ],
     });
-    expect(environmentDeleteFacts(subject)).toEqual({ composes: 2, dataDir: 'dataDir/my-saas/production/' });
+    expect(environmentDeleteFacts(subject)).toEqual({ composes: 2, directories: ['/srv/custom/original/production/web', '/srv/custom/.composes/12'] });
   });
 
   it('carries no path for an Environment without Composes', () => {
-    expect(environmentDeleteFacts(environment({ id: 1 }))).toEqual({ composes: 0, dataDir: undefined });
+    expect(environmentDeleteFacts(environment({ id: 1 }))).toEqual({ composes: 0, directories: [] });
   });
 });
 
@@ -122,19 +122,19 @@ describe('projectDeleteFacts', () => {
   const subject = project({
     id: 1,
     environments: [
-      environment({ id: 1, composes: [compose({ id: 11, envSlug: 'production' })] }),
-      environment({ id: 2, composes: [compose({ id: 21, envSlug: 'staging' }), compose({ id: 22, envSlug: 'staging' })] }),
+      environment({ id: 1, composes: [compose({ id: 11, deployIdentity: { projectName: 'relist-c11', directory: '/srv/custom/.composes/11' } })] }),
+      environment({ id: 2, composes: [compose({ id: 21, deployIdentity: { projectName: 'original-staging-web', directory: '/srv/custom/original/staging/web' } }), compose({ id: 22, envSlug: 'staging' })] }),
     ],
   });
 
   it('counts Environments and Composes across the whole tree', () => {
-    expect(projectDeleteFacts(subject)).toEqual({ composes: 3, dataDir: 'dataDir/my-saas/', environments: 2 });
+    expect(projectDeleteFacts(subject)).toEqual({ composes: 3, directories: ['/srv/custom/.composes/11', '/srv/custom/original/staging/web', 'dataDir/my-saas/staging/compose-22'], environments: 2 });
   });
 
   it('carries no path for a Project without Composes', () => {
     expect(projectDeleteFacts(project({ id: 2, environments: [environment({ id: 3 })] }))).toEqual({
       composes: 0,
-      dataDir: undefined,
+      directories: [],
       environments: 1,
     });
   });

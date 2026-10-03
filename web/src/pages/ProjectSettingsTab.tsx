@@ -5,22 +5,22 @@ import { useNavigate } from 'react-router';
 
 import { paths } from '../app/paths';
 import { DangerModal } from '../components/DangerModal';
+import { TeardownDetails } from '../components/TeardownDetails';
 import { RelativeTime } from '../components/primitives';
 import type { ProjectInput } from '../data/api';
 import { usePanel } from '../data/store';
 import type { Environment, Project } from '../data/types';
 import { environmentDeleteFacts, projectDeleteFacts } from './project-view';
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 /**
  * The Project screen's Settings tab (GUIDELINES §4.4): the Project details
  * form, the Environment list with delete, and the danger zone for deleting the
  * Project — the jobs the temporary `Manage` dropdown held, moved to their real
- * home. Delete copy is honest about what the API tears down: Environment and
- * Project delete remove records only (files stay on disk, running containers
- * are not stopped); the safe teardown path is deleting Composes one by one
- * first, each with its own confirmation.
+ * home. Parent deletion tears down each Compose's containers, networks,
+ * volumes and files before removing metadata; failures preserve the records
+ * without undoing child teardowns that already completed.
  */
 export function ProjectSettingsTab({
   activeEnvironmentId,
@@ -100,7 +100,7 @@ export function ProjectSettingsTab({
             requiredMark={false}
           >
             <Form.Item
-              extra="Renaming does not move already-deployed stacks — deploy identity is frozen at Compose creation (ADR-0005)."
+              extra="Renaming does not move already-deployed stacks — deploy identity is frozen at Compose creation (ADR-0011)."
               label="Name"
               name="name"
               rules={[
@@ -185,8 +185,8 @@ export function ProjectSettingsTab({
               <Text type="secondary">
                 Removes this Project, its {projectFacts.environments}{' '}
                 {projectFacts.environments === 1 ? 'Environment' : 'Environments'} and {projectFacts.composes}{' '}
-                {projectFacts.composes === 1 ? 'Compose' : 'Composes'}, from the panel. Files stay on disk and running
-                containers are not stopped — delete Composes one by one first to tear them down.
+                {projectFacts.composes === 1 ? 'Compose' : 'Composes'}. This first stops and removes their containers,
+                networks, volumes and deployment files. Volume data is permanently deleted.
               </Text>
             </div>
             <Button danger icon={<DeleteOutlined />} onClick={() => setDeleteProjectOpen(true)}>
@@ -199,22 +199,16 @@ export function ProjectSettingsTab({
       <DangerModal
         confirmWord={deletingEnvironment?.name ?? ''}
         consequences={
-          <Paragraph type="secondary">
+          <div>
             {deletingEnvironment && environmentFacts && (
               <>
                 This deletes {deletingEnvironment.name} and its {environmentFacts.composes}{' '}
-                {environmentFacts.composes === 1 ? 'Compose' : 'Composes'} from the panel.{' '}
-                {environmentFacts.dataDir ? (
-                  <>
-                    Their files stay on disk under <Text code>{environmentFacts.dataDir}</Text> and their containers
-                    keep running — delete a Compose instead to stop it and remove its containers, networks and volumes.
-                  </>
-                ) : (
-                  'It holds no Composes.'
-                )}
+                {environmentFacts.composes === 1 ? 'Compose' : 'Composes'} from the panel, after stopping and removing
+                their containers, networks, volumes and deployment files. Volume data is permanently deleted.
+                <TeardownDetails directories={environmentFacts.directories} />
               </>
             )}
-          </Paragraph>
+          </div>
         }
         description="Deleting an Environment cannot be undone."
         loading={isPending(`delete-environment:${deletingEnvironment?.id ?? 0}`)}
@@ -228,20 +222,13 @@ export function ProjectSettingsTab({
       <DangerModal
         confirmWord={project.name}
         consequences={
-          <Paragraph type="secondary">
+          <div>
             This removes {project.name}, its {projectFacts.environments}{' '}
             {projectFacts.environments === 1 ? 'Environment' : 'Environments'} and {projectFacts.composes}{' '}
-            {projectFacts.composes === 1 ? 'Compose' : 'Composes'}, from the panel.{' '}
-            {projectFacts.dataDir ? (
-              <>
-                Their files stay on disk under <Text code>{projectFacts.dataDir}</Text> and running containers are not
-                stopped — delete Composes one by one first to stop them and remove their containers, networks and
-                volumes.
-              </>
-            ) : (
-              'It holds no Composes.'
-            )}
-          </Paragraph>
+            {projectFacts.composes === 1 ? 'Compose' : 'Composes'}, after stopping and removing their containers,
+            networks, volumes and deployment files. Volume data is permanently deleted.
+            <TeardownDetails directories={projectFacts.directories} />
+          </div>
         }
         description="Deleting a Project cannot be undone."
         loading={isPending(`delete-project:${project.id}`)}

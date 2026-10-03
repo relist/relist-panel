@@ -40,6 +40,7 @@ import { usePanel } from '../data/store';
 import type { Compose } from '../data/types';
 import { composeState, projectComposes, summarize } from '../data/types';
 import { activeTab, selectEnvironment } from './project-view';
+import { composeDeployIdentity } from './compose-view';
 import { ProjectSettingsTab } from './ProjectSettingsTab';
 
 const { Text, Paragraph } = Typography;
@@ -394,7 +395,7 @@ export function ProjectPage() {
                               key: 'identity',
                               render: (_value, compose) => (
                                 <Text code style={{ fontSize: 12 }} type="secondary">
-                                  {compose.projectSlug}-{compose.envSlug}-{compose.name}
+                                  {composeDeployIdentity(compose).projectName}
                                 </Text>
                               ),
                               title: 'Deploy identity',
@@ -569,7 +570,7 @@ export function ProjectPage() {
             This stops and removes the containers, networks and volumes created by{' '}
             <Text code>{deletingCompose?.name}</Text>, and deletes its files under{' '}
             <Text code>
-              {deletingCompose?.projectSlug}/{deletingCompose?.envSlug}/{deletingCompose?.name}
+              {deletingCompose ? composeDeployIdentity(deletingCompose).directory : ''}
             </Text>
             .
           </Paragraph>

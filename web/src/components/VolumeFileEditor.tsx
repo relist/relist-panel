@@ -82,7 +82,11 @@ export function VolumeFileEditor({
       closable={false}
       destroyOnHidden
       footer={null}
-      onCancel={close}
+      onCancel={() => {
+        if (!saving) {
+          close();
+        }
+      }}
       open={open}
       style={{ margin: 0, maxWidth: '100vw', paddingBottom: 0, top: 0 }}
       styles={{

@@ -283,7 +283,10 @@ One rule, resolved before the first operation and passed to every `docker run` a
   runs as uid 999 may then fail to start.
 
 Root is a deliberate opt-in, never a default. The UI shows the resolved value and lets the operator
-override it.
+override it. Every operation accepts `service` or a numeric `user=uid:gid`; the chosen
+Service must mount the requested Volume. UID 0 requires `rootConfirmed=1`, and an
+unverifiable bind requires `bindConfirmed=1`, checked before the helper runs.
+The Explorer and direct archive downloads both ask for these acknowledgements.
 
 ## Archives
 

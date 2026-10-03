@@ -450,6 +450,59 @@ func TestExtractNeedsAnExistingDirectoryTarget(t *testing.T) {
 	}
 }
 
+func TestExtractValidatesTheGzipTrailerAfterTheTarEnds(t *testing.T) {
+	valid := extractArchive(t, tarEntry{
+		Header: tar.Header{Name: "saved.txt", Mode: 0o644, Typeflag: tar.TypeReg},
+		Body:   []byte("saved"),
+	})
+	corrupt := append([]byte(nil), valid...)
+	corrupt[len(corrupt)-8] ^= 1 // CRC32 lives in the first four trailer bytes.
+	for _, tc := range []struct {
+		name string
+		body []byte
+	}{
+		{"corrupt checksum", corrupt},
+		{"truncated trailer", valid[:len(valid)-4]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dst := newFixture(t)
+			err := dst.Extract(".", bytes.NewReader(tc.body))
+			if !errors.Is(err, ErrInvalidArchive) {
+				t.Fatalf("Extract = %v, want ErrInvalidArchive", err)
+			}
+			got, readErr := os.ReadFile(dst.path("saved.txt"))
+			if readErr != nil || string(got) != "saved" {
+				t.Fatalf("partial extraction = %q, want saved", got)
+			}
+		})
+	}
+}
+
+func TestExtractCapsUncompressedBytesAfterTheTarEnds(t *testing.T) {
+	var body bytes.Buffer
+	zw := gzip.NewWriter(&body)
+	tw := tar.NewWriter(zw)
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A valid tar end followed by compressible junk must not allow an
+	// unbounded drain merely to validate gzip's trailer.
+	if _, err := zw.Write(bytes.Repeat([]byte("x"), 4096)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dst := newFixture(t)
+	err := dst.Extract(".", bytes.NewReader(body.Bytes()), ExtractLimits{MaxEntries: 10, MaxBytes: 1024})
+	if !errors.Is(err, ErrArchiveTooLarge) {
+		t.Fatalf("Extract = %v, want ErrArchiveTooLarge", err)
+	}
+	if got := tree(t, dst.root); len(got) != 0 {
+		t.Fatalf("trailing bytes created files: %v", got)
+	}
+}
+
 // An empty stream, plain garbage and a gzip stream that is not a tar are all
 // classified ErrInvalidArchive — the body is not a usable tar.gz — rather
 // than as an unsafe entry or a size refusal, and none of them writes anything.

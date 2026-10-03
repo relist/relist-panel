@@ -987,9 +987,9 @@ func TestComposeVolumesListsResolvedVolumesAndServices(t *testing.T) {
 	// one config call, one existence check for the named volume, and no
 	// helper run for a listing.
 	wantRef := volumes.ComposeRef{
-		ProjectName:     "volume-co-production-web",
-		ComposeFilePath: filepath.Join(server.dataDir, "volume-co", "production", "web", "docker-compose.yml"),
-		EnvFilePath:     filepath.Join(server.dataDir, "volume-co", "production", "web", ".env"),
+		ProjectName:     "relist-c" + strconv.FormatInt(compose.ID, 10),
+		ComposeFilePath: filepath.Join(server.dataDir, ".composes", strconv.FormatInt(compose.ID, 10), "docker-compose.yml"),
+		EnvFilePath:     filepath.Join(server.dataDir, ".composes", strconv.FormatInt(compose.ID, 10), ".env"),
 	}
 	if !reflect.DeepEqual(server.volumeCLI.ComposeConfigRefs, []volumes.ComposeRef{wantRef}) {
 		t.Errorf("ComposeConfig refs = %+v, want exactly %+v", server.volumeCLI.ComposeConfigRefs, wantRef)
@@ -1151,7 +1151,7 @@ func TestAuthenticatedAdminCanDeployCompose(t *testing.T) {
 	if upCall.method != "up" {
 		t.Fatalf("first runner call = %q, want %q", upCall.method, "up")
 	}
-	wantProjectName := "deploy-co-production-web"
+	wantProjectName := "relist-c" + strconv.FormatInt(compose.ID, 10)
 	if upCall.request.ProjectName != wantProjectName {
 		t.Fatalf("deploy project name = %q, want %q", upCall.request.ProjectName, wantProjectName)
 	}
@@ -1171,7 +1171,7 @@ func TestAuthenticatedAdminCanDeployCompose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read generated env file: %v", err)
 	}
-	if !strings.Contains(string(envFile), "API_KEY=secret") {
+	if !strings.Contains(string(envFile), `API_KEY="secret"`) {
 		t.Fatalf("generated env file = %q, want it to contain the environment variable", envFile)
 	}
 
@@ -1468,8 +1468,8 @@ func TestAuthenticatedAdminCanStopCompose(t *testing.T) {
 	if lastCall.method != "status" || server.runner.calls[len(server.runner.calls)-2].method != "down" {
 		t.Fatalf("runner calls = %+v, want a down followed by a status call", server.runner.calls)
 	}
-	if server.runner.calls[len(server.runner.calls)-2].request.ProjectName != "stop-co-production-web" {
-		t.Fatalf("stop project name = %q, want %q", server.runner.calls[len(server.runner.calls)-2].request.ProjectName, "stop-co-production-web")
+	if server.runner.calls[len(server.runner.calls)-2].request.ProjectName != "relist-c"+strconv.FormatInt(compose.ID, 10) {
+		t.Fatalf("stop project name = %q, want %q", server.runner.calls[len(server.runner.calls)-2].request.ProjectName, "relist-c"+strconv.FormatInt(compose.ID, 10))
 	}
 
 	// A subsequent GET reflects the stopped status without redeploying.
@@ -1592,8 +1592,8 @@ func TestAuthenticatedAdminCanRestartCompose(t *testing.T) {
 	if lastCall.method != "status" || server.runner.calls[len(server.runner.calls)-2].method != "restart" {
 		t.Fatalf("runner calls = %+v, want a restart followed by a status call", server.runner.calls)
 	}
-	if server.runner.calls[len(server.runner.calls)-2].request.ProjectName != "restart-co-production-web" {
-		t.Fatalf("restart project name = %q, want %q", server.runner.calls[len(server.runner.calls)-2].request.ProjectName, "restart-co-production-web")
+	if server.runner.calls[len(server.runner.calls)-2].request.ProjectName != "relist-c"+strconv.FormatInt(compose.ID, 10) {
+		t.Fatalf("restart project name = %q, want %q", server.runner.calls[len(server.runner.calls)-2].request.ProjectName, "relist-c"+strconv.FormatInt(compose.ID, 10))
 	}
 }
 
@@ -1708,8 +1708,8 @@ func TestAuthenticatedAdminCanDeleteDeployedCompose(t *testing.T) {
 	if len(server.runner.calls) != 3 || server.runner.calls[2].method != "down-with-volumes" {
 		t.Fatalf("runner calls after delete = %+v, want down-with-volumes only", server.runner.calls)
 	}
-	if server.runner.calls[2].request.ProjectName != "delete-co-production-web" {
-		t.Fatalf("delete project name = %q, want %q", server.runner.calls[2].request.ProjectName, "delete-co-production-web")
+	if server.runner.calls[2].request.ProjectName != "relist-c"+strconv.FormatInt(compose.ID, 10) {
+		t.Fatalf("delete project name = %q, want %q", server.runner.calls[2].request.ProjectName, "relist-c"+strconv.FormatInt(compose.ID, 10))
 	}
 	if _, err := os.Stat(composeDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("compose directory still exists or returned unexpected error: %v", err)
@@ -1745,7 +1745,7 @@ func TestAuthenticatedAdminCanDeleteUndeployedCompose(t *testing.T) {
 		t.Fatalf("decode created compose: %v", err)
 	}
 
-	composeDir := filepath.Join(server.dataDir, "delete-co", "production", "web")
+	composeDir := filepath.Join(server.dataDir, ".composes", strconv.FormatInt(compose.ID, 10))
 	if err := os.MkdirAll(composeDir, 0o750); err != nil {
 		t.Fatalf("create compose directory: %v", err)
 	}
@@ -1878,8 +1878,8 @@ func TestAuthenticatedAdminCanViewComposeLogs(t *testing.T) {
 	if len(server.runner.calls) != 3 || server.runner.calls[2].method != "logs" {
 		t.Fatalf("runner calls = %+v, want deploy calls followed by logs", server.runner.calls)
 	}
-	if server.runner.calls[2].request.ProjectName != "logs-co-production-web" {
-		t.Fatalf("logs project name = %q, want %q", server.runner.calls[2].request.ProjectName, "logs-co-production-web")
+	if server.runner.calls[2].request.ProjectName != "relist-c"+strconv.FormatInt(compose.ID, 10) {
+		t.Fatalf("logs project name = %q, want %q", server.runner.calls[2].request.ProjectName, "relist-c"+strconv.FormatInt(compose.ID, 10))
 	}
 }
 
@@ -1970,7 +1970,7 @@ func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
 		body, _ := io.ReadAll(deployResponse.Body)
 		t.Fatalf("deploy status = %d, want %d, body = %s", deployResponse.StatusCode, http.StatusOK, body)
 	}
-	assertRunIdentity(t, "deploy", server.runner.calls[0].request, server.dataDir, "rename-co", "production", "web")
+	assertRunIdentity(t, "deploy", server.runner.calls[0].request, server.dataDir, compose.ID)
 
 	renameResponse := server.request(t, http.MethodPut, "/api/projects/"+strconv.FormatInt(project.ID, 10), map[string]string{
 		"name":        "Renamed Co",
@@ -1996,7 +1996,7 @@ func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
 	if lastCall.method != "status" {
 		t.Fatalf("last runner call after rename = %q, want %q", lastCall.method, "status")
 	}
-	assertRunIdentity(t, "status after rename", lastCall.request, server.dataDir, "rename-co", "production", "web")
+	assertRunIdentity(t, "status after rename", lastCall.request, server.dataDir, compose.ID)
 
 	stopResponse := server.request(t, http.MethodPost, composeStopPath(project.ID, production.ID, compose.ID), nil)
 	defer stopResponse.Body.Close()
@@ -2004,7 +2004,7 @@ func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
 		body, _ := io.ReadAll(stopResponse.Body)
 		t.Fatalf("stop after project rename status = %d, want %d, body = %s", stopResponse.StatusCode, http.StatusOK, body)
 	}
-	assertRunIdentity(t, "stop", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, "rename-co", "production", "web")
+	assertRunIdentity(t, "stop", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, compose.ID)
 
 	restartResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, compose.ID), nil)
 	defer restartResponse.Body.Close()
@@ -2012,7 +2012,7 @@ func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
 		body, _ := io.ReadAll(restartResponse.Body)
 		t.Fatalf("restart after project rename status = %d, want %d, body = %s", restartResponse.StatusCode, http.StatusOK, body)
 	}
-	assertRunIdentity(t, "restart", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, "rename-co", "production", "web")
+	assertRunIdentity(t, "restart", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, compose.ID)
 
 	logsResponse := server.request(t, http.MethodGet, composeLogsPath(project.ID, production.ID, compose.ID), nil)
 	defer logsResponse.Body.Close()
@@ -2020,7 +2020,7 @@ func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
 		body, _ := io.ReadAll(logsResponse.Body)
 		t.Fatalf("logs after project rename status = %d, want %d, body = %s", logsResponse.StatusCode, http.StatusOK, body)
 	}
-	assertRunIdentity(t, "logs", server.runner.calls[len(server.runner.calls)-1].request, server.dataDir, "rename-co", "production", "web")
+	assertRunIdentity(t, "logs", server.runner.calls[len(server.runner.calls)-1].request, server.dataDir, compose.ID)
 
 	deleteResponse := server.request(t, http.MethodDelete, composePath(project.ID, production.ID, compose.ID), nil)
 	defer deleteResponse.Body.Close()
@@ -2032,7 +2032,7 @@ func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
 	if lastCall.method != "down-with-volumes" {
 		t.Fatalf("last runner call after delete = %q, want %q (no orphaned teardown skip)", lastCall.method, "down-with-volumes")
 	}
-	assertRunIdentity(t, "delete", lastCall.request, server.dataDir, "rename-co", "production", "web")
+	assertRunIdentity(t, "delete", lastCall.request, server.dataDir, compose.ID)
 }
 
 func TestComposeActionsKeepOriginalIdentityAfterEnvironmentRename(t *testing.T) {
@@ -2080,7 +2080,7 @@ func TestComposeActionsKeepOriginalIdentityAfterEnvironmentRename(t *testing.T) 
 		body, _ := io.ReadAll(stopResponse.Body)
 		t.Fatalf("stop after environment rename status = %d, want %d, body = %s", stopResponse.StatusCode, http.StatusOK, body)
 	}
-	assertRunIdentity(t, "stop", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, "rename-env-co", "production", "web")
+	assertRunIdentity(t, "stop", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, compose.ID)
 
 	restartResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, compose.ID), nil)
 	defer restartResponse.Body.Close()
@@ -2088,7 +2088,7 @@ func TestComposeActionsKeepOriginalIdentityAfterEnvironmentRename(t *testing.T) 
 		body, _ := io.ReadAll(restartResponse.Body)
 		t.Fatalf("restart after environment rename status = %d, want %d, body = %s", restartResponse.StatusCode, http.StatusOK, body)
 	}
-	assertRunIdentity(t, "restart", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, "rename-env-co", "production", "web")
+	assertRunIdentity(t, "restart", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, compose.ID)
 
 	logsResponse := server.request(t, http.MethodGet, composeLogsPath(project.ID, production.ID, compose.ID), nil)
 	defer logsResponse.Body.Close()
@@ -2096,7 +2096,7 @@ func TestComposeActionsKeepOriginalIdentityAfterEnvironmentRename(t *testing.T) 
 		body, _ := io.ReadAll(logsResponse.Body)
 		t.Fatalf("logs after environment rename status = %d, want %d, body = %s", logsResponse.StatusCode, http.StatusOK, body)
 	}
-	assertRunIdentity(t, "logs", server.runner.calls[len(server.runner.calls)-1].request, server.dataDir, "rename-env-co", "production", "web")
+	assertRunIdentity(t, "logs", server.runner.calls[len(server.runner.calls)-1].request, server.dataDir, compose.ID)
 
 	deleteResponse := server.request(t, http.MethodDelete, composePath(project.ID, production.ID, compose.ID), nil)
 	defer deleteResponse.Body.Close()
@@ -2108,7 +2108,7 @@ func TestComposeActionsKeepOriginalIdentityAfterEnvironmentRename(t *testing.T) 
 	if lastCall.method != "down-with-volumes" {
 		t.Fatalf("last runner call after delete = %q, want %q (no orphaned teardown skip)", lastCall.method, "down-with-volumes")
 	}
-	assertRunIdentity(t, "delete", lastCall.request, server.dataDir, "rename-env-co", "production", "web")
+	assertRunIdentity(t, "delete", lastCall.request, server.dataDir, compose.ID)
 }
 
 func TestComposeCreateStoresDeployIdentity(t *testing.T) {
@@ -2692,14 +2692,10 @@ func productionEnvironment(t *testing.T, server *testServer, project projectResp
 
 // assertRunIdentity checks a runner call targeted the deploy identity derived
 // from the given stored slugs (ADR-0002).
-func assertRunIdentity(t *testing.T, label string, got composes.RunRequest, dataDir, projectSlug, envSlug, composeSlug string) {
+func assertRunIdentity(t *testing.T, label string, got composes.RunRequest, dataDir string, id int64) {
 	t.Helper()
-	dir := filepath.Join(dataDir, projectSlug, envSlug, composeSlug)
-	want := composes.RunRequest{
-		ProjectName:     projectSlug + "-" + envSlug + "-" + composeSlug,
-		ComposeFilePath: filepath.Join(dir, "docker-compose.yml"),
-		EnvFilePath:     filepath.Join(dir, ".env"),
-	}
+	dir := filepath.Join(dataDir, ".composes", strconv.FormatInt(id, 10))
+	want := composes.RunRequest{ProjectName: "relist-c" + strconv.FormatInt(id, 10), ComposeFilePath: filepath.Join(dir, "docker-compose.yml"), EnvFilePath: filepath.Join(dir, ".env")}
 	if got != want {
 		t.Fatalf("%s run request = %+v, want %+v", label, got, want)
 	}

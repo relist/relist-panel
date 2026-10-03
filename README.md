@@ -87,3 +87,13 @@ The feature assumes **TLS** on the panel's domain — a volume file manager over
 plain HTTP is a data-exfiltration channel. The install stack's Traefik is
 HTTP-only by default (above), so terminate TLS before exposing the panel
 beyond localhost.
+
+New Composes use the immutable Docker project name `relist-c<ID>` and keep their
+deployment files under `RELIST_DATA_DIR/.composes/<ID>/`. Upgrading preserves
+existing names and directories; conflicting legacy identities refuse operations
+until the operator reconciles the shared stack (ADR-0011). Parent deletion tears
+down its child stacks before removing their records.
+
+Before a Volume operation, select its mounting Service or a numeric uid:gid
+override. UID 0 and unverifiable bind paths require separate acknowledgements,
+including downloads started directly from the Volumes tab.

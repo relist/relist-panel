@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { Credentials, ProjectInput } from './api';
-import type { Compose, ComposeService, ComposeVolumes, EnvironmentVariable, HostMetrics, MetricWindow, Project, ServiceMetrics, VolumeEntry } from './types';
+import type { Compose, ComposeService, ComposeVolumes, EnvironmentVariable, HostMetrics, MetricWindow, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
@@ -70,19 +70,19 @@ type PanelValue = {
   /** The Compose's resolved Volumes and pre-flight statuses, from the Compose CLI. */
   loadVolumes: (composeId: number) => Promise<ComposeVolumes>;
   /** One directory inside a resolved Volume, for the Explorer's current path. */
-  listVolumeEntries: (composeId: number, source: string, path: string) => Promise<VolumeEntry[]>;
+  listVolumeEntries: (composeId: number, source: string, path: string, access?: VolumeAccess) => Promise<VolumeEntry[]>;
   /** One file's bytes inside a resolved Volume, for the editor (the caller applies the 1 MB gate). */
-  readVolumeFile: (composeId: number, source: string, path: string) => Promise<Uint8Array>;
+  readVolumeFile: (composeId: number, source: string, path: string, access?: VolumeAccess) => Promise<Uint8Array>;
   /** Uploads or overwrites one file inside a resolved Volume. Rejects with the API's message. */
-  writeVolumeFile: (composeId: number, source: string, path: string, file: Blob) => Promise<void>;
+  writeVolumeFile: (composeId: number, source: string, path: string, file: Blob, access?: VolumeAccess) => Promise<void>;
   /** Deletes one entry, or a whole tree, inside a resolved Volume. Permanent. */
-  deleteVolumeEntry: (composeId: number, source: string, path: string) => Promise<void>;
+  deleteVolumeEntry: (composeId: number, source: string, path: string, access?: VolumeAccess) => Promise<void>;
   /**
    * Streams a tar.gz into one directory of a resolved Volume: upload and
    * extract are one operation, so there is no separate upload step and the
    * archive is never stored. Rejects with the API's message.
    */
-  restoreVolume: (composeId: number, source: string, path: string, file: Blob) => Promise<void>;
+  restoreVolume: (composeId: number, source: string, path: string, file: Blob, access?: VolumeAccess) => Promise<void>;
   loadVariables: (environmentId: number) => Promise<void>;
   projects: Project[];
   /** Per-Service rows per Compose, from the Services endpoint. */
@@ -625,7 +625,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   // names the exact listing (`volume-list:<compose>:<source>:<path>`) so a
   // refresh spins only the directory it re-reads.
   const listVolumeEntries = useCallback(
-    (composeId: number, source: string, path: string) =>
+    (composeId: number, source: string, path: string, access?: VolumeAccess) =>
       track(`volume-list:${composeId}:${source}:${path}`, async () => {
         const location = findComposeLocation(projectsRef.current, composeId);
         if (!location) {
@@ -635,6 +635,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           { projectId: location.project.id, environmentId: location.environment.id, composeId },
           source,
           path,
+          access,
         );
       }),
     [track],
@@ -644,7 +645,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   // names the exact read (`volume-read:<compose>:<source>:<path>`), so the
   // row's edit control spins only for the file it opened.
   const readVolumeFile = useCallback(
-    (composeId: number, source: string, path: string) =>
+    (composeId: number, source: string, path: string, access?: VolumeAccess) =>
       track(`volume-read:${composeId}:${source}:${path}`, async () => {
         const location = findComposeLocation(projectsRef.current, composeId);
         if (!location) {
@@ -654,6 +655,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           { projectId: location.project.id, environmentId: location.environment.id, composeId },
           source,
           path,
+          access,
         );
       }),
     [track],
@@ -664,7 +666,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   // pending key names the exact entry (`volume-write:<compose>:<source>:<path>`),
   // so a control spins only for the write it started.
   const writeVolumeFile = useCallback(
-    (composeId: number, source: string, path: string, file: Blob) =>
+    (composeId: number, source: string, path: string, file: Blob, access?: VolumeAccess) =>
       track(`volume-write:${composeId}:${source}:${path}`, async () => {
         const location = findComposeLocation(projectsRef.current, composeId);
         if (!location) {
@@ -675,13 +677,14 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           source,
           path,
           file,
+          access,
         );
       }),
     [track],
   );
 
   const deleteVolumeEntry = useCallback(
-    (composeId: number, source: string, path: string) =>
+    (composeId: number, source: string, path: string, access?: VolumeAccess) =>
       track(`volume-delete:${composeId}:${source}:${path}`, async () => {
         const location = findComposeLocation(projectsRef.current, composeId);
         if (!location) {
@@ -691,6 +694,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           { projectId: location.project.id, environmentId: location.environment.id, composeId },
           source,
           path,
+          access,
         );
       }),
     [track],
@@ -701,7 +705,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   // (`volume-restore:<compose>:<source>:<path>`), so the toolbar's action
   // spins for its own request.
   const restoreVolume = useCallback(
-    (composeId: number, source: string, path: string, file: Blob) =>
+    (composeId: number, source: string, path: string, file: Blob, access?: VolumeAccess) =>
       track(`volume-restore:${composeId}:${source}:${path}`, async () => {
         const location = findComposeLocation(projectsRef.current, composeId);
         if (!location) {
@@ -712,6 +716,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           source,
           path,
           file,
+          access,
         );
       }),
     [track],

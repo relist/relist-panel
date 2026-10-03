@@ -15,6 +15,7 @@ import type {
   Project,
   ServiceFacts,
   ServiceMetrics,
+  VolumeAccess,
   VolumeEntry,
 } from './types';
 import type { MetricWindow } from './types';
@@ -166,17 +167,17 @@ export const api = {
    * root (`''` is the root); a refusal — a symlink that escapes, a directory
    * the operation uid cannot read — arrives as the API's own message.
    */
-  listVolumeEntries: (location: ComposePath, source: string, path: string) =>
+  listVolumeEntries: (location: ComposePath, source: string, path: string, access?: VolumeAccess) =>
     request<VolumeEntry[]>(
-      `${composePath(location)}/volumes/list?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`,
+      `${composePath(location)}/volumes/list?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}${volumeAccessQuery(access)}`,
     ),
   /**
    * One file's bytes, for the editor: `read` without the `download` marker,
    * held whole because the caller's 1 MB editor gate has already refused
    * anything larger. A failure carries the API's own message like every read.
    */
-  readVolumeFile: async (location: ComposePath, source: string, path: string): Promise<Uint8Array> => {
-    const response = await fetch(volumeReadApiUrl(location, source, path), { credentials: 'same-origin' });
+  readVolumeFile: async (location: ComposePath, source: string, path: string, access?: VolumeAccess): Promise<Uint8Array> => {
+    const response = await fetch(volumeReadApiUrl(location, source, path, access), { credentials: 'same-origin' });
     if (!response.ok) {
       throw new ApiError(response.status, await responseError(response));
     }
@@ -190,14 +191,14 @@ export const api = {
    * a write the helper refuses for want of space with 507 carrying its own
    * need-vs-available message. Success is 204.
    */
-  writeVolumeFile: (location: ComposePath, source: string, path: string, file: Blob) =>
-    request<void>(volumeContentUrl(location, source, path), { body: file, method: 'PUT' }),
+  writeVolumeFile: (location: ComposePath, source: string, path: string, file: Blob, access?: VolumeAccess) =>
+    request<void>(volumeContentUrl(location, source, path, access), { body: file, method: 'PUT' }),
   /**
    * Deletes one entry, or a whole directory tree: permanent, no trash, and
    * the API's own refusal when the path is the Volume root. Success is 204.
    */
-  deleteVolumeEntry: (location: ComposePath, source: string, path: string) =>
-    request<void>(volumeContentUrl(location, source, path), { method: 'DELETE' }),
+  deleteVolumeEntry: (location: ComposePath, source: string, path: string, access?: VolumeAccess) =>
+    request<void>(volumeContentUrl(location, source, path, access), { method: 'DELETE' }),
   /**
    * Restores a tar.gz into one resolved Volume directory: the archive is the
    * request body, streamed straight into the helper's `extract`, so upload and
@@ -210,8 +211,8 @@ export const api = {
    * message, out of space with 507, and a missing source with 409. Success is
    * 204.
    */
-  restoreVolume: (location: ComposePath, source: string, path: string, file: Blob) =>
-    request<void>(volumeRestoreUrl(location, source, path), { body: file, method: 'PUT' }),
+  restoreVolume: (location: ComposePath, source: string, path: string, file: Blob, access?: VolumeAccess) =>
+    request<void>(volumeRestoreUrl(location, source, path, access), { body: file, method: 'PUT' }),
   serviceMetrics: (location: ComposePath, service: string, window: MetricWindow) =>
     request<ServiceMetrics>(`${composePath(location)}/services/${encodeURIComponent(service)}/metrics?window=${window}`),
 };
@@ -246,8 +247,8 @@ function composePath(location: ComposePath): string {
  * disk, potentially for gigabytes, so it must never pass through a `fetch`
  * and a blob in the tab's memory.
  */
-export function volumeArchiveUrl(location: ComposePath, source: string, path = '.'): string {
-  return `${composePath(location)}/volumes/archive?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`;
+export function volumeArchiveUrl(location: ComposePath, source: string, path = '.', access?: VolumeAccess): string {
+  return `${composePath(location)}/volumes/archive?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}${volumeAccessQuery(access)}`;
 }
 
 /**
@@ -255,8 +256,8 @@ export function volumeArchiveUrl(location: ComposePath, source: string, path = '
  * what the editor's `fetch` wants. `volumeReadUrl` adds `download=1` for the
  * toolbar's `<a href>`.
  */
-export function volumeReadApiUrl(location: ComposePath, source: string, path: string): string {
-  return `${composePath(location)}/volumes/read?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`;
+export function volumeReadApiUrl(location: ComposePath, source: string, path: string, access?: VolumeAccess): string {
+  return `${composePath(location)}/volumes/read?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}${volumeAccessQuery(access)}`;
 }
 
 /**
@@ -264,8 +265,8 @@ export function volumeReadApiUrl(location: ComposePath, source: string, path: st
  * response is an attachment and the anchor never navigates the tab. Same rule
  * as the archive: an `<a href>`, never a fetch/blob.
  */
-export function volumeReadUrl(location: ComposePath, source: string, path: string): string {
-  return `${volumeReadApiUrl(location, source, path)}&download=1`;
+export function volumeReadUrl(location: ComposePath, source: string, path: string, access?: VolumeAccess): string {
+  return `${volumeReadApiUrl(location, source, path, access)}&download=1`;
 }
 
 /**
@@ -273,8 +274,8 @@ export function volumeReadUrl(location: ComposePath, source: string, path: strin
  * DELETE share it, with the same `source` + `path` grammar as the read URLs.
  * The body of a PUT is the file's bytes, so the URL never carries content.
  */
-export function volumeContentUrl(location: ComposePath, source: string, path: string): string {
-  return `${composePath(location)}/volumes/content?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`;
+export function volumeContentUrl(location: ComposePath, source: string, path: string, access?: VolumeAccess): string {
+  return `${composePath(location)}/volumes/content?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}${volumeAccessQuery(access)}`;
 }
 
 /**
@@ -283,6 +284,23 @@ export function volumeContentUrl(location: ComposePath, source: string, path: st
  * than refusing the way the write family does. The body is the archive, so the
  * URL never carries content.
  */
-export function volumeRestoreUrl(location: ComposePath, source: string, path = '.'): string {
-  return `${composePath(location)}/volumes/restore?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path || '.')}`;
+export function volumeRestoreUrl(location: ComposePath, source: string, path = '.', access?: VolumeAccess): string {
+  return `${composePath(location)}/volumes/restore?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path || '.')}${volumeAccessQuery(access)}`;
+}
+
+export function volumeAccessQuery(access?: VolumeAccess): string {
+  const query = new URLSearchParams();
+  if (access?.user) {
+    query.set('user', access.user);
+  } else if (access?.service) {
+    query.set('service', access.service);
+  }
+  if (access?.rootConfirmed) {
+    query.set('rootConfirmed', '1');
+  }
+  if (access?.bindConfirmed) {
+    query.set('bindConfirmed', '1');
+  }
+  const encoded = query.toString();
+  return encoded ? `&${encoded}` : '';
 }

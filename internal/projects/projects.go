@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"relist-panel/internal/composes"
 	"relist-panel/internal/environments"
 	"relist-panel/internal/slug"
 )
@@ -24,6 +25,7 @@ const (
 
 type Service struct {
 	repository *repository
+	teardown   *composes.Service
 	now        func() time.Time
 }
 
@@ -48,8 +50,8 @@ type projectInput struct {
 
 // New constructs the Project service over the application's migrated SQLite
 // database.
-func New(db *sql.DB) *Service {
-	return &Service{repository: &repository{db: db}, now: time.Now}
+func New(db *sql.DB, teardown *composes.Service) *Service {
+	return &Service{repository: &repository{db: db}, teardown: teardown, now: time.Now}
 }
 
 // RegisterRoutes adds the authenticated Project endpoints to mux.
@@ -212,6 +214,14 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	id, err := projectID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "project id must be a positive integer")
+		return
+	}
+	if s.teardown == nil {
+		writeError(w, http.StatusInternalServerError, "compose teardown is unavailable")
+		return
+	}
+	if err := s.teardown.TeardownProject(r.Context(), id); err != nil {
+		writeError(w, http.StatusBadGateway, "project teardown failed: "+err.Error())
 		return
 	}
 	deleted, err := s.repository.delete(r.Context(), id)

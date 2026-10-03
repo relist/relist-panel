@@ -32,13 +32,13 @@ func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, histo
 	mux.HandleFunc("GET /healthz", healthz)
 	authService := auth.New(db)
 	authService.RegisterRoutes(mux)
-	projectsService := projects.New(db)
+	composesService := composes.New(db, runner, dataDir)
+	projectsService := projects.New(db, composesService)
 	projectsService.RegisterRoutes(mux)
-	environmentsService := environments.New(db)
+	environmentsService := environments.New(db, composesService)
 	environmentsService.RegisterRoutes(mux)
 	environmentVariablesService := environmentvariables.New(db)
 	environmentVariablesService.RegisterRoutes(mux)
-	composesService := composes.New(db, runner, dataDir)
 	composesService.RegisterRoutes(mux)
 	volumeapi.New(composesService, volumeResolver, volumeRunner).RegisterRoutes(mux)
 	if history != nil && services != nil {
@@ -46,7 +46,7 @@ func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, histo
 		metricsService.RegisterRoutes(mux)
 	}
 	mux.Handle("/", webassets.Handler())
-	return authService.Middleware(mux)
+	return authService.Middleware(newCoordinator().middleware(mux))
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {

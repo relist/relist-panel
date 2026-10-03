@@ -1,4 +1,18 @@
-import type { ComposeLocation } from '../data/types';
+import type { Compose, ComposeLocation } from '../data/types';
+
+/** Use the backend's actual deploy paths; only older API payloads need the legacy fallback. */
+export function composeDeployIdentity(
+  compose: Pick<Compose, 'projectSlug' | 'envSlug' | 'name' | 'deployIdentity'>,
+): { projectName: string; directory: string } {
+  if (compose.deployIdentity) {
+    return compose.deployIdentity;
+  }
+  const name = compose.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'x';
+  return {
+    projectName: `${compose.projectSlug}-${compose.envSlug}-${name}`,
+    directory: `dataDir/${compose.projectSlug}/${compose.envSlug}/${name}`,
+  };
+}
 
 /**
  * View decisions for the Compose screen, kept pure so the design's rules — the

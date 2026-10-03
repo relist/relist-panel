@@ -121,7 +121,7 @@ func main() {
 func knownComposeProjects(db *sql.DB) hostmetrics.KnownProjects {
 	return func(ctx context.Context) (map[string]bool, error) {
 		rows, err := db.QueryContext(ctx, `
-			SELECT project_slug, env_slug, name
+			SELECT id, project_slug, env_slug, name, identity_version
 			FROM composes
 		`)
 		if err != nil {
@@ -132,7 +132,7 @@ func knownComposeProjects(db *sql.DB) hostmetrics.KnownProjects {
 		known := make(map[string]bool)
 		for rows.Next() {
 			var compose composes.Compose
-			if err := rows.Scan(&compose.ProjectSlug, &compose.EnvSlug, &compose.Name); err != nil {
+			if err := rows.Scan(&compose.ID, &compose.ProjectSlug, &compose.EnvSlug, &compose.Name, &compose.IdentityVersion); err != nil {
 				return nil, err
 			}
 			known[compose.DeployProjectName()] = true

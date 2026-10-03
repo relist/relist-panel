@@ -588,3 +588,25 @@ function normalize(path: string): string {
   }
   return out.join('/');
 }
+
+/** A save records sent bytes only in its original editor session, retaining subsequent edits. */
+export function savedEditorState<T extends { session: number; draft: string; original: string }>(
+  current: T | undefined,
+  session: number,
+  sent: string,
+): T | undefined {
+  return current !== undefined && editorSessionCurrent(current, session) ? { ...current, original: sent } : current;
+}
+
+/** A file read can populate the editor only in the context that requested it. */
+export function editorReadCurrent(
+  opening: { request: number; context: string },
+  current: { request: number; context: string },
+): boolean {
+  return opening.request === current.request && opening.context === current.context;
+}
+
+/** Save completion and failure belong only to the editor session that submitted them. */
+export function editorSessionCurrent(current: { session: number } | undefined, session: number): boolean {
+  return current?.session === session;
+}
