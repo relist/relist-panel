@@ -151,9 +151,9 @@ export function ComposeVolumesTab({
             dataIndex: 'uses',
             key: 'uses',
             render: (_value, volume) => (
-              <Flex gap={6} vertical>
+              <Flex gap={8} vertical>
                 {volume.uses.map((use) => (
-                  <Flex align="center" gap={6} key={`${use.service}:${use.target}`}>
+                  <Flex align="center" gap={8} key={`${use.service}:${use.target}`}>
                     <Tag style={{ marginInlineEnd: 0 }}>{use.service}</Tag>
                     <Text type="secondary">→</Text>
                     <CodeValue
@@ -182,7 +182,7 @@ export function ComposeVolumesTab({
               // what the resolution already marked missing.
               const refusal = downloadRefusal(volume);
               return (
-                <Flex gap={4} justify="flex-end" wrap>
+                <Flex gap={8} justify="flex-end" wrap>
                   <Tooltip title={refusal ?? 'Opens this Volume in its own browser tab.'}>
                     <Button
                       disabled={Boolean(refusal)}

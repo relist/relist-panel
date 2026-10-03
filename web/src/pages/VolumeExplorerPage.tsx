@@ -765,7 +765,7 @@ export function VolumeExplorerPage() {
   const header = (
     <PageHeader
       description={
-        <Flex align="center" gap={6} wrap>
+        <Flex align="center" gap={8} wrap>
           <span>
             {project.name} / {environment.name} / {compose.name}
           </span>
@@ -786,7 +786,7 @@ export function VolumeExplorerPage() {
           <Flex align="center" gap={8} wrap>
             <Text type="secondary">Mounted by</Text>
             {volume.uses.map((use) => (
-              <Flex align="center" gap={6} key={`${use.service}:${use.target}`}>
+              <Flex align="center" gap={8} key={`${use.service}:${use.target}`}>
                 <Tag style={{ marginInlineEnd: 0 }}>{use.service}</Tag>
                 <Text type="secondary">→</Text>
                 <Text code style={{ fontSize: 12 }}>
@@ -881,7 +881,7 @@ export function VolumeExplorerPage() {
         return (
           // The row itself navigates on click; the action column must not
           // bubble, or opening a directory would be what a delete click means.
-          <Flex align="center" gap={4} justify="flex-end" onClick={(event) => event.stopPropagation()}>
+          <Flex align="center" gap={8} justify="flex-end" onClick={(event) => event.stopPropagation()}>
             {row.entry.kind === 'file' && (
               <Tooltip title={refusal ?? 'Open this file in the editor'}>
                 <Button
@@ -1019,7 +1019,7 @@ export function VolumeExplorerPage() {
         {editorRefusal && (
           <Alert
             action={
-              <Button href={volumeReadUrl(composePath, source, editorRefusal.path)} size="small">
+              <Button href={volumeReadUrl(composePath, source, editorRefusal.path)}>
                 Download
               </Button>
             }
@@ -1136,10 +1136,10 @@ export function VolumeExplorerPage() {
               </Button>
             ) : undefined
           }
-          style={{ marginBottom: 16 }}
+          style={{ marginBottom: LAYOUT.gutterSmall }}
           title="Operation user"
         >
-          <Flex gap={12} vertical>
+          <Flex gap={LAYOUT.gutterSmall} vertical>
             <Select
               onChange={(value) => {
                 setIdentity(value);
@@ -1206,7 +1206,7 @@ export function VolumeExplorerPage() {
       >
         {restore && (
           <>
-            <ul style={{ marginBottom: 0, paddingInlineStart: 20 }}>
+            <ul style={{ marginBottom: 0, paddingInlineStart: LAYOUT.gutter }}>
               {restore.disclosure.points.map((point) => (
                 <li key={point}>{point}</li>
               ))}
