@@ -49,9 +49,9 @@ zip for download only would leave two archive formats, one with no restore story
   any Compose project and invisible to `docker compose down` on the install stack — but they are
   ephemeral and self-removing, so the panel's only lifecycle duty is killing an in-flight child when
   the HTTP request is cancelled, not stopping containers left over from an earlier run.
-- **ADR-0003's "exactly one port/adapter pair in the whole system" still becomes two.** The new
-  runner seam — it builds and runs `docker run --rm` invocations — is faked in tests, as
-  `ComposeRunner` is.
+- **ADR-0003's "exactly one port/adapter pair in the whole system" becomes three.** Two new seams
+  are faked in tests, as `ComposeRunner` is: `volumes.CLI` (resolution through `docker compose
+  config` and `docker volume inspect`) and `volumes.Runner` (the `docker run --rm` invocations).
 - **Tickets 04 and 10 of `.scratch/volume-files/` are closed by this decision.** Ticket 04 (handle
   lifecycle and the container run spec) has no lifecycle left to build, and ticket 10's banner has
   nothing to list. Ticket 10's audit rows are deferred: single admin, no viewer screen yet; additive

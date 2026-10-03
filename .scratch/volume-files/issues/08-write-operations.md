@@ -12,7 +12,7 @@ the safety story for it.
 - [x] Delete a file or a whole directory tree, permanent and confirmed by a `Popconfirm` naming the path (`docs/GUIDELINES.md` §6). There is no trash: a hidden trash directory inside the Volume would be visible to the application using it
 - [x] Every write is POST, PUT or DELETE — never GET — so the `SameSite=Lax` session cookie keeps them CSRF-safe
 - [x] When any Service in the Compose is running, the Explorer states that writing can corrupt a live stack, naming the consequence and the affected Services. The write is deliberately **not** gated behind an acknowledgement, so this banner is the only control here: it must name the consequence rather than say "be careful"
-- [ ] Deliberately not in v1: create an empty file, mkdir, rename or move, copy/duplicate, a chmod/chown editor, search, previews, multi-select, drag-and-drop, symlink creation
+- [x] After the plan: New folder (`mkdir`) and New file (`create`) were added at the operator's request — the spec, HTTP surface, helper and Explorer dialog shipped together in `dbfd35b` — leaving rename or move, copy/duplicate, a chmod/chown editor, search, previews, multi-select, drag-and-drop and symlink creation deliberately out of v1
 - [x] HTTP-seam tests with a faked runner asserting the argv for each write, and that the running-stack banner's condition is computed from the Compose's own status
 
 ## Comments

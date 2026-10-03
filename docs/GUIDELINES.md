@@ -92,7 +92,7 @@ Host-level dashboard. Purpose: answer "is anything broken?" in one screen.
   one-line hint underneath.
 - **Needs attention** list: every Compose that is partly running, stopped after a successful deploy,
   or has an unhealthy service, with the offending service named and a single `Open` action.
-- **Recent activity** timeline: who did what, to which stack, when.
+- **Recent activity** timeline: who did what, to which Compose, when.
 - **All Composes** table: flat view across Projects with Project/Environment, container counts and
   last-edited time. This is the operator's index when they do not remember which Project holds what.
 
@@ -273,7 +273,9 @@ UI — is the enforcer.
   a zip restore would need random access, and a download-only format would have no restore story.
 - **The operation user is confirmed, not inferred.** The Explorer resolves the `--user` identity — a mounting
   Service's resolved `user:`, or a numeric uid:gid — behind an explicit Confirm, and nothing is listed, read or
-  written until it is pressed; root and an unverifiable bind each need their own acknowledgement first. A change to
+  written until it is pressed; root and an unverifiable bind each need their own acknowledgement first. A Service
+  whose resolved `user:` is not itself a numeric uid:gid cannot be confirmed: `--user` resolves a name against the
+  helper image, not the Service's own — the card says so and asks for the explicit numeric override. A change to
   the form keeps the confirmed snapshot in force until Confirm is pressed again. The Volumes tab only launches the
   Explorer; it starts no archive itself.
 - **Creating entries is one operation per dialog.** New folder (`mkdir`) and New file (`create`) are one dialog
