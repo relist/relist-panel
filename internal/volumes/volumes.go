@@ -110,6 +110,16 @@ func (e *ExistsError) Error() string {
 	return e.Message
 }
 
+// The helper's exit codes for the typed refusals above — 3 for a refusal
+// before any work, 4 for a refused archive, 5 for a name already taken. They
+// live here, next to the error types the runner maps them to, so the helper
+// that exits with them and the runner that reads them cannot skew.
+const (
+	RefusalExitCode        = 3
+	ArchiveRefusedExitCode = 4
+	ExistsExitCode         = 5
+)
+
 // Runner is the seam that turns one operation into one helper run. Run
 // streams the operation's bytes over stdin/stdout — write and extract consume
 // stdin, read and archive produce stdout — and returns an error with the

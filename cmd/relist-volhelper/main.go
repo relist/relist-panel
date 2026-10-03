@@ -33,6 +33,7 @@ import (
 	"strconv"
 
 	"relist-panel/internal/volfs"
+	"relist-panel/internal/volumes"
 )
 
 // dataDir is where the panel mounts the one Volume this run may touch — the
@@ -57,18 +58,19 @@ mkdir creates one directory; create creates one empty file. Neither replaces an 
 extract consumes a tar.gz on stdin and writes it into the existing directory <path>.
 `
 
-// The helper's exit codes: 0 for success, 1 when an operation failed, 2 when
-// the invocation itself was refused, 3 when a write is refused for want of
-// space, 4 when an extract refuses the client's archive, and 5 when a create
-// refuses a name that is already taken. Any non-zero code is a failure to the
-// panel; the split only sharpens the helper's own diagnostics.
+// The helper's exit codes: 0 for success, 1 when an operation failed and 2
+// when the invocation itself was refused. The typed refusals — 3 for want of
+// space, 4 for a refused archive and 5 for a name already taken — are
+// declared in volumes, next to the error types the panel maps them to, so
+// helper and runner cannot skew. Any non-zero code is a failure to the panel;
+// the split only sharpens the helper's own diagnostics.
 const (
 	exitOK             = 0
 	exitError          = 1
 	exitUsage          = 2
-	exitRefused        = 3
-	exitArchiveRefused = 4
-	exitExists         = 5
+	exitRefused        = volumes.RefusalExitCode
+	exitArchiveRefused = volumes.ArchiveRefusedExitCode
+	exitExists         = volumes.ExistsExitCode
 )
 
 func main() {

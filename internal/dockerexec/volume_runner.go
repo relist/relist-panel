@@ -24,23 +24,11 @@ const helperEntrypoint = "/usr/local/bin/relist-volhelper"
 // `docker inspect` cannot answer (ADR-0010): the operator names it directly.
 const panelImageEnv = "RELIST_IMAGE"
 
-// helperRefusedExitCode is the helper's exitRefused (3): it refused before
-// doing the work, so the run carries a volumes.RefusalError. Exit 1 and 2 —
-// operation failure and malformed invocation — stay ordinary failures, and
-// docker run propagates the container's own exit code.
-const helperRefusedExitCode = 3
-
-// helperArchiveRefusedExitCode is the helper's exitArchiveRefused (4): the
-// bytes on stdin were not a usable tar.gz, named an entry unsafe to write, or
-// ran past a restore cap — the client's body's fault, not the Volume's — so
-// the run carries a volumes.ArchiveRefusedError for the HTTP layer's 422.
-const helperArchiveRefusedExitCode = 4
-
-// helperExistsExitCode is the helper's exitExists (5): the mkdir or create
-// named an entry that is already there, so the run carries a
-// volumes.ExistsError for the HTTP layer's 409 — the name is the request's,
-// not the Volume's failure.
-const helperExistsExitCode = 5
+// The refusal exit codes are volumes' (RefusalExitCode, ArchiveRefusedExitCode,
+// ExistsExitCode), next to the error types each maps to, so helper and runner
+// share one source. Exit 1 and 2 — operation failure and malformed invocation —
+// stay ordinary failures, and docker run propagates the container's own exit
+// code.
 
 // exitCoder is the shape a failed child leaves behind: *exec.ExitError
 // carries the exit code docker propagated from the helper. It is declared as
@@ -96,20 +84,20 @@ func (r *VolumeRunner) Run(ctx context.Context, req volumes.Request, stdin io.Re
 		var exit exitCoder
 		if errors.As(err, &exit) {
 			switch exit.ExitCode() {
-			case helperRefusedExitCode:
+			case volumes.RefusalExitCode:
 				// The helper refused before doing the work (the spec's
 				// Caps): its message is the whole story — need versus
 				// available — and the HTTP layer answers 507 rather than
 				// 502.
 				return &volumes.RefusalError{Message: message}
-			case helperArchiveRefusedExitCode:
+			case volumes.ArchiveRefusedExitCode:
 				// The helper refused the bytes it was fed (the spec's
 				// Restore): an unsafe entry, a restore cap exceeded, or a
 				// body that is not a usable tar.gz. The body is the
 				// client's, and the HTTP layer answers 422 rather than
 				// 502.
 				return &volumes.ArchiveRefusedError{Message: message}
-			case helperExistsExitCode:
+			case volumes.ExistsExitCode:
 				// A create found the name taken (the spec's v1 operation
 				// set): mkdir merges nothing and create never overwrites, so
 				// the HTTP layer answers 409 rather than 502.
