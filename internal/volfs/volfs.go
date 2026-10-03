@@ -5,9 +5,12 @@
 // hardlinks table).
 //
 // Paths are always relative to the Volume root and are handed to os.Root
-// unchanged. `..`, absolute paths and `dir/../../x` all fail with os.Root's
-// own "path escapes from parent"; a symlink that stays inside the root is
-// followed, and one that points outside is listed but refused on open.
+// unchanged. Absolute paths and `dir/../../x` fail with os.Root's own "path
+// escapes from parent", but a bare `..` — `sub/..` — must not reach
+// RemoveAll: it empties the root and only then reports `invalid argument`
+// (verified against Go 1.27.1), so Delete refuses that shape itself. A
+// symlink that stays inside the root is followed, and one that points outside
+// is listed but refused on open.
 // Production opens the helper's mount at /data; tests open a t.TempDir().
 //
 // Bytes are streamed: Read and Write never hold a whole file in memory, and
@@ -248,11 +251,34 @@ func (fs *FS) Create(name string, perm fs.FileMode) error {
 }
 
 // Delete removes one path: a file, a symlink, or a whole directory tree. The
-// root itself is never deletable — os.Root refuses — and a path that does not
-// exist is a no-op, both matching RemoveAll.
+// root itself is never deletable, and neither is any path carrying a `..`
+// segment: os.Root.RemoveAll("sub/..") empties the root before it returns
+// `invalid argument` (verified against Go 1.27.1), so RemoveAll must never
+// see one. A path that does not exist is a no-op, matching RemoveAll.
 func (fs *FS) Delete(name string) error {
+	if err := removableName(name); err != nil {
+		return err
+	}
 	if err := fs.root.RemoveAll(name); err != nil {
 		return fmt.Errorf("delete %q: %w", name, err)
+	}
+	return nil
+}
+
+// removableName refuses what RemoveAll must never be handed: the root under
+// any spelling, and any path carrying a `..` segment. The root's containment
+// is not enough here — this is the one shape it gets wrong.
+func removableName(name string) error {
+	if name == "" {
+		return fmt.Errorf("delete: empty path")
+	}
+	for _, segment := range strings.Split(name, "/") {
+		if segment == ".." {
+			return fmt.Errorf("delete %q: paths must not contain a .. segment", name)
+		}
+	}
+	if path.Clean(name) == "." {
+		return fmt.Errorf("delete %q: the volume root is not deletable", name)
 	}
 	return nil
 }

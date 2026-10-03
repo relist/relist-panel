@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -118,7 +119,14 @@ func (s *Service) operationOf(w http.ResponseWriter, r *http.Request, op volumes
 		writeError(w, http.StatusBadRequest, err.Error())
 		return volumes.Request{}, volumes.Volume{}, false
 	}
-	uid, _ := strconv.ParseUint(strings.Split(user, ":")[0], 10, 32)
+	uid, err := strconv.ParseUint(strings.Split(user, ":")[0], 10, 32)
+	if err != nil {
+		// operationUser guarantees a numeric uid:gid; this branch would be a
+		// bug, and a request must never fall through to an acknowledgement it
+		// did not earn.
+		writeError(w, http.StatusBadRequest, "user must be <uid>:<gid>")
+		return volumes.Request{}, volumes.Volume{}, false
+	}
 	if uid == 0 && r.URL.Query().Get("rootConfirmed") != "1" {
 		writeError(w, http.StatusBadRequest, "root user requires rootConfirmed=1 acknowledgement")
 		return volumes.Request{}, volumes.Volume{}, false
@@ -152,16 +160,17 @@ func volumeBySource(resolved []volumes.Volume, source string) (volumes.Volume, b
 }
 
 // operationUser requires a selected mounting Service or an explicit numeric
-// uid:gid override. operationOf separately acknowledges every UID 0 result.
+// uid:gid override. A Service's resolved `user:` must itself be a numeric
+// uid:gid: `--user` resolves a name against the helper image's /etc/passwd,
+// not the Service's own image, so a name (or a bare uid) is refused rather
+// than guessed at. operationOf separately acknowledges every UID 0 result.
 func operationUser(query url.Values, volume volumes.Volume, users []volumes.ServiceUser) (string, error) {
 	if explicit := query.Get("user"); explicit != "" {
 		if !userPattern.MatchString(explicit) {
 			return "", errors.New("user must be <uid>:<gid>")
 		}
-		for _, id := range strings.Split(explicit, ":") {
-			if _, err := strconv.ParseUint(id, 10, 32); err != nil {
-				return "", errors.New("user must contain valid numeric uid:gid")
-			}
+		if !numericUser(explicit) {
+			return "", errors.New("user must contain valid numeric uid:gid")
 		}
 		return explicit, nil
 	}
@@ -187,6 +196,9 @@ func operationUser(query url.Values, volume volumes.Volume, users []volumes.Serv
 		}
 		for _, candidate := range users {
 			if candidate.Service == service {
+				if !numericUser(candidate.User) {
+					return "", fmt.Errorf("service %q resolves to user %q, which is not a numeric uid:gid; use an explicit user override", service, candidate.User)
+				}
 				return candidate.User, nil
 			}
 		}
@@ -196,19 +208,56 @@ func operationUser(query url.Values, volume volumes.Volume, users []volumes.Serv
 	return "", errors.New("select a mounting service or explicit user <uid>:<gid>")
 }
 
+// numericUser reports whether user is the numeric uid:gid pair `--user`
+// accepts, both segments within uint32. Compose `user:` accepts names and bare
+// uids too; neither can be passed through unchanged.
+func numericUser(user string) bool {
+	if !userPattern.MatchString(user) {
+		return false
+	}
+	for _, id := range strings.Split(user, ":") {
+		if _, err := strconv.ParseUint(id, 10, 32); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 // operationPath interprets the path query exactly one way: absent or empty is
-// the Volume root, an absolute path is refused before any helper run, and
-// everything else is passed through untouched — there is no shell between
+// the Volume root, an absolute path is refused before any helper run, and a
+// path carrying a `..` segment — or one that resolves to the root without
+// naming it — is refused too. That last check is not redundancy: os.Root's
+// RemoveAll("sub/..") empties the root and only then reports `invalid argument`
+// (verified against Go 1.27.1), so no request may smuggle the shape through.
+// Everything else is passed through untouched — there is no shell between
 // the request and the helper (ADR-0010).
 func operationPath(query url.Values) (string, error) {
-	path := query.Get("path")
-	if path == "" {
+	name := query.Get("path")
+	if name == "" {
 		return ".", nil
 	}
-	if strings.HasPrefix(path, "/") {
+	if strings.HasPrefix(name, "/") {
 		return "", errors.New("path must be relative to the volume root")
 	}
-	return path, nil
+	if err := checkRelativePath(name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// checkRelativePath refuses the shapes os.Root itself mishandles for RemoveAll:
+// any `..` segment, and a path that resolves to the root without naming it.
+// volfs.Delete refuses them again at the deepest layer.
+func checkRelativePath(name string) error {
+	for _, segment := range strings.Split(name, "/") {
+		if segment == ".." {
+			return errors.New(`path must not contain a ".." segment`)
+		}
+	}
+	if name != "." && path.Clean(name) == "." {
+		return errors.New("path must not resolve to the volume root")
+	}
+	return nil
 }
 
 // operationContentPath is operationPath for the write family: a write or a
@@ -217,14 +266,14 @@ func operationPath(query url.Values) (string, error) {
 // directory is the helper's business: the panel cannot tell without running
 // it, and the write fails cleanly if it is not.
 func operationContentPath(query url.Values) (string, error) {
-	path, err := operationPath(query)
+	name, err := operationPath(query)
 	if err != nil {
 		return "", err
 	}
-	if path == "." {
+	if name == "." {
 		return "", errors.New("path must name a file or directory, not the volume root")
 	}
-	return path, nil
+	return name, nil
 }
 
 // metadata answers list and stat: the helper's JSON. stdout is buffered so a

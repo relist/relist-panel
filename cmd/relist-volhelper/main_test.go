@@ -484,11 +484,13 @@ func TestAbsolutePathsAreRefusedBeforeAnyFilesystemCall(t *testing.T) {
 
 // TestDeleteRemovesAFileAndAWholeTree drives delete through the helper: a
 // tree disappears, a missing path is the no-op RemoveAll semantics already
-// promise, and the root itself is refused.
+// promise, and the root itself — as "." or disguised as "guard/.." — is
+// refused.
 func TestDeleteRemovesAFileAndAWholeTree(t *testing.T) {
 	root := t.TempDir()
 	plant(t, root, "file.txt", []byte("x"))
 	plant(t, root, "tree/deep/nested.txt", []byte("nested"))
+	plant(t, root, "guard/inside.txt", []byte("guard"))
 
 	code, stdout, stderr := runHelper(t, root, nil, "delete", "--", "tree")
 	if code != 0 {
@@ -512,6 +514,16 @@ func TestDeleteRemovesAFileAndAWholeTree(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "file.txt")); err != nil {
 		t.Errorf("delete . damaged the root: %v", err)
+	}
+
+	if code, _, stderr := runHelper(t, root, nil, "delete", "--", "guard/.."); code == 0 {
+		t.Errorf("delete guard/.. exit = 0, stderr = %q; want the disguised root refused", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(root, "guard", "inside.txt")); err != nil {
+		t.Errorf("delete guard/.. damaged the root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "file.txt")); err != nil {
+		t.Errorf("delete guard/.. damaged a sibling: %v", err)
 	}
 }
 

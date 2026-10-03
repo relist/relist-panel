@@ -154,7 +154,10 @@ relist-volhelper archive --format tar.gz -- <relpath> # bytes on stdout
 relist-volhelper extract -- <relpath>                 # tar.gz on stdin
 ```
 
-Paths are **relative to `/data`**, always. The helper rejects absolute paths outright. Metadata
+Paths are **relative to `/data`**, always, and are refused before any run if they are absolute,
+carry a `..` segment, or resolve to the root without naming it: `os.Root.RemoveAll("sub/..")`
+empties the root before it reports `invalid argument` (Go 1.27.1), so the panel's path rule and
+`volfs.Delete` both refuse the shape — the root alone does not. Metadata
 operations return JSON on stdout; `read` and `archive` return raw bytes and `extract` consumes them.
 Read operations mount `:ro`; `write`, `delete`, `extract`, `mkdir` and `create` mount `:rw`.
 
@@ -288,7 +291,11 @@ One rule, resolved before the first operation and passed to every `docker run` a
 
 Root is a deliberate opt-in, never a default. The UI shows the resolved value and lets the operator
 override it. Every operation accepts `service` or a numeric `user=uid:gid`; the chosen
-Service must mount the requested Volume. UID 0 requires `rootConfirmed=1`, and an
+Service must mount the requested Volume. A Service's resolved `user:` that is not itself a numeric
+uid:gid — a name such as `postgres`, or a bare uid — is refused (HTTP 400, explained in the
+Explorer): `--user` resolves a name against the helper image's `/etc/passwd`, not the Service's own
+image, and a bare uid's group is image-dependent too, so the operator must supply the explicit
+numeric override instead. UID 0 requires `rootConfirmed=1`, and an
 unverifiable bind requires `bindConfirmed=1`, checked before the helper runs.
 The Explorer asks for these acknowledgements once, behind its Operation user Confirm; it is the
 only place an archive starts, and nothing is listed or downloaded before the operator confirms.
@@ -312,10 +319,11 @@ Rules:
   `/` or `..` in an entry name is how a *download* becomes a write outside the destination on
   whoever extracts it.
 - **Symlinks are stored as symlinks**, faithfully. The alternative silently produces an archive that
-  differs from the Volume, and a restore from it loses data without saying so. Because the tree is
-  walked anyway, the Explorer can state before the download how many symlinks the archive will hold
-  and how many of them point outside the Volume — the extraction-time hazard is disclosed rather
-  than hidden. The fix for that hazard is at extraction (see Restore), not in whether we record the
+  differs from the Volume, and a restore from it loses data without saying so. The Explorer marks
+  each symlink that points outside the Volume as it lists it, so the extraction-time hazard is
+  disclosed where the operator acts; a pre-download count was dropped with ticket 06 — it would need
+  a second full walk to know before the streaming archive's own walk does. The fix for that hazard is
+  at extraction (see Restore), not in whether we record the
   data honestly.
 - **Hardlinks are written as regular files**, never as hardlink entries. That sidesteps the hardlink
   tar-slip vector entirely at the cost of a larger archive, and Go's `FileInfoHeader` cannot express

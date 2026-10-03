@@ -6,6 +6,7 @@ import {
   downloadRefusal,
   isNotDeployed,
   resolvedVolumePath,
+  serviceUserRefusal,
   volumeLabel,
   volumeWarnings,
   volumesView,
@@ -145,5 +146,17 @@ describe('cliMessage and isNotDeployed', () => {
       "couldn't find env file: /data/.env",
     );
     expect(cliMessage('volume list failed: exit status 1')).toBe('volume list failed: exit status 1');
+  });
+});
+
+describe('serviceUserRefusal', () => {
+  it('refuses a name or a bare uid, which the helper image cannot resolve safely', () => {
+    expect(serviceUserRefusal('postgres')).toContain('not a numeric uid:gid');
+    expect(serviceUserRefusal('1000')).toContain('not a numeric uid:gid');
+  });
+
+  it('leaves the numeric uid:gid the API and the helper accept alone', () => {
+    expect(serviceUserRefusal('999:998')).toBeUndefined();
+    expect(serviceUserRefusal(undefined)).toBeUndefined();
   });
 });

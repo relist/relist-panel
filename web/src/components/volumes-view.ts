@@ -102,6 +102,19 @@ export function volumeIdentityValid(user: string | undefined): user is string {
   );
 }
 
+/**
+ * Why a Service's resolved user cannot be the operation identity, if it
+ * cannot. `--user` resolves a name (and a bare uid's group) against the
+ * helper image's `/etc/passwd`, not the Service's own, so only an explicit
+ * numeric uid:gid is safe to run as; the API refuses the same shapes.
+ */
+export function serviceUserRefusal(user: string | undefined): string | undefined {
+  if (user === undefined || volumeIdentityValid(user)) {
+    return undefined;
+  }
+  return `This Service’s resolved user is ${user}, which is not a numeric uid:gid. The helper cannot run as a name or a bare uid — pick “Numeric uid:gid override” and enter the account this Service actually runs as.`;
+}
+
 /** Both the Explorer and direct archive launcher gate every mount on these risks. */
 export function volumeAccessReady(
   user: string | undefined,

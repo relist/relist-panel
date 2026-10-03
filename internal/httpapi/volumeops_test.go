@@ -352,17 +352,52 @@ func TestVolumeOperationsResolveTheUser(t *testing.T) {
 	}
 }
 
+// A Service whose resolved `user:` is a name, or a bare uid, cannot become an
+// operation identity: `--user` resolves it against the helper image, not the
+// Service's own, so the request is refused rather than guessed at.
+func TestVolumeOperationsRefuseNonNumericServiceUsers(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	for _, user := range []string{"postgres", "1000"} {
+		t.Run(user, func(t *testing.T) {
+			server.volumeCLI.ComposeConfigOutput = []byte(fmt.Sprintf(`{
+				"services": {"db": {"user": %q, "volumes": [{"type": "volume", "source": "pgdata", "target": "/data"}]}},
+				"volumes": {"pgdata": {"name": "demoapp_pgdata"}}
+			}`, user))
+			before := len(server.volumeRunner.Calls)
+
+			response := server.request(t, http.MethodGet, volumeOpPath(fixture, "list", url.Values{
+				"source":  {"demoapp_pgdata"},
+				"service": {"db"},
+			}), nil)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusBadRequest {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusBadRequest, body)
+			}
+			assertErrorContains(t, response, "not a numeric uid:gid")
+			if len(server.volumeRunner.Calls) != before {
+				t.Errorf("runner calls = %+v, want none for a non-numeric service user", server.volumeRunner.Calls[before:])
+			}
+		})
+	}
+}
+
 // Paths are relative to the Volume root, one way only: absent or empty is the
-// root, an absolute path is a 400 before any run, and everything else — a
-// leading `-`, a newline, even `..` for the helper and the kernel to refuse —
-// is passed through untouched.
+// root, an absolute path is a 400 before any run, and a path carrying a `..`
+// segment — or one that resolves to the root without being it — is refused
+// too: os.Root.RemoveAll("sub/..") empties the root before it reports the
+// escape (Go 1.27.1). Everything else — a leading `-`, a newline — is passed
+// through untouched.
 func TestVolumeOperationsInterpretPathsRelativeToTheRoot(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
 	fixture := setupExplorerCompose(t, server)
 	server.volumeRunner.Stdout = "{}"
 
-	for _, path := range []string{"-dash", "nested/with\nnewline", "dir/file.txt", ".."} {
+	for _, path := range []string{"-dash", "nested/with\nnewline", "dir/file.txt"} {
 		response := server.request(t, http.MethodGet, volumeOpPath(fixture, "list", url.Values{
 			"source": {"demoapp_pgdata"},
 			"path":   {path},
@@ -412,6 +447,25 @@ func TestVolumeOperationsInterpretPathsRelativeToTheRoot(t *testing.T) {
 	assertErrorContains(t, absolute, "relative to the volume root")
 	if len(server.volumeRunner.Calls) != before {
 		t.Errorf("runner calls = %+v, want an absolute path refused without a run", server.volumeRunner.Calls[before:])
+	}
+
+	dotsBefore := len(server.volumeRunner.Calls)
+	for _, path := range []string{"..", "sub/..", "sub/../b", "./.", "sub/../.."} {
+		t.Run("refuses "+path, func(t *testing.T) {
+			response := server.request(t, http.MethodGet, volumeOpPath(fixture, "list", url.Values{
+				"source": {"demoapp_pgdata"},
+				"path":   {path},
+			}), nil)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusBadRequest {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("path %q status = %d, want %d, body = %s", path, response.StatusCode, http.StatusBadRequest, body)
+			}
+			assertErrorContains(t, response, "path must")
+		})
+	}
+	if len(server.volumeRunner.Calls) != dotsBefore {
+		t.Errorf("runner calls = %+v, want dot paths refused without a run", server.volumeRunner.Calls[dotsBefore:])
 	}
 }
 
@@ -1326,6 +1380,36 @@ func TestVolumeContentRefusesTheRootPath(t *testing.T) {
 	}
 	if len(server.volumeRunner.Calls) != 0 {
 		t.Errorf("runner calls = %+v, want none for the volume root", server.volumeRunner.Calls)
+	}
+}
+
+// A path that resolves to the root without being "." is refused before any
+// run: os.Root.RemoveAll("sub/..") empties the root before it reports the
+// escape (Go 1.27.1), so delete must never see one — and write refuses the
+// same shapes so the path rule stays one rule.
+func TestVolumeContentRefusesPathsThatResolveToTheRoot(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+
+	for _, path := range []string{"sub/..", "sub/../b", "./.", "sub/../.."} {
+		for _, method := range []string{http.MethodPut, http.MethodDelete} {
+			t.Run(method+" "+path, func(t *testing.T) {
+				response := contentRequest(t, server, method, contentPath(fixture, url.Values{
+					"source": {"demoapp_pgdata"},
+					"path":   {path},
+				}))
+				defer response.Body.Close()
+				if response.StatusCode != http.StatusBadRequest {
+					body, _ := io.ReadAll(response.Body)
+					t.Fatalf("status = %d, want %d, body = %s", response.StatusCode, http.StatusBadRequest, body)
+				}
+				assertErrorContains(t, response, "path must")
+			})
+		}
+	}
+	if len(server.volumeRunner.Calls) != 0 {
+		t.Errorf("runner calls = %+v, want none for disguised root paths", server.volumeRunner.Calls)
 	}
 }
 

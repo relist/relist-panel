@@ -86,3 +86,8 @@ request and a ~10-minute deadline; it also pins 502-before/committed-after
 failures, membership and pre-flight refusals with no run, the 503, and
 `download=1` vs plain read; `contentDisposition` and `archiveName` have their
 own unit tables.
+
+**Post-review:** the path rule is narrower: any `..` segment, or a path that resolves to the root
+without naming it, is a 400 before any run. `os.Root.RemoveAll("sub/..")` empties the root before it
+reports `invalid argument` (Go 1.27.1), so `volfs.Delete` refuses the shape as well. The spec's
+Protocol section was amended in the same change.

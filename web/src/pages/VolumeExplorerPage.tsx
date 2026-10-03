@@ -43,7 +43,7 @@ import { paths } from '../app/paths';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { CodeValue, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { VolumeFileEditor } from '../components/VolumeFileEditor';
-import { resolvedVolumePath, volumeLabel, volumeAccessReady, volumeIdentityValid } from '../components/volumes-view';
+import { resolvedVolumePath, volumeLabel, volumeAccessReady, volumeIdentityValid, serviceUserRefusal } from '../components/volumes-view';
 import { volumeAccessQuery, volumeArchiveUrl, volumeReadUrl } from '../data/api';
 import { usePanel } from '../data/store';
 import type { ComposeVolumes, VolumeAccess, VolumeEntry } from '../data/types';
@@ -231,6 +231,7 @@ export function VolumeExplorerPage() {
   const chosen = mountingUsers.find((candidate) => candidate.service === identity);
   const operationIdentity = identity === '__override' ? override : chosen?.user;
   const identityValid = volumeIdentityValid(operationIdentity);
+  const chosenRefusal = serviceUserRefusal(chosen?.user);
   const rootRequired = identityValid && Number(operationIdentity?.split(':')[0]) === 0;
   const riskKey = `${composeId}:${source}:${identityVolume?.preflight.status}:${identityVolume?.preflight.warning}`;
   const identityKey = `${riskKey}:${identity}:${operationIdentity}`;
@@ -961,7 +962,7 @@ export function VolumeExplorerPage() {
       <Alert
         action={<Button onClick={() => void fetchResolution()}>Retry</Button>}
         description={view.message}
-        message="Could not resolve this Compose’s Volumes"
+        title="Could not resolve this Compose’s Volumes"
         showIcon
         type="error"
       />
@@ -986,7 +987,7 @@ export function VolumeExplorerPage() {
         title={<Crumbs onGo={goTo} path={path} root={volumeLabel(view.volume)} />}
         variant="outlined"
       >
-        <Alert description={view.message} message="This Volume’s source is missing" showIcon type="error" />
+        <Alert description={view.message} title="This Volume’s source is missing" showIcon type="error" />
       </Card>
     );
   } else {
@@ -999,7 +1000,7 @@ export function VolumeExplorerPage() {
         {runningWarning && (
           <Alert
             description={runningWarning.description}
-            message={runningWarning.message}
+            title={runningWarning.message}
             showIcon
             style={{ marginBottom: LAYOUT.gutterSmall }}
             type="warning"
@@ -1007,10 +1008,9 @@ export function VolumeExplorerPage() {
         )}
         {failure && (
           <Alert
-            afterClose={() => setOpenError(undefined)}
-            closable
+            closable={{ afterClose: () => setOpenError(undefined) }}
             description={failure.description}
-            message={failure.message}
+            title={failure.message}
             showIcon
             style={{ marginBottom: LAYOUT.gutterSmall }}
             type={openError && isSymlink(openError.entry) && isEscapeRefusal(openError.error) ? 'warning' : 'error'}
@@ -1023,10 +1023,9 @@ export function VolumeExplorerPage() {
                 Download
               </Button>
             }
-            afterClose={() => setEditorRefusal(undefined)}
-            closable
+            closable={{ afterClose: () => setEditorRefusal(undefined) }}
             description={editorRefusal.failure.description}
-            message={editorRefusal.failure.message}
+            title={editorRefusal.failure.message}
             showIcon
             style={{ marginBottom: LAYOUT.gutterSmall }}
             type="info"
@@ -1034,10 +1033,9 @@ export function VolumeExplorerPage() {
         )}
         {writeError && (
           <Alert
-            afterClose={() => setWriteError(undefined)}
-            closable
+            closable={{ afterClose: () => setWriteError(undefined) }}
             description={writeError.description}
-            message={writeError.message}
+            title={writeError.message}
             showIcon
             style={{ marginBottom: LAYOUT.gutterSmall }}
             type="error"
@@ -1080,7 +1078,7 @@ export function VolumeExplorerPage() {
             <Alert
               action={<Button onClick={() => void loadList()}>Retry</Button>}
               description={currentListing.error}
-              message="Could not read this directory"
+              title="Could not read this directory"
               showIcon
               type="error"
             />
@@ -1169,7 +1167,8 @@ export function VolumeExplorerPage() {
                 value={override}
               />
             )}
-            {chosen?.warning && <Alert message={chosen.warning} showIcon type="warning" />}
+            {chosenRefusal && <Alert showIcon title={chosenRefusal} type="warning" />}
+            {chosen?.warning && <Alert showIcon title={chosen.warning} type="warning" />}
             {rootRequired && (
               <Checkbox
                 checked={rootAck === identityKey}

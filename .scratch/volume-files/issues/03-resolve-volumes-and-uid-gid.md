@@ -47,3 +47,8 @@ output and a `couldn't find env file` failure both surface as errors; every pre-
 outcome, with the volume check faked and `t.TempDir()` as the data directory. The CLI's
 resolution behaviour was verified directly against real Docker 29 (relative bind →
 the Compose file's directory, `${VAR}` from the env file, unreferenced volumes pruned).
+
+**Post-review:** a Service's resolved `user:` must itself be a numeric `uid:gid`. Compose accepts
+names (`postgres`) and bare uids, and `--user` would resolve either against the helper image's
+`/etc/passwd`, not the Service's own — so the API answers 400 and the Explorer explains, asking for
+the explicit numeric override. The spec's UID/GID section was amended in the same change.

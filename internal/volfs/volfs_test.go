@@ -102,7 +102,6 @@ func TestEscapingPathsFailWithGoRootsOwnError(t *testing.T) {
 		{"Read dir/../../x", func() error { return f.Read("dir/../../secret.txt", io.Discard) }},
 		{"Write ..", func() error { return f.Write("../escaped.txt", strings.NewReader("x")) }},
 		{"Write absolute", func() error { return f.Write(absoluteTarget, strings.NewReader("x")) }},
-		{"Delete ..", func() error { return f.Delete("../secret.txt") }},
 		{"Delete absolute", func() error { return f.Delete("/etc/passwd") }},
 	}
 	for _, op := range ops {
@@ -397,13 +396,17 @@ func TestFreeBytesReportsTheRootsFilesystem(t *testing.T) {
 }
 
 // Delete removes a file and a whole tree, removes a symlink without touching
-// its target, refuses the root itself, and treats an already-absent path as
-// the no-op RemoveAll is.
+// its target, refuses the root itself under every spelling, and treats an
+// already-absent path as the no-op RemoveAll is. A `..` segment never reaches
+// RemoveAll: os.Root.RemoveAll("sub/..") empties the root before it reports
+// `invalid argument` (Go 1.27.1), so the guard is the load-bearing check for
+// that one shape.
 func TestDeleteRemovesFilesSymlinksAndTrees(t *testing.T) {
 	f := newFixture(t)
 	f.plant(t, "file.txt", "x")
 	f.plant(t, "tree/a.txt", "a")
 	f.plant(t, "tree/deep/b.txt", "b")
+	f.plant(t, "guard/inside.txt", "guard")
 	f.plant(t, "keep.txt", "keep")
 	f.link(t, "keep.txt", "link-keep")
 
@@ -434,6 +437,19 @@ func TestDeleteRemovesFilesSymlinksAndTrees(t *testing.T) {
 	}
 	if _, err := f.Stat("keep.txt"); err != nil {
 		t.Errorf("Delete(\".\") damaged the root: %v", err)
+	}
+
+	// The disguised root: `guard/..` resolves to the root, and RemoveAll would
+	// empty it. Every spelling is refused, and nothing under it moves.
+	for _, name := range []string{"guard/..", "guard/../..", "./.", "../secret.txt"} {
+		if err := f.Delete(name); err == nil {
+			t.Errorf("Delete(%q) = nil, want the root to survive", name)
+		}
+	}
+	for _, kept := range []string{"guard/inside.txt", "keep.txt"} {
+		if _, err := f.Stat(kept); err != nil {
+			t.Errorf("Delete of a disguised root damaged %s: %v", kept, err)
+		}
 	}
 
 	if err := f.Delete("never-existed"); err != nil {
