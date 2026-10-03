@@ -114,17 +114,9 @@ func (s *Service) operationOf(w http.ResponseWriter, r *http.Request, op volumes
 		return volumes.Request{}, volumes.Volume{}, false
 	}
 
-	user, err := operationUser(r.URL.Query(), volume, resolution.Users)
+	user, uid, err := operationUser(r.URL.Query(), volume, resolution.Users)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return volumes.Request{}, volumes.Volume{}, false
-	}
-	uid, err := strconv.ParseUint(strings.Split(user, ":")[0], 10, 32)
-	if err != nil {
-		// operationUser guarantees a numeric uid:gid; this branch would be a
-		// bug, and a request must never fall through to an acknowledgement it
-		// did not earn.
-		writeError(w, http.StatusBadRequest, "user must be <uid>:<gid>")
 		return volumes.Request{}, volumes.Volume{}, false
 	}
 	if uid == 0 && r.URL.Query().Get("rootConfirmed") != "1" {
@@ -160,19 +152,18 @@ func volumeBySource(resolved []volumes.Volume, source string) (volumes.Volume, b
 }
 
 // operationUser requires a selected mounting Service or an explicit numeric
-// uid:gid override. A Service's resolved `user:` must itself be a numeric
-// uid:gid: `--user` resolves a name against the helper image's /etc/passwd,
-// not the Service's own image, so a name (or a bare uid) is refused rather
-// than guessed at. operationOf separately acknowledges every UID 0 result.
-func operationUser(query url.Values, volume volumes.Volume, users []volumes.ServiceUser) (string, error) {
+// uid:gid override, returning the `--user` value and its parsed uid. A
+// Service's resolved `user:` must itself be a numeric uid:gid: `--user`
+// resolves a name against the helper image's /etc/passwd, not the Service's
+// own image, so a name (or a bare uid) is refused rather than guessed at. The
+// caller separately acknowledges every UID 0 result.
+func operationUser(query url.Values, volume volumes.Volume, users []volumes.ServiceUser) (string, uint32, error) {
 	if explicit := query.Get("user"); explicit != "" {
-		if !userPattern.MatchString(explicit) {
-			return "", errors.New("user must be <uid>:<gid>")
+		uid, ok := numericUser(explicit)
+		if !ok {
+			return "", 0, errors.New("user must be <uid>:<gid>")
 		}
-		if !numericUser(explicit) {
-			return "", errors.New("user must contain valid numeric uid:gid")
-		}
-		return explicit, nil
+		return explicit, uid, nil
 	}
 
 	if service := query.Get("service"); service != "" {
@@ -190,37 +181,41 @@ func operationUser(query url.Values, volume volumes.Volume, users []volumes.Serv
 				}
 			}
 			if !exists {
-				return "", fmt.Errorf("unknown service %q", service)
+				return "", 0, fmt.Errorf("unknown service %q", service)
 			}
-			return "", fmt.Errorf("service %q does not mount this volume", service)
+			return "", 0, fmt.Errorf("service %q does not mount this volume", service)
 		}
 		for _, candidate := range users {
 			if candidate.Service == service {
-				if !numericUser(candidate.User) {
-					return "", fmt.Errorf("service %q resolves to user %q, which is not a numeric uid:gid; use an explicit user override", service, candidate.User)
+				uid, ok := numericUser(candidate.User)
+				if !ok {
+					return "", 0, fmt.Errorf("service %q resolves to user %q, which is not a numeric uid:gid; use an explicit user override", service, candidate.User)
 				}
-				return candidate.User, nil
+				return candidate.User, uid, nil
 			}
 		}
-		return "", fmt.Errorf("unknown service %q", service)
+		return "", 0, fmt.Errorf("unknown service %q", service)
 	}
 
-	return "", errors.New("select a mounting service or explicit user <uid>:<gid>")
+	return "", 0, errors.New("select a mounting service or explicit user <uid>:<gid>")
 }
 
-// numericUser reports whether user is the numeric uid:gid pair `--user`
-// accepts, both segments within uint32. Compose `user:` accepts names and bare
-// uids too; neither can be passed through unchanged.
-func numericUser(user string) bool {
+// numericUser parses user as the numeric uid:gid pair `--user` accepts and
+// returns the uid; both segments must be within uint32. Compose `user:`
+// accepts names and bare uids too; neither can be passed through unchanged.
+func numericUser(user string) (uint32, bool) {
 	if !userPattern.MatchString(user) {
-		return false
+		return 0, false
 	}
-	for _, id := range strings.Split(user, ":") {
-		if _, err := strconv.ParseUint(id, 10, 32); err != nil {
-			return false
-		}
+	ids := strings.Split(user, ":")
+	uid, err := strconv.ParseUint(ids[0], 10, 32)
+	if err != nil {
+		return 0, false
 	}
-	return true
+	if _, err := strconv.ParseUint(ids[1], 10, 32); err != nil {
+		return 0, false
+	}
+	return uint32(uid), true
 }
 
 // operationPath interprets the path query exactly one way: absent or empty is
