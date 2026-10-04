@@ -315,7 +315,11 @@ func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.writeDeployFiles(w, compose, req) {
+	files, ok := s.prepareDeployFiles(w, r, compose, req)
+	if !ok {
+		return
+	}
+	if !s.writeDeployFiles(w, req, files) {
 		return
 	}
 
@@ -344,6 +348,13 @@ func (s *Service) deployFresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Everything that can be checked without touching Docker or the disk is
+	// checked before the volumes go.
+	files, ok := s.prepareDeployFiles(w, r, compose, req)
+	if !ok {
+		return
+	}
+
 	if _, err := os.Stat(req.ComposeFilePath); err == nil {
 		if err := s.runner.DownWithVolumes(r.Context(), req); err != nil {
 			writeError(w, http.StatusBadGateway, "delete volumes failed: "+err.Error())
@@ -355,7 +366,8 @@ func (s *Service) deployFresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The volumes are gone from here on: a later failure must say so.
-	if !s.writeDeployFilesAfterVolumesRemoved(w, compose, req) {
+	if message, err := writeFiles(req, files); err != nil {
+		writeError(w, http.StatusBadGateway, message+" after volumes were removed: "+err.Error()+". "+volumesRemovedAdvice)
 		return
 	}
 	if err := s.runner.Up(r.Context(), req); err != nil {
@@ -412,51 +424,52 @@ func (s *Service) loadDeployable(w http.ResponseWriter, r *http.Request) (Compos
 	return compose, runRequestFor(s.dataDir, compose), true
 }
 
-// writeDeployFiles writes the resolved compose file and the environment file
-// for req. On false it has already written the error response.
-func (s *Service) writeDeployFiles(w http.ResponseWriter, compose Compose, req RunRequest) bool {
-	return s.writeDeployFilesWith(w, compose, req, "")
+// deployFiles is the content a deploy writes, computed before anything is
+// removed or written.
+type deployFiles struct {
+	composeYAML string
+	envFile     string
 }
 
-// writeDeployFilesAfterVolumesRemoved is writeDeployFiles for the fresh
-// deploy, whose failures must also say the volumes are already gone.
-func (s *Service) writeDeployFilesAfterVolumesRemoved(w http.ResponseWriter, compose Compose, req RunRequest) bool {
-	return s.writeDeployFilesWith(w, compose, req, " after volumes were removed")
-}
-
-func (s *Service) writeDeployFilesWith(w http.ResponseWriter, compose Compose, req RunRequest, suffix string) bool {
-	fail := func(status int, message string, err error) bool {
-		if suffix != "" {
-			cause := message
-			if err != nil {
-				cause = err.Error()
-			}
-			message = "could not write compose files" + suffix + ": " + cause + ". " + volumesRemovedAdvice
-		}
-		writeError(w, status, message)
-		return false
-	}
-
-	// No request in scope (the interface passes none); this is one short read.
-	variables, err := s.repository.listEnvironmentVariables(context.Background(), compose.EnvironmentID)
+// prepareDeployFiles resolves the YAML and loads the environment variables.
+// It touches no files. On false it has already written the error response.
+func (s *Service) prepareDeployFiles(w http.ResponseWriter, r *http.Request, compose Compose, req RunRequest) (deployFiles, bool) {
+	variables, err := s.repository.listEnvironmentVariables(r.Context(), compose.EnvironmentID)
 	if err != nil {
-		return fail(http.StatusInternalServerError, "could not load environment variables", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(req.ComposeFilePath), composeDirPerm); err != nil {
-		return fail(http.StatusInternalServerError, "could not prepare compose files", err)
+		writeError(w, http.StatusInternalServerError, "could not load environment variables")
+		return deployFiles{}, false
 	}
 	resolvedYAML, err := resolveCompose(compose.YAMLContent, dockernet.NetworkName, req.EnvFilePath)
 	if err != nil {
-		return fail(http.StatusBadRequest, "compose yaml is invalid: "+err.Error(), err)
+		writeError(w, http.StatusBadRequest, "compose yaml is invalid: "+err.Error())
+		return deployFiles{}, false
 	}
-	if err := os.WriteFile(req.ComposeFilePath, []byte(resolvedYAML), composeFilePerm); err != nil {
-		return fail(http.StatusInternalServerError, "could not write compose file", err)
-	}
-	if err := os.WriteFile(req.EnvFilePath, []byte(renderEnvFile(variables)), envFilePerm); err != nil {
-		return fail(http.StatusInternalServerError, "could not write environment file", err)
+	return deployFiles{composeYAML: resolvedYAML, envFile: renderEnvFile(variables)}, true
+}
+
+// writeDeployFiles writes the prepared compose and environment files. On
+// false it has already written the error response.
+func (s *Service) writeDeployFiles(w http.ResponseWriter, req RunRequest, files deployFiles) bool {
+	if message, err := writeFiles(req, files); err != nil {
+		writeError(w, http.StatusInternalServerError, message)
+		return false
 	}
 	return true
+}
+
+// writeFiles creates the Compose directory and writes both files, returning
+// the user-facing description of the step that failed.
+func writeFiles(req RunRequest, files deployFiles) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(req.ComposeFilePath), composeDirPerm); err != nil {
+		return "could not prepare compose files", err
+	}
+	if err := os.WriteFile(req.ComposeFilePath, []byte(files.composeYAML), composeFilePerm); err != nil {
+		return "could not write compose file", err
+	}
+	if err := os.WriteFile(req.EnvFilePath, []byte(files.envFile), envFilePerm); err != nil {
+		return "could not write environment file", err
+	}
+	return "", nil
 }
 
 // completeDeploy records the deploy time and answers with the refreshed

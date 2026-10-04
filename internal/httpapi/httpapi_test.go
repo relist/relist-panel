@@ -2854,7 +2854,12 @@ func (f freshDeployFixture) methodsAfter(n int) []string {
 
 func TestComposeDeployFreshRunsDownWithVolumesThenUp(t *testing.T) {
 	f := newFreshDeployFixture(t)
-	first := f.deploy(t)
+	f.deploy(t)
+	// Park deployed_at far in the past so only completeDeploy can move it.
+	const old = int64(1000000000)
+	if _, err := f.server.db.Exec("UPDATE composes SET deployed_at = ? WHERE id = ?", old, f.compose.ID); err != nil {
+		t.Fatalf("set deployed_at: %v", err)
+	}
 	before := len(f.server.runner.calls)
 
 	status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"})
@@ -2870,11 +2875,15 @@ func TestComposeDeployFreshRunsDownWithVolumesThenUp(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&fetched); err != nil {
 		t.Fatalf("decode compose: %v", err)
 	}
-	if fetched.LastDeployedAt == nil || first.LastDeployedAt == nil {
+	if fetched.LastDeployedAt == nil {
 		t.Fatal("lastDeployedAt = null, want a timestamp")
 	}
-	if *fetched.LastDeployedAt < *first.LastDeployedAt {
-		t.Fatalf("lastDeployedAt = %q, want it not before the first deploy's %q", *fetched.LastDeployedAt, *first.LastDeployedAt)
+	stamp, err := time.Parse(time.RFC3339, *fetched.LastDeployedAt)
+	if err != nil {
+		t.Fatalf("parse lastDeployedAt %q: %v", *fetched.LastDeployedAt, err)
+	}
+	if !stamp.After(time.Unix(old, 0)) {
+		t.Fatalf("lastDeployedAt = %v, want it strictly later than the parked %v", stamp, time.Unix(old, 0))
 	}
 }
 
@@ -3027,7 +3036,7 @@ func TestComposeDeployFreshReportsRemovedVolumesWhenUpFails(t *testing.T) {
 
 func TestComposeDeployFreshReportsRemovedVolumesWhenWritingFilesFails(t *testing.T) {
 	f := newFreshDeployFixture(t)
-	f.deploy(t)
+	first := f.deploy(t)
 	f.saveYAML(t, freshNewYAML)
 
 	// Replacing the env file with a directory makes the write fail whoever
@@ -3042,13 +3051,37 @@ func TestComposeDeployFreshReportsRemovedVolumesWhenWritingFilesFails(t *testing
 	}
 	before := len(f.server.runner.calls)
 	status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"})
-	if status != http.StatusInternalServerError {
-		t.Fatalf("status = %d (%v), want %d", status, body, http.StatusInternalServerError)
+	if status != http.StatusBadGateway {
+		t.Fatalf("status = %d (%v), want %d", status, body, http.StatusBadGateway)
 	}
 	if !strings.Contains(body["error"], "volumes were removed") {
 		t.Fatalf("error = %q, want it to contain %q", body["error"], "volumes were removed")
 	}
+	if !strings.Contains(body["error"], "stopped") {
+		t.Fatalf("error = %q, want it to say the Compose is stopped", body["error"])
+	}
 	if got := f.methodsAfter(before); !reflect.DeepEqual(got, []string{"down-with-volumes"}) {
 		t.Fatalf("calls = %v, want only [down-with-volumes]", got)
+	}
+	f.assertLastDeployedAt(t, first.LastDeployedAt)
+}
+
+func TestComposeDeployFreshRefusesUnresolvableYAMLBeforeDown(t *testing.T) {
+	f := newFreshDeployFixture(t)
+	f.deploy(t)
+	req := f.deployedRequest(t)
+	f.saveYAML(t, "- not\n- a mapping\n")
+	composeBefore := readFileString(t, req.ComposeFilePath)
+	before := len(f.server.runner.calls)
+
+	status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d (%v), want %d", status, body, http.StatusBadRequest)
+	}
+	if got := f.methodsAfter(before); len(got) != 0 {
+		t.Fatalf("calls = %v, want none: volumes must survive an unresolvable YAML", got)
+	}
+	if got := readFileString(t, req.ComposeFilePath); got != composeBefore {
+		t.Fatalf("compose file changed: %q", got)
 	}
 }
