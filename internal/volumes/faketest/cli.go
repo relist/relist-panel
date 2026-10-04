@@ -40,6 +40,9 @@ type CLI struct {
 	RemoveVolumeErr error
 	// RemovedVolumes records every volume RemoveVolume removed, in order.
 	RemovedVolumes []string
+	// OnRemoveVolume, when set, runs at the start of every RemoveVolume call
+	// so a test can observe or block the destructive step.
+	OnRemoveVolume func(name string)
 }
 
 // ComposeConfig implements volumes.CLI.
@@ -71,6 +74,9 @@ func (f *CLI) ListProjectVolumes(_ context.Context, project string) ([]volumes.P
 
 // RemoveVolume implements volumes.CLI.
 func (f *CLI) RemoveVolume(_ context.Context, name string) error {
+	if f.OnRemoveVolume != nil {
+		f.OnRemoveVolume(name)
+	}
 	if f.RemoveVolumeErr != nil {
 		return f.RemoveVolumeErr
 	}
