@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 import { createBrowserRouter } from 'react-router';
 
 import { SetupPage, SignInPage } from '../pages/AuthPages';
+import { AccountPage } from '../pages/AccountPage';
 import { ComposePage } from '../pages/ComposePage';
 import { MonitoringPage } from '../pages/MonitoringPage';
 import { NotFoundPage } from '../pages/NotFoundPage';
@@ -25,6 +26,7 @@ import { RequireAuth } from './RequireAuth';
 
 const elements: Record<string, ReactElement> = {
   '/': <OverviewPage />,
+  'account': <AccountPage />,
   'monitoring': <MonitoringPage />,
   'projects': <ProjectsPage />,
   'projects/:projectId': <ProjectPage />,

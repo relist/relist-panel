@@ -214,3 +214,68 @@ describe('fresh deploy and orphan volumes', () => {
     expect(init?.method).toBe('DELETE');
   });
 });
+
+/**
+ * The Account page's calls: one read of the admin account and the three
+ * two-factor mutations. Each one is a thin path/method/body wrapper, so the
+ * test pins the wire shape rather than the component.
+ */
+describe('account and two-factor', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('GETs the account', async () => {
+    const fetch = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ email: 'admin@relist.local', twoFactorEnabled: false }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.account()).resolves.toEqual({ email: 'admin@relist.local', twoFactorEnabled: false });
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/auth/account');
+    expect(init?.method).toBe('GET');
+  });
+
+  it('POSTs the password to setup and returns the secret and URI', async () => {
+    const fetch = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ secret: 'JBSWY3DPEHPK3PXP', otpauthUri: 'otpauth://totp/Relist' }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.twoFactorSetup('hunter2')).resolves.toEqual({
+      secret: 'JBSWY3DPEHPK3PXP',
+      otpauthUri: 'otpauth://totp/Relist',
+    });
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/auth/2fa/setup');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ password: 'hunter2' });
+  });
+
+  it('POSTs the code to enable and answers 204 with no body', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.twoFactorEnable('123456')).resolves.toBeUndefined();
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/auth/2fa/enable');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ code: '123456' });
+  });
+
+  it('POSTs the password and code to disable', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.twoFactorDisable('hunter2', '654321')).resolves.toBeUndefined();
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/auth/2fa/disable');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ password: 'hunter2', code: '654321' });
+  });
+});

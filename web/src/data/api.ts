@@ -26,6 +26,18 @@ export type AuthStatus = {
   authenticated: boolean;
 };
 
+/** The signed-in admin account: its email and whether two-factor is on. */
+export type Account = {
+  email: string;
+  twoFactorEnabled: boolean;
+};
+
+/** The setup answer: the base32 secret for manual entry and the URI the QR code encodes. */
+export type TwoFactorSetup = {
+  secret: string;
+  otpauthUri: string;
+};
+
 export type Credentials = {
   email: string;
   password: string;
@@ -178,6 +190,19 @@ export const api = {
     throw new ApiError(response.status, await responseError(response));
   },
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
+
+  /** The Account page's read: the admin's email and two-factor state. */
+  account: () => request<Account>('/api/auth/account', { method: 'GET' }),
+  /**
+   * Starts turning two-factor on: checks the password and issues a pending
+   * secret, replacing any earlier one. 409 when two-factor is already on.
+   */
+  twoFactorSetup: (password: string) => request<TwoFactorSetup>('/api/auth/2fa/setup', jsonInit('POST', { password })),
+  /** Confirms the pending secret with a code; success is 204. */
+  twoFactorEnable: (code: string) => request<void>('/api/auth/2fa/enable', jsonInit('POST', { code })),
+  /** Turns two-factor off, checking both the password and a current code; success is 204. */
+  twoFactorDisable: (password: string, code: string) =>
+    request<void>('/api/auth/2fa/disable', jsonInit('POST', { password, code })),
 
   listProjects: () => request<Project[]>('/api/projects'),
   createProject: (input: ProjectInput) => request<Project>('/api/projects', jsonInit('POST', input)),
