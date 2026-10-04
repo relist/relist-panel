@@ -29,6 +29,7 @@ teardown run `down -v` (`internal/composes/composes.go`, `internal/composes/tear
 - A global, cross-Compose volume manager. Every operation is scoped to one Compose.
 - Deleting a volume that is still declared in the Compose's YAML, other than through fresh volumes.
 - Volume size and "in use" state in the orphan list (see Decisions).
+- Anonymous volumes and explicitly named (`name:`) volumes in the orphan list.
 - Orphans of a previous identity or a renamed project. They are labelled under the old project name
   and are not found by the current one.
 - Changes to stop, restart, delete or teardown behaviour.
@@ -58,22 +59,34 @@ malformed body to the safe one and the existing route's behaviour does not chang
 
 - The request body carries `confirmName`, which must equal the Compose's name. The server checks it;
   the UI check is a convenience only. Mismatch is a client error and nothing runs.
-- Deploy's prepare step (identity check, resolve YAML, write the compose and env files) is extracted
-  into one function shared by both handlers.
-- Then `DownWithVolumes` (`down -v`) followed by `Up`. This removes every named volume the Compose
-  declares and nothing else.
-- **Failure window.** The two steps are not atomic. If `down -v` fails, nothing was removed and the
-  error is reported as such. If `down -v` succeeds and `up` fails, the volumes are already gone: the
-  response is 502 and its message states that volumes were removed and the Compose is stopped, so
-  the operator can fix the cause and press Deploy.
-- The route is registered with HTTP mutation coordination, exactly as `deploy` is
-  (`internal/httpapi/coordination.go`).
+- Order matters. The handler loads the Compose, checks identity and `confirmName`, and only then
+  runs `down -v` against the compose and env files **already on disk** — the same files the Volumes
+  payload resolved, so the volumes deleted are the volumes the confirmation dialog listed. If no
+  compose file exists (never deployed) the down step is skipped, as Compose delete already does.
+  Only after that are the new compose and env files written, followed by `Up`. A refused request
+  therefore leaves the files on disk byte-identical.
+- Deploy's steps are split so both handlers share them: load-and-check, write-files, complete (record
+  the deploy time and answer).
+- `down -v` removes every named volume the deployed Compose declares and nothing else.
+- **Failure window.** The steps are not atomic. If `down -v` fails, nothing was removed and the
+  error is reported as such. If `down -v` succeeds and then writing the files or `up` fails, the
+  volumes are already gone: the response is 502 and its message states that volumes were removed and
+  the Compose is stopped, so the operator can fix the cause and press Deploy.
+- No coordination change is needed: `coordinatedProject` in `internal/httpapi/coordination.go`
+  already gates every non-GET request under `/api/projects/{id}/`.
 
 ### C — Orphan volumes
 
-An **Orphan Volume** is a named volume that carries the label
-`com.docker.compose.project=<this Compose's project name>` and whose name is not one of the volumes
-the current YAML resolves to.
+An **Orphan Volume** is a named volume that (1) carries the label
+`com.docker.compose.project=<this Compose's project name>`, (2) is named
+`<project>_<logical>` where `<logical>` is its `com.docker.compose.volume` label, and (3) is not one
+of the volumes the current YAML resolves to.
+
+Condition 2 excludes volumes declared with an explicit `name:`, the only kind two Composes can
+share: a shared volume carries the label of whichever project created it and would otherwise be
+offered for deletion while another Compose still uses it. It also excludes anonymous volumes, which
+have no declared source. Both label names are verified against a real daemon before the work is
+called done.
 
 - `volumes.CLI` gains two methods: `ListProjectVolumes(ctx, project)`
   (`docker volume ls --filter label=com.docker.compose.project=<name>`) and
@@ -108,6 +121,9 @@ delete time. Size can be added later without changing the route shape.
 Read Ant Design's `llms.txt` and `docs/GUIDELINES.md`, and check props against the installed `antd`
 version, before touching `web/` (AGENTS.md).
 
+- **Unavailable states**: when the Compose was never deployed (the Volumes payload is a 502) or the
+  Volumes tab is hidden (`available: false`, the bare binary), the dropdown item is disabled with a
+  tooltip saying why — the dialog would have nothing to list.
 - **Deploy button** (`web/src/pages/ComposePage.tsx`): the primary action stays a plain Deploy. A
   dropdown beside it has one item, **Deploy with fresh volumes**.
 - **Fresh volumes dialog**: lists the named volumes that will be deleted, states that bind mounts are
