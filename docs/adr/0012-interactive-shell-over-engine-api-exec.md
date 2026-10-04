@@ -52,16 +52,19 @@ are not worth owning to save one small dependency.
   is `["/bin/sh", "-c", "echo $$; exec \"$1\"", "relist-terminal", "<shell>"]`: the server reads the
   first line of the stream as the shell's PID (never forwarding it to the browser), and `relist-terminal`
   is the marker the startup sweep looks for. On session end, for any reason, the server runs
-  `Kill(pid, "HUP")`, waits up to 2 s, then `Kill(pid, "KILL")`; the shell is the session leader of the
-  exec's TTY, so when it exits the kernel hangs up that TTY's foreground job (`vim`, `top`, a
+  `Kill(pid, "HUP")`, waits the 2 s grace, probes the pid with `kill -0`, and sends `KILL` only if the
+  probe still finds it; the shell is the session leader of the exec's TTY, so when it exits the kernel hangs up that TTY's foreground job (`vim`, `top`, a
   migration) as well. A `nohup … &` job may survive, as after an SSH logout; that is intended. The
   kill execs run on their own `context.WithTimeout(5s)`, never on the already-cancelled request
   context. The wrapper needs `/bin/sh`, so an image with `/bin/bash` but no `/bin/sh` is reported as
   having no usable shell.
 - **A startup sweep covers a panel crash.** On panel start, for each running Container of a known
-  Compose, the panel reads `ExecIDs` from `GET /containers/{id}/json`, inspects each, and kills any
-  that is `Running` and carries the `relist-terminal` marker. This is the in-process cleanup that
-  never ran because the process died.
+  Compose, the panel reads `ExecIDs` from `GET /containers/{id}/json`, inspects each, and hangs up any
+  that is `Running` and carries the `relist-terminal` marker. The hang-up is the session's own: HUP,
+  the 2 s grace, the `kill -0` probe, then KILL only if the shell is still alive, one goroutine per
+  orphan. The sweep keeps going past a Container or exec that fails to inspect, hanging up what it
+  found and logging the error, so one bad exec cannot leave the other shells running. This is the
+  in-process cleanup that never ran because the process died.
 - **A server-wide cap of 10 concurrent sessions.** Separate browser tabs are independent sessions and
   the server does not tie a session to a page; the cap is the guard against a reconnect loop or
   forgotten tabs. The 11th is refused with `Too many open terminal sessions (10) — close one first`.

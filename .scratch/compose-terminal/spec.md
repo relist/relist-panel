@@ -199,8 +199,8 @@ Splitting by frame type means keystrokes are never parsed as control, and nothin
 ### Sequence
 
 1. Browser opens the WebSocket with the query above.
-2. Server accepts, resolves the Container, probes the shell, checks the session cap, and starts the
-   exec.
+2. Server accepts, checks the session cap, resolves the Container, probes the shell, and starts the
+   exec. The cap comes first so a refused session costs no Docker calls.
 3. Server reads the PID line, then sends `ready`; bytes flow both ways.
 4. The shell exits (`exit`, Ctrl+D). The server reads the exit code, sends `exit`, and closes with 1000.
 
