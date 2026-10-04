@@ -195,3 +195,43 @@ sign-in and for the turn-on modal is pure functions in `*-view.ts` modules.
 - Changing the password from the Account page.
 - Encrypting the TOTP secret at rest.
 - Per-IP rate limiting.
+
+## Verification
+
+- `task build-web` (Vite) regenerated `internal/webassets/dist`, and `git status` showed only that
+  directory changed.
+- Full `go test -race ./...` passed, `go vet ./...` passed, and `gofmt -l .` printed nothing.
+- Frontend `pnpm --dir web typecheck`, `test` (284 tests) and `build` all passed.
+- Docker image built and the panel came up healthy on `:8899`, applying `00012_two_factor.sql`.
+  The e2e ran against a scratch Compose project (`relist-e2e`, `RELIST_PORT=8899`,
+  `RELIST_DATA_DIR=$PWD/.data-docker`); it did not touch the install running from the main
+  checkout. The build exposed a real defect: the Dockerfile's `go-builder` stage copied `main.go`
+  but not the `cli.go` added with `reset-2fa`, so the image failed to compile. The fix
+  (`COPY main.go cli.go ./`) is part of this change. The scratch container, its data directory and
+  the Chrome profile were removed afterwards; the shared `relist-network` was already present and
+  was kept.
+- End to end over HTTP: created the admin; signed in with the password alone (two-factor off,
+  `200`); `2fa/setup` returned a secret and an `otpauth://` URI; `2fa/enable` accepted a generated
+  code (`204`); `GET /api/auth/account` then reported `twoFactorEnabled: true`; after logout, login
+  with the password alone answered `401 {"codeRequired":true}`; login with a later code (`200`)
+  established a session; five wrong codes each answered `401 invalid code`; the sixth attempt — with
+  the correct password — answered `429` with `Retry-After: 60` and
+  `too many attempts, try again in 60 seconds`, confirming the lock. `docker compose exec panel
+  relist-panel reset-2fa` printed `Reset two-factor for admin@example.com (two-factor was on);
+  revoked 0 sessions.` (no live session existed at that moment); a second run with a live session
+  present printed `revoked 2 sessions` and left that session unauthenticated. Signing in with the
+  password alone then succeeded (`200`), and the account reported `twoFactorEnabled: false`.
+- **Generated code, not a real authenticator.** No authenticator app was available, so codes were
+  produced from the setup secret with the exact verified parameters (RFC 6238, SHA-1, 30 s,
+  6 digits) using Python's stdlib `hmac`/`base64`. The generator reproduces the RFC 6238 test
+  vectors. Codes are single-use, so a later-step code was minted for the second sign-in.
+- Headless Chrome (152, `--headless=new`) captured nine screens, each inspected: the Account page
+  with two-factor off (outlined `Off`, "Turn on two-factor") and on (green `On`, danger "Turn off
+  two-factor"); the turn-on modal at Password, Scan (QR code, copyable secret, `Steps` at 2) and
+  Verify (`Input.OTP` at 3); the turn-off modal (password plus `Input.OTP`, danger OK); the sign-in
+  password step; the sign-in code step (`Input.OTP`, Back link); and the lock message
+  ("Too many attempts. Try again in 52 seconds."). No runtime errors appeared while driving the
+  flows.
+- **Light theme only.** The app hardcodes `buildTheme('light')` (`web/src/main.tsx`) and has no
+  theme toggle, so the plan's dark-theme screenshots are not applicable; the app was not modified
+  to add dark mode. All screens above were captured in light theme.

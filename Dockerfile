@@ -9,7 +9,7 @@ FROM golang:1.27-alpine AS go-builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY main.go ./
+COPY main.go cli.go ./
 COPY internal/ ./internal/
 COPY cmd/ ./cmd/
 COPY --from=web-builder /src/internal/webassets/dist ./internal/webassets/dist
