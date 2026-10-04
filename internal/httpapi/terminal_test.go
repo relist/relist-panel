@@ -752,6 +752,25 @@ func TestTerminalSessionReportsTheExitCode(t *testing.T) {
 	awaitClose(t, conn)
 }
 
+// When Docker never reports the exit code, the browser gets an error instead of
+// an exit with a guessed 0.
+func TestTerminalSessionReportsAnUnknownExitCode(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+	server.terminal.ExitCodeErr = errors.New("docker api /exec/e1/json: exit code not reported")
+
+	conn, _ := dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
+	session := server.terminal.StartsSnapshot()[0].Session
+	if err := session.Remote.Close(); err != nil {
+		t.Fatalf("close Remote: %v", err)
+	}
+	ctrl := readControl(t, conn, 2*time.Second)
+	if ctrl.Type != "error" || ctrl.Message != "The shell ended, but Docker did not report its exit code" {
+		t.Fatalf("control frame = %+v, want the unknown exit code error", ctrl)
+	}
+	awaitClose(t, conn)
+}
+
 // A stream that ends before any output still reaches the browser as an exit and
 // releases its cap slot, so an eleventh session opens.
 func TestTerminalSessionEndsWhenTheStreamEndsBeforeOutput(t *testing.T) {

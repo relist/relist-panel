@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"relist-panel/internal/dockerexec"
 	"relist-panel/internal/terminal"
@@ -648,5 +649,131 @@ func writeProcStatus(t *testing.T, procRoot string, pid int, content string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "status"), []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s/status: %v", dir, err)
+	}
+}
+
+// scriptedInspect answers GET /exec/{id}/json from answers in order, repeating
+// the last one, the way a daemon reports a finished exec a moment late.
+func scriptedInspect(answers ...string) http.HandlerFunc {
+	var mu sync.Mutex
+	next := 0
+	return func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		answer := answers[min(next, len(answers)-1)]
+		next++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, answer)
+	}
+}
+
+// plainStartMux is a daemon whose non-TTY exec starts fine and whose inspect
+// follows answers.
+func plainStartMux(t *testing.T, answers ...string) *http.ServeMux {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
+		writeTerminalJSON(t, w, http.StatusCreated, map[string]string{"Id": "e1"})
+	})
+	mux.HandleFunc("POST /exec/{id}/start", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /exec/{id}/json", scriptedInspect(answers...))
+	return mux
+}
+
+// hijackingStartMux is the same daemon for a TTY exec: the start hijacks.
+func hijackingStartMux(t *testing.T, answers ...string) *http.ServeMux {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
+		writeTerminalJSON(t, w, http.StatusCreated, map[string]string{"Id": "e1"})
+	})
+	mux.HandleFunc("POST /exec/{id}/start", func(w http.ResponseWriter, r *http.Request) {
+		conn, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: tcp\r\nConnection: Upgrade\r\n\r\n")
+		_ = rw.Flush()
+		_, _ = io.Copy(io.Discard, conn)
+	})
+	mux.HandleFunc("GET /exec/{id}/json", scriptedInspect(answers...))
+	return mux
+}
+
+// The daemon can report a finished stream while the exec still reads
+// Running with a null ExitCode; the adapter waits for the real code.
+func TestTerminalExecExitCodeWaitsForTheDaemon(t *testing.T) {
+	socket := newTerminalDaemon(t, hijackingStartMux(t,
+		`{"Running":true,"ExitCode":null}`,
+		`{"Running":true,"ExitCode":null}`,
+		`{"Running":false,"ExitCode":3}`,
+	))
+	session, err := dockerexec.NewTerminalExec(socket, "").Start(context.Background(), "c1", terminal.ExecOptions{Rows: 24, Cols: 80})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	code, err := session.ExitCode(context.Background())
+	if err != nil {
+		t.Fatalf("ExitCode() error = %v", err)
+	}
+	if code != 3 {
+		t.Errorf("ExitCode() = %d, want 3", code)
+	}
+}
+
+func TestTerminalExecExitCodeGivesUpWithTheContext(t *testing.T) {
+	socket := newTerminalDaemon(t, hijackingStartMux(t, `{"Running":true,"ExitCode":null}`))
+	session, err := dockerexec.NewTerminalExec(socket, "").Start(context.Background(), "c1", terminal.ExecOptions{Rows: 24, Cols: 80})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err = session.ExitCode(ctx)
+	if err == nil || !strings.Contains(err.Error(), "exit code not reported") {
+		t.Fatalf("ExitCode() error = %v, want one containing %q", err, "exit code not reported")
+	}
+	if !strings.Contains(err.Error(), "/exec/e1/json") {
+		t.Errorf("ExitCode() error = %v, want it to name /exec/e1/json", err)
+	}
+}
+
+func TestTerminalExecHasShellWaitsForTheDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		last string
+		want bool
+	}{
+		{"zero after a null code is a shell", `{"Running":false,"ExitCode":0}`, true},
+		{"127 after a null code is not a shell", `{"Running":false,"ExitCode":127}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mux := plainStartMux(t, `{"Running":true,"ExitCode":null}`, tc.last)
+			socket := newTerminalDaemon(t, mux)
+			got, err := dockerexec.NewTerminalExec(socket, "").HasShell(context.Background(), "c1", "/bin/bash")
+			if err != nil {
+				t.Fatalf("HasShell() error = %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("HasShell() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTerminalExecKillWaitsForTheDaemon(t *testing.T) {
+	mux := plainStartMux(t, `{"Running":true,"ExitCode":null}`, `{"Running":false,"ExitCode":1}`)
+	socket := newTerminalDaemon(t, mux)
+	err := dockerexec.NewTerminalExec(socket, "").Kill(context.Background(), "c1", 4242, "0")
+	if !errors.Is(err, terminal.ErrNoProcess) {
+		t.Fatalf("Kill() error = %v, want terminal.ErrNoProcess", err)
 	}
 }

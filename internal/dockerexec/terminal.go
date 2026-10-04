@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"relist-panel/internal/hostmetrics"
 	"relist-panel/internal/terminal"
@@ -318,21 +319,11 @@ func (e *TerminalExec) HasShell(ctx context.Context, containerID, path string) (
 		return false, apiError(startPath, startResp.Status, startBody)
 	}
 
-	inspectPath := "/exec/" + url.PathEscape(execID) + "/json"
-	inspectResp, inspectBody, err := e.send(ctx, http.MethodGet, inspectPath, nil)
+	code, err := e.waitExec(ctx, execID)
 	if err != nil {
 		return false, err
 	}
-	if !ok(inspectResp.StatusCode) {
-		return false, apiError(inspectPath, inspectResp.Status, inspectBody)
-	}
-	var inspected struct {
-		ExitCode int `json:"ExitCode"`
-	}
-	if err := json.Unmarshal(inspectBody, &inspected); err != nil {
-		return false, fmt.Errorf("docker api %s: decode: %w", inspectPath, err)
-	}
-	return inspected.ExitCode == 0, nil
+	return code == 0, nil
 }
 
 // Kill signals pid in the Container with sig, through the shell's builtin kill
@@ -367,21 +358,11 @@ func (e *TerminalExec) Kill(ctx context.Context, containerID string, pid int, si
 		return apiError(startPath, startResp.Status, startBody)
 	}
 
-	inspectPath := "/exec/" + url.PathEscape(execID) + "/json"
-	inspectResp, inspectBody, err := e.send(ctx, http.MethodGet, inspectPath, nil)
+	code, err := e.waitExec(ctx, execID)
 	if err != nil {
 		return err
 	}
-	if !ok(inspectResp.StatusCode) {
-		return apiError(inspectPath, inspectResp.Status, inspectBody)
-	}
-	var inspected struct {
-		ExitCode int `json:"ExitCode"`
-	}
-	if err := json.Unmarshal(inspectBody, &inspected); err != nil {
-		return fmt.Errorf("docker api %s: decode: %w", inspectPath, err)
-	}
-	if inspected.ExitCode != 0 {
+	if code != 0 {
 		return terminal.ErrNoProcess
 	}
 	return nil
@@ -504,23 +485,45 @@ func (s *session) Resize(ctx context.Context, rows, cols uint16) error {
 	return nil
 }
 
-// ExitCode reads ExitCode from GET /exec/{id}/json.
+// ExitCode waits for GET /exec/{id}/json to report the finished exec's code.
 func (s *session) ExitCode(ctx context.Context) (int, error) {
-	path := "/exec/" + url.PathEscape(s.execID) + "/json"
-	resp, body, err := s.exec.send(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return 0, err
+	return s.exec.waitExec(ctx, s.execID)
+}
+
+// waitExec polls GET /exec/{id}/json every 50 ms until the exec is no longer
+// Running and its ExitCode is set, then returns the code. The daemon can close
+// a stream — and a non-TTY exec can answer its start — a moment before it has
+// recorded the exit, and reading then would give a false 0. A ctx that ends
+// first is an error, never a guessed code.
+func (e *TerminalExec) waitExec(ctx context.Context, execID string) (int, error) {
+	path := "/exec/" + url.PathEscape(execID) + "/json"
+	for {
+		resp, body, err := e.send(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			if ctx.Err() != nil {
+				return 0, fmt.Errorf("docker api %s: exit code not reported: %w", path, ctx.Err())
+			}
+			return 0, err
+		}
+		if !ok(resp.StatusCode) {
+			return 0, apiError(path, resp.Status, body)
+		}
+		var inspected struct {
+			Running  bool `json:"Running"`
+			ExitCode *int `json:"ExitCode"`
+		}
+		if err := json.Unmarshal(body, &inspected); err != nil {
+			return 0, fmt.Errorf("docker api %s: decode: %w", path, err)
+		}
+		if !inspected.Running && inspected.ExitCode != nil {
+			return *inspected.ExitCode, nil
+		}
+		select {
+		case <-ctx.Done():
+			return 0, fmt.Errorf("docker api %s: exit code not reported: %w", path, ctx.Err())
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
-	if !ok(resp.StatusCode) {
-		return 0, apiError(path, resp.Status, body)
-	}
-	var inspected struct {
-		ExitCode int `json:"ExitCode"`
-	}
-	if err := json.Unmarshal(body, &inspected); err != nil {
-		return 0, fmt.Errorf("docker api %s: decode: %w", path, err)
-	}
-	return inspected.ExitCode, nil
 }
 
 // createExecRequest is POST /containers/{id}/exec's body. User, Env and

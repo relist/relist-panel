@@ -314,7 +314,12 @@ func (s *Service) run(conn *websocket.Conn, session Session, reader io.Reader) {
 		exitCtx, exitCancel := context.WithTimeout(context.Background(), exitCodeTimeout)
 		code, err := session.ExitCode(exitCtx)
 		exitCancel()
-		if err == nil {
+		if err != nil {
+			_ = writeControl(context.Background(), conn, errorFrame{
+				Type:    "error",
+				Message: "The shell ended, but Docker did not report its exit code",
+			})
+		} else {
 			_ = writeControl(context.Background(), conn, exitFrame{Type: "exit", Code: code})
 		}
 	}

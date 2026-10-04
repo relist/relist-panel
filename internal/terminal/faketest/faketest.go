@@ -51,6 +51,9 @@ type Exec struct {
 	StartErr error
 	// ExitCode is what every started session reports from ExitCode.
 	ExitCode int
+	// ExitCodeErr, when set, is returned by every started session's ExitCode:
+	// Docker never reported the code.
+	ExitCodeErr error
 	// BeforeResize, when set, runs at the start of every Session.Resize,
 	// before the resize is recorded. A test can block on it to hold a resize
 	// in flight.
@@ -151,7 +154,7 @@ func (f *Exec) Start(_ context.Context, containerID string, opts terminal.ExecOp
 		return nil, f.StartErr
 	}
 	panel, remote := net.Pipe()
-	session := &Session{conn: panel, Remote: remote, exitCode: f.ExitCode, beforeResize: f.BeforeResize}
+	session := &Session{conn: panel, Remote: remote, exitCode: f.ExitCode, exitCodeErr: f.ExitCodeErr, beforeResize: f.BeforeResize}
 	f.mu.Lock()
 	f.Starts = append(f.Starts, StartCall{ContainerID: containerID, Opts: opts, Session: session})
 	f.mu.Unlock()
@@ -171,6 +174,7 @@ type Session struct {
 
 	conn         net.Conn
 	exitCode     int
+	exitCodeErr  error
 	beforeResize func()
 	mu           sync.Mutex
 	closed       chan struct{}
@@ -217,7 +221,7 @@ func (s *Session) Resize(_ context.Context, rows, cols uint16) error {
 
 // ExitCode implements terminal.Session.
 func (s *Session) ExitCode(_ context.Context) (int, error) {
-	return s.exitCode, nil
+	return s.exitCode, s.exitCodeErr
 }
 
 // ResizesSnapshot copies the recorded resizes under the lock, for a race-free
