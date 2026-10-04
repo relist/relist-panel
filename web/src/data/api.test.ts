@@ -126,3 +126,25 @@ describe('fresh deploy and orphan volumes', () => {
     expect(init?.method).toBe('DELETE');
   });
 });
+
+describe('terminalServices', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('lists the Services and their shell probes from the terminal endpoint', async () => {
+    const payload = {
+      available: true,
+      reason: '',
+      services: [
+        {
+          name: 'app',
+          containers: [{ id: 'c1', name: 'relist-c3-app-1', number: 1, shells: { bash: true, sh: true } }],
+        },
+      ],
+    };
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify(payload), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.terminalServices(location)).resolves.toEqual(payload);
+    expect(fetch.mock.calls[0][0]).toBe('/api/projects/1/environments/2/composes/3/terminal/services');
+  });
+});

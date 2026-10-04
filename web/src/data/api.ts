@@ -16,6 +16,7 @@ import type {
   Project,
   ServiceFacts,
   ServiceMetrics,
+  TerminalServices,
   VolumeAccess,
   VolumeEntry,
 } from './types';
@@ -154,6 +155,15 @@ export const api = {
   stopCompose: (location: ComposePath) => request<Compose>(`${composePath(location)}/stop`, { method: 'POST' }),
   restartCompose: (location: ComposePath) => request<Compose>(`${composePath(location)}/restart`, { method: 'POST' }),
   logs: (location: ComposePath) => request<LogsPayload>(`${composePath(location)}/logs`),
+
+  /**
+   * The Terminal tab's Service/Container listing, with a bash/sh probe per
+   * running Container. `available: false` carries the reason the feature
+   * cannot run (no Engine API); a Service with no running Container still
+   * appears, with an empty `containers` list.
+   */
+  terminalServices: (location: ComposePath) =>
+    request<TerminalServices>(`${composePath(location)}/terminal/services`),
 
   hostMetrics: (window: MetricWindow) => request<HostMetrics>(`/api/host/metrics?window=${window}`),
   /** The Compose's Services, from the container collector's cache. */

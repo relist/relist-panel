@@ -412,3 +412,24 @@ export type VolumeAccess = {
   rootConfirmed?: boolean;
   bindConfirmed?: boolean;
 };
+
+// ---- Compose terminal (.scratch/compose-terminal) ----------------------------
+//
+// The Terminal tab's Service listing, from `GET …/terminal/services`. The API
+// probes each running Container for bash and sh; `available: false` means the
+// Engine API is unreachable at all and `reason` says why.
+
+/** One Compose's Services and their running Containers, with the shells each carries. */
+export type TerminalServices = {
+  available: boolean;
+  reason: string;
+  services: {
+    name: string;
+    containers: {
+      id: string;
+      name: string;
+      number: number;
+      shells: { bash: boolean; sh: boolean };
+    }[];
+  }[];
+};
