@@ -125,7 +125,6 @@ function AuthError({ message }: { message: string }) {
 
 export function SignInPage() {
   const { auth, isPending, signIn } = usePanel();
-  const { message } = App.useApp();
   const navigate = useNavigate();
   const location = useLocation();
   const [form] = Form.useForm<{ email: string; password: string }>();
@@ -250,6 +249,7 @@ export function SignInPage() {
             onFinish={(values) => {
               void submitPassword(values);
             }}
+            preserve={false}
             requiredMark={false}
           >
             <Form.Item label="Email" name="email" rules={[{ message: 'Enter your email address', required: true }]}>

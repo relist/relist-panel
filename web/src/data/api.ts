@@ -162,7 +162,7 @@ export const api = {
    */
   login: async (input: LoginInput): Promise<LoginResult> => {
     const response = await fetch('/api/auth/login', { credentials: 'same-origin', ...jsonInit('POST', input) });
-    if (response.ok) {
+    if (response.status === 200) {
       return { kind: 'signedIn' };
     }
     if (response.status === 401) {
