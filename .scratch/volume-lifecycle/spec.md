@@ -96,11 +96,20 @@ Service is not currently active. Known residual: a top-level volume that no Serv
 pruned by `docker compose config` and so cannot be recognised as declared; Compose never creates such
 a volume itself, and the real-daemon check confirms it.
 
-Condition 2 excludes volumes declared with an explicit `name:`, the only kind two Composes can
-share: a shared volume carries the label of whichever project created it and would otherwise be
-offered for deletion while another Compose still uses it. It also excludes anonymous volumes, which
-have no declared source. Both label names are verified against a real daemon before the work is
-called done.
+Condition 2 excludes volumes declared with an explicit `name:`: such a volume is the usual way for
+two Composes to share one, it carries the label of whichever project created it, and it would
+otherwise be offered for deletion while another Compose still uses it. It also excludes anonymous
+volumes, which have no declared source. Both label names are verified against a real daemon before
+the work is called done.
+
+Residual, not guarded: this is not the only way to share. Compose B can mount Compose A's
+default-named volume by its full name (`external: true, name: A_old`, or a plain `name: A_old`).
+When A drops `old`, `A_old` passes every orphan condition on A's side, and a stopped B holds no
+container, so Docker's in-use refusal does not fire. Another Compose that references a volume of this
+Compose's project by its full name is therefore not detected; the README and the delete dialog say
+that deleting it takes that Compose's data too. Likewise `down -v` removes a volume with an explicit
+`name:` even when another Compose uses it, and may remove volumes only profile-gated Services mount
+that the fresh-volumes dialog (resolved without profiles) does not list.
 
 - `volumes.CLI` gains two methods: `ListProjectVolumes(ctx, project)`
   (`docker volume ls --filter label=com.docker.compose.project=<name>`) and

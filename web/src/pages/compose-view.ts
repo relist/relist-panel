@@ -1,4 +1,5 @@
-import type { Compose, ComposeLocation } from '../data/types';
+import { isNotDeployed } from '../components/volumes-view';
+import type { Compose, ComposeLocation, ComposeVolumes } from '../data/types';
 
 /** Use the backend's actual deploy paths; only older API payloads need the legacy fallback. */
 export function composeDeployIdentity(
@@ -78,4 +79,32 @@ export function composeLinkIsStale(
     return false;
   }
   return projectId !== location.project.id || environmentId !== location.environment.id;
+}
+
+/**
+ * The fresh-volumes dialog's rules from the page's Volumes resolution: which
+ * named volumes to list, and why the action is refused when it is. The list is
+ * the deployed file resolved without profiles, so it can miss volumes only a
+ * profile-gated Service mounts and includes `external: true` ones — the dialog
+ * copy says both; this function never claims the list is complete.
+ */
+export function freshDeployView(
+  payload: ComposeVolumes | undefined,
+  error: string | undefined,
+): { volumes: string[]; refusal: string | undefined } {
+  if (error !== undefined) {
+    return {
+      volumes: [],
+      refusal: isNotDeployed(error)
+        ? 'This Compose has not been deployed yet, so it has no volumes to replace.'
+        : `This Compose’s volumes could not be resolved: ${error}`,
+    };
+  }
+  if (payload === undefined) {
+    return { volumes: [], refusal: 'Resolving this Compose’s volumes…' };
+  }
+  if (!payload.available) {
+    return { volumes: [], refusal: 'Volume management is unavailable on this host.' };
+  }
+  return { volumes: payload.volumes.filter((v) => v.kind === 'volume').map((v) => v.source), refusal: undefined };
 }

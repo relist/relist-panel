@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, hasUnsavedChanges } from './compose-view';
+import type { ComposeVolumes } from '../data/types';
+import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges } from './compose-view';
 
 describe('composeDeployIdentity', () => {
   it('uses the API identity including the configured absolute directory for new Composes', () => {
@@ -108,5 +109,36 @@ describe('composeLinkIsStale', () => {
 
   it('is never stale for an unknown Compose — that is a not-found, not a redirect', () => {
     expect(composeLinkIsStale(undefined, 1, 2)).toBe(false);
+  });
+});
+
+describe('freshDeployView', () => {
+  const volume = (source: string, kind: 'volume' | 'bind' = 'volume') => ({ source, kind }) as ComposeVolumes['volumes'][number];
+  const payload = (volumes: ComposeVolumes['volumes'], available = true): ComposeVolumes => ({ available, volumes, services: [] });
+
+  it('lists the named volumes of the deployed file and allows the deploy', () => {
+    const view = freshDeployView(payload([volume('demo_data'), volume('/srv/bind', 'bind'), volume('demo_cache')]), undefined);
+    expect(view).toEqual({ volumes: ['demo_data', 'demo_cache'], refusal: undefined });
+  });
+
+  it('allows the deploy with an empty list when the file has no named volumes', () => {
+    expect(freshDeployView(payload([]), undefined)).toEqual({ volumes: [], refusal: undefined });
+  });
+
+  it('says the Compose has not been deployed only for the before-first-deploy error', () => {
+    const view = freshDeployView(undefined, "volume resolution failed: couldn't find env file: /data/.env");
+    expect(view.refusal).toMatch(/has not been deployed yet/);
+    expect(view.volumes).toEqual([]);
+  });
+
+  it('reports any other resolution failure as unresolved, with its message', () => {
+    const view = freshDeployView(undefined, 'docker unavailable');
+    expect(view.refusal).toBe('This Compose’s volumes could not be resolved: docker unavailable');
+    expect(view.refusal).not.toMatch(/not been deployed/);
+  });
+
+  it('refuses while the resolution is in flight and when volume management is unavailable', () => {
+    expect(freshDeployView(undefined, undefined).refusal).toMatch(/Resolving/);
+    expect(freshDeployView(payload([], false), undefined).refusal).toBe('Volume management is unavailable on this host.');
   });
 });

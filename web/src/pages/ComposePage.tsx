@@ -57,10 +57,11 @@ import {
 } from '../components/primitives';
 import { ServiceMonitor } from '../components/ServiceMonitor';
 import { YamlEditor } from '../components/YamlEditor';
+import { ApiError } from '../data/api';
 import { usePanel } from '../data/store';
 import type { ComposeVolumes, OrphanVolume } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
-import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, hasUnsavedChanges } from './compose-view';
+import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges } from './compose-view';
 
 const { Text, Paragraph, Title } = Typography;
 
@@ -145,7 +146,7 @@ export function ComposePage() {
   // The orphan section's list is the page's second Volumes fetch, keyed and
   // guarded the same way. Its failures (409 colliding identity, 502 before the
   // first deploy) stay on the section as the API's own words.
-  const [orphans, setOrphans] = useState<{ composeId: number; list?: OrphanVolume[]; error?: string }>();
+  const [orphans, setOrphans] = useState<{ composeId: number; list?: OrphanVolume[]; error?: string; conflict?: boolean }>();
   const orphansRequest = useRef(0);
   const orphansForCompose = orphans?.composeId === composeId ? orphans : undefined;
 
@@ -262,6 +263,8 @@ export function ComposePage() {
           setOrphans({
             composeId,
             error: reason instanceof Error ? reason.message : 'Could not list this Compose’s orphan volumes',
+            // 409 is the legacy identity collision: it never clears on retry.
+            conflict: reason instanceof ApiError && reason.status === 409,
           });
         }
       });
@@ -364,16 +367,20 @@ export function ComposePage() {
   };
   const deploy = () => runDeploy(false);
 
+  // Rejections go to the delete dialog, which shows the message itself (an
+  // Alert behind the modal mask would be invisible). A 404 means the list was
+  // stale, so it is refreshed while the dialog keeps the error.
   const removeOrphan = async (name: string) => {
     try {
       await deleteOrphanVolume(compose.id, name);
-      message.success(`Deleted volume ${name}`);
-      void fetchOrphans();
     } catch (reason: unknown) {
-      // The delete dialog shows the message itself (an Alert behind the modal
-      // mask would be invisible), so it is rethrown rather than `fail`ed.
+      if (reason instanceof ApiError && reason.status === 404) {
+        void fetchOrphans();
+      }
       throw reason;
     }
+    message.success(`Deleted volume ${name}`);
+    void fetchOrphans();
   };
 
   const lifecycle = async (action: 'restart' | 'stop') => {
@@ -413,14 +420,7 @@ export function ComposePage() {
   // removed. A never-deployed Compose has none (an error payload) and a hidden
   // tab means the feature cannot run, so the item stays visible but disabled
   // and says why (GUIDELINES §9).
-  const freshVolumes = volumesPayload?.available ? volumesPayload.volumes.filter((v) => v.kind === 'volume') : [];
-  const freshRefusal = volumesError !== undefined
-    ? 'This Compose has not been deployed yet, so it has no volumes to replace.'
-    : volumesPayload === undefined
-      ? 'Resolving this Compose’s volumes…'
-      : volumesPayload.available
-        ? undefined
-        : 'Volume management is unavailable on this host.';
+  const { volumes: freshVolumes, refusal: freshRefusal } = freshDeployView(volumesPayload, volumesError);
   const deployMenu: MenuProps['items'] = [
     {
       disabled: freshRefusal !== undefined,
@@ -800,6 +800,7 @@ export function ComposePage() {
                       onRetry={() => void fetchVolumes()}
                       onRetryOrphans={() => void fetchOrphans()}
                       orphans={orphansForCompose?.list}
+                      orphansConflict={orphansForCompose?.conflict}
                       orphansError={orphansForCompose?.error}
                       payload={volumesPayload}
                     />
@@ -941,18 +942,25 @@ export function ComposePage() {
           <>
             {freshVolumes.length > 0 ? (
               <>
-                <Paragraph style={{ marginBottom: 8 }}>These volumes are removed, with everything in them:</Paragraph>
+                <Paragraph style={{ marginBottom: 8 }}>
+                  Named volumes this Compose mounts — removed, with everything in them, unless declared{' '}
+                  <Text code>external: true</Text>:
+                </Paragraph>
                 <ul style={{ marginTop: 0 }}>
-                  {freshVolumes.map((volume) => (
-                    <li key={volume.source}>
-                      <Text code>{volume.source}</Text>
+                  {freshVolumes.map((source) => (
+                    <li key={source}>
+                      <Text code>{source}</Text>
                     </li>
                   ))}
                 </ul>
               </>
             ) : (
-              <Paragraph>This Compose declares no named volumes, so nothing is removed before the deploy.</Paragraph>
+              <Paragraph>The deployed file declares no named volumes to list.</Paragraph>
             )}
+            <Paragraph>
+              Volumes used only by Services behind a Compose profile may also be removed, even if they are not listed. A
+              volume with an explicit <Text code>name:</Text> is removed even if another Compose uses it.
+            </Paragraph>
             <Paragraph type="secondary">
               Bind mounts are not deleted, and neither are volumes declared <Text code>external: true</Text>. To keep a copy first, download a tar.gz backup from the Volumes tab.
               {dirty ? ' Your unsaved changes are saved first.' : ''}

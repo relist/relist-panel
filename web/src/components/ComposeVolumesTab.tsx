@@ -41,6 +41,7 @@ export function ComposeVolumesTab({
   onRetry,
   onRetryOrphans,
   orphans,
+  orphansConflict,
   orphansError,
   payload,
 }: {
@@ -57,6 +58,8 @@ export function ComposeVolumesTab({
   /** The page's one orphan fetch: the list, or its error, or neither while in flight. */
   orphans?: OrphanVolume[];
   orphansError?: string;
+  /** The orphan fetch failed with 409 (colliding identity): Retry can never succeed, so it is hidden. */
+  orphansConflict?: boolean;
   payload?: ComposeVolumes;
 }) {
   const view = volumesView(payload, error);
@@ -110,6 +113,7 @@ export function ComposeVolumesTab({
 
   const orphanSection = (
     <OrphanVolumes
+      conflict={orphansConflict}
       error={orphansError}
       onDelete={onDeleteOrphan}
       onRetry={onRetryOrphans}
@@ -251,11 +255,13 @@ export function ComposeVolumesTab({
  * there is no bulk delete, because the data in an orphan is not recoverable.
  */
 function OrphanVolumes({
+  conflict,
   error,
   onDelete,
   onRetry,
   orphans,
 }: {
+  conflict?: boolean;
   error?: string;
   onDelete: (name: string) => Promise<void>;
   onRetry: () => void;
@@ -289,14 +295,14 @@ function OrphanVolumes({
         Orphan volumes
       </Text>
       <Paragraph type="secondary">
-        Volumes Docker holds for this Compose that its file no longer declares. Nothing mounts them any more.
+        Volumes Docker holds for this Compose that the deployed file no longer declares. No Service in the deployed file mounts them.
       </Paragraph>
 
       {view.status === 'loading' && <Skeleton active paragraph={{ rows: 2 }} title={false} />}
 
       {view.status === 'error' && (
         <Alert
-          action={<Button onClick={onRetry}>Retry</Button>}
+          action={conflict ? undefined : <Button onClick={onRetry}>Retry</Button>}
           description={view.message}
           title="Could not list orphan volumes"
           showIcon
@@ -307,7 +313,7 @@ function OrphanVolumes({
       {view.status === 'empty' && (
         <Card variant="outlined">
           <EmptyState
-            description="Every volume Docker holds for this Compose is still declared in its file."
+            description="Every volume Docker holds for this Compose is still declared in the deployed file."
             title="No orphan volumes"
           />
         </Card>
@@ -359,6 +365,10 @@ function OrphanVolumes({
             <Paragraph type="secondary">
               Deletes the volume <Text code>{target}</Text> from Docker. Its data is permanently lost; there is no
               trash. A volume that a container still uses is refused.
+            </Paragraph>
+            <Paragraph type="secondary">
+              If another Compose references this volume by its name, that Compose loses its data too: the panel
+              cannot see that, and a stopped Compose holds no container to make Docker refuse.
             </Paragraph>
             {deleteError && <Alert description={deleteError} showIcon title="Could not delete this volume" type="error" />}
           </>

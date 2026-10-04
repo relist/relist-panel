@@ -79,15 +79,23 @@ Each Compose page has a **Volumes** tab listing the Volumes that Compose
 mounts, with a **Volume Explorer** behind each one for browsing, editing,
 uploading, deleting, and downloading or restoring a tar.gz.
 
-Deploy runs `docker compose up -d --remove-orphans`, so the containers of
+Deploy runs `docker compose up -d --build --remove-orphans`, so the containers of
 Services you removed from the YAML are removed with the next deploy. Volumes are
 left alone. The Compose page also offers **Deploy with fresh volumes**, which
 removes the Compose's named volumes (`down -v`) before redeploying, and the
 Volumes tab lists **orphan volumes** — named volumes Compose created for this
-Compose's project that its YAML no longer declares — for you to delete one by
-one. Docker refuses to delete a volume a container still uses, and the panel
-never forces it. Bind mounts and `external: true` volumes are never deleted by
-either action.
+Compose's project that the deployed file no longer declares — for you to delete
+one by one. Docker refuses to delete a volume a container still uses, and the
+panel never forces it. Bind mounts and `external: true` volumes are never
+deleted by either action.
+
+Two limits to know before using either. Fresh volumes runs `down -v`, which can
+also remove volumes used only by Services behind a Compose profile, even though
+the dialog's list (resolved without profiles) may not show them; and a volume
+declared with an explicit `name:` is removed even if another Compose uses it.
+The panel does not detect another Compose that references one of this
+Compose's volumes by its full name: deleting that volume as an orphan, or
+removing it with fresh volumes, takes that Compose's data too.
 
 Volume files require a **containerized panel**: the helper runs from the
 panel's own image, which must be on the host, over the Docker socket this
