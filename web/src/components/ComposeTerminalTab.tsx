@@ -125,6 +125,9 @@ export function ComposeTerminalTab({
   const [pickedUser, setPickedUser] = useState<TerminalUser>('default');
   const [session, setSession] = useState<SessionState>({ kind: 'idle' });
   const [expired, setExpired] = useState(false);
+  // Once the box exists it stays until the page unmounts, so a Reconnect that
+  // finds nothing running (a redeploy in progress) cannot wipe the output.
+  const [boxCreated, setBoxCreated] = useState(false);
 
   // The socket handlers close over state, so the machine lives in a ref beside
   // React state; `applyState` keeps the two in step.
@@ -148,6 +151,9 @@ export function ComposeTerminalTab({
   // The toolbar and the box exist only once there is something to shell into.
   const running = services?.available === true && selection.service !== undefined;
   const busy = session.kind === 'connecting' || session.kind === 'open';
+  const showBox = running || boxCreated;
+  // The toolbar stays in place over a kept box, but has nothing to act on.
+  const locked = busy || !running;
 
   const applyState = (next: SessionState) => {
     sessionRef.current = next;
@@ -230,6 +236,7 @@ export function ComposeTerminalTab({
     term.open(el);
     termRef.current = term;
     fitRef.current = fit;
+    setBoxCreated(true);
 
     term.onData((data) => {
       const socket = wsRef.current;
@@ -274,10 +281,10 @@ export function ComposeTerminalTab({
       termRef.current = undefined;
       fitRef.current = undefined;
     };
-    // Recreated only when the box itself appears or disappears; theme changes
-    // are applied in place below.
+    // Created when the box first appears and kept until unmount, never keyed on
+    // `running` alone; theme changes are applied in place below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running]);
+  }, [boxCreated || running]);
 
   // A hidden pane measured zero on mount; refit once it is the active tab.
   useEffect(() => {
@@ -434,6 +441,7 @@ export function ComposeTerminalTab({
 
   // ---- Render ----------------------------------------------------------------
 
+  const noneRunningCopy = `A terminal opens a shell in a running Container. ${compose.name} has none on the host yet, and deploying is what starts them.`
   const statusText =
     session.kind === 'open'
       ? `Connected · ${session.ready.shell} · ${userLabel(session.ready.user)} · ${session.ready.container}`
@@ -457,7 +465,7 @@ export function ComposeTerminalTab({
         servicesLoading ? (
           <Skeleton active paragraph={{ rows: 6 }} title={false} />
         ) : null
-      ) : !services.available ? (
+      ) : !showBox && !services.available ? (
         <Alert
           action={<Button onClick={() => void loadServices()}>Retry</Button>}
           description={services.reason}
@@ -465,7 +473,7 @@ export function ComposeTerminalTab({
           title="Terminal is unavailable"
           type="warning"
         />
-      ) : !running ? (
+      ) : !showBox ? (
         <Card variant="outlined">
           <EmptyState
             action={
@@ -473,7 +481,7 @@ export function ComposeTerminalTab({
                 Open the Editor tab
               </Button>
             }
-            description={`A terminal opens a shell in a running Container. ${compose.name} has none on the host yet, and deploying is what starts them.`}
+            description={noneRunningCopy}
             title="Deploy to start a terminal"
           />
         </Card>
@@ -482,7 +490,7 @@ export function ComposeTerminalTab({
           <Flex align="center" gap={12} style={{ marginBottom: LAYOUT.gutterSmall }} wrap>
             <Select
               aria-label="Service"
-              disabled={busy}
+              disabled={locked}
               onChange={(value) => {
                 setPickedService(value);
                 setPickedContainer(undefined);
@@ -498,7 +506,7 @@ export function ComposeTerminalTab({
             {selection.containers.length > 1 && (
               <Select
                 aria-label="Container"
-                disabled={busy}
+                disabled={locked}
                 onChange={setPickedContainer}
                 options={selection.containers.map((entry) => ({ label: entry.name, value: entry.id }))}
                 style={{ minWidth: 220 }}
@@ -508,7 +516,7 @@ export function ComposeTerminalTab({
             <Flex align="center" gap={8}>
               <Text type="secondary">Shell</Text>
               <Segmented
-                disabled={busy}
+                disabled={locked}
                 onChange={(value) => setPickedShell(value as TerminalShell)}
                 options={[
                   { label: 'Auto', value: 'auto' },
@@ -531,7 +539,7 @@ export function ComposeTerminalTab({
             <Flex align="center" gap={8}>
               <Text type="secondary">User</Text>
               <Segmented
-                disabled={busy}
+                disabled={locked}
                 onChange={(value) => setPickedUser(value as TerminalUser)}
                 options={[
                   { label: 'Image default', value: 'default' },
@@ -544,6 +552,7 @@ export function ComposeTerminalTab({
               <Button onClick={disconnect}>Disconnect</Button>
             ) : (
               <Button
+                disabled={!running}
                 loading={servicesLoading || session.kind === 'connecting'}
                 onClick={() => void openShell()}
                 type="primary"
@@ -557,6 +566,23 @@ export function ComposeTerminalTab({
               </Text>
             )}
           </Flex>
+
+          {!running && (
+            <Alert
+              action={
+                services.available ? (
+                  <Button onClick={onOpenEditor}>Open the Editor tab</Button>
+                ) : (
+                  <Button onClick={() => void loadServices()}>Retry</Button>
+                )
+              }
+              description={services.available ? noneRunningCopy : services.reason}
+              showIcon
+              style={{ marginBottom: LAYOUT.gutterSmall }}
+              title={services.available ? 'Deploy to start a terminal' : 'Terminal is unavailable'}
+              type={services.available ? 'info' : 'warning'}
+            />
+          )}
 
           {session.kind === 'failed' && (
             <Alert
