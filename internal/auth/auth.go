@@ -182,6 +182,12 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// The password check below runs inside this transaction deliberately: it
+	// keeps the failure counter, the replay step (totp_last_step) and the
+	// session insert atomic across concurrent logins. The pool holds a single
+	// connection, so this serializes logins for the duration of the bcrypt
+	// comparison; widening the pool means revisiting this hold together with
+	// the replay guard's unconditional totp_last_step update.
 	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
