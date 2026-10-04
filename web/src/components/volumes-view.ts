@@ -1,4 +1,4 @@
-import type { ComposeVolume, ComposeVolumes } from '../data/types';
+import type { ComposeVolume, ComposeVolumes, OrphanVolume } from '../data/types';
 
 /**
  * View decisions for the Compose screen's Volumes tab, kept pure so the
@@ -64,6 +64,24 @@ export function volumesView(payload: ComposeVolumes | undefined, error: string |
     return { status: 'empty' };
   }
   return { status: 'ready', volumes: payload.volumes, warnings: volumeWarnings(payload.volumes) };
+}
+
+export type OrphansView =
+  | { status: 'loading' }
+  /** The API's own message (409 colliding identity, 502 before the first deploy, …). */
+  | { status: 'error'; message: string }
+  | { status: 'empty' }
+  | { status: 'ready'; orphans: OrphanVolume[] };
+
+/** What the orphan section renders, from the page's one fetch of it. */
+export function orphansView(payload?: { orphans: OrphanVolume[] }, error?: string): OrphansView {
+  if (error !== undefined) {
+    return { status: 'error', message: error };
+  }
+  if (payload === undefined) {
+    return { status: 'loading' };
+  }
+  return payload.orphans.length === 0 ? { status: 'empty' } : { status: 'ready', orphans: payload.orphans };
 }
 
 /** The pre-flight outcomes that must be said out loud, in Volume order; `ok` is the silent majority. */

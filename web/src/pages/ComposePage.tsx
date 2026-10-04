@@ -2,6 +2,7 @@ import {
   CloudDownloadOutlined,
   CopyOutlined,
   DeleteOutlined,
+  DownOutlined,
   FileTextOutlined,
   FullscreenOutlined,
   MoreOutlined,
@@ -57,7 +58,7 @@ import {
 import { ServiceMonitor } from '../components/ServiceMonitor';
 import { YamlEditor } from '../components/YamlEditor';
 import { usePanel } from '../data/store';
-import type { ComposeVolumes } from '../data/types';
+import type { ComposeVolumes, OrphanVolume } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
 import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, hasUnsavedChanges } from './compose-view';
 
@@ -87,9 +88,12 @@ export function ComposePage() {
   const {
     checkedAt,
     deleteCompose,
+    deleteOrphanVolume,
     deployCompose,
+    deployComposeFresh,
     isPending,
     loadLogs,
+    loadOrphanVolumes,
     loadVariables,
     loadServices,
     loadVolumes,
@@ -115,6 +119,7 @@ export function ComposePage() {
   const [logServices, setLogServices] = useState<string[]>([]);
   const [logLines, setLogLines] = useState(200);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [freshOpen, setFreshOpen] = useState(false);
   // Action failures stay on this screen as an Alert (GUIDELINES §8) — the
   // control that retries them is right there.
   const [actionError, setActionError] = useState<string>();
@@ -132,6 +137,13 @@ export function ComposePage() {
   const volumesPayload = volumesForCompose?.payload;
   const volumesError = volumesForCompose?.error;
 
+  // The orphan section's list is the page's second Volumes fetch, keyed and
+  // guarded the same way. Its failures (409 colliding identity, 502 before the
+  // first deploy) stay on the section as the API's own words.
+  const [orphans, setOrphans] = useState<{ composeId: number; list?: OrphanVolume[]; error?: string }>();
+  const orphansRequest = useRef(0);
+  const orphansForCompose = orphans?.composeId === composeId ? orphans : undefined;
+
   useEffect(() => {
     setDraft(compose?.yamlContent ?? '');
   }, [compose?.id, compose?.yamlContent]);
@@ -144,6 +156,7 @@ export function ComposePage() {
   // The full screen editor must never outlive the Compose it was opened for.
   useEffect(() => {
     setFullscreenOpen(false);
+    setFreshOpen(false);
   }, [composeId]);
 
   // The Environment card and the full screen editor's rail read the
@@ -230,6 +243,31 @@ export function ComposePage() {
     }
   }, [fetchVolumes, knownComposeId]);
 
+  const fetchOrphans = useCallback(() => {
+    const request = ++orphansRequest.current;
+    setOrphans({ composeId });
+    return loadOrphanVolumes(composeId)
+      .then((list) => {
+        if (orphansRequest.current === request) {
+          setOrphans({ composeId, list });
+        }
+      })
+      .catch((reason: unknown) => {
+        if (orphansRequest.current === request) {
+          setOrphans({
+            composeId,
+            error: reason instanceof Error ? reason.message : 'Could not list this Compose’s orphan volumes',
+          });
+        }
+      });
+  }, [composeId, loadOrphanVolumes]);
+
+  useEffect(() => {
+    if (knownComposeId !== undefined) {
+      void fetchOrphans();
+    }
+  }, [fetchOrphans, knownComposeId]);
+
   const logsLoading = isPending(`logs:${composeId}`);
   const logLineCount = logsText ? logsText.split('\n').length : 0;
   const visibleLogLines = filterLogLines(logsText, logServices, logLines);
@@ -273,22 +311,54 @@ export function ComposePage() {
     }
   };
 
-  const deploy = async () => {
+  // A deploy mints new containers; the rail's rows follow, and the env file it
+  // wrote is what the Volumes resolution needs. A fresh deploy also changes
+  // which volumes are orphans.
+  const refreshAfterDeploy = () => {
+    fetchServices();
+    void fetchVolumes();
+    void fetchOrphans();
+  };
+
+  // `fresh` removes the Compose's named volumes before the same deploy; the
+  // save-first steps are identical, so unsaved YAML is what gets deployed.
+  const runDeploy = async (fresh: boolean) => {
     try {
       for (const step of deploySteps(dirty)) {
         if (step === 'save') {
           await saveCompose(compose.id, draft);
+        } else if (fresh) {
+          await deployComposeFresh(compose.id);
         } else {
           await deployCompose(compose.id);
         }
       }
-      message.success(`Deployed ${compose.name}`);
-      // A deploy mints new containers; the rail's rows follow, and the env
-      // file it wrote is what the Volumes resolution needs.
-      fetchServices();
-      void fetchVolumes();
+      message.success(fresh ? `Deployed ${compose.name} with fresh volumes` : `Deployed ${compose.name}`);
+      refreshAfterDeploy();
     } catch (reason: unknown) {
       fail(reason);
+      // A fresh deploy that failed after the wipe has already removed the
+      // volumes (the API says so), so the page follows the host.
+      if (fresh) {
+        refreshAfterDeploy();
+      }
+    } finally {
+      if (fresh) {
+        setFreshOpen(false);
+      }
+    }
+  };
+  const deploy = () => runDeploy(false);
+
+  const removeOrphan = async (name: string) => {
+    try {
+      await deleteOrphanVolume(compose.id, name);
+      message.success(`Deleted volume ${name}`);
+    } catch (reason: unknown) {
+      fail(reason);
+      throw reason;
+    } finally {
+      void fetchOrphans();
     }
   };
 
@@ -324,6 +394,32 @@ export function ComposePage() {
       fail(reason);
     }
   };
+
+  // Fresh volumes needs the page's Volumes resolution: it names what will be
+  // removed. A never-deployed Compose has none (an error payload) and a hidden
+  // tab means the feature cannot run, so the item stays visible but disabled
+  // and says why (GUIDELINES §9).
+  const freshVolumes = volumesPayload?.available ? volumesPayload.volumes.filter((v) => v.kind === 'volume') : [];
+  const freshRefusal = volumesError !== undefined
+    ? 'This Compose has not been deployed yet, so it has no volumes to replace.'
+    : volumesPayload === undefined
+      ? 'Resolving this Compose’s volumes…'
+      : volumesPayload.available
+        ? undefined
+        : 'Volume management is unavailable on this host.';
+  const deployMenu: MenuProps['items'] = [
+    {
+      disabled: freshRefusal !== undefined,
+      icon: <DeleteOutlined />,
+      key: 'deploy-fresh',
+      label: (
+        <Tooltip placement="left" title={freshRefusal}>
+          <span>Deploy with fresh volumes</span>
+        </Tooltip>
+      ),
+      onClick: () => setFreshOpen(true),
+    },
+  ];
 
   const moreMenu: MenuProps['items'] = [
     {
@@ -382,14 +478,19 @@ export function ComposePage() {
             >
               Save
             </Button>
-            <Button
-              icon={<RocketOutlined />}
-              loading={isPending(`deploy:${compose.id}`)}
-              onClick={() => void deploy()}
-              type="primary"
-            >
-              {dirty ? 'Save & Deploy' : 'Deploy'}
-            </Button>
+            <Space.Compact>
+              <Button
+                icon={<RocketOutlined />}
+                loading={isPending(`deploy:${compose.id}`)}
+                onClick={() => void deploy()}
+                type="primary"
+              >
+                {dirty ? 'Save & Deploy' : 'Deploy'}
+              </Button>
+              <Dropdown menu={{ items: deployMenu }} placement="bottomRight" trigger={['click']}>
+                <Button aria-label="More deploy options" icon={<DownOutlined />} type="primary" />
+              </Dropdown>
+            </Space.Compact>
           </>
         }
         tags={
@@ -680,8 +781,12 @@ export function ComposePage() {
                       explorerHref={(volume) =>
                         paths.volumeExplorer(project.id, environment.id, compose.id, volume.source)
                       }
+                      onDeleteOrphan={removeOrphan}
                       onDeploy={() => void deploy()}
                       onRetry={() => void fetchVolumes()}
+                      onRetryOrphans={() => void fetchOrphans()}
+                      orphans={orphansForCompose?.list}
+                      orphansError={orphansForCompose?.error}
                       payload={volumesPayload}
                     />
                   ),
@@ -815,6 +920,39 @@ export function ComposePage() {
           The panel returns the last ~200 lines from <Text code>docker compose logs</Text>. Nothing is streamed or stored.
         </Text>
       </Drawer>
+
+      <DangerModal
+        confirmWord={compose.name}
+        consequences={
+          <>
+            {freshVolumes.length > 0 ? (
+              <>
+                <Paragraph style={{ marginBottom: 8 }}>These volumes are removed, with everything in them:</Paragraph>
+                <ul style={{ marginTop: 0 }}>
+                  {freshVolumes.map((volume) => (
+                    <li key={volume.source}>
+                      <Text code>{volume.source}</Text>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <Paragraph>This Compose declares no named volumes, so nothing is removed before the deploy.</Paragraph>
+            )}
+            <Paragraph type="secondary">
+              Bind mounts are not deleted. To keep a copy first, download a tar.gz backup from the Volumes tab.
+              {dirty ? ' Your unsaved changes are saved first.' : ''}
+            </Paragraph>
+          </>
+        }
+        description="Deploy removes this Compose’s named volumes, then deploys it again from empty."
+        loading={isPending(`deploy:${compose.id}`)}
+        okText="Deploy with fresh volumes"
+        onCancel={() => setFreshOpen(false)}
+        onConfirm={() => void runDeploy(true)}
+        open={freshOpen}
+        title="Deploy with fresh volumes?"
+      />
 
       <DangerModal
         confirmWord={compose.name}

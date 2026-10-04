@@ -1,4 +1,4 @@
-import { ExportOutlined, LockOutlined, RocketOutlined } from '@ant-design/icons';
+import { DeleteOutlined, ExportOutlined, LockOutlined, RocketOutlined } from '@ant-design/icons';
 import {
   Alert,
   Button,
@@ -11,10 +11,12 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
+import { useState } from 'react';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
-import type { ComposeVolume, ComposeVolumes } from '../data/types';
-import { CodeValue, EmptyState } from './primitives';
-import { downloadRefusal, resolvedVolumePath, volumeLabel, volumesView } from './volumes-view';
+import type { ComposeVolume, ComposeVolumes, OrphanVolume } from '../data/types';
+import { DangerModal } from './DangerModal';
+import { CodeValue, EmptyState, RelativeTime } from './primitives';
+import { downloadRefusal, orphansView, resolvedVolumePath, volumeLabel, volumesView } from './volumes-view';
 
 const { Text, Paragraph } = Typography;
 
@@ -34,8 +36,12 @@ export function ComposeVolumesTab({
   deploying,
   error,
   explorerHref,
+  onDeleteOrphan,
   onDeploy,
   onRetry,
+  onRetryOrphans,
+  orphans,
+  orphansError,
   payload,
 }: {
   /** The page's deploy is in flight, so the state's affordance spins with it. */
@@ -43,8 +49,14 @@ export function ComposeVolumesTab({
   error?: string;
   /** Builds the Volume Explorer's URL for one Volume. */
   explorerHref: (volume: ComposeVolume) => string;
+  /** Deletes one orphan; rejects with the API's message (the page shows it) so the dialog stays open. */
+  onDeleteOrphan: (name: string) => Promise<void>;
   onDeploy: () => void;
   onRetry: () => void;
+  onRetryOrphans: () => void;
+  /** The page's one orphan fetch: the list, or its error, or neither while in flight. */
+  orphans?: OrphanVolume[];
+  orphansError?: string;
   payload?: ComposeVolumes;
 }) {
   const view = volumesView(payload, error);
@@ -96,14 +108,26 @@ export function ComposeVolumesTab({
     );
   }
 
+  const orphanSection = (
+    <OrphanVolumes
+      error={orphansError}
+      onDelete={onDeleteOrphan}
+      onRetry={onRetryOrphans}
+      orphans={orphans}
+    />
+  );
+
   if (view.status === 'empty') {
     return (
-      <Card variant="outlined">
-        <EmptyState
-          description="This Compose declares no volumes and no bind mounts. Anything it writes lives inside its container, and goes away with it."
-          title="Nothing mounted"
-        />
-      </Card>
+      <>
+        <Card variant="outlined">
+          <EmptyState
+            description="This Compose declares no volumes and no bind mounts. Anything it writes lives inside its container, and goes away with it."
+            title="Nothing mounted"
+          />
+        </Card>
+        {orphanSection}
+      </>
     );
   }
 
@@ -215,6 +239,128 @@ export function ComposeVolumesTab({
         host path from a form: a Volume can only be one this Compose already declares. Downloads and writes happen in
         each Volume’s Explorer, behind its Operation user Confirm.
       </Paragraph>
+
+      {orphanSection}
     </>
+  );
+}
+
+/**
+ * Volumes Docker still holds under this Compose's project that its file no
+ * longer declares. Each row is deleted on its own behind a typed-name dialog —
+ * there is no bulk delete, because the data in an orphan is not recoverable.
+ */
+function OrphanVolumes({
+  error,
+  onDelete,
+  onRetry,
+  orphans,
+}: {
+  error?: string;
+  onDelete: (name: string) => Promise<void>;
+  onRetry: () => void;
+  orphans?: OrphanVolume[];
+}) {
+  const view = orphansView(orphans && { orphans }, error);
+  const [target, setTarget] = useState<string>();
+  const [deleting, setDeleting] = useState(false);
+
+  const confirm = async () => {
+    if (target === undefined) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      await onDelete(target);
+      setTarget(undefined);
+    } catch {
+      // The page shows the API's message (409 while the volume is in use).
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: LAYOUT.gutter }}>
+      <Text strong style={{ display: 'block', marginBottom: 4 }}>
+        Orphan volumes
+      </Text>
+      <Paragraph type="secondary">
+        Volumes Docker holds for this Compose that its file no longer declares. Nothing mounts them any more.
+      </Paragraph>
+
+      {view.status === 'loading' && <Skeleton active paragraph={{ rows: 2 }} title={false} />}
+
+      {view.status === 'error' && (
+        <Alert
+          action={<Button onClick={onRetry}>Retry</Button>}
+          description={view.message}
+          title="Could not list orphan volumes"
+          showIcon
+          type="error"
+        />
+      )}
+
+      {view.status === 'empty' && (
+        <Card variant="outlined">
+          <EmptyState
+            description="Every volume Docker holds for this Compose is still declared in its file."
+            title="No orphan volumes"
+          />
+        </Card>
+      )}
+
+      {view.status === 'ready' && (
+        <Table<OrphanVolume>
+          columns={[
+            {
+              dataIndex: 'name',
+              key: 'name',
+              render: (name: string) => <CodeValue copyable value={name} />,
+              title: 'Volume',
+            },
+            {
+              dataIndex: 'createdAt',
+              key: 'createdAt',
+              render: (createdAt: string) => <RelativeTime value={createdAt} />,
+              title: 'Created',
+              width: 180,
+            },
+            {
+              key: 'actions',
+              render: (_value, orphan) => (
+                <Flex justify="flex-end">
+                  <Button danger icon={<DeleteOutlined />} onClick={() => setTarget(orphan.name)} size="small">
+                    Delete
+                  </Button>
+                </Flex>
+              ),
+              title: '',
+              width: 110,
+            },
+          ]}
+          dataSource={view.orphans}
+          pagination={false}
+          rowKey="name"
+          size="middle"
+        />
+      )}
+
+      <DangerModal
+        confirmWord={target ?? ''}
+        consequences={
+          <Paragraph type="secondary">
+            Deletes the volume <Text code>{target}</Text> from Docker. Its data is permanently lost; there is no trash.
+            A volume that a container still uses is refused.
+          </Paragraph>
+        }
+        loading={deleting}
+        okText="Delete volume"
+        onCancel={() => setTarget(undefined)}
+        onConfirm={() => void confirm()}
+        open={target !== undefined}
+        title="Delete this orphan volume?"
+      />
+    </div>
   );
 }

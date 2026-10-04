@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { Credentials, ProjectInput } from './api';
-import type { Compose, ComposeService, ComposeVolumes, EnvironmentVariable, HostMetrics, MetricWindow, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
+import type { Compose, ComposeService, ComposeVolumes, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
@@ -57,6 +57,8 @@ type PanelValue = {
   deleteEnvironment: (projectId: number, environmentId: number) => Promise<void>;
   deleteProject: (projectId: number) => Promise<void>;
   deployCompose: (composeId: number) => Promise<void>;
+  /** Removes the Compose's volumes and redeploys; the confirmation name is the Compose's own. */
+  deployComposeFresh: (composeId: number) => Promise<void>;
   isPending: (key: string) => boolean;
   loadAuthStatus: () => Promise<void>;
   loadLogs: (composeId: number) => Promise<string>;
@@ -67,6 +69,9 @@ type PanelValue = {
   loadServiceMetrics: (composeId: number, service: string, metricWindow: MetricWindow) => Promise<ServiceMetrics>;
   /** The Compose's per-Service rows, from the container collector's cache. */
   loadServices: (composeId: number) => Promise<void>;
+  /** The Compose's orphan Volumes: Docker volumes under its project that the file no longer declares. */
+  loadOrphanVolumes: (composeId: number) => Promise<OrphanVolume[]>;
+  deleteOrphanVolume: (composeId: number, name: string) => Promise<void>;
   /** The Compose's resolved Volumes and pre-flight statuses, from the Compose CLI. */
   loadVolumes: (composeId: number) => Promise<ComposeVolumes>;
   /** One directory inside a resolved Volume, for the Explorer's current path. */
@@ -484,8 +489,8 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   );
 
   const runComposeAction = useCallback(
-    (key: 'deploy' | 'stop' | 'restart', composeId: number) =>
-      track(`${key}:${composeId}`, async () => {
+    (key: 'deploy' | 'deploy-fresh' | 'stop' | 'restart', composeId: number) =>
+      track(`${key === 'deploy-fresh' ? 'deploy' : key}:${composeId}`, async () => {
         const location = findComposeLocation(projectsRef.current, composeId);
         if (!location) {
           throw new Error('Compose not found');
@@ -494,9 +499,11 @@ export function PanelProvider({ children }: { children: ReactNode }) {
         const updated =
           key === 'deploy'
             ? await api.deployCompose(path)
-            : key === 'stop'
-              ? await api.stopCompose(path)
-              : await api.restartCompose(path);
+            : key === 'deploy-fresh'
+              ? await api.deployComposeFresh(path, location.compose.name)
+              : key === 'stop'
+                ? await api.stopCompose(path)
+                : await api.restartCompose(path);
         patchCompose(composeId, () => updated);
         // The API returns no read timestamp; the rail's "checked N minutes ago"
         // is stamped client-side, as the prototype does (GUIDELINES §11). The
@@ -508,6 +515,10 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   );
 
   const deployCompose = useCallback((composeId: number) => runComposeAction('deploy', composeId), [runComposeAction]);
+  const deployComposeFresh = useCallback(
+    (composeId: number) => runComposeAction('deploy-fresh', composeId),
+    [runComposeAction],
+  );
   const stopCompose = useCallback((composeId: number) => runComposeAction('stop', composeId), [runComposeAction]);
   const restartCompose = useCallback((composeId: number) => runComposeAction('restart', composeId), [runComposeAction]);
 
@@ -607,6 +618,38 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           environmentId: location.environment.id,
           composeId,
         });
+      }),
+    [track],
+  );
+
+  const loadOrphanVolumes = useCallback(
+    (composeId: number) =>
+      track(`orphans:${composeId}`, async () => {
+        const location = findComposeLocation(projectsRef.current, composeId);
+        if (!location) {
+          throw new Error('Compose not found');
+        }
+        const { orphans } = await api.listOrphanVolumes({
+          projectId: location.project.id,
+          environmentId: location.environment.id,
+          composeId,
+        });
+        return orphans;
+      }),
+    [track],
+  );
+
+  const deleteOrphanVolume = useCallback(
+    (composeId: number, name: string) =>
+      track(`orphan-delete:${composeId}:${name}`, async () => {
+        const location = findComposeLocation(projectsRef.current, composeId);
+        if (!location) {
+          throw new Error('Compose not found');
+        }
+        await api.deleteOrphanVolume(
+          { projectId: location.project.id, environmentId: location.environment.id, composeId },
+          name,
+        );
       }),
     [track],
   );
@@ -780,12 +823,15 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteEnvironment,
       deleteProject,
       deleteVariable,
+      deleteOrphanVolume,
       deleteVolumeEntry,
       deployCompose,
+      deployComposeFresh,
       isPending,
       loadAuthStatus,
       loadLogs,
       loadMetrics,
+      loadOrphanVolumes,
       loadProjects,
       loadServiceMetrics,
       loadServices,
@@ -820,12 +866,15 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteEnvironment,
       deleteProject,
       deleteVariable,
+      deleteOrphanVolume,
       deleteVolumeEntry,
       deployCompose,
+      deployComposeFresh,
       isPending,
       loadAuthStatus,
       loadLogs,
       loadMetrics,
+      loadOrphanVolumes,
       loadProjects,
       loadServiceMetrics,
       loadServices,

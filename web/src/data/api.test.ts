@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  api,
   volumeArchiveUrl,
   volumeContentUrl,
   volumeDirectoryUrl,
@@ -86,5 +87,42 @@ describe('volumeRestoreUrl', () => {
     expect(volumeRestoreUrl(location, '/srv/legacy images', 'invoices/2026-09')).toBe(
       '/api/projects/1/environments/2/composes/3/volumes/restore?source=%2Fsrv%2Flegacy%20images&path=invoices%2F2026-09',
     );
+  });
+});
+
+describe('fresh deploy and orphan volumes', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('POSTs the confirmation name to deploy-fresh as JSON', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await api.deployComposeFresh(location, 'web');
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/projects/1/environments/2/composes/3/deploy-fresh');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ confirmName: 'web' });
+  });
+
+  it('lists orphans from the orphans endpoint', async () => {
+    const fetch = vi.fn(
+      async (_url: string, _init?: RequestInit) => new Response('{"orphans":[]}', { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.listOrphanVolumes(location)).resolves.toEqual({ orphans: [] });
+    expect(fetch.mock.calls[0][0]).toBe('/api/projects/1/environments/2/composes/3/volumes/orphans');
+  });
+
+  it('DELETEs one orphan with its name encoded whole', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await api.deleteOrphanVolume(location, 'a/b');
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/projects/1/environments/2/composes/3/volumes/orphans/a%2Fb');
+    expect(init?.method).toBe('DELETE');
   });
 });

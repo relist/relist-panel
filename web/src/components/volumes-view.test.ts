@@ -5,6 +5,7 @@ import {
   cliMessage,
   downloadRefusal,
   isNotDeployed,
+  orphansView,
   resolvedVolumePath,
   serviceUserRefusal,
   volumeLabel,
@@ -158,5 +159,25 @@ describe('serviceUserRefusal', () => {
   it('leaves the numeric uid:gid the API and the helper accept alone', () => {
     expect(serviceUserRefusal('999:998')).toBeUndefined();
     expect(serviceUserRefusal(undefined)).toBeUndefined();
+  });
+});
+
+describe('orphansView', () => {
+  const row = { name: 'demo_old', createdAt: '2026-09-01T00:00:00Z' };
+
+  it('is loading with neither a payload nor an error', () => {
+    expect(orphansView(undefined, undefined)).toEqual({ status: 'loading' });
+  });
+
+  it('carries the error message', () => {
+    expect(orphansView(undefined, 'docker said no')).toEqual({ status: 'error', message: 'docker said no' });
+  });
+
+  it('is empty for no orphans', () => {
+    expect(orphansView({ orphans: [] })).toEqual({ status: 'empty' });
+  });
+
+  it('is ready with the rows otherwise', () => {
+    expect(orphansView({ orphans: [row] })).toEqual({ status: 'ready', orphans: [row] });
   });
 });

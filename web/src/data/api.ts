@@ -12,6 +12,7 @@ import type {
   Environment,
   EnvironmentVariable,
   HostMetrics,
+  OrphanVolume,
   Project,
   ServiceFacts,
   ServiceMetrics,
@@ -147,6 +148,9 @@ export const api = {
     request<Compose>(composePath(location), jsonInit('PUT', input)),
   deleteCompose: (location: ComposePath) => request<void>(composePath(location), { method: 'DELETE' }),
   deployCompose: (location: ComposePath) => request<Compose>(`${composePath(location)}/deploy`, { method: 'POST' }),
+  /** Removes the Compose's volumes, then deploys; `confirmName` must equal the Compose's name exactly. */
+  deployComposeFresh: (location: ComposePath, confirmName: string) =>
+    request<Compose>(`${composePath(location)}/deploy-fresh`, jsonInit('POST', { confirmName })),
   stopCompose: (location: ComposePath) => request<Compose>(`${composePath(location)}/stop`, { method: 'POST' }),
   restartCompose: (location: ComposePath) => request<Compose>(`${composePath(location)}/restart`, { method: 'POST' }),
   logs: (location: ComposePath) => request<LogsPayload>(`${composePath(location)}/logs`),
@@ -161,6 +165,10 @@ export const api = {
    * CLI's own `couldn't find env file`.
    */
   listVolumes: (location: ComposePath) => request<ComposeVolumes>(`${composePath(location)}/volumes`),
+  listOrphanVolumes: (location: ComposePath) =>
+    request<{ orphans: OrphanVolume[] }>(`${composePath(location)}/volumes/orphans`),
+  deleteOrphanVolume: (location: ComposePath, name: string) =>
+    request<void>(`${composePath(location)}/volumes/orphans/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   /**
    * One directory's entries, from the helper's `list`. `source` must be one
    * of the Compose's resolved sources and `path` is relative to the Volume

@@ -381,6 +381,9 @@ export type ComposeVolumes = {
   services: VolumeServiceUser[];
 };
 
+/** A named Volume Docker holds under this Compose's project label that its file no longer declares. */
+export type OrphanVolume = { name: string; createdAt: string };
+
 /** What one entry of a directory listing is, per the helper's `list`/`stat` JSON. */
 export type VolumeEntryKind = 'file' | 'directory' | 'symlink' | 'other';
 
