@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react';
 
 import { api } from './api';
-import type { Credentials, ProjectInput } from './api';
+import type { Credentials, LoginResult, ProjectInput } from './api';
 import type { Compose, ComposeService, ComposeVolumes, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
@@ -102,7 +102,7 @@ type PanelValue = {
   saveVariable: (environmentId: number, variable: NewVariable, variableId?: number) => Promise<void>;
   deleteVariable: (environmentId: number, variableId: number) => Promise<void>;
   replaceVariables: (environmentId: number, rows: NewVariable[]) => Promise<void>;
-  signIn: (email: string, password: string) => Promise<void>;
+  signIn: (email: string, password: string, code?: string) => Promise<LoginResult>;
   signOut: () => Promise<void>;
   signUp: (email: string, password: string) => Promise<void>;
   stopCompose: (composeId: number) => Promise<void>;
@@ -186,10 +186,15 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   }, [track]);
 
   const signIn = useCallback(
-    async (email: string, password: string) => {
-      await track('signin', async () => {
-        await api.login({ email, password } satisfies Credentials);
-        setAuth({ checked: true, setupRequired: false, authenticated: true });
+    async (email: string, password: string, code?: string) => {
+      return track('signin', async () => {
+        const result = await api.login({ email, password, code });
+        // Only a completed sign-in opens the app; a code prompt or the lock
+        // leaves the auth state untouched so the page stays on its step.
+        if (result.kind === 'signedIn') {
+          setAuth({ checked: true, setupRequired: false, authenticated: true });
+        }
+        return result;
       });
     },
     [track],

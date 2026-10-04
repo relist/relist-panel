@@ -90,6 +90,94 @@ describe('volumeRestoreUrl', () => {
   });
 });
 
+/**
+ * Sign-in is the one endpoint where a `401` and a `429` are answers rather than
+ * failures: the API tells the client to ask for a code or to wait. Every other
+ * non-2xx response stays an `ApiError`, so the page can show the API's message.
+ */
+describe('login', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('maps a 200 response to signedIn and POSTs the credentials as JSON', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.login({ email: 'admin@relist.local', password: 'hunter2' })).resolves.toEqual({
+      kind: 'signedIn',
+    });
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/auth/login');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ email: 'admin@relist.local', password: 'hunter2' });
+  });
+
+  it('maps a 401 that asks for a code to codeRequired', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (_url: string, _init?: RequestInit) =>
+          new Response(JSON.stringify({ error: 'two-factor code required', codeRequired: true }), { status: 401 }),
+      ),
+    );
+
+    await expect(api.login({ email: 'admin@relist.local', password: 'hunter2' })).resolves.toEqual({
+      kind: 'codeRequired',
+    });
+  });
+
+  it('maps a 429 with Retry-After to rateLimited', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (_url: string, _init?: RequestInit) =>
+          new Response(JSON.stringify({ error: 'too many attempts, try again in 42 seconds' }), {
+            status: 429,
+            headers: { 'Retry-After': '42' },
+          }),
+      ),
+    );
+
+    await expect(api.login({ email: 'admin@relist.local', password: 'hunter2' })).resolves.toEqual({
+      kind: 'rateLimited',
+      retryAfterSeconds: 42,
+    });
+  });
+
+  it('falls back to one second when a 429 has no usable Retry-After', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (_url: string, _init?: RequestInit) =>
+          new Response(JSON.stringify({ error: 'too many attempts, try again in 1 seconds' }), {
+            status: 429,
+            headers: { 'Retry-After': 'soon' },
+          }),
+      ),
+    );
+
+    await expect(api.login({ email: 'admin@relist.local', password: 'hunter2' })).resolves.toEqual({
+      kind: 'rateLimited',
+      retryAfterSeconds: 1,
+    });
+  });
+
+  it('rejects with an ApiError carrying invalid code on a 401 that is not a code prompt', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (_url: string, _init?: RequestInit) =>
+          new Response(JSON.stringify({ error: 'invalid code' }), { status: 401 }),
+      ),
+    );
+
+    await expect(api.login({ email: 'admin@relist.local', password: 'hunter2', code: '000000' })).rejects.toMatchObject({
+      message: 'invalid code',
+      status: 401,
+    });
+  });
+});
+
 describe('fresh deploy and orphan volumes', () => {
   afterEach(() => vi.unstubAllGlobals());
 

@@ -6,7 +6,10 @@ import { Navigate, useLocation, useNavigate } from 'react-router';
 import { entryScreen, signInTarget } from '../app/entry';
 import { paths } from '../app/paths';
 import { CenteredScreen } from '../app/RequireAuth';
+import type { LoginResult } from '../data/api';
 import { usePanel } from '../data/store';
+import { backToPassword, nextStep, rateLimitMessage } from './signin-view';
+import type { SignInStep } from './signin-view';
 
 const { Text, Title, Paragraph } = Typography;
 
@@ -126,7 +129,10 @@ export function SignInPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [form] = Form.useForm<{ email: string; password: string }>();
+  const [step, setStep] = useState<SignInStep>({ step: 'password' });
   const [error, setError] = useState<string>();
+  const [codeError, setCodeError] = useState<string>();
+  const [code, setCode] = useState('');
 
   // The deep link that sent the visitor here (set by the gate's redirect).
   const from = (location.state as { from?: unknown } | null)?.from;
@@ -153,19 +159,59 @@ export function SignInPage() {
     return <Navigate replace to={paths.setup} />;
   }
 
-  const submit = async (values: { email: string; password: string }) => {
+  // A result is an answer, not necessarily a failure: the code prompt advances
+  // the step, the lock leaves a message, and only a completed sign-in moves the
+  // store, which the effect above turns into navigation.
+  const applyResult = (submitted: { email: string; password: string }, result: LoginResult) => {
+    if (result.kind === 'rateLimited') {
+      setError(rateLimitMessage(result.retryAfterSeconds));
+    } else if (result.kind === 'codeRequired') {
+      setError(undefined);
+      setCode('');
+    }
+    setCodeError(undefined);
+    setStep((current) => nextStep(current, submitted, result));
+  };
+
+  const submitPassword = async (values: { email: string; password: string }) => {
     setError(undefined);
+    setCodeError(undefined);
     try {
-      await signIn(values.email, values.password);
+      applyResult(values, await signIn(values.email, values.password));
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : 'Sign in failed');
     }
   };
 
+  const submitCode = async (value: string) => {
+    if (step.step !== 'code') {
+      return;
+    }
+    setError(undefined);
+    setCodeError(undefined);
+    try {
+      applyResult({ email: step.email, password: step.password }, await signIn(step.email, step.password, value));
+    } catch (reason: unknown) {
+      // A refused code is spent: clear the boxes and show the API's words under them.
+      setCode('');
+      setCodeError(reason instanceof Error ? reason.message : 'Sign in failed');
+    }
+  };
+
+  const back = () => {
+    setCode('');
+    setError(undefined);
+    setCodeError(undefined);
+    setStep(backToPassword());
+  };
+
+  const signingIn = isPending('signin');
+  const onCodeStep = step.step === 'code';
+
   return (
     <AuthLayout
       footer={
-        auth.setupRequired ? (
+        !onCodeStep && auth.setupRequired ? (
           <Flex gap={8} wrap>
             <Text type="secondary">First run?</Text>
             <Button onClick={() => navigate(paths.setup)} size="small" type="link">
@@ -174,35 +220,57 @@ export function SignInPage() {
           </Flex>
         ) : undefined
       }
-      subtitle="Use the admin account for this host."
-      title="Sign in"
+      subtitle={onCodeStep ? 'Enter the six-digit code from your authenticator app.' : 'Use the admin account for this host.'}
+      title={onCodeStep ? 'Two-factor code' : 'Sign in'}
     >
       {error && <AuthError message={error} />}
-      <Form
-        form={form}
-        layout="vertical"
-        onFinish={(values) => {
-          void submit(values);
-        }}
-        requiredMark={false}
-      >
-        <Form.Item label="Email" name="email" rules={[{ message: 'Enter your email address', required: true }]}>
-          <Input autoComplete="email" autoFocus placeholder="admin@relist.local" size="large" />
-        </Form.Item>
-        <Form.Item label="Password" name="password" rules={[{ message: 'Enter your password', required: true }]}>
-          <Input.Password autoComplete="current-password" placeholder="••••••••" prefix={<LockOutlined />} size="large" />
-        </Form.Item>
-        <Button block htmlType="submit" loading={isPending('signin')} size="large" type="primary">
-          Sign in
-        </Button>
-      </Form>
-      <Alert
-        description="Sessions are cookie-based and survive a reload; signing out clears the session server-side."
-        showIcon
-        style={{ marginTop: 16 }}
-        title="Staying signed in"
-        type="info"
-      />
+      {onCodeStep ? (
+        <Flex gap={16} vertical>
+          <Input.OTP
+            autoComplete="one-time-code"
+            autoFocus
+            disabled={signingIn}
+            length={6}
+            onChange={(value) => {
+              void submitCode(value);
+            }}
+            size="large"
+            value={code}
+          />
+          {codeError && <AuthError message={codeError} />}
+          <Button block onClick={back} size="small" type="link">
+            Back
+          </Button>
+        </Flex>
+      ) : (
+        <>
+          <Form
+            form={form}
+            layout="vertical"
+            onFinish={(values) => {
+              void submitPassword(values);
+            }}
+            requiredMark={false}
+          >
+            <Form.Item label="Email" name="email" rules={[{ message: 'Enter your email address', required: true }]}>
+              <Input autoComplete="email" autoFocus placeholder="admin@relist.local" size="large" />
+            </Form.Item>
+            <Form.Item label="Password" name="password" rules={[{ message: 'Enter your password', required: true }]}>
+              <Input.Password autoComplete="current-password" placeholder="••••••••" prefix={<LockOutlined />} size="large" />
+            </Form.Item>
+            <Button block htmlType="submit" loading={signingIn} size="large" type="primary">
+              Sign in
+            </Button>
+          </Form>
+          <Alert
+            description="Sessions are cookie-based and survive a reload; signing out clears the session server-side."
+            showIcon
+            style={{ marginTop: 16 }}
+            title="Staying signed in"
+            type="info"
+          />
+        </>
+      )}
     </AuthLayout>
   );
 }

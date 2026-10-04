@@ -31,6 +31,20 @@ export type Credentials = {
   password: string;
 };
 
+/** A sign-in attempt: `code` is present only on the second, two-factor step. */
+export type LoginInput = Credentials & { code?: string };
+
+/**
+ * The three answers a sign-in attempt can settle on. Two of them are not
+ * failures: `codeRequired` is the API asking for the second factor, and
+ * `rateLimited` is the lock, carrying how long to wait. A wrong password or
+ * code stays a thrown `ApiError` — there is nothing to do but show it.
+ */
+export type LoginResult =
+  | { kind: 'signedIn' }
+  | { kind: 'codeRequired' }
+  | { kind: 'rateLimited'; retryAfterSeconds: number };
+
 export type ProjectInput = {
   name: string;
   description: string;
@@ -104,6 +118,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+/**
+ * Sign-in's `401` body, parsed once: `codeRequired` is the API asking for the
+ * second factor rather than reporting a bad password, so the flag has to be
+ * read before the error message is turned into an `ApiError`.
+ */
+type LoginErrorResponse = ErrorResponse & { codeRequired?: boolean };
+
+async function loginErrorResponse(response: Response): Promise<LoginErrorResponse> {
+  try {
+    const payload = (await response.json()) as unknown;
+    if (payload && typeof payload === 'object') {
+      return payload as LoginErrorResponse;
+    }
+  } catch {
+    // A non-JSON body carries no `codeRequired`; the caller falls back to a status message.
+  }
+  return {};
+}
+
+/** The lock's wait, in whole seconds; the server always sends at least one. */
+function retryAfterSeconds(header: string | null): number {
+  const seconds = Number(header);
+  return Number.isFinite(seconds) && seconds >= 1 ? Math.ceil(seconds) : 1;
+}
+
 function jsonInit(method: string, body: unknown): RequestInit {
   return {
     method,
@@ -115,7 +154,29 @@ function jsonInit(method: string, body: unknown): RequestInit {
 export const api = {
   authStatus: () => request<AuthStatus>('/api/auth/status'),
   setup: (credentials: Credentials) => request<unknown>('/api/auth/setup', jsonInit('POST', credentials)),
-  login: (credentials: Credentials) => request<unknown>('/api/auth/login', jsonInit('POST', credentials)),
+  /**
+   * Sign-in, with its own `fetch` rather than `request`: a `401` asking for the
+   * two-factor code and a `429` announcing the lock are results, not failures.
+   * A wrong password or code still throws an `ApiError`, as does any other
+   * non-2xx response.
+   */
+  login: async (input: LoginInput): Promise<LoginResult> => {
+    const response = await fetch('/api/auth/login', { credentials: 'same-origin', ...jsonInit('POST', input) });
+    if (response.ok) {
+      return { kind: 'signedIn' };
+    }
+    if (response.status === 401) {
+      const payload = await loginErrorResponse(response);
+      if (payload.codeRequired) {
+        return { kind: 'codeRequired' };
+      }
+      throw new ApiError(401, payload.error ?? 'Request failed (401)');
+    }
+    if (response.status === 429) {
+      return { kind: 'rateLimited', retryAfterSeconds: retryAfterSeconds(response.headers.get('Retry-After')) };
+    }
+    throw new ApiError(response.status, await responseError(response));
+  },
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
 
   listProjects: () => request<Project[]>('/api/projects'),
