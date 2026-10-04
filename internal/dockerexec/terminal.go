@@ -155,6 +155,58 @@ func (e *TerminalExec) HasShell(ctx context.Context, containerID, path string) (
 	return inspected.ExitCode == 0, nil
 }
 
+// Kill signals pid in the Container with sig, through the shell's builtin kill
+// rather than a kill executable some minimal images lack: a non-TTY exec of
+// `/bin/sh -c "kill -<sig> <pid>"` as root. A non-zero exit means the pid is
+// gone, which the liveness probe (sig "0") relies on, so it is ErrNoProcess.
+// The adapter knows nothing of the wrapper: pid is the caller's to identify.
+func (e *TerminalExec) Kill(ctx context.Context, containerID string, pid int, sig string) error {
+	createPath := "/containers/" + url.PathEscape(containerID) + "/exec"
+	resp, body, err := e.send(ctx, http.MethodPost, createPath, createExecRequest{
+		Cmd:  []string{"/bin/sh", "-c", "kill -" + sig + " " + strconv.Itoa(pid)},
+		User: "0",
+		Tty:  false,
+	})
+	if err != nil {
+		return err
+	}
+	if !ok(resp.StatusCode) {
+		return apiError(createPath, resp.Status, body)
+	}
+	execID, err := createdExecID(body)
+	if err != nil {
+		return fmt.Errorf("docker api %s: decode: %w", createPath, err)
+	}
+
+	startPath := "/exec/" + url.PathEscape(execID) + "/start"
+	startResp, startBody, err := e.send(ctx, http.MethodPost, startPath, startExecRequest{Detach: false, Tty: false})
+	if err != nil {
+		return err
+	}
+	if !ok(startResp.StatusCode) {
+		return apiError(startPath, startResp.Status, startBody)
+	}
+
+	inspectPath := "/exec/" + url.PathEscape(execID) + "/json"
+	inspectResp, inspectBody, err := e.send(ctx, http.MethodGet, inspectPath, nil)
+	if err != nil {
+		return err
+	}
+	if !ok(inspectResp.StatusCode) {
+		return apiError(inspectPath, inspectResp.Status, inspectBody)
+	}
+	var inspected struct {
+		ExitCode int `json:"ExitCode"`
+	}
+	if err := json.Unmarshal(inspectBody, &inspected); err != nil {
+		return fmt.Errorf("docker api %s: decode: %w", inspectPath, err)
+	}
+	if inspected.ExitCode != 0 {
+		return terminal.ErrNoProcess
+	}
+	return nil
+}
+
 // Start opens a TTY exec and returns the hijacked stream. The create carries
 // the requested shell, user, TERM and initial console size; the start asks the
 // daemon to upgrade the connection, and the 101's connection — with its
@@ -163,7 +215,7 @@ func (e *TerminalExec) Start(ctx context.Context, containerID string, opts termi
 	createPath := "/containers/" + url.PathEscape(containerID) + "/exec"
 	consoleSize := [2]uint16{opts.Rows, opts.Cols}
 	resp, body, err := e.send(ctx, http.MethodPost, createPath, createExecRequest{
-		Cmd:          []string{opts.Shell},
+		Cmd:          opts.Cmd,
 		Tty:          true,
 		AttachStdin:  true,
 		AttachStdout: true,

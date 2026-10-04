@@ -28,6 +28,13 @@ type ShellCall struct {
 	Path        string
 }
 
+// KillCall is one Kill the fake served: the Container, the pid and the signal.
+type KillCall struct {
+	ContainerID string
+	PID         int
+	Signal      string
+}
+
 // Exec is a scripted terminal.Exec. Its zero value answers an empty listing,
 // reports the feature available, and starts a fresh in-memory session.
 type Exec struct {
@@ -48,12 +55,18 @@ type Exec struct {
 	// before the resize is recorded. A test can block on it to hold a resize
 	// in flight.
 	BeforeResize func()
+	// KillExits, when it has an entry for a pid, makes a HUP end that pid:
+	// the following liveness probe (signal "0") returns ErrNoProcess. Without
+	// it the pid survives its HUP and the probe finds it.
+	KillExits map[int]bool
 	// Starts records every successful Start, in order. Reads race-free
 	// through StartsSnapshot.
 	Starts []StartCall
 
 	mu         sync.Mutex
 	shellCalls []ShellCall
+	kills      []KillCall
+	dead       map[int]bool
 }
 
 // StartsSnapshot copies the recorded Starts under the lock, for a race-free
@@ -69,6 +82,14 @@ func (f *Exec) ShellCallsSnapshot() []ShellCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]ShellCall(nil), f.shellCalls...)
+}
+
+// KillsSnapshot copies the recorded Kills under the lock, for a race-free read
+// while a handler may still be hanging a shell up.
+func (f *Exec) KillsSnapshot() []KillCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]KillCall(nil), f.kills...)
 }
 
 // Available implements terminal.Exec.
@@ -87,6 +108,25 @@ func (f *Exec) HasShell(_ context.Context, containerID, path string) (bool, erro
 	f.shellCalls = append(f.shellCalls, ShellCall{ContainerID: containerID, Path: path})
 	f.mu.Unlock()
 	return f.Shells[containerID+":"+path], nil
+}
+
+// Kill implements terminal.Exec. It records the call; a HUP for a pid in
+// KillExits ends that pid, after which the "0" probe returns ErrNoProcess.
+func (f *Exec) Kill(_ context.Context, containerID string, pid int, sig string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.kills = append(f.kills, KillCall{ContainerID: containerID, PID: pid, Signal: sig})
+	if sig == "HUP" && f.KillExits[pid] {
+		if f.dead == nil {
+			f.dead = make(map[int]bool)
+		}
+		f.dead[pid] = true
+		return nil
+	}
+	if sig == "0" && f.dead[pid] {
+		return terminal.ErrNoProcess
+	}
+	return nil
 }
 
 // Start implements terminal.Exec. It records the call and returns a Session

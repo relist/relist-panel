@@ -16,6 +16,7 @@ import (
 
 	"relist-panel/internal/composes"
 	"relist-panel/internal/terminal"
+	terminalfake "relist-panel/internal/terminal/faketest"
 )
 
 // terminalServicesPath is the listing route under one Compose.
@@ -267,14 +268,66 @@ func awaitReady(t *testing.T, conn *websocket.Conn) terminalControl {
 	return ctrl
 }
 
-func dialReady(t *testing.T, server *testServer, path string) (*websocket.Conn, terminalControl) {
+// wrapperPID is the pid the fake's marked wrapper announces. Every session test
+// that awaits ready must first feed this line to the session's Remote: the
+// handler reads it before it announces ready, and never forwards it.
+const wrapperPID = 4242
+
+// awaitStarted waits until the handler has started at least before+1 sessions
+// and returns the (before+1)th, so a test can act as the container side before
+// the handler sends ready.
+func awaitStarted(t *testing.T, server *testServer, before int) *terminalfake.Session {
 	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		starts := server.terminal.StartsSnapshot()
+		if len(starts) > before {
+			return starts[before].Session
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the session never started")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// writePID feeds the marked wrapper's pid line to the session, as the container
+// side would.
+func writePID(t *testing.T, session *terminalfake.Session) {
+	t.Helper()
+	if _, err := session.Remote.Write([]byte(strconv.Itoa(wrapperPID) + "\r\n")); err != nil {
+		t.Fatalf("write the wrapper's pid line: %v", err)
+	}
+}
+
+// openAndReady dials a session, feeds the wrapper a pid line if the handler got
+// as far as starting one, and returns the first control frame. A cap refusal
+// arrives with no Start and is returned as its error frame.
+func openAndReady(t *testing.T, server *testServer, path string) (*websocket.Conn, terminalControl) {
+	t.Helper()
+	before := len(server.terminal.StartsSnapshot())
 	conn, resp, err := dialTerminal(t, server, path, nil)
 	if err != nil {
 		t.Fatalf("dial terminal: %v (HTTP %v)", err, resp)
 	}
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for len(server.terminal.StartsSnapshot()) == before && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if starts := server.terminal.StartsSnapshot(); len(starts) > before {
+		writePID(t, starts[before].Session)
+	}
+	return conn, readControl(t, conn, 2*time.Second)
+}
+
+func dialReady(t *testing.T, server *testServer, path string) (*websocket.Conn, terminalControl) {
+	t.Helper()
+	conn, ctrl := openAndReady(t, server, path)
 	t.Cleanup(func() { conn.CloseNow() })
-	return conn, awaitReady(t, conn)
+	if ctrl.Type != "ready" {
+		t.Fatalf("control frame = %+v, want ready", ctrl)
+	}
+	return conn, ctrl
 }
 
 func writeText(t *testing.T, conn *websocket.Conn, value any) {
@@ -320,6 +373,7 @@ func TestTerminalSessionPumpsBytesBothWays(t *testing.T) {
 	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
 	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
 
+	before := len(server.terminal.StartsSnapshot())
 	conn, resp, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"), nil)
 	if err != nil {
 		t.Fatalf("dial terminal: %v", err)
@@ -328,9 +382,10 @@ func TestTerminalSessionPumpsBytesBothWays(t *testing.T) {
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusSwitchingProtocols)
 	}
+	session := awaitStarted(t, server, before)
+	writePID(t, session)
 	awaitReady(t, conn)
 
-	session := server.terminal.StartsSnapshot()[0].Session
 	writeBinary(t, conn, []byte("ls\r"))
 	keystrokes := make([]byte, 3)
 	if _, err := io.ReadFull(session.Remote, keystrokes); err != nil {
@@ -349,6 +404,106 @@ func TestTerminalSessionPumpsBytesBothWays(t *testing.T) {
 	}
 }
 
+// The wrapper's pid line is the session's own business: the browser receives
+// only the shell's output that follows it.
+func TestTerminalSessionHidesTheWrapperPID(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+
+	before := len(server.terminal.StartsSnapshot())
+	conn, resp, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"), nil)
+	if err != nil {
+		t.Fatalf("dial terminal: %v (HTTP %v)", err, resp)
+	}
+	defer conn.CloseNow()
+	session := awaitStarted(t, server, before)
+	if _, err := session.Remote.Write([]byte("4242\r\n$ ")); err != nil {
+		t.Fatalf("write the wrapper's pid line and output: %v", err)
+	}
+	awaitReady(t, conn)
+
+	typ, data := readMessage(t, conn, 2*time.Second)
+	if typ != websocket.MessageBinary || string(data) != "$ " {
+		t.Fatalf("message = %v %q, want binary %q", typ, data, "$ ")
+	}
+}
+
+// The session announces the shell with a marked wrapper: /bin/sh prints its own
+// pid and execs the chosen shell, so the session has a pid to hang up and Task
+// 7's sweep has a marker. The session builds the argv; the adapter sends it.
+func TestTerminalSessionStartsTheMarkedWrapper(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+
+	dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
+
+	starts := server.terminal.StartsSnapshot()
+	if len(starts) != 1 {
+		t.Fatalf("Starts = %d, want 1", len(starts))
+	}
+	want := []string{"/bin/sh", "-c", `echo $$; exec "$1"`, "relist-terminal", "/bin/bash"}
+	if got := starts[0].Opts.Cmd; !reflect.DeepEqual(got, want) {
+		t.Fatalf("start command = %v, want %v", got, want)
+	}
+}
+
+// When a session ends the shell it started is hung up: a HUP, then a probe for
+// the pid, and a KILL only when the probe still finds it. Escalation is skipped
+// only once the pid is reported gone.
+func TestTerminalSessionHangsUpTheShellOnDisconnect(t *testing.T) {
+	t.Run("escalates to KILL when the probe still sees the pid", func(t *testing.T) {
+		server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+		scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+
+		conn, _ := dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
+		conn.CloseNow()
+
+		want := []terminalfake.KillCall{
+			{ContainerID: "c1", PID: wrapperPID, Signal: "HUP"},
+			{ContainerID: "c1", PID: wrapperPID, Signal: "KILL"},
+		}
+		if got := waitForNonProbeKills(t, server, want); !reflect.DeepEqual(got, want) {
+			t.Fatalf("kills = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("stops after HUP when the probe reports no process", func(t *testing.T) {
+		server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+		scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+		server.terminal.KillExits = map[int]bool{wrapperPID: true}
+
+		conn, _ := dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
+		conn.CloseNow()
+
+		want := []terminalfake.KillCall{{ContainerID: "c1", PID: wrapperPID, Signal: "HUP"}}
+		if got := waitForNonProbeKills(t, server, want); !reflect.DeepEqual(got, want) {
+			t.Fatalf("kills = %+v, want %+v", got, want)
+		}
+	})
+}
+
+// waitForNonProbeKills polls until the signals other than the liveness probe
+// (signal "0") match want, and returns them.
+func waitForNonProbeKills(t *testing.T, server *testServer, want []terminalfake.KillCall) []terminalfake.KillCall {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		got := make([]terminalfake.KillCall, 0, len(want))
+		for _, kill := range server.terminal.KillsSnapshot() {
+			if kill.Signal != "0" {
+				got = append(got, kill)
+			}
+		}
+		if reflect.DeepEqual(got, want) {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("kills = %+v, want %+v", got, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // ready names the shell, user and Container the session resolved, and the exec
 // was started with the matching options and the browser's initial size.
 func TestTerminalSessionReadyNamesTheResolvedTarget(t *testing.T) {
@@ -360,7 +515,13 @@ func TestTerminalSessionReadyNamesTheResolvedTarget(t *testing.T) {
 		if ready.Shell != "bash" || ready.User != "default" || ready.Container != "relist-c3-app-1" {
 			t.Fatalf("ready = %+v, want bash/default/relist-c3-app-1", ready)
 		}
-		if got, want := server.terminal.StartsSnapshot()[0].Opts, (terminal.ExecOptions{Shell: "/bin/bash", Rows: 24, Cols: 80}); got != want {
+		want := terminal.ExecOptions{
+			Shell: "/bin/bash",
+			Rows:  24,
+			Cols:  80,
+			Cmd:   []string{"/bin/sh", "-c", `echo $$; exec "$1"`, "relist-terminal", "/bin/bash"},
+		}
+		if got := server.terminal.StartsSnapshot()[0].Opts; !reflect.DeepEqual(got, want) {
 			t.Fatalf("exec options = %+v, want %+v", got, want)
 		}
 	})
@@ -373,7 +534,13 @@ func TestTerminalSessionReadyNamesTheResolvedTarget(t *testing.T) {
 		if ready.Shell != "sh" {
 			t.Fatalf("ready.shell = %q, want sh", ready.Shell)
 		}
-		if got, want := server.terminal.StartsSnapshot()[0].Opts, (terminal.ExecOptions{Shell: "/bin/sh", Rows: 24, Cols: 80}); got != want {
+		want := terminal.ExecOptions{
+			Shell: "/bin/sh",
+			Rows:  24,
+			Cols:  80,
+			Cmd:   []string{"/bin/sh", "-c", `echo $$; exec "$1"`, "relist-terminal", "/bin/sh"},
+		}
+		if got := server.terminal.StartsSnapshot()[0].Opts; !reflect.DeepEqual(got, want) {
 			t.Fatalf("exec options = %+v, want %+v", got, want)
 		}
 	})
@@ -568,13 +735,10 @@ func TestTerminalSessionEndsWhenTheStreamEndsBeforeOutput(t *testing.T) {
 	// The slot is freed once the handler returns; dial until the eleventh opens.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		conn, _, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"), nil)
-		if err == nil {
-			ctrl := readControl(t, conn, 2*time.Second)
-			conn.CloseNow()
-			if ctrl.Type == "ready" {
-				return
-			}
+		conn, ctrl := openAndReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
+		conn.CloseNow()
+		if ctrl.Type == "ready" {
+			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("the eleventh session never opened after a slot was released")
@@ -616,13 +780,10 @@ func TestTerminalSessionEnforcesTheSessionCap(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		conn, _, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"), nil)
-		if err == nil {
-			ctrl := readControl(t, conn, 2*time.Second)
-			conn.CloseNow()
-			if ctrl.Type == "ready" {
-				return
-			}
+		conn, ctrl := openAndReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
+		conn.CloseNow()
+		if ctrl.Type == "ready" {
+			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("a new session never opened after one was closed")

@@ -8,13 +8,16 @@
 package terminal
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -29,7 +32,17 @@ const (
 	defaultCols      = 80
 	exitCodeTimeout  = 5 * time.Second
 	controlWriteTime = 5 * time.Second
+	// maxPIDLine bounds the wrapper's pid line. The wrapper prints nothing but
+	// the pid, so anything longer is a stream out of order, not a pid.
+	maxPIDLine = 32
+	// killTimeout bounds the whole hang-up: HUP, the grace, the probe and the
+	// escalation. It never runs on the request's context.
+	killTimeout = 5 * time.Second
 )
+
+// wrapperName is the marker the session's wrapper carries as the exec's third
+// argument, which Task 7's sweep matches on to find orphaned shells.
+const wrapperName = "relist-terminal"
 
 // controlFrame is an incoming JSON text frame. Only resize is defined in that
 // direction; the fields a frame does not carry stay zero.
@@ -134,12 +147,25 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 		User:  userFlag(userChoice),
 		Rows:  rows,
 		Cols:  cols,
+		Cmd:   wrapperCmd(shellPath),
 	})
 	if err != nil {
 		s.fail(conn, err.Error())
 		return
 	}
 	defer session.Close()
+
+	// The wrapper prints the shell's pid before it execs the shell. Read it here,
+	// before ready, so the session has something to hang up; the reader keeps any
+	// shell output that arrived in the same read, so none of it is lost and the
+	// pid line is never forwarded.
+	reader := bufio.NewReader(session)
+	pid, err := readWrapperPID(reader)
+	if err != nil {
+		s.fail(conn, "could not read the shell's pid: "+err.Error())
+		return
+	}
+	defer s.hangUp(target.ID, pid)
 
 	if err := writeControl(r.Context(), conn, readyFrame{
 		Type:      "ready",
@@ -150,7 +176,62 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.run(conn, session)
+	s.run(conn, session, reader)
+}
+
+// wrapperCmd is the marked shell the session starts: a /bin/sh prints its own
+// pid — the pid the session later hangs up — then execs the chosen shell. The
+// marker stays in the exec's ProcessConfig, where Task 7's sweep can find it.
+// /bin/sh is required: an image with bash but no sh has no usable shell.
+func wrapperCmd(shell string) []string {
+	return []string{"/bin/sh", "-c", `echo $$; exec "$1"`, wrapperName, shell}
+}
+
+// readWrapperPID reads the first line the marked wrapper prints — the shell's
+// own pid — from r. The line ends at the first newline, carries the \r of a
+// TTY's CRLF trimmed, is at most maxPIDLine bytes, and must be a positive
+// integer. Anything else is refused so the session never runs an unkillable
+// shell.
+func readWrapperPID(r *bufio.Reader) (int, error) {
+	line := make([]byte, 0, maxPIDLine)
+	for len(line) < maxPIDLine {
+		b, err := r.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		if b == '\n' {
+			text := strings.TrimRight(string(line), "\r")
+			pid, err := strconv.Atoi(text)
+			if err != nil || pid <= 0 {
+				return 0, fmt.Errorf("invalid pid %q", text)
+			}
+			return pid, nil
+		}
+		line = append(line, b)
+	}
+	return 0, errors.New("pid line is too long")
+}
+
+// hangUp ends the shell one session started, on its own bounded context so a
+// cancelled request or a dead browser cannot skip the cleanup: a HUP, the kill
+// grace, then a liveness probe. Only a probe that still finds the pid escalates
+// to KILL; ErrNoProcess means the HUP was enough.
+func (s *Service) hangUp(containerID string, pid int) {
+	ctx, cancel := context.WithTimeout(context.Background(), killTimeout)
+	defer cancel()
+
+	if err := s.exec.Kill(ctx, containerID, pid, "HUP"); errors.Is(err, ErrNoProcess) {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(s.killGrace):
+	}
+	if err := s.exec.Kill(ctx, containerID, pid, "0"); errors.Is(err, ErrNoProcess) {
+		return
+	}
+	_ = s.exec.Kill(ctx, containerID, pid, "KILL")
 }
 
 // run carries one live session: output to the browser, input from it, a ping
@@ -158,7 +239,7 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 // Docker resize call off the input pump. The first pump to end cancels the
 // rest; the handler returns once the output pump has stopped, which is when the
 // shell's stream has ended.
-func (s *Service) run(conn *websocket.Conn, session Session) {
+func (s *Service) run(conn *websocket.Conn, session Session, reader io.Reader) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -188,7 +269,7 @@ func (s *Service) run(conn *websocket.Conn, session Session) {
 		defer close(outputDone)
 		buf := make([]byte, 32*1024)
 		for {
-			n, err := session.Read(buf)
+			n, err := reader.Read(buf)
 			if n > 0 {
 				writeCtx, writeCancel := context.WithTimeout(ctx, controlWriteTime)
 				werr := conn.Write(writeCtx, websocket.MessageBinary, buf[:n])

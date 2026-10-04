@@ -32,12 +32,19 @@ type Container struct {
 
 // ExecOptions is one interactive exec's parameters, in the seam's own
 // vocabulary: the resolved shell path, the resolved user ("" for the image's
-// own user, "0" for root) and the initial terminal size.
+// own user, "0" for root) and the initial terminal size. Cmd, when set, is the
+// exact argv to exec, built by the session; the adapter sends it verbatim, so
+// the adapter stays dumb about the marked wrapper.
 type ExecOptions struct {
 	Shell      string // "/bin/bash" or "/bin/sh"
 	User       string // "" or "0"
 	Rows, Cols uint16
+	Cmd        []string // the argv to exec; the session's marked wrapper
 }
+
+// ErrNoProcess reports that a pid is gone: the liveness probe's kill exec
+// exited non-zero, so there is no process left to signal.
+var ErrNoProcess = errors.New("terminal: no such process")
 
 // Session is one live interactive exec: the raw TTY stream both ways, plus the
 // window resize and the exit code the Engine API offers out of band.
@@ -61,6 +68,10 @@ type Exec interface {
 	HasShell(ctx context.Context, containerID, path string) (bool, error)
 	// Start opens a TTY exec running shell as user.
 	Start(ctx context.Context, containerID string, opts ExecOptions) (Session, error)
+	// Kill signals pid in the Container with sig ("HUP", "0" for the
+	// liveness probe, "KILL"). A non-zero kill exit means the pid is gone:
+	// ErrNoProcess.
+	Kill(ctx context.Context, containerID string, pid int, sig string) error
 }
 
 // Options configures the terminal service. The zero value of each limit or

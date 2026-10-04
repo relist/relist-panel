@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -435,6 +436,77 @@ func TestTerminalExecSessionResizeAndExitCode(t *testing.T) {
 	if gotMethod != http.MethodGet || gotPath != "/exec/e1/json" {
 		t.Errorf("inspect request was %s %s, want GET /exec/e1/json", gotMethod, gotPath)
 	}
+}
+
+// Kill signals a pid through the shell's builtin, not an executable: a non-TTY
+// exec of `/bin/sh -c "kill -<sig> <pid>"` as root. A non-zero exit is the pid
+// already gone, terminal.ErrNoProcess.
+func TestTerminalExecKillUsesTheShellBuiltinAsRoot(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("the kill is a non-tty shell builtin as root", func(t *testing.T) {
+		var mu sync.Mutex
+		var createBody []byte
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			createBody = body
+			mu.Unlock()
+			writeTerminalJSON(t, w, http.StatusCreated, map[string]string{"Id": "e1"})
+		})
+		mux.HandleFunc("POST /exec/{id}/start", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		mux.HandleFunc("GET /exec/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+			writeTerminalJSON(t, w, http.StatusOK, map[string]any{"ExitCode": 0})
+		})
+		socket := newTerminalDaemon(t, mux)
+
+		if err := dockerexec.NewTerminalExec(socket).Kill(ctx, "c1", 4242, "HUP"); err != nil {
+			t.Fatalf("Kill() error = %v", err)
+		}
+
+		mu.Lock()
+		body := createBody
+		mu.Unlock()
+		var create struct {
+			Cmd  []string `json:"Cmd"`
+			User string   `json:"User"`
+			Tty  bool     `json:"Tty"`
+		}
+		if err := json.Unmarshal(body, &create); err != nil {
+			t.Fatalf("create body %q is not JSON: %v", body, err)
+		}
+		if want := []string{"/bin/sh", "-c", "kill -HUP 4242"}; !reflect.DeepEqual(create.Cmd, want) {
+			t.Errorf("create Cmd = %v, want %v", create.Cmd, want)
+		}
+		if create.User != "0" {
+			t.Errorf("create User = %q, want %q", create.User, "0")
+		}
+		if create.Tty {
+			t.Error("create Tty = true, want false")
+		}
+	})
+
+	t.Run("a non-zero exit is no such process", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
+			writeTerminalJSON(t, w, http.StatusCreated, map[string]string{"Id": "e1"})
+		})
+		mux.HandleFunc("POST /exec/{id}/start", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		mux.HandleFunc("GET /exec/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+			writeTerminalJSON(t, w, http.StatusOK, map[string]any{"ExitCode": 1})
+		})
+		socket := newTerminalDaemon(t, mux)
+
+		err := dockerexec.NewTerminalExec(socket).Kill(ctx, "c1", 4242, "0")
+		if !errors.Is(err, terminal.ErrNoProcess) {
+			t.Fatalf("Kill() error = %v, want terminal.ErrNoProcess", err)
+		}
+	})
 }
 
 func TestTerminalExecAvailablePingsTheDaemon(t *testing.T) {
