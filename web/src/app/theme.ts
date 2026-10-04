@@ -35,6 +35,13 @@ export const LAYOUT = {
    * scrolls with the document — no nested scrollers.
    */
   editorMinHeight: 'clamp(640px, 80vh, 1000px)',
+  /**
+   * The Terminal tab's xterm box (GUIDELINES §6, §4.6): a bounded box because
+   * a terminal *is* the feature, tall enough for `vim` and `top` without
+   * giving the whole viewport to it — the sheet around it still scrolls as one
+   * document. `clamp` keeps it usable on a short laptop and on a tall monitor.
+   */
+  terminalHeight: 'clamp(420px, 65vh, 800px)',
 } as const;
 
 export type ThemeMode = 'dark' | 'light';

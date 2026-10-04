@@ -42,6 +42,7 @@ import { useNavigate, useParams } from 'react-router';
 
 import { paths } from '../app/paths';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
+import { ComposeTerminalTab } from '../components/ComposeTerminalTab';
 import { ComposeVolumesTab } from '../components/ComposeVolumesTab';
 import { DangerModal } from '../components/DangerModal';
 import { FullscreenEditor } from '../components/FullscreenEditor';
@@ -865,6 +866,26 @@ export function ComposePage() {
             ),
             key: 'logs',
             label: 'Logs',
+          },
+          {
+            children: (
+              // Keyed by Compose so navigating to another Compose's Terminal
+              // remounts it: state, the selectors and the socket all belong to
+              // one Compose. Switching tabs within this one does not remount.
+              <ComposeTerminalTab
+                active={activeTab === 'terminal'}
+                compose={compose}
+                key={compose.id}
+                location={{
+                  composeId: compose.id,
+                  environmentId: environment.id,
+                  projectId: project.id,
+                }}
+                onOpenEditor={() => navigate(paths.compose(project.id, environment.id, compose.id))}
+              />
+            ),
+            key: 'terminal',
+            label: 'Terminal',
           },
           {
             children: (

@@ -13,6 +13,7 @@ describe('LAYOUT', () => {
       gutter: 24,
       gutterSmall: 16,
       editorMinHeight: 'clamp(640px, 80vh, 1000px)',
+      terminalHeight: 'clamp(420px, 65vh, 800px)',
     });
   });
 });
