@@ -105,6 +105,22 @@ func TestResetTwoFactorPicksTheOnlyAccount(t *testing.T) {
 	}
 }
 
+func TestResetTwoFactorEmailIsCaseInsensitive(t *testing.T) {
+	db := openResetDatabase(t)
+	seedResetAdmin(t, db, sql.NullString{String: "SECRET", Valid: true})
+
+	result, err := ResetTwoFactor(context.Background(), db, " Admin@Example.COM ")
+	if err != nil {
+		t.Fatalf("ResetTwoFactor() error = %v", err)
+	}
+	if result.Email != "admin@example.com" {
+		t.Fatalf("Email = %q, want %q", result.Email, "admin@example.com")
+	}
+	if !result.WasEnabled {
+		t.Fatalf("WasEnabled = false, want true")
+	}
+}
+
 func TestResetTwoFactorUnknownEmail(t *testing.T) {
 	db := openResetDatabase(t)
 	seedResetAdmin(t, db, sql.NullString{String: "SECRET", Valid: true})

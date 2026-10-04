@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 )
 
 var (
@@ -82,6 +83,7 @@ type resetTarget struct {
 // row because admin_credentials.email is UNIQUE. Without an email the query
 // must find exactly one account.
 func findResetTarget(ctx context.Context, tx *sql.Tx, email string) (resetTarget, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
 	if email != "" {
 		var account resetTarget
 		err := tx.QueryRowContext(ctx, `
