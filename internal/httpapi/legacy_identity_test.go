@@ -216,3 +216,24 @@ func TestComposeDeployFreshRefusesAmbiguousLegacyIdentity(t *testing.T) {
 		t.Fatalf("ambiguous legacy identity reached Docker: %+v", server.runner.calls)
 	}
 }
+
+func TestOrphanVolumesRefuseAmbiguousLegacyIdentity(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	p := createProject(t, server, "Legacy", "")
+	e := productionEnvironment(t, server, p)
+	one := legacyCompose(t, server, e.ID, "a-b", "c", "web")
+	two := legacyCompose(t, server, e.ID, "a", "b-c", "other")
+	if _, err := server.db.Exec(`UPDATE composes SET name='c-web', env_slug='b' WHERE id=?`, two); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{one, two} {
+		orphans := composeVolumesPath(p.ID, e.ID, id) + "/orphans"
+		legacyStatus(t, server, http.MethodGet, orphans, http.StatusConflict)
+		legacyStatus(t, server, http.MethodDelete, orphans+"/a-b-c-web_old", http.StatusConflict)
+	}
+	cli := server.volumeCLI
+	if len(cli.ComposeConfigRefs) != 0 || len(cli.ListedProjects) != 0 || len(cli.RemovedVolumes) != 0 {
+		t.Fatalf("ambiguous legacy identity reached the Docker CLI: %+v", cli)
+	}
+}

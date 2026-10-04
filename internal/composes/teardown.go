@@ -8,6 +8,18 @@ import (
 	"path/filepath"
 )
 
+// ErrAmbiguousIdentity is wrapped by requireUniqueIdentity when a legacy deploy
+// identity is shared by two Composes, so a caller can tell that refusal from a
+// lookup failure.
+var ErrAmbiguousIdentity = errors.New("ambiguous deploy identity")
+
+// ambiguousIdentity carries the refusal's own message while unwrapping to
+// ErrAmbiguousIdentity, so the text callers already show is unchanged.
+type ambiguousIdentity struct{ message string }
+
+func (e ambiguousIdentity) Error() string { return e.message }
+func (e ambiguousIdentity) Unwrap() error { return ErrAmbiguousIdentity }
+
 // requireUniqueIdentity keeps ambiguous legacy deployments read-only. Moving a
 // running stack would orphan it; the operator must resolve its old identity first.
 func (s *Service) requireUniqueIdentity(ctx context.Context, compose Compose) error {
@@ -25,7 +37,7 @@ func (s *Service) requireUniqueIdentity(ctx context.Context, compose Compose) er
 			return err
 		}
 		if other.ID != compose.ID && other.DeployProjectName() == compose.DeployProjectName() {
-			return fmt.Errorf("legacy deploy identity %q is shared by Composes %d and %d; resolve the collision before operating on either Compose", compose.DeployProjectName(), compose.ID, other.ID)
+			return ambiguousIdentity{fmt.Sprintf("legacy deploy identity %q is shared by Composes %d and %d; resolve the collision before operating on either Compose", compose.DeployProjectName(), compose.ID, other.ID)}
 		}
 	}
 	return rows.Err()
