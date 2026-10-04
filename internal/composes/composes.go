@@ -722,7 +722,15 @@ func (s *Service) ComposeRunRequest(ctx context.Context, projectID, environmentI
 // sibling domain that needs the set but owns neither the runner nor the
 // 404 path. It takes an already-resolved RunRequest so the caller shares one
 // resolution with ComposeRunRequest.
+//
+// Like currentStatus, it only queries the runner once a Compose has actually
+// been deployed (its resolved compose file exists on disk). An undeployed
+// Compose has no Compose file for `docker compose ps` to read, so asking would
+// fail; it lists no Services instead, which the UI renders as its empty state.
 func (s *Service) ServiceNames(ctx context.Context, req RunRequest) ([]string, error) {
+	if _, err := os.Stat(req.ComposeFilePath); err != nil {
+		return nil, nil
+	}
 	status, err := s.runner.Status(ctx, req)
 	if err != nil {
 		return nil, err

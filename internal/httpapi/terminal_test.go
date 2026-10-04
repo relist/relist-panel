@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"testing"
@@ -22,6 +24,20 @@ import (
 // terminalServicesPath is the listing route under one Compose.
 func terminalServicesPath(projectID, environmentID, composeID int64) string {
 	return composePath(projectID, environmentID, composeID) + "/terminal/services"
+}
+
+// writeDeployedComposeFile writes the resolved compose file a deploy would
+// leave on disk, marking a Compose as deployed for the status guard the terminal
+// listing shares with currentStatus.
+func writeDeployedComposeFile(t *testing.T, server *testServer, composeID int64) {
+	t.Helper()
+	dir := filepath.Join(server.dataDir, ".composes", strconv.FormatInt(composeID, 10))
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("create compose directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services: {}\n"), 0o640); err != nil {
+		t.Fatalf("write deployed compose file: %v", err)
+	}
 }
 
 type terminalServicesResponse struct {
@@ -58,6 +74,7 @@ func TestTerminalServicesListsRunningContainersAndShells(t *testing.T) {
 	compose := createCompose(t, server, project.ID, env.ID, "App")
 	projectName := "relist-c" + strconv.FormatInt(compose.ID, 10)
 
+	writeDeployedComposeFile(t, server, compose.ID)
 	server.runner.statuses[projectName] = composes.ComposeStatus{Services: []string{"app", "worker"}}
 	server.terminal.Containers = map[string][]terminal.Container{
 		projectName + "/app": {{ID: "c1", Name: "relist-c3-app-1", Number: 1}},
@@ -129,6 +146,40 @@ func TestTerminalServicesReportsTheFeatureUnavailable(t *testing.T) {
 	}
 	if payload.Reason != "docker socket not reachable" {
 		t.Fatalf("reason = %q, want the availability error", payload.Reason)
+	}
+	if payload.Services == nil || len(payload.Services) != 0 {
+		t.Fatalf("services = %#v, want an empty list, not null", payload.Services)
+	}
+}
+
+// An undeployed Compose — one whose resolved compose file does not exist on
+// disk, because Up is what writes it — must list no Services rather than fail:
+// `docker compose ps` has no file to read, so ServiceNames short-circuits. The
+// listing stays a 200 and available, and the UI renders its "Deploy to start a
+// terminal" empty state from the empty Services list.
+func TestTerminalServicesListsNothingForAnUndeployedCompose(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Terminal Co", "")
+	env := productionEnvironment(t, server, project)
+	compose := createCompose(t, server, project.ID, env.ID, "App")
+
+	composeFile := filepath.Join(server.dataDir, ".composes", strconv.FormatInt(compose.ID, 10), "docker-compose.yml")
+	if _, err := os.Stat(composeFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat %s = %v, want the compose file to be absent before a deploy", composeFile, err)
+	}
+
+	response := server.request(t, http.MethodGet, terminalServicesPath(project.ID, env.ID, compose.ID), nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	var payload terminalServicesResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode terminal services: %v", err)
+	}
+	if !payload.Available || payload.Reason != "" {
+		t.Fatalf("availability = %+v, want available with no reason", payload)
 	}
 	if payload.Services == nil || len(payload.Services) != 0 {
 		t.Fatalf("services = %#v, want an empty list, not null", payload.Services)
