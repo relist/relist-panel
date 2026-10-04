@@ -148,3 +148,26 @@ export function nextState(
   }
   return state;
 }
+
+/**
+ * What a key press means to the terminal box. Ctrl+C stays SIGINT, so copy is
+ * the explicit Ctrl+Shift+C (Cmd+C on a Mac). Paste is Ctrl+Shift+V / Cmd+V;
+ * the component leaves the browser's own `paste` event to xterm, so a paste
+ * lands exactly once.
+ */
+export function terminalKeyAction(
+  event: Pick<KeyboardEvent, 'type' | 'key' | 'ctrlKey' | 'shiftKey' | 'metaKey'>,
+): 'copy' | 'paste' | 'pass' {
+  if (event.type !== 'keydown') {
+    return 'pass';
+  }
+  const key = event.key.toLowerCase();
+  const chord = (event.ctrlKey && event.shiftKey) || (event.metaKey && !event.ctrlKey);
+  if (chord && key === 'c') {
+    return 'copy';
+  }
+  if (chord && key === 'v') {
+    return 'paste';
+  }
+  return 'pass';
+}

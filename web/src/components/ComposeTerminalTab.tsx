@@ -12,7 +12,7 @@ import { paths, resolvePath } from '../app/paths';
 import { LAYOUT, ThemeModeContext } from '../app/theme';
 import { api } from '../data/api';
 import type { ComposePath } from '../data/api';
-import { nextState, parseServerFrame, resizeFrame, terminalUrl } from '../data/terminal-session';
+import { nextState, parseServerFrame, resizeFrame, terminalKeyAction, terminalUrl } from '../data/terminal-session';
 import type { SessionState, TerminalShell, TerminalTarget, TerminalUser } from '../data/terminal-session';
 import type { Compose, TerminalServices } from '../data/types';
 import { EmptyState } from './primitives';
@@ -240,37 +240,24 @@ export function ComposeTerminalTab({
     term.onResize(({ rows, cols }) => queueResize(rows, cols));
 
     // Ctrl+C stays SIGINT: copy needs the explicit Ctrl+Shift+C (Cmd+C on a
-    // Mac) and only steals the key when there is a selection. Paste is
-    // Ctrl+Shift+V / Cmd+V.
+    // Mac) and only steals the key when there is a selection. Paste returns
+    // false so xterm ignores the chord and the browser's native `paste` event
+    // reaches it once, with no clipboard permission needed.
     term.attachCustomKeyEventHandler((event) => {
-      if (event.type !== 'keydown') {
-        return true;
-      }
-      const key = event.key.toLowerCase();
-      const copy =
-        (event.ctrlKey && event.shiftKey && key === 'c') || (event.metaKey && !event.ctrlKey && key === 'c');
-      if (copy) {
-        const selected = term.getSelection();
-        if (!selected) {
-          return true;
+      switch (terminalKeyAction(event)) {
+        case 'copy': {
+          const selected = term.getSelection();
+          if (!selected) {
+            return true;
+          }
+          void navigator.clipboard?.writeText(selected).catch(() => undefined);
+          return false;
         }
-        void navigator.clipboard?.writeText(selected).catch(() => undefined);
-        return false;
+        case 'paste':
+          return false;
+        default:
+          return true;
       }
-      const paste =
-        (event.ctrlKey && event.shiftKey && key === 'v') || (event.metaKey && !event.ctrlKey && key === 'v');
-      if (paste && navigator.clipboard?.readText) {
-        void navigator.clipboard
-          .readText()
-          .then((text) => {
-            if (text) {
-              term.paste(text);
-            }
-          })
-          .catch(() => undefined);
-        return false;
-      }
-      return true;
     });
 
     const observer = new ResizeObserver(() => scheduleFit());

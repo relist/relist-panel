@@ -5,6 +5,7 @@ import {
   nextState,
   parseServerFrame,
   resizeFrame,
+  terminalKeyAction,
   terminalUrl,
   type ServerFrame,
   type SessionState,
@@ -137,5 +138,30 @@ describe('nextState', () => {
   it('leaves a failed session failed when the socket closes', () => {
     const state: SessionState = { kind: 'failed', message: 'boom' };
     expect(nextState(state, { type: 'close' })).toEqual(state);
+  });
+});
+
+describe('terminalKeyAction', () => {
+  const key = (event: Partial<Parameters<typeof terminalKeyAction>[0]>) =>
+    terminalKeyAction({ ctrlKey: false, key: '', metaKey: false, shiftKey: false, type: 'keydown', ...event });
+
+  it('copies on Ctrl+Shift+C and on Cmd+C', () => {
+    expect(key({ ctrlKey: true, key: 'C', shiftKey: true })).toBe('copy');
+    expect(key({ key: 'c', metaKey: true })).toBe('copy');
+  });
+
+  it('pastes on Ctrl+Shift+V and on Cmd+V, whatever the key case', () => {
+    expect(key({ ctrlKey: true, key: 'V', shiftKey: true })).toBe('paste');
+    expect(key({ key: 'v', metaKey: true })).toBe('paste');
+  });
+
+  it('passes a plain Ctrl+C through so it stays SIGINT', () => {
+    expect(key({ ctrlKey: true, key: 'c' })).toBe('pass');
+  });
+
+  it('passes keyup and unrelated keys through', () => {
+    expect(key({ ctrlKey: true, key: 'v', shiftKey: true, type: 'keyup' })).toBe('pass');
+    expect(key({ key: 'a' })).toBe('pass');
+    expect(key({ ctrlKey: true, key: 'v', metaKey: true })).toBe('pass');
   });
 });
