@@ -20,7 +20,6 @@ import {
   Card,
   Col,
   Descriptions,
-  Drawer,
   Dropdown,
   Empty,
   Flex,
@@ -61,7 +60,7 @@ import { ApiError } from '../data/api';
 import { usePanel } from '../data/store';
 import type { ComposeVolumes, OrphanVolume } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
-import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges } from './compose-view';
+import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
 
 const { Text, Paragraph, Title } = Typography;
 
@@ -115,7 +114,6 @@ export function ComposePage() {
 
   const [draft, setDraft] = useState(compose?.yamlContent ?? '');
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
-  const [logsOpen, setLogsOpen] = useState(false);
   const [logsText, setLogsText] = useState<string>();
   const [logServices, setLogServices] = useState<string[]>([]);
   const [logLines, setLogLines] = useState(200);
@@ -178,6 +176,15 @@ export function ComposePage() {
   // parent, hand-edited URL) is redirected to the canonical one — tab included,
   // or the redirect would drop the operator back on the Editor.
   const activeTab = activeComposeTab(tab);
+
+  // Logs are fetched on demand: opening the tab (or landing on its URL) reads them.
+  const logsComposeId = compose?.id;
+  const onLogsTab = activeTab === 'logs';
+  useEffect(() => {
+    if (onLogsTab && logsComposeId !== undefined) {
+      loadLogs(logsComposeId).then(setLogsText).catch(fail);
+    }
+  }, [loadLogs, logsComposeId, onLogsTab]);
   // `available: false` means the feature cannot run at all — a bare binary, no
   // Docker socket — and the tab is hidden rather than shown dead. A URL that
   // still names it redirects to the Editor along with every other stale link.
@@ -396,15 +403,6 @@ export function ComposePage() {
     }
   };
 
-  const openLogs = async () => {
-    setLogsOpen(true);
-    try {
-      setLogsText(await loadLogs(compose.id));
-    } catch (reason: unknown) {
-      fail(reason);
-    }
-  };
-
   const removeCompose = async () => {
     try {
       await deleteCompose(compose.id);
@@ -478,9 +476,6 @@ export function ComposePage() {
         }
         extra={
           <>
-            <Button icon={<FileTextOutlined />} onClick={() => void openLogs()}>
-              Logs
-            </Button>
             <Dropdown menu={{ items: moreMenu }} placement="bottomRight" trigger={['click']}>
               <Button icon={<MoreOutlined />} />
             </Dropdown>
@@ -692,7 +687,7 @@ export function ComposePage() {
 
                       {state === 'partial' && (
                         <Alert
-                          description="Open the Logs drawer and filter to the service that exited."
+                          description="Open the Logs tab and filter to the service that exited."
                           title="Some containers are not running"
                           showIcon
                           style={{ marginTop: 12 }}
@@ -774,6 +769,105 @@ export function ComposePage() {
           },
           {
             children: (
+              <>
+            <Flex align="center" gap={8} style={{ marginBottom: 12 }} wrap>
+              <Select
+                maxTagCount="responsive"
+                mode="multiple"
+                onChange={setLogServices}
+                options={services.map((service) => ({ label: service.name, value: service.name }))}
+                placeholder="All services"
+                style={{ minWidth: 240 }}
+                value={logServices}
+              />
+              <Select
+                onChange={setLogLines}
+                options={[
+                  { label: 'Last 50 lines', value: 50 },
+                  { label: 'Last 200 lines', value: 200 },
+                  { label: 'Last 500 lines', value: 500 },
+                ]}
+                style={{ width: 150 }}
+                value={logLines}
+              />
+              <Tooltip title="Live streaming needs a websocket log feed — deliberately out of scope for v1">
+                <Flex align="center" gap={6}>
+                  <Switch disabled size="small" />
+                  <Text type="secondary">Follow</Text>
+                </Flex>
+              </Tooltip>
+              <Text type="secondary" style={{ marginInlineStart: 'auto' }}>
+                {visibleLogLines.length} of {logLineCount} lines
+              </Text>
+                <Space>
+                  <Button
+                    icon={<CopyOutlined />}
+                    onClick={() => {
+                      void navigator.clipboard.writeText(visibleLogLines.join('\n'));
+                      message.success('Copied visible log lines');
+                    }}
+                    size="small"
+                  >
+                    Copy
+                  </Button>
+                  <Tooltip title="Downloading logs is out of scope for v1 — the API returns the last 200 lines only">
+                    <Button disabled icon={<CloudDownloadOutlined />} size="small">
+                      Download
+                    </Button>
+                  </Tooltip>
+                  <Button
+                    icon={<ReloadOutlined />}
+                    loading={logsLoading}
+                    onClick={() => {
+                      void loadLogs(compose.id)
+                        .then(setLogsText)
+                        .catch(fail);
+                    }}
+                    size="small"
+                  >
+                    Refresh
+                  </Button>
+                </Space>
+            </Flex>
+    
+            {logsLoading ? (
+              <Skeleton active paragraph={{ rows: 8 }} title={false} />
+            ) : visibleLogLines.length === 0 ? (
+              <Empty
+                description={<Text type="secondary">No log lines for the selected services.</Text>}
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              />
+            ) : (
+              <pre
+                className="rp-logs"
+                style={{
+                  background: token.colorFillQuaternary,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  borderRadius: token.borderRadius,
+                  margin: 0,
+                  maxHeight: 'calc(100vh - 320px)',
+                  overflow: 'auto',
+                }}
+              >
+                {visibleLogLines.map((line, index) => (
+                  <div key={`${index}-${line.slice(0, 24)}`}>{line}</div>
+                ))}
+              </pre>
+            )}
+            <Title level={5} style={{ marginTop: 16 }}>
+              Logs are fetched on demand
+            </Title>
+            <Text type="secondary">
+              The panel returns the last ~200 lines from <Text code>docker compose logs</Text>. Nothing is streamed or stored.
+            </Text>
+    
+              </>
+            ),
+            key: 'logs',
+            label: 'Logs',
+          },
+          {
+            children: (
               <ServiceMonitor
                 compose={compose}
                 onOpenEditor={() => navigate(paths.compose(project.id, environment.id, compose.id))}
@@ -828,113 +922,6 @@ export function ComposePage() {
         project={project}
         saving={isPending(`save-compose:${compose.id}`)}
       />
-
-      <Drawer
-        extra={
-          <Space>
-            <Button
-              icon={<CopyOutlined />}
-              onClick={() => {
-                void navigator.clipboard.writeText(visibleLogLines.join('\n'));
-                message.success('Copied visible log lines');
-              }}
-              size="small"
-            >
-              Copy
-            </Button>
-            <Tooltip title="Downloading logs is out of scope for v1 — the API returns the last 200 lines only">
-              <Button disabled icon={<CloudDownloadOutlined />} size="small">
-                Download
-              </Button>
-            </Tooltip>
-            <Button
-              icon={<ReloadOutlined />}
-              loading={logsLoading}
-              onClick={() => {
-                void loadLogs(compose.id)
-                  .then(setLogsText)
-                  .catch(fail);
-              }}
-              size="small"
-            >
-              Refresh
-            </Button>
-          </Space>
-        }
-        onClose={() => setLogsOpen(false)}
-        open={logsOpen}
-        title={
-          <Flex align="center" gap={8}>
-            <Text strong>Logs</Text>
-            <Text type="secondary">
-              {project.name} / {environment.name} / {compose.name}
-            </Text>
-          </Flex>
-        }
-        width={760}
-      >
-        <Flex align="center" gap={8} style={{ marginBottom: 12 }} wrap>
-          <Select
-            maxTagCount="responsive"
-            mode="multiple"
-            onChange={setLogServices}
-            options={services.map((service) => ({ label: service.name, value: service.name }))}
-            placeholder="All services"
-            style={{ minWidth: 240 }}
-            value={logServices}
-          />
-          <Select
-            onChange={setLogLines}
-            options={[
-              { label: 'Last 50 lines', value: 50 },
-              { label: 'Last 200 lines', value: 200 },
-              { label: 'Last 500 lines', value: 500 },
-            ]}
-            style={{ width: 150 }}
-            value={logLines}
-          />
-          <Tooltip title="Live streaming needs a websocket log feed — deliberately out of scope for v1">
-            <Flex align="center" gap={6}>
-              <Switch disabled size="small" />
-              <Text type="secondary">Follow</Text>
-            </Flex>
-          </Tooltip>
-          <Text type="secondary" style={{ marginInlineStart: 'auto' }}>
-            {visibleLogLines.length} of {logLineCount} lines
-          </Text>
-        </Flex>
-
-        {logsLoading ? (
-          <Skeleton active paragraph={{ rows: 8 }} title={false} />
-        ) : visibleLogLines.length === 0 ? (
-          <Empty
-            description={<Text type="secondary">No log lines for the selected services.</Text>}
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-          />
-        ) : (
-          <pre
-            className="rp-logs"
-            style={{
-              background: token.colorFillQuaternary,
-              border: `1px solid ${token.colorBorderSecondary}`,
-              borderRadius: token.borderRadius,
-              margin: 0,
-              maxHeight: 'calc(100vh - 220px)',
-              overflow: 'auto',
-            }}
-          >
-            {visibleLogLines.map((line, index) => (
-              <div key={`${index}-${line.slice(0, 24)}`}>{line}</div>
-            ))}
-          </pre>
-        )}
-        <Title level={5} style={{ marginTop: 16 }}>
-          Logs are fetched on demand
-        </Title>
-        <Text type="secondary">
-          The panel returns the last ~200 lines from <Text code>docker compose logs</Text>. Nothing is streamed or stored.
-        </Text>
-      </Drawer>
 
       <DangerModal
         confirmWord={compose.name}

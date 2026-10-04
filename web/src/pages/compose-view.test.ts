@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ComposeVolumes } from '../data/types';
-import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges } from './compose-view';
+import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
 
 describe('composeDeployIdentity', () => {
   it('uses the API identity including the configured absolute directory for new Composes', () => {
@@ -25,6 +25,7 @@ describe('composeDeployIdentity', () => {
 describe('activeComposeTab', () => {
   it('resolves the tab segment the design links to', () => {
     expect(activeComposeTab('monitor')).toBe('monitor');
+    expect(activeComposeTab('logs')).toBe('logs');
     expect(activeComposeTab('volumes')).toBe('volumes');
     expect(activeComposeTab('editor')).toBe('editor');
   });
@@ -88,6 +89,27 @@ describe('filterLogLines', () => {
 
   it('yields an empty list when the filter matches nothing', () => {
     expect(filterLogLines(logs, ['cache-1'], 200)).toEqual([]);
+  });
+
+  it('matches a Service name against its container labels, not a bare prefix', () => {
+    const mixed = 'web-1  | a\nweb-2  | b\nweb2-1 | c';
+    expect(filterLogLines(mixed, ['web'], 200)).toEqual(['web-1  | a', 'web-2  | b']);
+  });
+});
+
+describe('logServiceOptions', () => {
+  const logs = 'web-1  | a\ndb-1   | b\nweb-1  | c';
+
+  it('names the Services the log text mentions when the collector knows none', () => {
+    expect(logServiceOptions(logs, [])).toEqual(['db', 'web']);
+  });
+
+  it('does not repeat a known Service the logs also name', () => {
+    expect(logServiceOptions(logs, ['web'])).toEqual(['db', 'web']);
+  });
+
+  it('offers the known Services before any logs are fetched', () => {
+    expect(logServiceOptions(undefined, ['web'])).toEqual(['web']);
   });
 });
 
