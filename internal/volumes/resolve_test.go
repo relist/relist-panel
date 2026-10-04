@@ -34,6 +34,12 @@ func (f *fakeCLI) VolumeExists(_ context.Context, name string) (bool, error) {
 	return f.volumeExists[name], nil
 }
 
+func (f *fakeCLI) ListProjectVolumes(context.Context, string) ([]ProjectVolume, error) {
+	return nil, nil
+}
+
+func (f *fakeCLI) RemoveVolume(context.Context, string) error { return nil }
+
 // demoConfig is `docker compose config --format json`'s real shape (Docker
 // 29), with the CLI's own work already done: db's relative bind came out
 // absolute, the `${VAR}` default was interpolated, the top-level map carries

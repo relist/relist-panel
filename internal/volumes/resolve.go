@@ -24,9 +24,14 @@ type ComposeRef struct {
 // `docker volume inspect <name>` reduced to a boolean: false only for a
 // volume that does not exist, with every other failure (a daemon that is down,
 // a missing CLI) an error, so "gone" is never confused with "unreachable".
+// ListProjectVolumes lists the volumes labelled with a Compose project, and
+// RemoveVolume is a plain `docker volume rm` that never forces: a volume still
+// in use fails with ErrVolumeInUse.
 type CLI interface {
 	ComposeConfig(ctx context.Context, ref ComposeRef) ([]byte, error)
 	VolumeExists(ctx context.Context, name string) (bool, error)
+	ListProjectVolumes(ctx context.Context, project string) ([]ProjectVolume, error)
+	RemoveVolume(ctx context.Context, name string) error
 }
 
 // VolumeKind is how a Volume is realised on the host, matching the `type` the

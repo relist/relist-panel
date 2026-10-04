@@ -134,3 +134,126 @@ func TestVolumeResolverVolumeExists(t *testing.T) {
 		})
 	}
 }
+
+// dockerStep is one scripted docker call's stdout, stderr and error.
+type dockerStep struct {
+	stdout string
+	stderr string
+	err    error
+}
+
+// scriptedDocker answers each docker call in order with the matching step and
+// records every argv; a call past the script fails.
+func scriptedDocker(steps []dockerStep, gotArgvs *[][]string) func(context.Context, []string, io.Reader, io.Writer, io.Writer) error {
+	return func(_ context.Context, argv []string, _ io.Reader, stdout, stderr io.Writer) error {
+		i := len(*gotArgvs)
+		*gotArgvs = append(*gotArgvs, argv)
+		if i >= len(steps) {
+			return errors.New("unexpected docker call")
+		}
+		_, _ = io.WriteString(stdout, steps[i].stdout)
+		_, _ = io.WriteString(stderr, steps[i].stderr)
+		return steps[i].err
+	}
+}
+
+// ListProjectVolumes lists names by project label, then inspects them all in
+// one call; the inspect JSON array supplies Name, CreatedAt and Labels.
+func TestVolumeResolverListProjectVolumesRunsLsThenInspect(t *testing.T) {
+	var gotArgvs [][]string
+	resolver := &VolumeResolver{runDocker: scriptedDocker([]dockerStep{
+		{stdout: "app_data\napp_old\n"},
+		{stdout: `[
+			{"Name":"app_data","CreatedAt":"2026-01-02T03:04:05Z","Driver":"local","Labels":{"com.docker.compose.project":"app","com.docker.compose.volume":"data"}},
+			{"Name":"app_old","CreatedAt":"2026-02-03T04:05:06Z","Driver":"local","Labels":null}
+		]`},
+	}, &gotArgvs)}
+
+	got, err := resolver.ListProjectVolumes(context.Background(), "app")
+	if err != nil {
+		t.Fatalf("ListProjectVolumes() error = %v", err)
+	}
+	wantArgvs := [][]string{
+		{"docker", "volume", "ls", "-q", "--filter", "label=com.docker.compose.project=app"},
+		{"docker", "volume", "inspect", "app_data", "app_old"},
+	}
+	if !reflect.DeepEqual(gotArgvs, wantArgvs) {
+		t.Errorf("docker argvs =\n\t%q\nwant\n\t%q", gotArgvs, wantArgvs)
+	}
+	want := []volumes.ProjectVolume{
+		{Name: "app_data", CreatedAt: "2026-01-02T03:04:05Z", Labels: map[string]string{
+			volumes.ComposeProjectLabel: "app",
+			volumes.ComposeVolumeLabel:  "data",
+		}},
+		{Name: "app_old", CreatedAt: "2026-02-03T04:05:06Z"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ListProjectVolumes() = %#v, want %#v", got, want)
+	}
+}
+
+// With no volume matching the label there is nothing to inspect, and the
+// answer is an empty non-nil slice.
+func TestVolumeResolverListProjectVolumesSkipsInspectWhenNothingMatches(t *testing.T) {
+	var gotArgvs [][]string
+	resolver := &VolumeResolver{runDocker: scriptedDocker([]dockerStep{{stdout: "\n"}}, &gotArgvs)}
+
+	got, err := resolver.ListProjectVolumes(context.Background(), "app")
+	if err != nil {
+		t.Fatalf("ListProjectVolumes() error = %v", err)
+	}
+	if len(gotArgvs) != 1 {
+		t.Errorf("docker calls = %q, want only the ls", gotArgvs)
+	}
+	if got == nil || len(got) != 0 {
+		t.Errorf("ListProjectVolumes() = %#v, want an empty non-nil slice", got)
+	}
+}
+
+func TestVolumeResolverListProjectVolumesFoldsStderrIntoTheError(t *testing.T) {
+	var gotArgvs [][]string
+	resolver := &VolumeResolver{runDocker: scriptedDocker([]dockerStep{
+		{stderr: "Cannot connect to the Docker daemon", err: errors.New("exit status 1")},
+	}, &gotArgvs)}
+
+	_, err := resolver.ListProjectVolumes(context.Background(), "app")
+	if err == nil {
+		t.Fatal("ListProjectVolumes() = nil error, want the CLI failure")
+	}
+	for _, want := range []string{"docker volume ls", "exit status 1", "Cannot connect"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("ListProjectVolumes() error = %v, want it to contain %q", err, want)
+		}
+	}
+}
+
+// RemoveVolume runs a plain `docker volume rm <name>` — never `-f`.
+func TestVolumeResolverRemoveVolumeRunsTheExactArgv(t *testing.T) {
+	var gotArgvs [][]string
+	resolver := &VolumeResolver{runDocker: scriptedDocker([]dockerStep{{stdout: "app_old\n"}}, &gotArgvs)}
+
+	if err := resolver.RemoveVolume(context.Background(), "app_old"); err != nil {
+		t.Fatalf("RemoveVolume() error = %v", err)
+	}
+	if want := [][]string{{"docker", "volume", "rm", "app_old"}}; !reflect.DeepEqual(gotArgvs, want) {
+		t.Errorf("docker argvs = %q, want %q", gotArgvs, want)
+	}
+}
+
+// A volume a container still uses maps to volumes.ErrVolumeInUse, with
+// Docker's own message kept for the operator.
+func TestVolumeResolverRemoveVolumeMapsInUseToErrVolumeInUse(t *testing.T) {
+	const message = "Error response from daemon: remove app_old: volume is in use - [abc123]"
+	var gotArgvs [][]string
+	resolver := &VolumeResolver{runDocker: scriptedDocker([]dockerStep{
+		{stderr: message, err: errors.New("exit status 1")},
+	}, &gotArgvs)}
+
+	err := resolver.RemoveVolume(context.Background(), "app_old")
+	if !errors.Is(err, volumes.ErrVolumeInUse) {
+		t.Fatalf("RemoveVolume() error = %v, want ErrVolumeInUse", err)
+	}
+	if !strings.Contains(err.Error(), message) {
+		t.Errorf("RemoveVolume() error = %v, want Docker's message %q", err, message)
+	}
+}

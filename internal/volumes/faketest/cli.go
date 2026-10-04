@@ -25,6 +25,21 @@ type CLI struct {
 	VolumeExistsErr error
 	// VolumeExistsNames records every VolumeExists name, in order.
 	VolumeExistsNames []string
+
+	// ProjectVolumes is what every ListProjectVolumes call lists, whatever
+	// project it is asked for — the Resolver's filter is what is under test.
+	ProjectVolumes []volumes.ProjectVolume
+	// ListProjectVolumesErr is returned by every ListProjectVolumes call in
+	// place of the list.
+	ListProjectVolumesErr error
+	// ListedProjects records every ListProjectVolumes project, in order.
+	ListedProjects []string
+
+	// RemoveVolumeErr is returned by every RemoveVolume call; a failed removal
+	// is not recorded in RemovedVolumes.
+	RemoveVolumeErr error
+	// RemovedVolumes records every volume RemoveVolume removed, in order.
+	RemovedVolumes []string
 }
 
 // ComposeConfig implements volumes.CLI.
@@ -43,6 +58,24 @@ func (f *CLI) VolumeExists(_ context.Context, name string) (bool, error) {
 		return false, f.VolumeExistsErr
 	}
 	return f.VolumeExistsByName[name], nil
+}
+
+// ListProjectVolumes implements volumes.CLI.
+func (f *CLI) ListProjectVolumes(_ context.Context, project string) ([]volumes.ProjectVolume, error) {
+	f.ListedProjects = append(f.ListedProjects, project)
+	if f.ListProjectVolumesErr != nil {
+		return nil, f.ListProjectVolumesErr
+	}
+	return f.ProjectVolumes, nil
+}
+
+// RemoveVolume implements volumes.CLI.
+func (f *CLI) RemoveVolume(_ context.Context, name string) error {
+	if f.RemoveVolumeErr != nil {
+		return f.RemoveVolumeErr
+	}
+	f.RemovedVolumes = append(f.RemovedVolumes, name)
+	return nil
 }
 
 var _ volumes.CLI = (*CLI)(nil)
