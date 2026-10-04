@@ -187,8 +187,9 @@ trouble?" without ssh'ing in — and be honest about what the panel can and cann
 
 ### 4.6 Compose (`…/compose/:composeId`)
 
-The core screen. Two tabs, in the path so both are linkable and the back button works:
-**Editor** (`…/compose/:composeId`, the default) and **Monitor** (`…/compose/:composeId/monitor`).
+The core screen. Tabs in the path so each is linkable and the back button works:
+**Editor** (`…/compose/:composeId`, the default), **Logs** (`…/compose/:composeId/logs`) and **Monitor**
+(`…/compose/:composeId/monitor`).
 An unknown segment falls back to Editor rather than a not-found page. Layout of the Editor tab:
 editor on the left, status rail on the right, both in normal document
 flow — the page scrolls as one, no nested scrollers. The two columns stretch to the same height, so
@@ -197,7 +198,7 @@ the editor is exactly as tall as the status rail beside it, with `LAYOUT.editorM
 height; it gets one from the rail rather than from a hard-coded number.
 
 - **Header**: name, status tag, `Unsaved changes` tag when dirty; actions graded by weight —
-  `Logs`, `⋮` (Restart / Stop / Delete), `Save`, and one primary `Deploy` that becomes
+  `⋮` (Restart / Stop / Delete), `Save`, and one primary `Deploy` that becomes
   `Save & Deploy` while the editor is dirty.
 - **Editor**: `docker-compose.yml` label, `Modified` marker, `Discard`, a full screen button, and a banner
   offering Save/Discard while dirty.
@@ -221,7 +222,7 @@ height; it gets one from the rail rather than from a hard-coded number.
   ADR-0005 note that identity is frozen at creation.
 - **Environment**: which Environment supplies variables, count, and how to reference them.
 - **Activity**: this Compose's recent actions.
-- **Logs drawer**: service filter, line count, copy; `Follow` is visible but disabled, with a tooltip
+- **Logs tab** (read on open, not a drawer): service filter, line count, copy; `Follow` is visible but disabled, with a tooltip
   explaining that streaming is out of v1 scope.
 
 #### Monitor tab (`…/compose/:composeId/monitor`)
