@@ -2522,6 +2522,9 @@ type fakeComposeRunner struct {
 	restartErr         error
 	logsOutput         string
 	logsErr            error
+	// onDownWithVolumes, when set, runs at the start of DownWithVolumes so a
+	// test can observe or change the disk at the moment of the destructive step.
+	onDownWithVolumes func(req composes.RunRequest)
 }
 
 type fakeComposeRun struct {
@@ -2548,6 +2551,9 @@ func (f *fakeComposeRunner) Down(_ context.Context, req composes.RunRequest) err
 }
 
 func (f *fakeComposeRunner) DownWithVolumes(_ context.Context, req composes.RunRequest) error {
+	if f.onDownWithVolumes != nil {
+		f.onDownWithVolumes(req)
+	}
 	f.calls = append(f.calls, fakeComposeRun{method: "down-with-volumes", request: req})
 	if f.downWithVolumesErr != nil {
 		return f.downWithVolumesErr
@@ -2729,6 +2735,10 @@ func composeDeployPath(projectID, environmentID, composeID int64) string {
 	return composePath(projectID, environmentID, composeID) + "/deploy"
 }
 
+func composeDeployFreshPath(projectID, environmentID, composeID int64) string {
+	return composePath(projectID, environmentID, composeID) + "/deploy-fresh"
+}
+
 func composeStopPath(projectID, environmentID, composeID int64) string {
 	return composePath(projectID, environmentID, composeID) + "/stop"
 }
@@ -2743,4 +2753,302 @@ func composeLogsPath(projectID, environmentID, composeID int64) string {
 
 func composeVolumesPath(projectID, environmentID, composeID int64) string {
 	return composePath(projectID, environmentID, composeID) + "/volumes"
+}
+
+const (
+	freshOldYAML = "services:\n  web:\n    image: nginx:old\n"
+	freshNewYAML = "services:\n  web:\n    image: nginx:new\n"
+)
+
+// freshDeployFixture is a Compose named "Web" holding freshOldYAML.
+type freshDeployFixture struct {
+	server  *testServer
+	project projectResponse
+	env     environmentResponse
+	compose composeResponse
+}
+
+func newFreshDeployFixture(t *testing.T) freshDeployFixture {
+	t.Helper()
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Fresh Co", "")
+	env := productionEnvironment(t, server, project)
+	response := postJSON(t, server, composesPath(project.ID, env.ID), map[string]string{
+		"name":        "Web",
+		"yamlContent": freshOldYAML,
+	})
+	defer response.Body.Close()
+	var compose composeResponse
+	if err := json.NewDecoder(response.Body).Decode(&compose); err != nil {
+		t.Fatalf("decode created compose: %v", err)
+	}
+	return freshDeployFixture{server: server, project: project, env: env, compose: compose}
+}
+
+func (f freshDeployFixture) deploy(t *testing.T) composeResponse {
+	t.Helper()
+	response := f.server.request(t, http.MethodPost, composeDeployPath(f.project.ID, f.env.ID, f.compose.ID), nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("deploy status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	var deployed composeResponse
+	if err := json.NewDecoder(response.Body).Decode(&deployed); err != nil {
+		t.Fatalf("decode deployed compose: %v", err)
+	}
+	return deployed
+}
+
+func (f freshDeployFixture) saveYAML(t *testing.T, yaml string) {
+	t.Helper()
+	response := f.server.request(t, http.MethodPut, composePath(f.project.ID, f.env.ID, f.compose.ID), map[string]string{"yamlContent": yaml})
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("save status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+}
+
+func (f freshDeployFixture) deployFresh(t *testing.T, body any) (int, map[string]string) {
+	t.Helper()
+	response := f.server.request(t, http.MethodPost, composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), body)
+	defer response.Body.Close()
+	var decoded map[string]string
+	_ = json.NewDecoder(response.Body).Decode(&decoded)
+	return response.StatusCode, decoded
+}
+
+// deployedRequest is the run request of the most recent up call: where the
+// deployed files live on disk.
+func (f freshDeployFixture) deployedRequest(t *testing.T) composes.RunRequest {
+	t.Helper()
+	for i := len(f.server.runner.calls) - 1; i >= 0; i-- {
+		if f.server.runner.calls[i].method == "up" {
+			return f.server.runner.calls[i].request
+		}
+	}
+	t.Fatal("no up call recorded")
+	return composes.RunRequest{}
+}
+
+func readFileString(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(content)
+}
+
+// methodsAfter returns the call methods past the first n calls, ignoring the
+// status probes that responses trigger.
+func (f freshDeployFixture) methodsAfter(n int) []string {
+	var methods []string
+	for _, call := range f.server.runner.calls[n:] {
+		if call.method != "status" {
+			methods = append(methods, call.method)
+		}
+	}
+	return methods
+}
+
+func TestComposeDeployFreshRunsDownWithVolumesThenUp(t *testing.T) {
+	f := newFreshDeployFixture(t)
+	first := f.deploy(t)
+	before := len(f.server.runner.calls)
+
+	status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"})
+	if status != http.StatusOK {
+		t.Fatalf("deploy-fresh status = %d (%v), want %d", status, body, http.StatusOK)
+	}
+	if got := f.methodsAfter(before); !reflect.DeepEqual(got, []string{"down-with-volumes", "up"}) {
+		t.Fatalf("calls = %v, want [down-with-volumes up]", got)
+	}
+	response := f.server.request(t, http.MethodGet, composePath(f.project.ID, f.env.ID, f.compose.ID), nil)
+	defer response.Body.Close()
+	var fetched composeResponse
+	if err := json.NewDecoder(response.Body).Decode(&fetched); err != nil {
+		t.Fatalf("decode compose: %v", err)
+	}
+	if fetched.LastDeployedAt == nil || first.LastDeployedAt == nil {
+		t.Fatal("lastDeployedAt = null, want a timestamp")
+	}
+	if *fetched.LastDeployedAt < *first.LastDeployedAt {
+		t.Fatalf("lastDeployedAt = %q, want it not before the first deploy's %q", *fetched.LastDeployedAt, *first.LastDeployedAt)
+	}
+}
+
+func TestComposeDeployFreshDownRunsAgainstTheFilesAlreadyOnDisk(t *testing.T) {
+	f := newFreshDeployFixture(t)
+	f.deploy(t)
+	req := f.deployedRequest(t)
+	f.saveYAML(t, freshNewYAML)
+
+	var atDown string
+	f.server.runner.onDownWithVolumes = func(req composes.RunRequest) {
+		content, err := os.ReadFile(req.ComposeFilePath)
+		if err != nil {
+			t.Errorf("read compose file during down: %v", err)
+		}
+		atDown = string(content)
+	}
+	if status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"}); status != http.StatusOK {
+		t.Fatalf("deploy-fresh status = %d (%v), want %d", status, body, http.StatusOK)
+	}
+	if !strings.Contains(atDown, "nginx:old") || strings.Contains(atDown, "nginx:new") {
+		t.Fatalf("compose file at down -v = %q, want the old YAML", atDown)
+	}
+	if after := readFileString(t, req.ComposeFilePath); !strings.Contains(after, "nginx:new") {
+		t.Fatalf("compose file after deploy-fresh = %q, want the new YAML", after)
+	}
+}
+
+func TestComposeDeployFreshOnANeverDeployedComposeSkipsDown(t *testing.T) {
+	f := newFreshDeployFixture(t)
+	if status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"}); status != http.StatusOK {
+		t.Fatalf("deploy-fresh status = %d (%v), want %d", status, body, http.StatusOK)
+	}
+	if got := f.methodsAfter(0); !reflect.DeepEqual(got, []string{"up"}) {
+		t.Fatalf("calls = %v, want [up]", got)
+	}
+}
+
+func TestComposeDeployFreshRefusesWrongConfirmName(t *testing.T) {
+	f := newFreshDeployFixture(t)
+	f.deploy(t)
+	req := f.deployedRequest(t)
+	f.saveYAML(t, freshNewYAML)
+	composeBefore := readFileString(t, req.ComposeFilePath)
+	envBefore := readFileString(t, req.EnvFilePath)
+	calls := len(f.server.runner.calls)
+
+	tests := []struct {
+		name string
+		do   func() *http.Response
+	}{
+		{"empty", func() *http.Response {
+			return f.server.request(t, http.MethodPost, composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), map[string]string{"confirmName": ""})
+		}},
+		{"trailing space", func() *http.Response {
+			return f.server.request(t, http.MethodPost, composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), map[string]string{"confirmName": "Web "})
+		}},
+		{"wrong case", func() *http.Response {
+			return f.server.request(t, http.MethodPost, composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), map[string]string{"confirmName": "WEB"})
+		}},
+		{"missing body", func() *http.Response {
+			return f.server.request(t, http.MethodPost, composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), nil)
+		}},
+		{"malformed JSON", func() *http.Response {
+			request := httptest.NewRequest(http.MethodPost, "http://relist-panel.test"+composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), strings.NewReader("{"))
+			request.Header.Set("Content-Type", "application/json")
+			return f.server.serve(request)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := test.do()
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+			}
+			if len(f.server.runner.calls) != calls {
+				t.Fatalf("runner calls = %+v, want none", f.server.runner.calls[calls:])
+			}
+			if got := readFileString(t, req.ComposeFilePath); got != composeBefore {
+				t.Fatalf("compose file changed: %q, want %q", got, composeBefore)
+			}
+			if got := readFileString(t, req.EnvFilePath); got != envBefore {
+				t.Fatalf("env file changed: %q, want %q", got, envBefore)
+			}
+		})
+	}
+}
+
+func TestComposeDeployFreshDoesNotUpWhenDownFails(t *testing.T) {
+	f := newFreshDeployFixture(t)
+	first := f.deploy(t)
+	req := f.deployedRequest(t)
+	f.saveYAML(t, freshNewYAML)
+	composeBefore := readFileString(t, req.ComposeFilePath)
+	before := len(f.server.runner.calls)
+
+	f.server.runner.downWithVolumesErr = errors.New("daemon unreachable")
+	status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"})
+	if status != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", status, http.StatusBadGateway)
+	}
+	if !strings.Contains(body["error"], "delete volumes failed") {
+		t.Fatalf("error = %q, want it to contain %q", body["error"], "delete volumes failed")
+	}
+	if got := f.methodsAfter(before); !reflect.DeepEqual(got, []string{"down-with-volumes"}) {
+		t.Fatalf("calls = %v, want only [down-with-volumes]", got)
+	}
+	if got := readFileString(t, req.ComposeFilePath); got != composeBefore {
+		t.Fatalf("compose file changed after a failed down: %q", got)
+	}
+	f.assertLastDeployedAt(t, first.LastDeployedAt)
+}
+
+func (f freshDeployFixture) assertLastDeployedAt(t *testing.T, want *string) {
+	t.Helper()
+	response := f.server.request(t, http.MethodGet, composePath(f.project.ID, f.env.ID, f.compose.ID), nil)
+	defer response.Body.Close()
+	var fetched composeResponse
+	if err := json.NewDecoder(response.Body).Decode(&fetched); err != nil {
+		t.Fatalf("decode compose: %v", err)
+	}
+	if want == nil || fetched.LastDeployedAt == nil {
+		if want != fetched.LastDeployedAt {
+			t.Fatalf("lastDeployedAt = %v, want %v", fetched.LastDeployedAt, want)
+		}
+		return
+	}
+	if *fetched.LastDeployedAt != *want {
+		t.Fatalf("lastDeployedAt = %q, want unchanged %q", *fetched.LastDeployedAt, *want)
+	}
+}
+
+func TestComposeDeployFreshReportsRemovedVolumesWhenUpFails(t *testing.T) {
+	f := newFreshDeployFixture(t)
+	first := f.deploy(t)
+
+	f.server.runner.upErr = errors.New("port already allocated")
+	status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"})
+	if status != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", status, http.StatusBadGateway)
+	}
+	for _, want := range []string{"volumes were removed", "stopped", "port already allocated"} {
+		if !strings.Contains(body["error"], want) {
+			t.Errorf("error = %q, want it to contain %q", body["error"], want)
+		}
+	}
+	f.assertLastDeployedAt(t, first.LastDeployedAt)
+}
+
+func TestComposeDeployFreshReportsRemovedVolumesWhenWritingFilesFails(t *testing.T) {
+	f := newFreshDeployFixture(t)
+	f.deploy(t)
+	f.saveYAML(t, freshNewYAML)
+
+	// Replacing the env file with a directory makes the write fail whoever
+	// runs the tests; chmod would not stop root.
+	f.server.runner.onDownWithVolumes = func(req composes.RunRequest) {
+		if err := os.Remove(req.EnvFilePath); err != nil {
+			t.Errorf("remove env file: %v", err)
+		}
+		if err := os.Mkdir(req.EnvFilePath, 0o750); err != nil {
+			t.Errorf("replace env file with a directory: %v", err)
+		}
+	}
+	before := len(f.server.runner.calls)
+	status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"})
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status = %d (%v), want %d", status, body, http.StatusInternalServerError)
+	}
+	if !strings.Contains(body["error"], "volumes were removed") {
+		t.Fatalf("error = %q, want it to contain %q", body["error"], "volumes were removed")
+	}
+	if got := f.methodsAfter(before); !reflect.DeepEqual(got, []string{"down-with-volumes"}) {
+		t.Fatalf("calls = %v, want only [down-with-volumes]", got)
+	}
 }

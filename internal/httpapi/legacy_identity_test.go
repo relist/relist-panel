@@ -190,3 +190,29 @@ func TestPartialParentTeardownCanRetryWithoutRepeatingCompletedChild(t *testing.
 	}
 	legacyStatus(t, server, http.MethodGet, parentPath, http.StatusNotFound)
 }
+
+func TestComposeDeployFreshRefusesAmbiguousLegacyIdentity(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	p := createProject(t, server, "Legacy", "")
+	e := productionEnvironment(t, server, p)
+	one := legacyCompose(t, server, e.ID, "a-b", "c", "web")
+	two := legacyCompose(t, server, e.ID, "a", "b-c", "other")
+	if _, err := server.db.Exec(`UPDATE composes SET name='c-web', env_slug='b' WHERE id=?`, two); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{one, two} {
+		name := "web"
+		if id == two {
+			name = "c-web"
+		}
+		r := server.request(t, http.MethodPost, composeDeployFreshPath(p.ID, e.ID, id), map[string]string{"confirmName": name})
+		r.Body.Close()
+		if r.StatusCode != http.StatusConflict {
+			t.Fatalf("deploy-fresh of ambiguous legacy compose %d = %d, want %d", id, r.StatusCode, http.StatusConflict)
+		}
+	}
+	if len(server.runner.calls) != 0 {
+		t.Fatalf("ambiguous legacy identity reached Docker: %+v", server.runner.calls)
+	}
+}
