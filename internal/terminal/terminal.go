@@ -88,6 +88,10 @@ type Service struct {
 	pingInterval time.Duration
 	pingTimeout  time.Duration
 	killGrace    time.Duration
+	// sessions is the server-wide cap: a slot is held for the life of one
+	// session, and the send on it is non-blocking, so the (maxSessions+1)th
+	// is refused rather than queued.
+	sessions chan struct{}
 }
 
 // New constructs the terminal service over the Compose service. opts.Exec is
@@ -112,6 +116,7 @@ func New(composeService *composes.Service, opts Options) *Service {
 		pingInterval: opts.PingInterval,
 		pingTimeout:  opts.PingTimeout,
 		killGrace:    opts.KillGrace,
+		sessions:     make(chan struct{}, opts.MaxSessions),
 	}
 }
 
@@ -120,6 +125,7 @@ func New(composeService *composes.Service, opts Options) *Service {
 // a redeploy that replaces the Container ends it through the stream instead.
 func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/terminal/services", s.listServices)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/terminal", s.terminal)
 }
 
 // listServices answers one Compose's Services and their running Containers,

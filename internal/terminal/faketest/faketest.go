@@ -13,11 +13,19 @@ import (
 	"relist-panel/internal/terminal"
 )
 
-// StartCall is one Start the fake served: the Container it was asked for and
-// the options as they were passed.
+// StartCall is one Start the fake served: the Container it was asked for, the
+// options as they were passed, and the Session it handed back, whose Remote is
+// the container's side of the stream.
 type StartCall struct {
 	ContainerID string
 	Opts        terminal.ExecOptions
+	Session     *Session
+}
+
+// ShellCall is one HasShell probe the fake served.
+type ShellCall struct {
+	ContainerID string
+	Path        string
 }
 
 // Exec is a scripted terminal.Exec. Its zero value answers an empty listing,
@@ -36,8 +44,31 @@ type Exec struct {
 	StartErr error
 	// ExitCode is what every started session reports from ExitCode.
 	ExitCode int
-	// Starts records every successful Start, in order.
+	// BeforeResize, when set, runs at the start of every Session.Resize,
+	// before the resize is recorded. A test can block on it to hold a resize
+	// in flight.
+	BeforeResize func()
+	// Starts records every successful Start, in order. Reads race-free
+	// through StartsSnapshot.
 	Starts []StartCall
+
+	mu         sync.Mutex
+	shellCalls []ShellCall
+}
+
+// StartsSnapshot copies the recorded Starts under the lock, for a race-free
+// read while a handler may still be appending to it.
+func (f *Exec) StartsSnapshot() []StartCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]StartCall(nil), f.Starts...)
+}
+
+// ShellCallsSnapshot copies the recorded HasShell probes under the lock.
+func (f *Exec) ShellCallsSnapshot() []ShellCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]ShellCall(nil), f.shellCalls...)
 }
 
 // Available implements terminal.Exec.
@@ -52,6 +83,9 @@ func (f *Exec) ServiceContainers(_ context.Context, project, service string) ([]
 
 // HasShell implements terminal.Exec.
 func (f *Exec) HasShell(_ context.Context, containerID, path string) (bool, error) {
+	f.mu.Lock()
+	f.shellCalls = append(f.shellCalls, ShellCall{ContainerID: containerID, Path: path})
+	f.mu.Unlock()
 	return f.Shells[containerID+":"+path], nil
 }
 
@@ -62,9 +96,12 @@ func (f *Exec) Start(_ context.Context, containerID string, opts terminal.ExecOp
 	if f.StartErr != nil {
 		return nil, f.StartErr
 	}
-	f.Starts = append(f.Starts, StartCall{ContainerID: containerID, Opts: opts})
 	panel, remote := net.Pipe()
-	return &Session{conn: panel, Remote: remote, exitCode: f.ExitCode}, nil
+	session := &Session{conn: panel, Remote: remote, exitCode: f.ExitCode, beforeResize: f.BeforeResize}
+	f.mu.Lock()
+	f.Starts = append(f.Starts, StartCall{ContainerID: containerID, Opts: opts, Session: session})
+	f.mu.Unlock()
+	return session, nil
 }
 
 // Session is a scripted terminal.Session over one net.Pipe. Remote is the
@@ -78,11 +115,12 @@ type Session struct {
 	// Resizes records every Resize, in order.
 	Resizes [][2]uint16
 
-	conn     net.Conn
-	exitCode int
-	mu       sync.Mutex
-	closed   chan struct{}
-	once     sync.Once
+	conn         net.Conn
+	exitCode     int
+	beforeResize func()
+	mu           sync.Mutex
+	closed       chan struct{}
+	once         sync.Once
 }
 
 // Read implements io.Reader on the panel's side of the stream.
@@ -114,6 +152,9 @@ func (s *Session) closedChannel() chan struct{} {
 // Resize records a resize. The session forwards exactly what it was asked for;
 // the handler clamps to 1–500.
 func (s *Session) Resize(_ context.Context, rows, cols uint16) error {
+	if s.beforeResize != nil {
+		s.beforeResize()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Resizes = append(s.Resizes, [2]uint16{rows, cols})

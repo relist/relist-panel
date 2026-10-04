@@ -2502,7 +2502,13 @@ func newTestServer(t *testing.T) *testServer {
 	volumeCLI := &faketest.CLI{}
 	terminalExec := &terminalfake.Exec{}
 	return &testServer{
-		handler:      httpapi.NewHandler(db, runner, dataDir, history, facts, volumeRunner, volumes.NewResolver(volumeCLI, dataDir), &terminal.Options{Exec: terminalExec}),
+		handler: httpapi.NewHandler(db, runner, dataDir, history, facts, volumeRunner, volumes.NewResolver(volumeCLI, dataDir), &terminal.Options{
+			Exec:         terminalExec,
+			MaxSessions:  10,
+			PingInterval: 50 * time.Millisecond,
+			PingTimeout:  50 * time.Millisecond,
+			KillGrace:    50 * time.Millisecond,
+		}),
 		db:           db,
 		dataDir:      dataDir,
 		runner:       runner,

@@ -1,11 +1,18 @@
 package httpapi_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"testing"
+	"time"
+
+	"github.com/coder/websocket"
 
 	"relist-panel/internal/composes"
 	"relist-panel/internal/terminal"
@@ -161,5 +168,619 @@ func TestTerminalServicesRequiresAuthentication(t *testing.T) {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+// --- The WebSocket session -------------------------------------------------
+
+// terminalControl is every JSON control frame the session can carry, in either
+// direction. A frame sets only the fields it means.
+type terminalControl struct {
+	Type      string `json:"type"`
+	Shell     string `json:"shell"`
+	User      string `json:"user"`
+	Container string `json:"container"`
+	Code      int    `json:"code"`
+	Message   string `json:"message"`
+}
+
+// terminalSessionPath is the WebSocket route under one Compose, with its query.
+func terminalSessionPath(projectID, environmentID, composeID int64, query string) string {
+	path := composePath(projectID, environmentID, composeID) + "/terminal"
+	if query != "" {
+		path += "?" + query
+	}
+	return path
+}
+
+// dialTerminal starts a server over the test handler, copies the session cookie
+// into header, and dials the WebSocket route. query is the route and its query
+// string, for example "/api/…/terminal?service=app".
+func dialTerminal(t *testing.T, server *testServer, query string, header http.Header) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	httpServer := httptest.NewServer(server.handler)
+	t.Cleanup(httpServer.Close)
+	if header == nil {
+		header = http.Header{}
+	}
+	for _, cookie := range server.cookies {
+		header.Add("Cookie", cookie.Name+"="+cookie.Value)
+	}
+	return websocket.Dial(context.Background(), httpServer.URL+query, &websocket.DialOptions{HTTPHeader: header})
+}
+
+// newTerminalSessionServer is the fixture the session tests share: a logged-in
+// server with one Project, its production Environment and one Compose. The last
+// return is the Compose's deploy ProjectName.
+func newTerminalSessionServer(t *testing.T) (*testServer, int64, int64, int64, string) {
+	t.Helper()
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Terminal Co", "")
+	env := productionEnvironment(t, server, project)
+	compose := createCompose(t, server, project.ID, env.ID, "App")
+	return server, project.ID, env.ID, compose.ID, "relist-c" + strconv.FormatInt(compose.ID, 10)
+}
+
+// scriptAppContainer scripts one running Container for the app Service, with
+// exactly the named shells present.
+func scriptAppContainer(server *testServer, projectName string, container terminal.Container, shells ...string) {
+	server.terminal.Containers = map[string][]terminal.Container{
+		projectName + "/app": {container},
+	}
+	server.terminal.Shells = map[string]bool{}
+	for _, shell := range shells {
+		server.terminal.Shells[container.ID+":"+shell] = true
+	}
+}
+
+func readMessage(t *testing.T, conn *websocket.Conn, timeout time.Duration) (websocket.MessageType, []byte) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	typ, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read websocket message: %v", err)
+	}
+	return typ, data
+}
+
+func readControl(t *testing.T, conn *websocket.Conn, timeout time.Duration) terminalControl {
+	t.Helper()
+	typ, data := readMessage(t, conn, timeout)
+	if typ != websocket.MessageText {
+		t.Fatalf("message type = %v, want text (%q)", typ, data)
+	}
+	var ctrl terminalControl
+	if err := json.Unmarshal(data, &ctrl); err != nil {
+		t.Fatalf("decode control frame %q: %v", data, err)
+	}
+	return ctrl
+}
+
+func awaitReady(t *testing.T, conn *websocket.Conn) terminalControl {
+	t.Helper()
+	ctrl := readControl(t, conn, 2*time.Second)
+	if ctrl.Type != "ready" {
+		t.Fatalf("control frame = %+v, want ready", ctrl)
+	}
+	return ctrl
+}
+
+func dialReady(t *testing.T, server *testServer, path string) (*websocket.Conn, terminalControl) {
+	t.Helper()
+	conn, resp, err := dialTerminal(t, server, path, nil)
+	if err != nil {
+		t.Fatalf("dial terminal: %v (HTTP %v)", err, resp)
+	}
+	t.Cleanup(func() { conn.CloseNow() })
+	return conn, awaitReady(t, conn)
+}
+
+func writeText(t *testing.T, conn *websocket.Conn, value any) {
+	t.Helper()
+	payload, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("encode control frame: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := conn.Write(ctx, websocket.MessageText, payload); err != nil {
+		t.Fatalf("write control frame: %v", err)
+	}
+}
+
+func writeBinary(t *testing.T, conn *websocket.Conn, payload []byte) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := conn.Write(ctx, websocket.MessageBinary, payload); err != nil {
+		t.Fatalf("write binary frame: %v", err)
+	}
+}
+
+// awaitClose reads until the server's close frame and asserts the status the
+// spec gives an exited shell: 1000.
+func awaitClose(t *testing.T, conn *websocket.Conn) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _, err := conn.Read(ctx)
+	if err == nil {
+		t.Fatal("expected the connection to close")
+	}
+	if status := websocket.CloseStatus(err); status != websocket.StatusNormalClosure {
+		t.Fatalf("close status = %d, want %d", status, websocket.StatusNormalClosure)
+	}
+}
+
+// A binary keystroke reaches the container side, and container output arrives
+// back as a binary frame.
+func TestTerminalSessionPumpsBytesBothWays(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+
+	conn, resp, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"), nil)
+	if err != nil {
+		t.Fatalf("dial terminal: %v", err)
+	}
+	defer conn.CloseNow()
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusSwitchingProtocols)
+	}
+	awaitReady(t, conn)
+
+	session := server.terminal.StartsSnapshot()[0].Session
+	writeBinary(t, conn, []byte("ls\r"))
+	keystrokes := make([]byte, 3)
+	if _, err := io.ReadFull(session.Remote, keystrokes); err != nil {
+		t.Fatalf("read keystrokes on Remote: %v", err)
+	}
+	if string(keystrokes) != "ls\r" {
+		t.Fatalf("Remote read %q, want %q", keystrokes, "ls\r")
+	}
+
+	if _, err := session.Remote.Write([]byte("out")); err != nil {
+		t.Fatalf("write output on Remote: %v", err)
+	}
+	typ, data := readMessage(t, conn, 2*time.Second)
+	if typ != websocket.MessageBinary || string(data) != "out" {
+		t.Fatalf("message = %v %q, want binary %q", typ, data, "out")
+	}
+}
+
+// ready names the shell, user and Container the session resolved, and the exec
+// was started with the matching options and the browser's initial size.
+func TestTerminalSessionReadyNamesTheResolvedTarget(t *testing.T) {
+	t.Run("bash present", func(t *testing.T) {
+		server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+		scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash", "/bin/sh")
+
+		_, ready := dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app&shell=auto"))
+		if ready.Shell != "bash" || ready.User != "default" || ready.Container != "relist-c3-app-1" {
+			t.Fatalf("ready = %+v, want bash/default/relist-c3-app-1", ready)
+		}
+		if got, want := server.terminal.StartsSnapshot()[0].Opts, (terminal.ExecOptions{Shell: "/bin/bash", Rows: 24, Cols: 80}); got != want {
+			t.Fatalf("exec options = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("bash absent", func(t *testing.T) {
+		server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+		scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/sh")
+
+		_, ready := dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app&shell=auto"))
+		if ready.Shell != "sh" {
+			t.Fatalf("ready.shell = %q, want sh", ready.Shell)
+		}
+		if got, want := server.terminal.StartsSnapshot()[0].Opts, (terminal.ExecOptions{Shell: "/bin/sh", Rows: 24, Cols: 80}); got != want {
+			t.Fatalf("exec options = %+v, want %+v", got, want)
+		}
+	})
+}
+
+// user=root starts the exec as uid 0 and says so in ready.
+func TestTerminalSessionRunsAsRootOnRequest(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+
+	_, ready := dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app&user=root"))
+	if ready.User != "root" {
+		t.Fatalf("ready.user = %q, want root", ready.User)
+	}
+	if got := server.terminal.StartsSnapshot()[0].Opts.User; got != "0" {
+		t.Fatalf("exec user = %q, want %q", got, "0")
+	}
+}
+
+// Resize frames reach the session in order, clamped to 1–500.
+func TestTerminalSessionForwardsClampedResizes(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+
+	conn, _ := dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
+	session := server.terminal.StartsSnapshot()[0].Session
+
+	writeText(t, conn, map[string]any{"type": "resize", "rows": 40, "cols": 120})
+	waitForResizes(t, session, [][2]uint16{{40, 120}})
+	writeText(t, conn, map[string]any{"type": "resize", "rows": 9000, "cols": 0})
+	waitForResizes(t, session, [][2]uint16{{40, 120}, {500, 1}})
+}
+
+// waitForResizes polls the session's recorded resizes until they match want.
+func waitForResizes(t *testing.T, session interface{ ResizesSnapshot() [][2]uint16 }, want [][2]uint16) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got := session.ResizesSnapshot()
+		if reflect.DeepEqual(got, want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("resizes = %v, want %v", got, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// An explicit shell that is absent, and auto with neither shell, each get the
+// matching error frame and never start an exec.
+func TestTerminalSessionReportsAMissingShell(t *testing.T) {
+	cases := []struct {
+		name    string
+		shells  []string
+		query   string
+		message string
+	}{
+		{"bash chosen without bash", []string{"/bin/sh"}, "service=app&shell=bash", "bash is not installed in this image — use sh"},
+		{"auto with neither shell", nil, "service=app&shell=auto", "No shell found in this image (/bin/bash, /bin/sh)"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+			scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, tt.shells...)
+
+			conn, _, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID, tt.query), nil)
+			if err != nil {
+				t.Fatalf("dial terminal: %v", err)
+			}
+			defer conn.CloseNow()
+			ctrl := readControl(t, conn, 2*time.Second)
+			if ctrl.Type != "error" || ctrl.Message != tt.message {
+				t.Fatalf("control frame = %+v, want error %q", ctrl, tt.message)
+			}
+			if starts := server.terminal.StartsSnapshot(); len(starts) != 0 {
+				t.Fatalf("Starts = %+v, want none", starts)
+			}
+		})
+	}
+}
+
+// A Container that is not in the resolved Service's running list — another
+// Service's, another Compose's, or the panel's own body — is refused as no
+// running Container, with no shell probe and no exec on the foreign id.
+func TestTerminalSessionRefusesAContainerOutsideTheService(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	server.terminal.Containers = map[string][]terminal.Container{
+		projectName + "/app":    {{ID: "c1", Name: "relist-c3-app-1", Number: 1}},
+		projectName + "/worker": {{ID: "w1", Name: "relist-c3-worker-1", Number: 1}},
+		"relist-c999/app":       {{ID: "x1", Name: "relist-c999-app-1", Number: 1}},
+	}
+	server.terminal.Shells = map[string]bool{
+		"c1:/bin/bash": true,
+		"w1:/bin/bash": true,
+		"x1:/bin/bash": true,
+	}
+
+	for _, foreign := range []string{"w1", "x1", "deadbeef"} {
+		conn, _, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app&container="+foreign), nil)
+		if err != nil {
+			t.Fatalf("dial terminal for %q: %v", foreign, err)
+		}
+		ctrl := readControl(t, conn, 2*time.Second)
+		conn.CloseNow()
+		want := `Service "app" has no running container — deploy or start it first`
+		if ctrl.Type != "error" || ctrl.Message != want {
+			t.Fatalf("container %q control frame = %+v, want error %q", foreign, ctrl, want)
+		}
+	}
+
+	if starts := server.terminal.StartsSnapshot(); len(starts) != 0 {
+		t.Fatalf("Starts = %+v, want none", starts)
+	}
+	for _, call := range server.terminal.ShellCallsSnapshot() {
+		if call.ContainerID != "c1" {
+			t.Fatalf("HasShell probe = %+v, want none on a foreign Container", call)
+		}
+	}
+}
+
+// With no container id the lowest-numbered running Container is the target,
+// whatever order the listing returns.
+func TestTerminalSessionDefaultsToTheLowestNumberedContainer(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	server.terminal.Containers = map[string][]terminal.Container{
+		projectName + "/app": {
+			{ID: "c2", Name: "relist-c3-app-2", Number: 2},
+			{ID: "c1", Name: "relist-c3-app-1", Number: 1},
+		},
+	}
+	server.terminal.Shells = map[string]bool{"c1:/bin/bash": true, "c2:/bin/bash": true}
+
+	_, ready := dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
+	if ready.Container != "relist-c3-app-1" {
+		t.Fatalf("ready.container = %q, want relist-c3-app-1", ready.Container)
+	}
+	if got := server.terminal.StartsSnapshot()[0].ContainerID; got != "c1" {
+		t.Fatalf("started ContainerID = %q, want c1", got)
+	}
+}
+
+// When the shell's stream ends the server reports its exit code and closes 1000.
+func TestTerminalSessionReportsTheExitCode(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+	server.terminal.ExitCode = 3
+
+	conn, _ := dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
+	session := server.terminal.StartsSnapshot()[0].Session
+	if err := session.Remote.Close(); err != nil {
+		t.Fatalf("close Remote: %v", err)
+	}
+	ctrl := readControl(t, conn, 2*time.Second)
+	if ctrl.Type != "exit" || ctrl.Code != 3 {
+		t.Fatalf("control frame = %+v, want exit code 3", ctrl)
+	}
+	awaitClose(t, conn)
+}
+
+// A stream that ends before any output still reaches the browser as an exit and
+// releases its cap slot, so an eleventh session opens.
+func TestTerminalSessionEndsWhenTheStreamEndsBeforeOutput(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+
+	conns := make([]*websocket.Conn, 0, 10)
+	for i := 0; i < 10; i++ {
+		conn, _ := dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
+		conns = append(conns, conn)
+	}
+	starts := server.terminal.StartsSnapshot()
+	if len(starts) != 10 {
+		t.Fatalf("Starts = %d, want 10", len(starts))
+	}
+
+	first := starts[0].Session
+	if err := first.Remote.Close(); err != nil {
+		t.Fatalf("close Remote: %v", err)
+	}
+	ctrl := readControl(t, conns[0], 2*time.Second)
+	if ctrl.Type != "exit" {
+		t.Fatalf("control frame = %+v, want exit", ctrl)
+	}
+	awaitClose(t, conns[0])
+	select {
+	case <-first.Closed():
+	case <-time.After(2 * time.Second):
+		t.Fatal("session was not closed after its stream ended")
+	}
+
+	// The slot is freed once the handler returns; dial until the eleventh opens.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		conn, _, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"), nil)
+		if err == nil {
+			ctrl := readControl(t, conn, 2*time.Second)
+			conn.CloseNow()
+			if ctrl.Type == "ready" {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the eleventh session never opened after a slot was released")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// The server-wide cap refuses the eleventh concurrent session with the cap
+// error, and closing one frees a slot for a new session.
+func TestTerminalSessionEnforcesTheSessionCap(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+
+	conns := make([]*websocket.Conn, 0, 10)
+	for i := 0; i < 10; i++ {
+		conn, _ := dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
+		conns = append(conns, conn)
+	}
+
+	over, _, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"), nil)
+	if err != nil {
+		t.Fatalf("eleventh dial: %v", err)
+	}
+	ctrl := readControl(t, over, 2*time.Second)
+	over.CloseNow()
+	want := "Too many open terminal sessions (10) — close one first"
+	if ctrl.Type != "error" || ctrl.Message != want {
+		t.Fatalf("control frame = %+v, want error %q", ctrl, want)
+	}
+
+	starts := server.terminal.StartsSnapshot()
+	_ = conns[0].Close(websocket.StatusNormalClosure, "")
+	select {
+	case <-starts[0].Session.Closed():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the closed session never signalled")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		conn, _, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"), nil)
+		if err == nil {
+			ctrl := readControl(t, conn, 2*time.Second)
+			conn.CloseNow()
+			if ctrl.Type == "ready" {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a new session never opened after one was closed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A client that stops answering pings is noticed and its Session closed.
+func TestTerminalSessionEndsWhenPongsStop(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+
+	conn, _ := dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
+	session := server.terminal.StartsSnapshot()[0].Session
+	_ = conn // The test stops reading here, so no pong is ever read or sent.
+
+	select {
+	case <-session.Closed():
+	case <-time.After(2 * time.Second):
+		t.Fatal("session did not close after pongs stopped")
+	}
+}
+
+// A resize that is stuck inside the session does not stop keystrokes from
+// reaching the container side.
+func TestTerminalSessionKeystrokesFlowDuringASlowResize(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+
+	gate := make(chan struct{})
+	started := make(chan struct{}, 1)
+	server.terminal.BeforeResize = func() {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-gate
+	}
+
+	conn, _ := dialReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
+	session := server.terminal.StartsSnapshot()[0].Session
+
+	writeText(t, conn, map[string]any{"type": "resize", "rows": 40, "cols": 120})
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the resize never reached the session")
+	}
+
+	writeBinary(t, conn, []byte("x"))
+	keystroke := make([]byte, 1)
+	if _, err := io.ReadFull(session.Remote, keystroke); err != nil {
+		t.Fatalf("read keystroke during a slow resize: %v", err)
+	}
+	if string(keystroke) != "x" {
+		t.Fatalf("keystroke = %q, want %q", keystroke, "x")
+	}
+	close(gate)
+}
+
+// A cross-Origin upgrade with a valid session cookie is refused before any exec.
+func TestTerminalSessionRefusesACrossOriginUpgrade(t *testing.T) {
+	server, projectID, environmentID, composeID, _ := newTerminalSessionServer(t)
+
+	header := http.Header{}
+	header.Set("Origin", "http://evil.example")
+	conn, resp, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"), header)
+	if conn != nil {
+		conn.CloseNow()
+	}
+	if err == nil {
+		t.Fatal("cross-Origin dial succeeded, want refusal")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("response = %v, want status %d", resp, http.StatusForbidden)
+	}
+	if starts := server.terminal.StartsSnapshot(); len(starts) != 0 {
+		t.Fatalf("Starts = %+v, want none", starts)
+	}
+}
+
+// Bad shell, user or size, and a missing service, are 400 before the upgrade;
+// an unknown Compose is 404; a missing cookie is 401.
+func TestTerminalSessionValidatesParametersBeforeUpgrade(t *testing.T) {
+	server, projectID, environmentID, composeID, _ := newTerminalSessionServer(t)
+
+	cases := []struct {
+		name  string
+		query string
+		want  int
+	}{
+		{"bad shell", "service=app&shell=zsh", http.StatusBadRequest},
+		{"bad user", "service=app&user=nobody", http.StatusBadRequest},
+		{"zero rows", "service=app&rows=0", http.StatusBadRequest},
+		{"large cols", "service=app&cols=501", http.StatusBadRequest},
+		{"missing service", "shell=auto", http.StatusBadRequest},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			conn, resp, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID, tt.query), nil)
+			if conn != nil {
+				conn.CloseNow()
+			}
+			if err == nil {
+				t.Fatal("dial succeeded, want a refusal before the upgrade")
+			}
+			if resp == nil || resp.StatusCode != tt.want {
+				t.Fatalf("response = %v, want status %d", resp, tt.want)
+			}
+		})
+	}
+
+	t.Run("unknown compose", func(t *testing.T) {
+		conn, resp, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID+1000, "service=app"), nil)
+		if conn != nil {
+			conn.CloseNow()
+		}
+		if err == nil {
+			t.Fatal("dial succeeded, want 404")
+		}
+		if resp == nil || resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("response = %v, want status %d", resp, http.StatusNotFound)
+		}
+	})
+
+	t.Run("no cookie", func(t *testing.T) {
+		guest := newTestServer(t)
+		conn, resp, err := dialTerminal(t, guest, terminalSessionPath(1, 1, 1, "service=app"), nil)
+		if conn != nil {
+			conn.CloseNow()
+		}
+		if err == nil {
+			t.Fatal("dial succeeded without a cookie, want 401")
+		}
+		if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("response = %v, want status %d", resp, http.StatusUnauthorized)
+		}
+	})
+}
+
+// A Docker API failure reaches the browser as an error frame with Docker's own
+// message, unchanged.
+func TestTerminalSessionPassesDockerErrorsThrough(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+	server.terminal.StartErr = errors.New("docker api /containers/x/exec: 409 Conflict: container is paused")
+
+	conn, _, err := dialTerminal(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"), nil)
+	if err != nil {
+		t.Fatalf("dial terminal: %v", err)
+	}
+	defer conn.CloseNow()
+	ctrl := readControl(t, conn, 2*time.Second)
+	if ctrl.Type != "error" || ctrl.Message != server.terminal.StartErr.Error() {
+		t.Fatalf("control frame = %+v, want error %q", ctrl, server.terminal.StartErr.Error())
+	}
+	if starts := server.terminal.StartsSnapshot(); len(starts) != 0 {
+		t.Fatalf("Starts = %+v, want none", starts)
 	}
 }
