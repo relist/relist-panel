@@ -343,3 +343,43 @@ remains. Repeat with the network cut (DevTools offline) and confirm cleanup with
   living only as long as the page that opened it. _Avoid_: Console, SSH.
 - **`docs/GUIDELINES.md`** §4.6 adds the Terminal tab to the tab list, and §6 adds the terminal box to
   the bounded boxes.
+
+## Spike result
+
+Spike (Task 1): does a TTY exec's process outlive its attach connection?
+
+- **Docker server version** (`docker version --format '{{.Server.Version}}'`): `29.8.0` — the plan says
+  "Docker 27"; this host's daemon is 29.8.0.
+- Ran against `alpine:3` (pulled locally first; image was not present). Container `relist-spike`
+  (`docker run -d --name relist-spike alpine:3 sleep 3600`).
+
+### Run 1 — `exec -it sh -c 'exec sleep 1001'`, client `kill -9`
+
+After `script -qc "docker exec -it relist-spike sh -c 'exec sleep 1001'" /dev/null & CLIENT=$!;
+sleep 2; kill -9 $CLIENT; sleep 3`, `docker top relist-spike`:
+
+```
+UID                 PID                 PPID                C                   STIME               TTY                 TIME                CMD
+root                498733              498705              0                   21:46               ?                   00:00:00            sleep 3600
+root                498850              498705              0                   21:47               pts/0               00:00:00            sleep 1001
+```
+
+`sleep 1001` (the exec'd process) is still listed after its client was killed → it outlived the
+connection.
+
+### Run 2 — interactive `sh` running foreground `top`, client `kill -9`
+
+After `script -qc "docker exec -it relist-spike sh" /dev/null <<'EOF' & CLIENT=$!; top; EOF;
+sleep 2; kill -9 $CLIENT; sleep 3`, `docker top relist-spike`:
+
+```
+UID                 PID                 PPID                C                   STIME               TTY                 TIME                CMD
+root                498733              498705              0                   21:46               ?                   00:00:00            sleep 3600
+root                498850              498705              0                   21:47               pts/0               00:00:00            sleep 1001
+root                498985              498705              0                   21:47               pts/1               00:00:00            sh
+```
+
+The interactive `sh` (the exec'd shell, PID 498985) is still listed after its client was killed. Its
+foreground `top` died when the pty closed, but the shell itself survived the disconnect.
+
+**Verdict:** **LEAKS**
