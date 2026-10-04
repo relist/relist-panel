@@ -24,6 +24,9 @@ _Avoid_: Container (a Service is the definition; a Container is one running inst
 One running instance of a Service, created by a deploy. Its identity is not stable: every deploy mints a new one, so anything that outlives a single deploy — metric history, for one — is keyed by Service, never by Container.
 _Avoid_: Instance
 
+**Terminal Session**:
+One interactive shell in one Container of a Service, opened from the Compose page's Terminal tab and living only as long as that page. _Avoid_: Console, SSH.
+
 **Volume**:
 One entry in a Compose's `volumes:` list, attached to one of its Services. Either a named Docker volume or a host path (a bind mount) — the panel treats both alike, because the operator declares both in the same place.
 _Avoid_: Mount, Storage. Docker's own "volume" means only the named kind, so never assume a Volume is a named volume.
