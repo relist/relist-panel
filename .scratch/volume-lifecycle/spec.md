@@ -88,7 +88,9 @@ An **Orphan Volume** is a named volume that (1) carries the label
 of the volumes the current YAML resolves to.
 
 Condition 3 is evaluated against the Compose resolved with **every profile enabled**
-(`docker compose --profile '*' … config`), so a volume mounted only by a profile-gated Service
+(the adapter lists the declared profiles with `docker compose config --profiles` and passes each as
+`--profile <name>` to `config`; `--profile '*'` is not relied on, and a failing listing fails the
+request), so a volume mounted only by a profile-gated Service
 (`profiles: [tools]`) still counts as declared and is never offered for deletion just because that
 Service is not currently active. Known residual: a top-level volume that no Service mounts at all is
 pruned by `docker compose config` and so cannot be recognised as declared; Compose never creates such

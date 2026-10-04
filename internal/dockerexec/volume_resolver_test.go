@@ -258,25 +258,75 @@ func TestVolumeResolverRemoveVolumeMapsInUseToErrVolumeInUse(t *testing.T) {
 	}
 }
 
-// With AllProfiles the global --profile '*' flag goes before the config
-// subcommand, so volumes of profile-gated services are resolved too.
-func TestVolumeResolverComposeConfigAllProfilesAddsTheProfileFlag(t *testing.T) {
+// With AllProfiles the resolver lists every declared profile with
+// `config --profiles` and passes each one explicitly as a global --profile
+// before `config`, so volumes of profile-gated services are resolved too.
+// `*` is never relied on: a Compose that read it literally would drop the
+// gated Services and report their volumes as orphans.
+func TestVolumeResolverComposeConfigAllProfilesPassesEveryDeclaredProfile(t *testing.T) {
 	var gotArgvs [][]string
-	resolver := &VolumeResolver{runDocker: scriptedDocker([]dockerStep{{stdout: demoResolvedConfig}}, &gotArgvs)}
+	resolver := &VolumeResolver{runDocker: scriptedDocker([]dockerStep{
+		{stdout: "extra\nother\n"},
+		{stdout: demoResolvedConfig},
+	}, &gotArgvs)}
+	ref := volumes.ComposeRef{ProjectName: "demo-prod", ComposeFilePath: "/c/docker-compose.yml", EnvFilePath: "/c/.env", AllProfiles: true}
+
+	got, err := resolver.ComposeConfig(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("ComposeConfig() error = %v", err)
+	}
+	if string(got) != demoResolvedConfig {
+		t.Errorf("ComposeConfig() = %q, want the config call's stdout", got)
+	}
+	base := []string{"docker", "compose", "-p", "demo-prod", "-f", "/c/docker-compose.yml", "--env-file", "/c/.env"}
+	want := [][]string{
+		append(append([]string{}, base...), "config", "--profiles"),
+		append(append([]string{}, base...), "--profile", "extra", "--profile", "other", "config", "--format", "json"),
+	}
+	if !reflect.DeepEqual(gotArgvs, want) {
+		t.Errorf("docker argvs =\n\t%q\nwant\n\t%q", gotArgvs, want)
+	}
+}
+
+// A Compose that declares no profiles resolves with no --profile flag.
+func TestVolumeResolverComposeConfigAllProfilesWithNoneAddsNoFlag(t *testing.T) {
+	var gotArgvs [][]string
+	resolver := &VolumeResolver{runDocker: scriptedDocker([]dockerStep{
+		{stdout: ""},
+		{stdout: demoResolvedConfig},
+	}, &gotArgvs)}
 	ref := volumes.ComposeRef{ProjectName: "demo-prod", ComposeFilePath: "/c/docker-compose.yml", EnvFilePath: "/c/.env", AllProfiles: true}
 
 	if _, err := resolver.ComposeConfig(context.Background(), ref); err != nil {
 		t.Fatalf("ComposeConfig() error = %v", err)
 	}
-	want := [][]string{{
-		"docker", "compose",
-		"-p", "demo-prod",
-		"-f", "/c/docker-compose.yml",
-		"--env-file", "/c/.env",
-		"--profile", "*",
-		"config", "--format", "json",
-	}}
+	base := []string{"docker", "compose", "-p", "demo-prod", "-f", "/c/docker-compose.yml", "--env-file", "/c/.env"}
+	want := [][]string{
+		append(append([]string{}, base...), "config", "--profiles"),
+		append(append([]string{}, base...), "config", "--format", "json"),
+	}
 	if !reflect.DeepEqual(gotArgvs, want) {
 		t.Errorf("docker argvs =\n\t%q\nwant\n\t%q", gotArgvs, want)
+	}
+}
+
+// A failing `config --profiles` is returned as an error and the resolution
+// call never runs: orphan detection fails closed.
+func TestVolumeResolverComposeConfigAllProfilesFailsClosedWhenListingFails(t *testing.T) {
+	var gotArgvs [][]string
+	resolver := &VolumeResolver{runDocker: scriptedDocker([]dockerStep{
+		{stderr: "boom", err: errors.New("exit status 1")},
+	}, &gotArgvs)}
+	ref := volumes.ComposeRef{ProjectName: "demo-prod", ComposeFilePath: "/c/docker-compose.yml", EnvFilePath: "/c/.env", AllProfiles: true}
+
+	got, err := resolver.ComposeConfig(context.Background(), ref)
+	if err == nil {
+		t.Fatalf("ComposeConfig() = %q, nil; want an error", got)
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error = %v, want the CLI's stderr", err)
+	}
+	if len(gotArgvs) != 1 {
+		t.Errorf("docker calls = %d, want 1 (no config call after a failed --profiles)", len(gotArgvs))
 	}
 }

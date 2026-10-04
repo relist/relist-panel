@@ -16,8 +16,8 @@ type ComposeRef struct {
 	ProjectName     string
 	ComposeFilePath string
 	EnvFilePath     string
-	// AllProfiles resolves the Compose with every profile enabled
-	// (`--profile '*'`), so volumes only a profile-gated Service mounts are
+	// AllProfiles resolves the Compose with every declared profile enabled
+	// (each passed explicitly by the CLI adapter), so volumes only a profile-gated Service mounts are
 	// included. Orphan derivation sets it; the Volume Explorer does not.
 	AllProfiles bool
 }

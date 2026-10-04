@@ -30,26 +30,36 @@ func NewVolumeResolver() *VolumeResolver {
 //
 // so named volumes, relative and absolute binds, `${VAR}` interpolation and
 // pruning are all resolved by the CLI, the reference implementation. With
-// ref.AllProfiles, `--profile '*'` is added before `config` so profile-gated
-// Services resolve too. The
+// ref.AllProfiles, every declared profile is first listed with `config
+// --profiles` and passed explicitly as `--profile <name>`, so profile-gated
+// Services resolve too; `--profile '*'` is deliberately not relied on, since a
+// Compose that read it literally would silently drop the gated Services and
+// their volumes would look like orphans. A failing listing is an error. The
 // CLI's stderr is folded into the error, which is how the operator sees its
 // own `couldn't find env file` before the first deploy.
 func (r *VolumeResolver) ComposeConfig(ctx context.Context, ref volumes.ComposeRef) ([]byte, error) {
-	argv := []string{
+	base := []string{
 		"docker",
 		"compose",
 		"-p", ref.ProjectName,
 		"-f", ref.ComposeFilePath,
 		"--env-file", ref.EnvFilePath,
 	}
+	argv := append([]string{}, base...)
 	if ref.AllProfiles {
+		var profiles bytes.Buffer
+		if err := r.run(ctx, append(append([]string{}, base...), "config", "--profiles"), &profiles); err != nil {
+			return nil, err
+		}
 		// Global flags: they must precede the config subcommand.
-		argv = append(argv, "--profile", "*")
+		for _, name := range strings.Fields(profiles.String()) {
+			argv = append(argv, "--profile", name)
+		}
 	}
 	argv = append(argv, "config", "--format", "json")
-	var stdout, stderr bytes.Buffer
-	if err := r.runDocker(ctx, argv, nil, &stdout, &stderr); err != nil {
-		return nil, fmt.Errorf("docker %s: %w: %s", strings.Join(argv, " "), err, strings.TrimSpace(stderr.String()))
+	var stdout bytes.Buffer
+	if err := r.run(ctx, argv, &stdout); err != nil {
+		return nil, err
 	}
 	return stdout.Bytes(), nil
 }
