@@ -477,9 +477,7 @@ export function ComposeTerminalTab({
         <Card variant="outlined">
           <EmptyState
             action={
-              <Button onClick={onOpenEditor} type="primary">
-                Open the Editor tab
-              </Button>
+              <Button onClick={onOpenEditor}>Open the Editor tab</Button>
             }
             description={noneRunningCopy}
             title="Deploy to start a terminal"
@@ -487,7 +485,7 @@ export function ComposeTerminalTab({
         </Card>
       ) : (
         <>
-          <Flex align="center" gap={12} style={{ marginBottom: LAYOUT.gutterSmall }} wrap>
+          <Flex align="center" gap={8} style={{ marginBottom: LAYOUT.gutterSmall }} wrap>
             <Select
               aria-label="Service"
               disabled={locked}
@@ -555,7 +553,6 @@ export function ComposeTerminalTab({
                 disabled={!running}
                 loading={servicesLoading || session.kind === 'connecting'}
                 onClick={() => void openShell()}
-                type="primary"
               >
                 Connect
               </Button>
@@ -605,11 +602,7 @@ export function ComposeTerminalTab({
           {session.kind === 'lost' &&
             (expired ? (
               <Alert
-                action={
-                  <Button onClick={() => navigate(paths.signIn)} type="primary">
-                    Sign in
-                  </Button>
-                }
+                action={<Button onClick={() => navigate(paths.signIn)}>Sign in</Button>}
                 showIcon
                 style={{ marginBottom: LAYOUT.gutterSmall }}
                 title="Your session expired — sign in again"
@@ -633,7 +626,7 @@ export function ComposeTerminalTab({
               borderRadius: token.borderRadius,
               height: LAYOUT.terminalHeight,
               overflow: 'hidden',
-              padding: 8,
+              padding: token.paddingXS,
             }}
           >
             <div ref={containerRef} style={{ height: '100%', width: '100%' }} />
