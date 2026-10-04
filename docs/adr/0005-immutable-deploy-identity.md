@@ -1,5 +1,7 @@
 # Deploy identity is immutable, frozen at Compose creation
 
+> **Revised by ADR-0011:** immutability remains; new Composes use database IDs. The original claim below that parent-name uniqueness guarantees deployment uniqueness was disproved by delimiter ambiguity and renamed-name reuse. Existing stacks retain their identities.
+
 A Compose's deploy identity — its data-dir path `dataDir/<project-slug>/<env-slug>/<compose-slug>/`
 and its `docker compose -p` project name `<p>-<e>-<c>` (ADR-0002) — used to be recomputed from the
 *current* Project and Environment names on every lifecycle action. Parent names are mutable;

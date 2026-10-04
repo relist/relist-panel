@@ -1,7 +1,10 @@
-// Package dockerexec implements composes.ComposeRunner by shelling out to
-// the `docker compose` CLI over the host's mounted Docker socket (ADR-0002),
-// the one real adapter for the ComposeRunner port declared in composes
-// (ADR-0003).
+// Package dockerexec implements the system's Docker ports: composes.ComposeRunner
+// by shelling out to the `docker compose` CLI (ADR-0002), volumes.Runner by one
+// `docker run --rm` per Volume operation and volumes.CLI by the CLI's
+// `compose config` and `volume inspect` over the same argv-only exec
+// (ADR-0010), and hostmetrics.ContainerSource by calling the stats API over the
+// mounted Docker socket (ADR-0006) — one adapter package for the ports declared
+// in their consumers (ADR-0003).
 package dockerexec
 
 import (
@@ -23,8 +26,15 @@ func New() Runner {
 	return Runner{}
 }
 
+// upArgs is the argv for a deploy. --remove-orphans removes containers of
+// services no longer in the compose file; it never touches volumes. run has no
+// injection seam, so the argv is tested through this helper.
+func upArgs() []string {
+	return []string{"up", "-d", "--build", "--remove-orphans"}
+}
+
 func (Runner) Up(ctx context.Context, req composes.RunRequest) error {
-	_, err := run(ctx, req, "up", "-d", "--build")
+	_, err := run(ctx, req, upArgs()...)
 	return err
 }
 

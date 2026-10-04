@@ -57,7 +57,7 @@ A minimal, self-hosted web panel that manages Docker Compose deployments on a si
 26. As an operator, I want to click "Stop" on a deployed Compose to bring its containers down without deleting my saved YAML, so that I can pause a deployment temporarily.
 27. As an operator, I want to click "Restart" on a Compose, so that I can cycle its containers without a full redeploy.
 28. As an operator, I want to click "Delete" on a Compose to stop and remove its containers, networks, and volumes and delete its files from disk, so that I can fully tear down something I no longer need.
-29. As an operator, I want every Compose to deploy under a deterministic, unique identity derived from its Project/Environment/Compose names, so that two Composes never collide on container or network names.
+29. As an operator, I want every Compose to deploy under a deterministic, immutable unique identity (database IDs for new Composes; frozen names for legacy rows, per ADR-0011), so that two Composes never collide on container or network names.
 
 **Status & logs**
 
@@ -78,7 +78,7 @@ A minimal, self-hosted web panel that manages Docker Compose deployments on a si
 - Before deploying any user Compose, the panel parses its YAML and injects a reference to the shared network into every service (merging with any `networks:` block the user already declared), so Traefik can route to it without the user wiring that up by hand. This is the one place the panel modifies user-authored YAML — everything else (labels, service definitions, restart policies, etc.) passes through untouched.
 - Environment Variables are passed to `docker compose` via a generated env file, not injected into the YAML text itself.
 - Every Compose deploys under a deterministic Compose project name derived from its Project, Environment, and Compose names, passed via `docker compose -p`, so deployments never collide on container/network names.
-- The panel's data directory is bind-mounted at an **identical path** on the host and inside the panel container (default `/var/lib/relist-panel`, overridable via an environment variable) — not a named Docker volume — because `docker compose up` executes against the host's dockerd, so relative paths in a user's Compose file (build context, bind volumes) only resolve correctly if that path exists identically on both sides. Each Compose's resolved files live under a per-Project/per-Environment/per-Compose subdirectory of the data directory; the panel's SQLite database lives alongside them in the same directory.
+- The panel's data directory is bind-mounted at an **identical path** on the host and inside the panel container (default `/var/lib/relist-panel`, overridable via an environment variable) — not a named Docker volume — because `docker compose up` executes against the host's dockerd, so relative paths in a user's Compose file (build context, bind volumes) only resolve correctly if that path exists identically on both sides. New Composes' resolved files live under `.composes/<ID>/`; legacy Composes keep their per-Project/per-Environment/per-Compose directory (ADR-0011); the panel's SQLite database lives alongside them in the same directory.
 
 **Auth**: single admin account, created on first run when none exists; session persisted via a cookie/token. No teams, roles, or multi-user support.
 

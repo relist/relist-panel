@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"relist-panel/internal/composes"
 	"relist-panel/internal/slug"
 )
 
@@ -23,6 +24,7 @@ const (
 
 type Service struct {
 	repository *repository
+	teardown   *composes.Service
 	now        func() time.Time
 }
 
@@ -44,8 +46,8 @@ type environmentInput struct {
 
 // New constructs the Environment service over the application's migrated
 // SQLite database.
-func New(db *sql.DB) *Service {
-	return &Service{repository: &repository{db: db}, now: time.Now}
+func New(db *sql.DB, teardown *composes.Service) *Service {
+	return &Service{repository: &repository{db: db}, teardown: teardown, now: time.Now}
 }
 
 // RegisterRoutes adds the authenticated Environment endpoints to mux.
@@ -162,6 +164,14 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.teardown == nil {
+		writeError(w, http.StatusInternalServerError, "compose teardown is unavailable")
+		return
+	}
+	if err := s.teardown.TeardownEnvironment(r.Context(), projectID, environmentID); err != nil {
+		writeError(w, http.StatusBadGateway, "environment teardown failed: "+err.Error())
+		return
+	}
 	deleted, err := s.repository.delete(r.Context(), projectID, environmentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete environment")

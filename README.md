@@ -61,9 +61,57 @@ Override the defaults via environment variables (or a `.env` file next to
   to the panel on
 - `TRAEFIK_HTTP_PORT` (default `80`) — the host port Traefik's HTTP
   entrypoint is published on
+- `RELIST_IMAGE` (unset by default) — the panel image that Volume file
+  operations run from; set it only when the panel cannot name its own image
+  (`docker inspect $(hostname)` fails, e.g. a custom `hostname:` on the panel
+  service) by adding it to that service's `environment:`. The image must be on
+  the host; `docker compose build` puts it there
 
 Traefik ships with a minimal default (`--providers.docker`, HTTP entrypoint
 only, `exposedbydefault=false`); TLS/ACME and additional entrypoints are left
 to the operator to configure — routing for anything deployed through the
 panel is controlled entirely by Traefik labels written directly in that
 Compose's YAML, per the v1 scope.
+
+## Volume files
+
+Each Compose page has a **Volumes** tab listing the Volumes that Compose
+mounts, with a **Volume Explorer** behind each one for browsing, editing,
+uploading, deleting, and downloading or restoring a tar.gz.
+
+Deploy runs `docker compose up -d --build --remove-orphans`, so the containers of
+Services you removed from the YAML are removed with the next deploy. Volumes are
+left alone. The Compose page also offers **Deploy with fresh volumes**, which
+removes the Compose's named volumes (`down -v`) before redeploying, and the
+Volumes tab lists **orphan volumes** — named volumes Compose created for this
+Compose's project that the deployed file no longer declares — for you to delete
+one by one. Docker refuses to delete a volume a container still uses, and the
+panel never forces it. Bind mounts and `external: true` volumes are never
+deleted by either action.
+
+Two limits to know before using either. Fresh volumes runs `down -v`, which can
+also remove volumes used only by Services behind a Compose profile, even though
+the dialog's list (resolved without profiles) may not show them; and a volume
+declared with an explicit `name:` is removed even if another Compose uses it.
+The panel does not detect another Compose that references one of this
+Compose's volumes by its full name: deleting that volume as an orphan, or
+removing it with fresh volumes, takes that Compose's data too.
+
+Volume files require a **containerized panel**: the helper runs from the
+panel's own image, which must be on the host, over the Docker socket this
+install mounts. Running the bare binary hides the Volumes tab.
+
+The feature assumes **TLS** on the panel's domain — a volume file manager over
+plain HTTP is a data-exfiltration channel. The install stack's Traefik is
+HTTP-only by default (above), so terminate TLS before exposing the panel
+beyond localhost.
+
+New Composes use the immutable Docker project name `relist-c<ID>` and keep their
+deployment files under `RELIST_DATA_DIR/.composes/<ID>/`. Upgrading preserves
+existing names and directories; conflicting legacy identities refuse operations
+until the operator reconciles the shared stack (ADR-0011). Parent deletion tears
+down its child stacks before removing their records.
+
+Before a Volume operation, select its mounting Service or a numeric uid:gid
+override. UID 0 and unverifiable bind paths require separate acknowledgements,
+including downloads started directly from the Volumes tab.

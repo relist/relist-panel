@@ -75,20 +75,39 @@ type repository struct {
 
 // Compose is the API representation of a Compose.
 type Compose struct {
-	ID            int64         `json:"id"`
-	EnvironmentID int64         `json:"environmentId"`
-	Name          string        `json:"name"`
-	ProjectSlug   string        `json:"projectSlug"`
-	EnvSlug       string        `json:"envSlug"`
-	YAMLContent   string        `json:"yamlContent"`
-	CreatedAt     time.Time     `json:"createdAt"`
-	UpdatedAt     time.Time     `json:"updatedAt"`
-	Status        ComposeStatus `json:"status"`
+	DeployIdentity  *DeployIdentity `json:"deployIdentity"`
+	IdentityVersion int             `json:"-"`
+	ID              int64           `json:"id"`
+	EnvironmentID   int64           `json:"environmentId"`
+	Name            string          `json:"name"`
+	ProjectSlug     string          `json:"projectSlug"`
+	EnvSlug         string          `json:"envSlug"`
+	YAMLContent     string          `json:"yamlContent"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
+	// LastDeployedAt is a pointer so never-deployed stays distinct from every
+	// real timestamp on the wire: nil serializes as JSON null, while even a
+	// deploy at the Unix epoch is a non-nil time. Only a successful deploy
+	// ever sets it.
+	LastDeployedAt *time.Time    `json:"lastDeployedAt"`
+	Status         ComposeStatus `json:"status"`
+}
+
+// DeployIdentity is derived from the same RunRequest lifecycle actions use. It
+// lets the UI display the configured directory and both identity versions
+// without rebuilding paths from mutable names or default configuration.
+type DeployIdentity struct {
+	ProjectName string `json:"projectName"`
+	Directory   string `json:"directory"`
 }
 
 type composeCreateInput struct {
 	Name        string  `json:"name"`
 	YAMLContent *string `json:"yamlContent"`
+}
+
+type deployFreshInput struct {
+	ConfirmName string `json:"confirmName"`
 }
 
 type composeUpdateInput struct {
@@ -109,6 +128,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.get)
 	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.update)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/deploy", s.deploy)
+	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/deploy-fresh", s.deployFresh)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/stop", s.stop)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/restart", s.restart)
 	mux.HandleFunc("DELETE /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.delete)
@@ -291,66 +311,181 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
-	if !s.available() {
-		writeError(w, http.StatusInternalServerError, "composes are temporarily unavailable")
+	compose, req, ok := s.loadDeployable(w, r)
+	if !ok {
 		return
 	}
-
-	projectID, environmentID, err := routeIDs(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	files, ok := s.prepareDeployFiles(w, r, compose, req)
+	if !ok {
 		return
 	}
-	id, err := composeID(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
-		return
-	}
-	if err := s.requireEnvironment(r.Context(), projectID, environmentID); err != nil {
-		writeParentError(w, err)
-		return
-	}
-
-	compose, err := s.repository.findByID(r.Context(), environmentID, id)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "compose not found")
-		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return
-	}
-	if strings.TrimSpace(compose.YAMLContent) == "" {
-		writeError(w, http.StatusBadRequest, "compose has no YAML content to deploy")
-		return
-	}
-
-	req := runRequestFor(s.dataDir, compose)
-	variables, err := s.repository.listEnvironmentVariables(r.Context(), environmentID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load environment variables")
-		return
-	}
-
-	if err := os.MkdirAll(filepath.Dir(req.ComposeFilePath), composeDirPerm); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not prepare compose files")
-		return
-	}
-	resolvedYAML, err := resolveCompose(compose.YAMLContent, dockernet.NetworkName, req.EnvFilePath)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "compose yaml is invalid: "+err.Error())
-		return
-	}
-	if err := os.WriteFile(req.ComposeFilePath, []byte(resolvedYAML), composeFilePerm); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not write compose file")
-		return
-	}
-	if err := os.WriteFile(req.EnvFilePath, []byte(renderEnvFile(variables)), envFilePerm); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not write environment file")
+	if !s.writeDeployFiles(w, req, files) {
 		return
 	}
 
 	if err := s.runner.Up(r.Context(), req); err != nil {
 		writeError(w, http.StatusBadGateway, "deploy failed: "+err.Error())
+		return
+	}
+
+	s.completeDeploy(w, r, compose, req)
+}
+
+// deployFresh deploys after deleting the Compose's named volumes. The order
+// is the safety property: nothing is removed or written until the Compose has
+// loaded, its identity is unambiguous and confirmName matches, and the down
+// step runs against the files already on disk — the ones the Volumes payload
+// listed — before the new files replace them (volume-lifecycle spec, B).
+func (s *Service) deployFresh(w http.ResponseWriter, r *http.Request) {
+	compose, req, ok := s.loadDeployable(w, r)
+	if !ok {
+		return
+	}
+
+	var input deployFreshInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.ConfirmName != compose.Name {
+		writeError(w, http.StatusBadRequest, "confirmName must match the compose name")
+		return
+	}
+
+	// Everything that can be checked without touching Docker or the disk is
+	// checked before the volumes go.
+	files, ok := s.prepareDeployFiles(w, r, compose, req)
+	if !ok {
+		return
+	}
+
+	if _, err := os.Stat(req.ComposeFilePath); err == nil {
+		if err := s.runner.DownWithVolumes(r.Context(), req); err != nil {
+			writeError(w, http.StatusBadGateway, "delete volumes failed: "+err.Error())
+			return
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		writeError(w, http.StatusInternalServerError, "could not inspect compose files")
+		return
+	}
+
+	// The volumes are gone from here on: a later failure must say so.
+	if message, err := writeFiles(req, files); err != nil {
+		writeError(w, http.StatusBadGateway, message+" after volumes were removed: "+err.Error()+". "+volumesRemovedAdvice)
+		return
+	}
+	if err := s.runner.Up(r.Context(), req); err != nil {
+		writeError(w, http.StatusBadGateway, "deploy failed after volumes were removed: "+err.Error()+". "+volumesRemovedAdvice)
+		return
+	}
+
+	s.completeDeploy(w, r, compose, req)
+}
+
+const volumesRemovedAdvice = "The Compose is stopped; fix the cause and deploy again."
+
+// loadDeployable resolves the route, loads the Compose and runs the checks
+// every deploy shares. It writes nothing to disk; on !ok it has already
+// written the error response.
+func (s *Service) loadDeployable(w http.ResponseWriter, r *http.Request) (Compose, RunRequest, bool) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "composes are temporarily unavailable")
+		return Compose{}, RunRequest{}, false
+	}
+
+	projectID, environmentID, err := routeIDs(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return Compose{}, RunRequest{}, false
+	}
+	id, err := composeID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
+		return Compose{}, RunRequest{}, false
+	}
+	if err := s.requireEnvironment(r.Context(), projectID, environmentID); err != nil {
+		writeParentError(w, err)
+		return Compose{}, RunRequest{}, false
+	}
+
+	compose, err := s.repository.findByID(r.Context(), environmentID, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "compose not found")
+		return Compose{}, RunRequest{}, false
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return Compose{}, RunRequest{}, false
+	}
+	if strings.TrimSpace(compose.YAMLContent) == "" {
+		writeError(w, http.StatusBadRequest, "compose has no YAML content to deploy")
+		return Compose{}, RunRequest{}, false
+	}
+
+	if err := s.requireUniqueIdentity(r.Context(), compose); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return Compose{}, RunRequest{}, false
+	}
+	return compose, runRequestFor(s.dataDir, compose), true
+}
+
+// deployFiles is the content a deploy writes, computed before anything is
+// removed or written.
+type deployFiles struct {
+	composeYAML string
+	envFile     string
+}
+
+// prepareDeployFiles resolves the YAML and loads the environment variables.
+// It touches no files. On false it has already written the error response.
+func (s *Service) prepareDeployFiles(w http.ResponseWriter, r *http.Request, compose Compose, req RunRequest) (deployFiles, bool) {
+	variables, err := s.repository.listEnvironmentVariables(r.Context(), compose.EnvironmentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load environment variables")
+		return deployFiles{}, false
+	}
+	resolvedYAML, err := resolveCompose(compose.YAMLContent, dockernet.NetworkName, req.EnvFilePath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose yaml is invalid: "+err.Error())
+		return deployFiles{}, false
+	}
+	return deployFiles{composeYAML: resolvedYAML, envFile: renderEnvFile(variables)}, true
+}
+
+// writeDeployFiles writes the prepared compose and environment files. On
+// false it has already written the error response.
+func (s *Service) writeDeployFiles(w http.ResponseWriter, req RunRequest, files deployFiles) bool {
+	if message, err := writeFiles(req, files); err != nil {
+		writeError(w, http.StatusInternalServerError, message)
+		return false
+	}
+	return true
+}
+
+// writeFiles creates the Compose directory and writes both files, returning
+// the user-facing description of the step that failed.
+func writeFiles(req RunRequest, files deployFiles) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(req.ComposeFilePath), composeDirPerm); err != nil {
+		return "could not prepare compose files", err
+	}
+	if err := os.WriteFile(req.ComposeFilePath, []byte(files.composeYAML), composeFilePerm); err != nil {
+		return "could not write compose file", err
+	}
+	if err := os.WriteFile(req.EnvFilePath, []byte(files.envFile), envFilePerm); err != nil {
+		return "could not write environment file", err
+	}
+	return "", nil
+}
+
+// completeDeploy records the deploy time and answers with the refreshed
+// Compose.
+func (s *Service) completeDeploy(w http.ResponseWriter, r *http.Request, compose Compose, req RunRequest) {
+	// The deploy timestamp records success only (deploy-timestamps spec): it
+	// lands after the runner returns without error, and no other action ever
+	// writes it — "has deployed" and "is running" stay two different facts.
+	deployedAt := s.now().UTC().Truncate(time.Second)
+	if err := s.repository.markDeployed(r.Context(), compose.EnvironmentID, compose.ID, deployedAt); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not record deploy time")
+		return
+	}
+	compose, err := s.repository.findByID(r.Context(), compose.EnvironmentID, compose.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
 		return
 	}
 
@@ -528,6 +663,10 @@ func (s *Service) loadComposeAndRunRequest(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "could not load compose")
 		return Compose{}, RunRequest{}, false
 	}
+	if err := s.requireUniqueIdentity(r.Context(), compose); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return Compose{}, RunRequest{}, false
+	}
 	return compose, runRequestFor(s.dataDir, compose), true
 }
 
@@ -548,10 +687,35 @@ func (s *Service) resolveDeployedCompose(w http.ResponseWriter, r *http.Request,
 	return compose, req, true
 }
 
+// ComposeRunRequest resolves one Compose's deploy identity for a sibling
+// domain that must act on its files but owns neither the lookup nor the path
+// derivation: the Project and Environment are checked exactly as the Compose
+// routes check them, the row comes from repository.findByID and the identity
+// from runRequestFor. A missing Project, Environment or Compose is reported
+// as sql.ErrNoRows — including the lookup's own error, passed through
+// unchanged — so the caller keeps a single 404 path.
+func (s *Service) ComposeRunRequest(ctx context.Context, projectID, environmentID, composeID int64) (RunRequest, error) {
+	if err := s.requireEnvironment(ctx, projectID, environmentID); err != nil {
+		if errors.Is(err, errProjectNotFound) || errors.Is(err, errEnvironmentNotFound) {
+			return RunRequest{}, sql.ErrNoRows
+		}
+		return RunRequest{}, err
+	}
+	compose, err := s.repository.findByID(ctx, environmentID, composeID)
+	if err != nil {
+		return RunRequest{}, err
+	}
+	if err := s.requireUniqueIdentity(ctx, compose); err != nil {
+		return RunRequest{}, err
+	}
+	return runRequestFor(s.dataDir, compose), nil
+}
+
 // withRefreshedStatus re-reads a Compose's live status immediately after a
 // runner action (deploy/stop/restart) so the response reflects the outcome
 // without a separate round-trip; best-effort like withStatus/withStatuses.
 func (s *Service) withRefreshedStatus(ctx context.Context, req RunRequest, compose Compose) Compose {
+	compose = s.withDeployIdentity(compose)
 	status, err := s.runner.Status(ctx, req)
 	if err != nil {
 		status = ComposeStatus{}
@@ -564,21 +728,31 @@ func (s *Service) withRefreshedStatus(ctx context.Context, req RunRequest, compo
 // They are best-effort: a runner error (e.g. Docker is unreachable) must not
 // fail an otherwise-successful read, so it degrades to a zero-value status.
 func (s *Service) withStatus(ctx context.Context, compose Compose) Compose {
+	compose = s.withDeployIdentity(compose)
 	compose.Status = s.currentStatus(ctx, compose)
 	return compose
 }
 
 func (s *Service) withStatuses(ctx context.Context, composes []Compose) []Compose {
 	for i := range composes {
-		composes[i].Status = s.currentStatus(ctx, composes[i])
+		composes[i] = s.withStatus(ctx, composes[i])
 	}
 	return composes
+}
+
+func (s *Service) withDeployIdentity(compose Compose) Compose {
+	req := runRequestFor(s.dataDir, compose)
+	compose.DeployIdentity = &DeployIdentity{ProjectName: req.ProjectName, Directory: filepath.Dir(req.ComposeFilePath)}
+	return compose
 }
 
 // currentStatus only queries the runner once a Compose has actually been
 // deployed (its resolved compose file exists on disk); an undeployed Compose
 // always reads as a zero-value status without shelling out.
 func (s *Service) currentStatus(ctx context.Context, compose Compose) ComposeStatus {
+	if err := s.requireUniqueIdentity(ctx, compose); err != nil {
+		return ComposeStatus{}
+	}
 	req := runRequestFor(s.dataDir, compose)
 	if _, err := os.Stat(req.ComposeFilePath); err != nil {
 		return ComposeStatus{}
@@ -747,7 +921,7 @@ func BackfillLegacyIdentities(ctx context.Context, db *sql.DB) error {
 
 func (r *repository) list(ctx context.Context, environmentID int64) ([]Compose, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at
+		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at, identity_version
 		FROM composes
 		WHERE environment_id = ?
 		ORDER BY id ASC
@@ -773,8 +947,8 @@ func (r *repository) list(ctx context.Context, environmentID int64) ([]Compose, 
 
 func (r *repository) create(ctx context.Context, environmentID int64, projectSlug, envSlug, name, yamlContent string, createdAt time.Time) (Compose, error) {
 	result, err := r.db.ExecContext(ctx, `
-		INSERT INTO composes (environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO composes (environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, identity_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1)
 	`, environmentID, name, projectSlug, envSlug, yamlContent, createdAt.Unix(), createdAt.Unix())
 	if err != nil {
 		return Compose{}, err
@@ -788,11 +962,24 @@ func (r *repository) create(ctx context.Context, environmentID int64, projectSlu
 
 func (r *repository) findByID(ctx context.Context, environmentID, id int64) (Compose, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at
+		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at, identity_version
 		FROM composes
 		WHERE environment_id = ? AND id = ?
 	`, environmentID, id)
 	return scanComposeValues(row.Scan)
+}
+
+// markDeployed records a successful deploy's time on the Compose row. It is
+// deployed_at's only writer: called after the runner reports success, never
+// by stop, restart, save or delete — so a stopped Compose keeps the timestamp
+// that says it has been deployed before.
+func (r *repository) markDeployed(ctx context.Context, environmentID, id int64, deployedAt time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE composes
+		SET deployed_at = ?
+		WHERE environment_id = ? AND id = ?
+	`, deployedAt.Unix(), environmentID, id)
+	return err
 }
 
 func (r *repository) update(ctx context.Context, environmentID, id int64, yamlContent string, updatedAt time.Time) error {
@@ -818,15 +1005,20 @@ func (r *repository) delete(ctx context.Context, environmentID, id int64) (bool,
 
 func scanComposeValues(scan func(...any) error) (Compose, error) {
 	var (
-		compose   Compose
-		createdAt int64
-		updatedAt int64
+		compose    Compose
+		createdAt  int64
+		updatedAt  int64
+		deployedAt sql.NullInt64
 	)
-	if err := scan(&compose.ID, &compose.EnvironmentID, &compose.Name, &compose.ProjectSlug, &compose.EnvSlug, &compose.YAMLContent, &createdAt, &updatedAt); err != nil {
+	if err := scan(&compose.ID, &compose.EnvironmentID, &compose.Name, &compose.ProjectSlug, &compose.EnvSlug, &compose.YAMLContent, &createdAt, &updatedAt, &deployedAt, &compose.IdentityVersion); err != nil {
 		return Compose{}, err
 	}
 	compose.CreatedAt = time.Unix(createdAt, 0).UTC()
 	compose.UpdatedAt = time.Unix(updatedAt, 0).UTC()
+	if deployedAt.Valid {
+		at := time.Unix(deployedAt.Int64, 0).UTC()
+		compose.LastDeployedAt = &at
+	}
 	return compose, nil
 }
 
@@ -878,15 +1070,27 @@ func validateComposeName(value string) (string, error) {
 	return trimmed, nil
 }
 
-// runRequestFor computes a Compose's deploy identity from the slugs stored on
-// its row (ADR-0005): the `docker compose -p` project name and the paths its
-// resolved files live at under dataDir (ADR-0002). The compose name slugifies
-// here because the row stores the display name only.
+// DeployProjectName is the Compose's immutable Docker identity (ADR-0011):
+// new rows use their database ID; legacy rows retain their frozen slugs. Metrics
+// collection uses this same identity to attribute containers to Composes.
+func (c Compose) DeployProjectName() string {
+	if c.IdentityVersion == 1 {
+		return "relist-c" + strconv.FormatInt(c.ID, 10)
+	}
+	return c.ProjectSlug + "-" + c.EnvSlug + "-" + slug.Slugify(c.Name)
+}
+
+// runRequestFor resolves the immutable name and paths for either identity
+// version (ADR-0011). Legacy files stay at their original slug paths; new
+// Composes use the separate .composes/<ID> namespace.
 func runRequestFor(dataDir string, compose Compose) RunRequest {
 	composeSlug := slug.Slugify(compose.Name)
 	dir := filepath.Join(dataDir, compose.ProjectSlug, compose.EnvSlug, composeSlug)
+	if compose.IdentityVersion == 1 {
+		dir = filepath.Join(dataDir, ".composes", strconv.FormatInt(compose.ID, 10))
+	}
 	return RunRequest{
-		ProjectName:     compose.ProjectSlug + "-" + compose.EnvSlug + "-" + composeSlug,
+		ProjectName:     compose.DeployProjectName(),
 		ComposeFilePath: filepath.Join(dir, composeFileName),
 		EnvFilePath:     filepath.Join(dir, envFileName),
 	}
@@ -967,17 +1171,6 @@ func appendUnique(sequence []any, value string) []any {
 		}
 	}
 	return append(sequence, value)
-}
-
-func renderEnvFile(variables []environmentVariable) string {
-	var b strings.Builder
-	for _, variable := range variables {
-		b.WriteString(variable.Key)
-		b.WriteByte('=')
-		b.WriteString(variable.Value)
-		b.WriteByte('\n')
-	}
-	return b.String()
 }
 
 func isUniqueConstraint(err error) bool {

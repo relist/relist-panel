@@ -9,16 +9,27 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${RELIST_DATA_DIR:-/var/lib/relist-panel}:${RELIST_DATA_DIR:-/var/lib/relist-panel}
+      # Read-only host /proc for the metrics sampler (ADR-0006): network
+      # counters are read from /host/proc/1/net/dev because /proc/net/dev is
+      # /proc/self/net/dev and would report the panel's own namespace.
+      - /proc:/host/proc:ro
     networks:
       - relist-network
     labels:
       - traefik.enable=true
       - traefik.http.routers.panel.rule=Host(`${RELIST_DOMAIN:-panel.localhost}`)
       - traefik.http.services.panel.loadbalancer.server.port=${RELIST_PORT:-8080}
+    cpus: 0.25
+    mem_limit: 256M
     restart: unless-stopped
 
   traefik:
     image: traefik:v3.7
+    environment:
+      # Go can't see the cgroup mem_limit, so without GOMEMLIMIT the heap grows
+      # until the kernel OOM-kills the container instead of the GC stepping in.
+      # Keep it under mem_limit; 400MiB ≈ 80% of the 512M limit.
+      GOMEMLIMIT: 400MiB
     command:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
@@ -29,6 +40,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - relist-network
+    cpus: 1
+    mem_limit: 512M
     restart: unless-stopped
 
 # relist-network is external: it must outlive this install stack's own
