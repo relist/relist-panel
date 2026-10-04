@@ -41,7 +41,7 @@ const (
 )
 
 // wrapperName is the marker the session's wrapper carries as the exec's third
-// argument, which Task 7's sweep matches on to find orphaned shells.
+// argument, which the startup sweep matches on to find orphaned shells.
 const wrapperName = "relist-terminal"
 
 // controlFrame is an incoming JSON text frame. Only resize is defined in that
@@ -181,7 +181,7 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 
 // wrapperCmd is the marked shell the session starts: a /bin/sh prints its own
 // pid — the pid the session later hangs up — then execs the chosen shell. The
-// marker stays in the exec's ProcessConfig, where Task 7's sweep can find it.
+// marker stays in the exec's ProcessConfig, where the startup sweep can find it.
 // /bin/sh is required: an image with bash but no sh has no usable shell.
 func wrapperCmd(shell string) []string {
 	return []string{"/bin/sh", "-c", `echo $$; exec "$1"`, wrapperName, shell}
@@ -213,25 +213,31 @@ func readWrapperPID(r *bufio.Reader) (int, error) {
 }
 
 // hangUp ends the shell one session started, on its own bounded context so a
-// cancelled request or a dead browser cannot skip the cleanup: a HUP, the kill
-// grace, then a liveness probe. Only a probe that still finds the pid escalates
-// to KILL; ErrNoProcess means the HUP was enough.
+// cancelled request or a dead browser cannot skip the cleanup.
 func (s *Service) hangUp(containerID string, pid int) {
 	ctx, cancel := context.WithTimeout(context.Background(), killTimeout)
 	defer cancel()
+	_ = hangUp(ctx, s.exec, containerID, pid, s.killGrace)
+}
 
-	if err := s.exec.Kill(ctx, containerID, pid, "HUP"); errors.Is(err, ErrNoProcess) {
-		return
+// hangUp is the one way a shell is ended, by a session and by the startup
+// sweep: a HUP, the grace, then a liveness probe. Only a probe that still finds
+// the pid escalates to KILL; ErrNoProcess at the HUP or at the probe means the
+// shell is already gone. It returns the KILL's error, or ctx's when it ends
+// during the grace.
+func hangUp(ctx context.Context, exec Exec, containerID string, pid int, grace time.Duration) error {
+	if err := exec.Kill(ctx, containerID, pid, "HUP"); errors.Is(err, ErrNoProcess) {
+		return nil
 	}
 	select {
 	case <-ctx.Done():
-		return
-	case <-time.After(s.killGrace):
+		return ctx.Err()
+	case <-time.After(grace):
 	}
-	if err := s.exec.Kill(ctx, containerID, pid, "0"); errors.Is(err, ErrNoProcess) {
-		return
+	if err := exec.Kill(ctx, containerID, pid, "0"); errors.Is(err, ErrNoProcess) {
+		return nil
 	}
-	_ = s.exec.Kill(ctx, containerID, pid, "KILL")
+	return exec.Kill(ctx, containerID, pid, "KILL")
 }
 
 // run carries one live session: output to the browser, input from it, a ping

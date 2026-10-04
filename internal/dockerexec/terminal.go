@@ -127,7 +127,9 @@ func (e *TerminalExec) ServiceContainers(ctx context.Context, project, service s
 // daemon, then mapped to the last NSpid field of its <procRoot>/<pid>/status —
 // the pid inside the Container's own namespace, which is the one a kill there
 // addresses. An exec whose proc entry has vanished is skipped: it is already
-// gone, which is the outcome the sweep wants.
+// gone, which is the outcome the sweep wants. A Container or exec that fails to
+// inspect does not stop the others: what was found is returned beside the
+// joined errors, so one bad exec cannot leave the rest of the shells running.
 func (e *TerminalExec) OrphanShells(ctx context.Context, projects []string) ([]terminal.OrphanShell, error) {
 	if len(projects) == 0 {
 		return nil, nil
@@ -143,22 +145,25 @@ func (e *TerminalExec) OrphanShells(ctx context.Context, projects []string) ([]t
 	}
 
 	var orphans []terminal.OrphanShell
+	var errs []error
 	for _, containerID := range containers {
 		execIDs, err := e.containerExecIDs(ctx, containerID)
 		if err != nil {
-			return nil, err
+			errs = append(errs, err)
+			continue
 		}
 		for _, execID := range execIDs {
 			pid, marked, err := e.markedExecPID(ctx, execID)
 			if err != nil {
-				return nil, err
+				errs = append(errs, err)
+				continue
 			}
 			if marked {
 				orphans = append(orphans, terminal.OrphanShell{ContainerID: containerID, PID: pid})
 			}
 		}
 	}
-	return orphans, nil
+	return orphans, errors.Join(errs...)
 }
 
 // projectContainers lists the ids of the running Containers whose Compose

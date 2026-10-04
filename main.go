@@ -111,7 +111,7 @@ func main() {
 		for name := range projects {
 			names = append(names, name)
 		}
-		terminal.Sweep(sweepCtx, terminalExec, names, log.Printf)
+		terminal.Sweep(sweepCtx, terminalExec, names, 2*time.Second, log.Printf)
 	}()
 
 	select {

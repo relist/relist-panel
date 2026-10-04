@@ -65,8 +65,8 @@ type Exec struct {
 	// Orphans answers OrphanShells: the marked shells a crashed panel left
 	// running.
 	Orphans []terminal.OrphanShell
-	// OrphanShellsErr, when set, is returned by OrphanShells instead of
-	// Orphans.
+	// OrphanShellsErr, when set, is returned by OrphanShells beside Orphans, the
+	// way the real listing reports a partial failure.
 	OrphanShellsErr error
 	// Starts records every successful Start, in order. Reads race-free
 	// through StartsSnapshot.
@@ -113,10 +113,7 @@ func (f *Exec) ServiceContainers(_ context.Context, project, service string) ([]
 
 // OrphanShells implements terminal.Exec.
 func (f *Exec) OrphanShells(_ context.Context, _ []string) ([]terminal.OrphanShell, error) {
-	if f.OrphanShellsErr != nil {
-		return nil, f.OrphanShellsErr
-	}
-	return f.Orphans, nil
+	return f.Orphans, f.OrphanShellsErr
 }
 
 // HasShell implements terminal.Exec.

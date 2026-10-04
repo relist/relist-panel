@@ -639,6 +639,50 @@ func TestTerminalExecOrphanShellsFindsRunningMarkedExecs(t *testing.T) {
 	}
 }
 
+// One container whose inspect fails must not hide the shells of the others:
+// OrphanShells returns what it found, plus an error naming what failed.
+func TestTerminalExecOrphanShellsContinuesPastAFailedInspect(t *testing.T) {
+	procRoot := t.TempDir()
+	writeProcStatus(t, procRoot, 111, "Name:\tsh\nPid:\t111\nNSpid:\t111\t42\t7\n")
+
+	marker := []string{"-c", `echo $$; exec "$1"`, "relist-terminal", "/bin/sh"}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /containers/json", func(w http.ResponseWriter, r *http.Request) {
+		writeTerminalJSON(t, w, http.StatusOK, []map[string]any{
+			{"Id": "broken", "Labels": map[string]string{"com.docker.compose.project": "relist-c3"}},
+			{"Id": "web", "Labels": map[string]string{"com.docker.compose.project": "relist-c3"}},
+		})
+	})
+	mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") == "broken" {
+			writeTerminalJSON(t, w, http.StatusOK, map[string]any{"ExecIDs": []string{"e-broken"}})
+			return
+		}
+		writeTerminalJSON(t, w, http.StatusOK, map[string]any{"ExecIDs": []string{"e-running"}})
+	})
+	mux.HandleFunc("GET /exec/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") == "e-broken" {
+			writeTerminalJSON(t, w, http.StatusInternalServerError, map[string]string{"message": "boom"})
+			return
+		}
+		writeTerminalJSON(t, w, http.StatusOK, map[string]any{
+			"Running": true, "Pid": 111,
+			"ProcessConfig": map[string]any{"arguments": marker},
+		})
+	})
+	socket := newTerminalDaemon(t, mux)
+
+	orphans, err := dockerexec.NewTerminalExec(socket, procRoot).OrphanShells(context.Background(), []string{"relist-c3"})
+
+	want := []terminal.OrphanShell{{ContainerID: "web", PID: 7}}
+	if !reflect.DeepEqual(orphans, want) {
+		t.Errorf("OrphanShells() = %+v, want %+v", orphans, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "/exec/e-broken/json") {
+		t.Errorf("OrphanShells() error = %v, want one naming /exec/e-broken/json", err)
+	}
+}
+
 // writeProcStatus writes a golden <procRoot>/<pid>/status, the host proc entry
 // the sweep reads an exec's NSpid line from.
 func writeProcStatus(t *testing.T, procRoot string, pid int, content string) {
