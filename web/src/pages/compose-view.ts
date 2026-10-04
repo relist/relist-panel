@@ -46,10 +46,37 @@ export function deploySteps(dirty: boolean): readonly ('deploy' | 'save')[] {
   return dirty ? ['save', 'deploy'] : ['deploy'];
 }
 
+/** The `web-1` in `web-1  | GET /healthz`: the label `docker compose logs` puts before the pipe. */
+function logLabel(line: string): string | undefined {
+  const pipe = line.indexOf('|');
+  return pipe > 0 ? line.slice(0, pipe).trim() || undefined : undefined;
+}
+
+/** `web-1` belongs to Service `web`; `web2-1` does not. */
+function labelIsService(label: string, service: string): boolean {
+  return label === service || new RegExp(`^${service.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+$`).test(label);
+}
+
 /**
- * The logs drawer's view of the whole-stack `docker compose logs` text: keep
- * the lines that begin with one of the selected Services' names, then keep only
- * the last `limit` of those. No selection filters nothing.
+ * The names the Logs tab's service filter offers: the Services the collector
+ * knows, plus any the log text itself names — the collector's cache can be
+ * empty (before its first sweep) while the logs are not.
+ */
+export function logServiceOptions(logsText: string | undefined, known: readonly string[]): string[] {
+  const names = new Set(known);
+  for (const line of logsText ? logsText.split('\n') : []) {
+    const label = logLabel(line);
+    if (label && ![...names].some((name) => labelIsService(label, name))) {
+      names.add(label.replace(/-\d+$/, ''));
+    }
+  }
+  return [...names].sort();
+}
+
+/**
+ * The Logs tab's view of the whole-stack `docker compose logs` text: keep the
+ * lines whose container label belongs to one of the selected Services, then
+ * keep only the last `limit` of those. No selection filters nothing.
  */
 export function filterLogLines(
   logsText: string | undefined,
@@ -60,7 +87,10 @@ export function filterLogLines(
   const byService =
     services.length === 0
       ? lines
-      : lines.filter((line) => services.some((service) => line.trimStart().startsWith(service)));
+      : lines.filter((line) => {
+          const label = logLabel(line);
+          return label !== undefined && services.some((service) => labelIsService(label, service));
+        });
   return byService.slice(-limit);
 }
 

@@ -60,7 +60,7 @@ import { ApiError } from '../data/api';
 import { usePanel } from '../data/store';
 import type { ComposeVolumes, OrphanVolume } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
-import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges } from './compose-view';
+import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
 
 const { Text, Paragraph, Title } = Typography;
 
