@@ -192,11 +192,16 @@ func (e *TerminalExec) projectContainers(ctx context.Context, known map[string]b
 }
 
 // containerExecIDs reads a Container's ExecIDs from GET /containers/{id}/json.
+// A 404 means the Container vanished between the list and this inspect — a
+// redeploy race — so it is skipped, not an error; every other non-2xx stays one.
 func (e *TerminalExec) containerExecIDs(ctx context.Context, containerID string) ([]string, error) {
 	path := "/containers/" + url.PathEscape(containerID) + "/json"
 	resp, body, err := e.send(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
 	}
 	if !ok(resp.StatusCode) {
 		return nil, apiError(path, resp.Status, body)
@@ -213,11 +218,17 @@ func (e *TerminalExec) containerExecIDs(ctx context.Context, containerID string)
 // markedExecPID reports the container-namespace pid of one exec and whether it
 // is a still-running marked shell. A non-marked or exited exec is not an
 // orphan, and a marked exec whose proc entry is gone is skipped, not an error.
+// A 404 means the exec vanished between the Container's ExecIDs list and this
+// inspect — a redeploy race — so it is skipped too; every other non-2xx stays
+// an error.
 func (e *TerminalExec) markedExecPID(ctx context.Context, execID string) (int, bool, error) {
 	path := "/exec/" + url.PathEscape(execID) + "/json"
 	resp, body, err := e.send(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return 0, false, err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return 0, false, nil
 	}
 	if !ok(resp.StatusCode) {
 		return 0, false, apiError(path, resp.Status, body)

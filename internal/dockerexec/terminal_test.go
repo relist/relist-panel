@@ -547,7 +547,9 @@ func TestTerminalExecAvailablePingsTheDaemon(t *testing.T) {
 // ExecIDs, keeps the execs that are Running and carry the wrapper marker at
 // ProcessConfig.arguments[2], and maps each exec's host pid to the
 // container-namespace pid — the last field of the mounted proc's NSpid line.
-// An exec whose status file has vanished is skipped: it is already gone.
+// An exec whose status file has vanished is skipped: it is already gone. A
+// Container or exec that answers 404 (removed between the list and its inspect)
+// is skipped too, and does not abort the sweep: another orphan is still found.
 func TestTerminalExecOrphanShellsFindsRunningMarkedExecs(t *testing.T) {
 	procRoot := t.TempDir()
 	writeProcStatus(t, procRoot, 111, "Name:\tsh\nPid:\t111\nNSpid:\t111\t42\t7\n")
@@ -558,6 +560,7 @@ func TestTerminalExecOrphanShellsFindsRunningMarkedExecs(t *testing.T) {
 	mux.HandleFunc("GET /containers/json", func(w http.ResponseWriter, r *http.Request) {
 		writeTerminalJSON(t, w, http.StatusOK, []map[string]any{
 			{"Id": "web", "Labels": map[string]string{"com.docker.compose.project": "relist-c3"}},
+			{"Id": "vanished", "Labels": map[string]string{"com.docker.compose.project": "relist-c3"}},
 			{"Id": "other", "Labels": map[string]string{"com.docker.compose.project": "not-ours"}},
 		})
 	})
@@ -565,13 +568,18 @@ func TestTerminalExecOrphanShellsFindsRunningMarkedExecs(t *testing.T) {
 		mu.Lock()
 		inspected = append(inspected, r.PathValue("id"))
 		mu.Unlock()
-		if r.PathValue("id") != "web" {
+		switch r.PathValue("id") {
+		case "vanished":
+			// The Container was removed between the list and this inspect — a
+			// redeploy race — so it must be skipped, not abort the sweep.
+			writeTerminalJSON(t, w, http.StatusNotFound, map[string]string{"message": "No such container"})
+		case "web":
+			writeTerminalJSON(t, w, http.StatusOK, map[string]any{
+				"ExecIDs": []string{"e-running", "e-exited", "e-other", "e-missing", "e-vanished"},
+			})
+		default:
 			writeTerminalJSON(t, w, http.StatusOK, map[string]any{"ExecIDs": []string{"e-foreign"}})
-			return
 		}
-		writeTerminalJSON(t, w, http.StatusOK, map[string]any{
-			"ExecIDs": []string{"e-running", "e-exited", "e-other", "e-missing"},
-		})
 	})
 	mux.HandleFunc("GET /exec/{id}/json", func(w http.ResponseWriter, r *http.Request) {
 		marker := []string{"-c", `echo $$; exec "$1"`, "relist-terminal", "/bin/sh"}
@@ -596,6 +604,10 @@ func TestTerminalExecOrphanShellsFindsRunningMarkedExecs(t *testing.T) {
 				"Running": true, "Pid": 222,
 				"ProcessConfig": map[string]any{"arguments": marker},
 			})
+		case "e-vanished":
+			// The exec was removed between the Container's ExecIDs list and
+			// this inspect — the same redeploy race — so it is skipped too.
+			writeTerminalJSON(t, w, http.StatusNotFound, map[string]string{"message": "No such exec"})
 		default:
 			t.Errorf("unexpected exec inspect %q", r.PathValue("id"))
 			writeTerminalJSON(t, w, http.StatusNotFound, map[string]string{"message": "no such exec"})
@@ -617,9 +629,12 @@ func TestTerminalExecOrphanShellsFindsRunningMarkedExecs(t *testing.T) {
 	gotInspected := append([]string(nil), inspected...)
 	mu.Unlock()
 	for _, id := range gotInspected {
-		if id != "web" {
+		if id != "web" && id != "vanished" {
 			t.Errorf("inspected Container %q; only known project labels may be swept", id)
 		}
+	}
+	if !reflect.DeepEqual(gotInspected, []string{"web", "vanished"}) {
+		t.Errorf("inspected = %v, want web and vanished", gotInspected)
 	}
 }
 
