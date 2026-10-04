@@ -31,13 +31,19 @@ type ContainerSource struct {
 
 // NewContainerSource constructs a source over the socket at socketPath.
 func NewContainerSource(socketPath string) *ContainerSource {
+	return &ContainerSource{client: newSocketClient(socketPath)}
+}
+
+// newSocketClient is the HTTP client that dials the daemon's unix socket for
+// every request, whatever the URL's host says. ADR-0006's direct Engine API
+// path; the terminal exec adapter dials the same socket for everything except
+// the hijacked start stream, which needs the raw connection.
+func newSocketClient(socketPath string) *http.Client {
 	dialer := &net.Dialer{}
-	return &ContainerSource{
-		client: &http.Client{
-			Transport: &http.Transport{
-				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-					return dialer.DialContext(ctx, "unix", socketPath)
-				},
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return dialer.DialContext(ctx, "unix", socketPath)
 			},
 		},
 	}
