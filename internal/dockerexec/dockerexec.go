@@ -26,8 +26,15 @@ func New() Runner {
 	return Runner{}
 }
 
+// upArgs is the argv for a deploy. --remove-orphans removes containers of
+// services no longer in the compose file; it never touches volumes. run has no
+// injection seam, so the argv is tested through this helper.
+func upArgs() []string {
+	return []string{"up", "-d", "--build", "--remove-orphans"}
+}
+
 func (Runner) Up(ctx context.Context, req composes.RunRequest) error {
-	_, err := run(ctx, req, "up", "-d", "--build")
+	_, err := run(ctx, req, upArgs()...)
 	return err
 }
 
