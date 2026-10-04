@@ -29,7 +29,9 @@ func NewVolumeResolver() *VolumeResolver {
 //	docker compose -p <project> -f <file> --env-file <env> config --format json
 //
 // so named volumes, relative and absolute binds, `${VAR}` interpolation and
-// pruning are all resolved by the CLI, the reference implementation. The
+// pruning are all resolved by the CLI, the reference implementation. With
+// ref.AllProfiles, `--profile '*'` is added before `config` so profile-gated
+// Services resolve too. The
 // CLI's stderr is folded into the error, which is how the operator sees its
 // own `couldn't find env file` before the first deploy.
 func (r *VolumeResolver) ComposeConfig(ctx context.Context, ref volumes.ComposeRef) ([]byte, error) {
@@ -39,9 +41,12 @@ func (r *VolumeResolver) ComposeConfig(ctx context.Context, ref volumes.ComposeR
 		"-p", ref.ProjectName,
 		"-f", ref.ComposeFilePath,
 		"--env-file", ref.EnvFilePath,
-		"config",
-		"--format", "json",
 	}
+	if ref.AllProfiles {
+		// Global flags: they must precede the config subcommand.
+		argv = append(argv, "--profile", "*")
+	}
+	argv = append(argv, "config", "--format", "json")
 	var stdout, stderr bytes.Buffer
 	if err := r.runDocker(ctx, argv, nil, &stdout, &stderr); err != nil {
 		return nil, fmt.Errorf("docker %s: %w: %s", strings.Join(argv, " "), err, strings.TrimSpace(stderr.String()))

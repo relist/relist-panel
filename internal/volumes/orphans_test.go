@@ -168,3 +168,51 @@ func TestRemoveOrphanPassesTheInUseErrorThrough(t *testing.T) {
 		t.Errorf("RemoveOrphan() error = %v, want ErrVolumeInUse", err)
 	}
 }
+
+// Orphan derivation resolves the Compose with every profile enabled, so a
+// volume only a profile-gated service mounts still counts as declared — and
+// the caller's ref is left untouched.
+func TestOrphanDerivationResolvesWithEveryProfileEnabled(t *testing.T) {
+	cli := newOrphanFake(composeVolume("app_old", "app", "old"))
+	resolver := volumes.NewResolver(cli, "/data")
+
+	if _, err := resolver.ListOrphans(context.Background(), orphanRef); err != nil {
+		t.Fatalf("ListOrphans() error = %v", err)
+	}
+	if err := resolver.RemoveOrphan(context.Background(), orphanRef, "app_old"); err != nil {
+		t.Fatalf("RemoveOrphan() error = %v", err)
+	}
+	if len(cli.ComposeConfigRefs) != 2 {
+		t.Fatalf("ComposeConfig calls = %d, want 2", len(cli.ComposeConfigRefs))
+	}
+	for i, ref := range cli.ComposeConfigRefs {
+		if !ref.AllProfiles {
+			t.Errorf("ComposeConfig ref %d AllProfiles = false, want true", i)
+		}
+	}
+	if orphanRef.AllProfiles {
+		t.Error("the caller's ref was mutated")
+	}
+}
+
+// A volume mounted only by a profile-gated service is in the all-profiles
+// resolution, so it is not an orphan and RemoveOrphan refuses it.
+func TestProfileGatedVolumeIsNotAnOrphan(t *testing.T) {
+	cli := newOrphanFake(composeVolume("app_tools", "app", "tools"), composeVolume("app_old", "app", "old"))
+	cli.ComposeConfigOutput = []byte(`{"services":{"tools":{"volumes":[{"type":"volume","source":"tools","target":"/t"}]}},"volumes":{"tools":{"name":"app_tools"}}}`)
+	resolver := volumes.NewResolver(cli, "/data")
+
+	got, err := resolver.ListOrphans(context.Background(), orphanRef)
+	if err != nil {
+		t.Fatalf("ListOrphans() error = %v", err)
+	}
+	if want := []string{"app_old"}; !reflect.DeepEqual(orphanNames(got), want) {
+		t.Errorf("orphans = %v, want %v", orphanNames(got), want)
+	}
+	if err := resolver.RemoveOrphan(context.Background(), orphanRef, "app_tools"); !errors.Is(err, volumes.ErrNotOrphan) {
+		t.Errorf("RemoveOrphan() error = %v, want ErrNotOrphan", err)
+	}
+	if len(cli.RemovedVolumes) != 0 {
+		t.Errorf("RemovedVolumes = %v, want none", cli.RemovedVolumes)
+	}
+}

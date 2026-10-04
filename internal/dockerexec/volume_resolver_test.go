@@ -257,3 +257,26 @@ func TestVolumeResolverRemoveVolumeMapsInUseToErrVolumeInUse(t *testing.T) {
 		t.Errorf("RemoveVolume() error = %v, want Docker's message %q", err, message)
 	}
 }
+
+// With AllProfiles the global --profile '*' flag goes before the config
+// subcommand, so volumes of profile-gated services are resolved too.
+func TestVolumeResolverComposeConfigAllProfilesAddsTheProfileFlag(t *testing.T) {
+	var gotArgvs [][]string
+	resolver := &VolumeResolver{runDocker: scriptedDocker([]dockerStep{{stdout: demoResolvedConfig}}, &gotArgvs)}
+	ref := volumes.ComposeRef{ProjectName: "demo-prod", ComposeFilePath: "/c/docker-compose.yml", EnvFilePath: "/c/.env", AllProfiles: true}
+
+	if _, err := resolver.ComposeConfig(context.Background(), ref); err != nil {
+		t.Fatalf("ComposeConfig() error = %v", err)
+	}
+	want := [][]string{{
+		"docker", "compose",
+		"-p", "demo-prod",
+		"-f", "/c/docker-compose.yml",
+		"--env-file", "/c/.env",
+		"--profile", "*",
+		"config", "--format", "json",
+	}}
+	if !reflect.DeepEqual(gotArgvs, want) {
+		t.Errorf("docker argvs =\n\t%q\nwant\n\t%q", gotArgvs, want)
+	}
+}

@@ -38,6 +38,10 @@ type ProjectVolume struct {
 // nil. The current YAML is always re-resolved, so a stale caller view cannot
 // widen the answer; a CLI failure at either step is returned as is.
 func (r *Resolver) ListOrphans(ctx context.Context, ref ComposeRef) ([]ProjectVolume, error) {
+	// Condition 3 is judged against every profile enabled: a volume only a
+	// profile-gated Service mounts is still declared, and must never be offered
+	// for deletion. ref is a copy, so the caller's is not mutated.
+	ref.AllProfiles = true
 	resolution, err := r.Resolve(ctx, ref)
 	if err != nil {
 		return nil, err

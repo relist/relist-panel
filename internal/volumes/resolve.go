@@ -16,6 +16,10 @@ type ComposeRef struct {
 	ProjectName     string
 	ComposeFilePath string
 	EnvFilePath     string
+	// AllProfiles resolves the Compose with every profile enabled
+	// (`--profile '*'`), so volumes only a profile-gated Service mounts are
+	// included. Orphan derivation sets it; the Volume Explorer does not.
+	AllProfiles bool
 }
 
 // CLI is the Docker CLI port resolution and pre-flight need. ComposeConfig
