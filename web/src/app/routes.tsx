@@ -29,8 +29,7 @@ const elements: Record<string, ReactElement> = {
   'projects': <ProjectsPage />,
   'projects/:projectId': <ProjectPage />,
   'projects/:projectId/env/:environmentId/:tab': <ProjectPage />,
-  'projects/:projectId/env/:environmentId/compose/:composeId': <ComposePage />,
-  'projects/:projectId/env/:environmentId/compose/:composeId/:tab': <ComposePage />,
+  'projects/:projectId/env/:environmentId/compose/:composeId/:tab?': <ComposePage />,
   'projects/:projectId/env/:environmentId/compose/:composeId/volumes/explorer': <VolumeExplorerPage />,
 };
 

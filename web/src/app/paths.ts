@@ -52,8 +52,10 @@ export const routePaths = [
   { path: 'projects' },
   { path: 'projects/:projectId' },
   { path: 'projects/:projectId/env/:environmentId/:tab' },
-  { path: 'projects/:projectId/env/:environmentId/compose/:composeId' },
-  { path: 'projects/:projectId/env/:environmentId/compose/:composeId/:tab' },
+  // One Compose route with an optional tab, so Editor ↔ tab is a params change
+  // and `ComposePage` stays mounted — a remount would drop editor history and,
+  // later, the Terminal session.
+  { path: 'projects/:projectId/env/:environmentId/compose/:composeId/:tab?' },
   // The Explorer is a route of its own so the new tab survives a reload and
   // the back button works. `volumes/explorer` is two static segments, so it
   // out-ranks the Compose `:tab` route and `.../volumes` stays the tab.
