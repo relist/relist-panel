@@ -32,6 +32,10 @@ _Avoid_: Mount, Storage. Docker's own "volume" means only the named kind, so nev
 The screen inside the panel where a Volume's files are listed, edited, uploaded and downloaded. Part of the panel, not a separate application.
 _Avoid_: File Manager, File Browser
 
+**Orphan Volume**:
+A named Docker volume that Compose created for a Compose's project but whose YAML no longer declares. Precisely: it carries this Compose's `com.docker.compose.project` label and a non-empty `com.docker.compose.volume` label, its name is exactly `<project>_<logical>`, and it is not a named Volume in the Compose resolved with every profile enabled. Volumes with an explicit `name:`, `external: true` volumes, anonymous volumes and bind mounts are never Orphan Volumes. The panel only deletes one on the operator's request, and never forces it.
+_Avoid_: Dangling volume — that is Docker's term for any unreferenced volume, whichever project made it.
+
 **Environment Variable**:
 A key-value pair scoped to an Environment, interpolated into all of that Environment's Composes at deploy time. A variable may be flagged **secret**, which masks its value on screen — a display tier owned by the user, not a security boundary: the value is stored and served as any other, and the panel's single admin can always reveal it.
 _Avoid_: treating the secret flag as an encryption or access tier; "plain" is not a domain word, just the tag for the flag's absence.
