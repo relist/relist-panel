@@ -121,7 +121,7 @@ func TestLifecycleRequestsWaitForInFlightDeploy(t *testing.T) {
 	save := server.request(t, http.MethodPut, composePath(p.ID, e.ID, c.ID), map[string]string{"yamlContent": "services:\n  web:\n    image: nginx\n"})
 	save.Body.Close()
 	runner := &blockingLifecycleRunner{fakeComposeRunner: newFakeComposeRunner(), started: make(chan struct{}), release: make(chan struct{}), stopped: make(chan struct{})}
-	server.handler = httpapi.NewHandler(server.db, runner, server.dataDir, nil, nil, server.volumeRunner, volumes.NewResolver(server.volumeCLI, server.dataDir))
+	server.handler = httpapi.NewHandler(server.db, runner, server.dataDir, nil, nil, server.volumeRunner, volumes.NewResolver(server.volumeCLI, server.dataDir), nil)
 	deployDone := make(chan *http.Response, 1)
 	go func() { deployDone <- server.request(t, http.MethodPost, composeDeployPath(p.ID, e.ID, c.ID), nil) }()
 	select {
@@ -253,7 +253,7 @@ func newCoordinationFixture(t *testing.T) coordinationFixture {
 	e := productionEnvironment(t, server, p)
 	c := deployFixture(t, server, p.ID, e.ID, "web")
 	runner := newEventRunner()
-	server.handler = httpapi.NewHandler(server.db, runner, server.dataDir, nil, nil, server.volumeRunner, volumes.NewResolver(server.volumeCLI, server.dataDir))
+	server.handler = httpapi.NewHandler(server.db, runner, server.dataDir, nil, nil, server.volumeRunner, volumes.NewResolver(server.volumeCLI, server.dataDir), nil)
 	return coordinationFixture{server: server, runner: runner, project: p, env: e, compose: c}
 }
 

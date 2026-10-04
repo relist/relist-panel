@@ -1,0 +1,137 @@
+// Package faketest provides the test double for the terminal package's Exec
+// seam that the spec's Testing Decisions call for: HTTP-seam tests install it
+// in place of the real Docker Engine API adapter, script its answers, and
+// assert exactly what would have run — all with no Docker in them. It lives in
+// its own package so nothing but tests imports it.
+package faketest
+
+import (
+	"context"
+	"net"
+	"sync"
+
+	"relist-panel/internal/terminal"
+)
+
+// StartCall is one Start the fake served: the Container it was asked for and
+// the options as they were passed.
+type StartCall struct {
+	ContainerID string
+	Opts        terminal.ExecOptions
+}
+
+// Exec is a scripted terminal.Exec. Its zero value answers an empty listing,
+// reports the feature available, and starts a fresh in-memory session.
+type Exec struct {
+	// Containers answers ServiceContainers, keyed "project/service". A
+	// Service with no entry reads as no running Containers.
+	Containers map[string][]terminal.Container
+	// Shells answers HasShell, keyed "containerID:path". A missing entry
+	// reads as the shell being absent.
+	Shells map[string]bool
+	// AvailableErr is returned by Available; the zero value — nil — answers
+	// that the feature is available.
+	AvailableErr error
+	// StartErr, when set, is returned by Start instead of a session.
+	StartErr error
+	// ExitCode is what every started session reports from ExitCode.
+	ExitCode int
+	// Starts records every successful Start, in order.
+	Starts []StartCall
+}
+
+// Available implements terminal.Exec.
+func (f *Exec) Available(_ context.Context) error {
+	return f.AvailableErr
+}
+
+// ServiceContainers implements terminal.Exec.
+func (f *Exec) ServiceContainers(_ context.Context, project, service string) ([]terminal.Container, error) {
+	return f.Containers[project+"/"+service], nil
+}
+
+// HasShell implements terminal.Exec.
+func (f *Exec) HasShell(_ context.Context, containerID, path string) (bool, error) {
+	return f.Shells[containerID+":"+path], nil
+}
+
+// Start implements terminal.Exec. It records the call and returns a Session
+// over a net.Pipe whose Remote end is the container's side, which the test
+// reads and writes.
+func (f *Exec) Start(_ context.Context, containerID string, opts terminal.ExecOptions) (terminal.Session, error) {
+	if f.StartErr != nil {
+		return nil, f.StartErr
+	}
+	f.Starts = append(f.Starts, StartCall{ContainerID: containerID, Opts: opts})
+	panel, remote := net.Pipe()
+	return &Session{conn: panel, Remote: remote, exitCode: f.ExitCode}, nil
+}
+
+// Session is a scripted terminal.Session over one net.Pipe. Remote is the
+// container's side: write to it to produce output the session reads, read from
+// it to observe the bytes the session wrote. Appends to Resizes are guarded by
+// a mutex; use ResizesSnapshot for a race-free read, or read the field once the
+// handler has stopped.
+type Session struct {
+	// Remote is the container's side of the stream.
+	Remote net.Conn
+	// Resizes records every Resize, in order.
+	Resizes [][2]uint16
+
+	conn     net.Conn
+	exitCode int
+	mu       sync.Mutex
+	closed   chan struct{}
+	once     sync.Once
+}
+
+// Read implements io.Reader on the panel's side of the stream.
+func (s *Session) Read(p []byte) (int, error) { return s.conn.Read(p) }
+
+// Write implements io.Writer on the panel's side of the stream.
+func (s *Session) Write(p []byte) (int, error) { return s.conn.Write(p) }
+
+// Close closes the panel's side and signals Closed.
+func (s *Session) Close() error {
+	s.once.Do(func() { close(s.closedChannel()) })
+	return s.conn.Close()
+}
+
+// Closed reports a channel that is closed once the session has been closed.
+func (s *Session) Closed() <-chan struct{} { return s.closedChannel() }
+
+// closedChannel lazily creates the closed channel, so a Session literal still
+// signals Closed.
+func (s *Session) closedChannel() chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed == nil {
+		s.closed = make(chan struct{})
+	}
+	return s.closed
+}
+
+// Resize records a resize. The session forwards exactly what it was asked for;
+// the handler clamps to 1–500.
+func (s *Session) Resize(_ context.Context, rows, cols uint16) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Resizes = append(s.Resizes, [2]uint16{rows, cols})
+	return nil
+}
+
+// ExitCode implements terminal.Session.
+func (s *Session) ExitCode(_ context.Context) (int, error) {
+	return s.exitCode, nil
+}
+
+// ResizesSnapshot copies the recorded resizes under the lock, for a race-free
+// read while the handler may still be resizing.
+func (s *Session) ResizesSnapshot() [][2]uint16 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([][2]uint16(nil), s.Resizes...)
+}
+
+var _ terminal.Exec = (*Exec)(nil)
+var _ terminal.Session = (*Session)(nil)

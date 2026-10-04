@@ -13,6 +13,7 @@ import (
 	"relist-panel/internal/environmentvariables"
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/projects"
+	"relist-panel/internal/terminal"
 	"relist-panel/internal/volumeapi"
 	"relist-panel/internal/volumes"
 	"relist-panel/internal/webassets"
@@ -26,8 +27,9 @@ import (
 // fakes at the HTTP seam); they may be nil, in which case the metrics
 // endpoints stay unregistered (an unwired panel has nothing to serve).
 // volumeRunner and volumeResolver are the Volume Explorer's operation seam
-// and its read side (ADR-0010).
-func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts, volumeRunner volumes.Runner, volumeResolver *volumes.Resolver) http.Handler {
+// and its read side (ADR-0010). terminalOptions, when non-nil, is the terminal
+// seam and settings; nil leaves the terminal routes unregistered.
+func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts, volumeRunner volumes.Runner, volumeResolver *volumes.Resolver, terminalOptions *terminal.Options) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
 	authService := auth.New(db)
@@ -41,6 +43,9 @@ func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, histo
 	environmentVariablesService.RegisterRoutes(mux)
 	composesService.RegisterRoutes(mux)
 	volumeapi.New(composesService, volumeResolver, volumeRunner).RegisterRoutes(mux)
+	if terminalOptions != nil {
+		terminal.New(composesService, *terminalOptions).RegisterRoutes(mux)
+	}
 	if history != nil && services != nil {
 		metricsService := metrics.New(metrics.NewStore(db), history, services)
 		metricsService.RegisterRoutes(mux)

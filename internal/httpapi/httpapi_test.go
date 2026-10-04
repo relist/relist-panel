@@ -23,6 +23,8 @@ import (
 	"relist-panel/internal/composes"
 	"relist-panel/internal/database"
 	"relist-panel/internal/httpapi"
+	"relist-panel/internal/terminal"
+	terminalfake "relist-panel/internal/terminal/faketest"
 	"relist-panel/internal/volumes"
 	"relist-panel/internal/volumes/faketest"
 )
@@ -1392,7 +1394,7 @@ func TestComposeDeployRecordsDeployedAtOnSuccessOnly(t *testing.T) {
 	restartedVolumeCLI := &faketest.CLI{}
 	restartedVolumeRunner := &faketest.Runner{}
 	restarted := &testServer{
-		handler:      httpapi.NewHandler(server.db, restartedRunner, server.dataDir, newFakeHostHistory(), newFakeServiceFacts(), restartedVolumeRunner, volumes.NewResolver(restartedVolumeCLI, server.dataDir)),
+		handler:      httpapi.NewHandler(server.db, restartedRunner, server.dataDir, newFakeHostHistory(), newFakeServiceFacts(), restartedVolumeRunner, volumes.NewResolver(restartedVolumeCLI, server.dataDir), nil),
 		db:           server.db,
 		dataDir:      server.dataDir,
 		runner:       restartedRunner,
@@ -2481,6 +2483,7 @@ type testServer struct {
 	facts        *fakeServiceFacts
 	volumeRunner *faketest.Runner
 	volumeCLI    *faketest.CLI
+	terminal     *terminalfake.Exec
 	cookies      map[string]*http.Cookie
 }
 
@@ -2497,8 +2500,9 @@ func newTestServer(t *testing.T) *testServer {
 	facts := newFakeServiceFacts()
 	volumeRunner := &faketest.Runner{}
 	volumeCLI := &faketest.CLI{}
+	terminalExec := &terminalfake.Exec{}
 	return &testServer{
-		handler:      httpapi.NewHandler(db, runner, dataDir, history, facts, volumeRunner, volumes.NewResolver(volumeCLI, dataDir)),
+		handler:      httpapi.NewHandler(db, runner, dataDir, history, facts, volumeRunner, volumes.NewResolver(volumeCLI, dataDir), &terminal.Options{Exec: terminalExec}),
 		db:           db,
 		dataDir:      dataDir,
 		runner:       runner,
@@ -2506,6 +2510,7 @@ func newTestServer(t *testing.T) *testServer {
 		facts:        facts,
 		volumeRunner: volumeRunner,
 		volumeCLI:    volumeCLI,
+		terminal:     terminalExec,
 		cookies:      make(map[string]*http.Cookie),
 	}
 }

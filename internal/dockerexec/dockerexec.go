@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"relist-panel/internal/composes"
@@ -84,7 +85,8 @@ func run(ctx context.Context, req composes.RunRequest, args ...string) (string, 
 }
 
 // parseStatus reads `docker compose ps --format json`'s newline-delimited
-// JSON output (one container object per line).
+// JSON output (one container object per line) into the Compose's running and
+// total Container counts plus the Service names it saw, in first-seen order.
 func parseStatus(output string) (composes.ComposeStatus, error) {
 	var status composes.ComposeStatus
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
@@ -93,7 +95,8 @@ func parseStatus(output string) (composes.ComposeStatus, error) {
 			continue
 		}
 		var container struct {
-			State string `json:"State"`
+			Service string `json:"Service"`
+			State   string `json:"State"`
 		}
 		if err := json.Unmarshal([]byte(line), &container); err != nil {
 			return composes.ComposeStatus{}, fmt.Errorf("parse docker compose ps output: %w", err)
@@ -101,6 +104,9 @@ func parseStatus(output string) (composes.ComposeStatus, error) {
 		status.Total++
 		if container.State == "running" {
 			status.Running++
+		}
+		if container.Service != "" && !slices.Contains(status.Services, container.Service) {
+			status.Services = append(status.Services, container.Service)
 		}
 	}
 	return status, nil
