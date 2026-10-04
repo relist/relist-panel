@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
@@ -40,15 +41,17 @@ type credentials struct {
 }
 
 type admin struct {
-	id           int64
-	email        string
-	passwordHash string
+	id             int64
+	email          string
+	passwordHash   string
+	failedAttempts int64
+	lockedUntil    sql.NullInt64
 }
 
 // New constructs the auth service over the application's migrated SQLite
 // database.
 func New(db *sql.DB) *Service {
-	return &Service{db: db, now: time.Now}
+	return newServiceWithClock(db, time.Now)
 }
 
 // RegisterRoutes adds the public authentication endpoints to mux.
@@ -170,8 +173,19 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	account, err := s.findAdmin(r, email)
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
+		return
+	}
+	defer tx.Rollback()
+
+	account, err := s.findAdmin(r.Context(), tx, email)
 	if errors.Is(err, sql.ErrNoRows) {
+		// Release the connection before the fallback read: the pool holds a
+		// single connection, and adminExists would block behind this open
+		// transaction.
+		tx.Rollback()
 		exists, existsErr := s.adminExists(r)
 		if existsErr != nil {
 			writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
@@ -188,8 +202,32 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
 	}
+
+	remaining, err := s.lockedFor(r.Context(), tx, account.id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
+		return
+	}
+	if remaining > 0 {
+		writeLocked(w, remaining)
+		return
+	}
+
 	if err := bcrypt.CompareHashAndPassword([]byte(account.passwordHash), []byte(input.Password)); err != nil {
+		if err := s.recordFailure(r.Context(), tx, account.id); err != nil {
+			writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
+			return
+		}
 		writeError(w, http.StatusUnauthorized, "invalid email or password")
+		return
+	}
+
+	if err := s.recordSuccess(r.Context(), tx, account.id); err != nil {
+		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
 	}
 
@@ -200,10 +238,14 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create a session")
 		return
 	}
-	if _, err := s.db.ExecContext(r.Context(), `
+	if _, err := tx.ExecContext(r.Context(), `
 		INSERT INTO sessions (token, admin_id, expires_at, created_at)
 		VALUES (?, ?, ?, ?)
 	`, token, account.id, expiresAt.Unix(), now.Unix()); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create a session")
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create a session")
 		return
 	}
@@ -297,13 +339,19 @@ func (s *Service) createAdmin(r *http.Request, email, passwordHash string) error
 	return tx.Commit()
 }
 
-func (s *Service) findAdmin(r *http.Request, email string) (admin, error) {
+func (s *Service) findAdmin(ctx context.Context, tx *sql.Tx, email string) (admin, error) {
 	var account admin
-	err := s.db.QueryRowContext(r.Context(), `
-		SELECT id, email, password_hash
+	err := tx.QueryRowContext(ctx, `
+		SELECT id, email, password_hash, failed_attempts, locked_until
 		FROM admin_credentials
 		WHERE email = ?
-	`, email).Scan(&account.id, &account.email, &account.passwordHash)
+	`, email).Scan(
+		&account.id,
+		&account.email,
+		&account.passwordHash,
+		&account.failedAttempts,
+		&account.lockedUntil,
+	)
 	return account, err
 }
 
