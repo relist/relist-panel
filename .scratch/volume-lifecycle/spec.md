@@ -82,6 +82,13 @@ An **Orphan Volume** is a named volume that (1) carries the label
 `<project>_<logical>` where `<logical>` is its `com.docker.compose.volume` label, and (3) is not one
 of the volumes the current YAML resolves to.
 
+Condition 3 is evaluated against the Compose resolved with **every profile enabled**
+(`docker compose --profile '*' … config`), so a volume mounted only by a profile-gated Service
+(`profiles: [tools]`) still counts as declared and is never offered for deletion just because that
+Service is not currently active. Known residual: a top-level volume that no Service mounts at all is
+pruned by `docker compose config` and so cannot be recognised as declared; Compose never creates such
+a volume itself, and the real-daemon check confirms it.
+
 Condition 2 excludes volumes declared with an explicit `name:`, the only kind two Composes can
 share: a shared volume carries the label of whichever project created it and would otherwise be
 offered for deletion while another Compose still uses it. It also excludes anonymous volumes, which
