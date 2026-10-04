@@ -59,6 +59,12 @@ type Exec struct {
 	// the following liveness probe (signal "0") returns ErrNoProcess. Without
 	// it the pid survives its HUP and the probe finds it.
 	KillExits map[int]bool
+	// Orphans answers OrphanShells: the marked shells a crashed panel left
+	// running.
+	Orphans []terminal.OrphanShell
+	// OrphanShellsErr, when set, is returned by OrphanShells instead of
+	// Orphans.
+	OrphanShellsErr error
 	// Starts records every successful Start, in order. Reads race-free
 	// through StartsSnapshot.
 	Starts []StartCall
@@ -100,6 +106,14 @@ func (f *Exec) Available(_ context.Context) error {
 // ServiceContainers implements terminal.Exec.
 func (f *Exec) ServiceContainers(_ context.Context, project, service string) ([]terminal.Container, error) {
 	return f.Containers[project+"/"+service], nil
+}
+
+// OrphanShells implements terminal.Exec.
+func (f *Exec) OrphanShells(_ context.Context, _ []string) ([]terminal.OrphanShell, error) {
+	if f.OrphanShellsErr != nil {
+		return nil, f.OrphanShellsErr
+	}
+	return f.Orphans, nil
 }
 
 // HasShell implements terminal.Exec.

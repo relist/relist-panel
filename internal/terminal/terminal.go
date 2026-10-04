@@ -30,6 +30,13 @@ type Container struct {
 	Number int    `json:"number"`
 }
 
+// OrphanShell is one marked shell a crashed panel left running: the Container
+// it runs in and the pid to signal inside that Container's own namespace.
+type OrphanShell struct {
+	ContainerID string
+	PID         int
+}
+
 // ExecOptions is one interactive exec's parameters, in the seam's own
 // vocabulary: the resolved shell path, the resolved user ("" for the image's
 // own user, "0" for root) and the initial terminal size. Cmd, when set, is the
@@ -72,6 +79,11 @@ type Exec interface {
 	// liveness probe, "KILL"). A non-zero kill exit means the pid is gone:
 	// ErrNoProcess.
 	Kill(ctx context.Context, containerID string, pid int, sig string) error
+	// OrphanShells lists the marked shells a crashed panel left running: for
+	// each Container of one of the named Compose projects, every exec that is
+	// Running and carries the wrapper marker. A shell whose process entry has
+	// already vanished is skipped, not an error.
+	OrphanShells(ctx context.Context, projects []string) ([]OrphanShell, error)
 }
 
 // Options configures the terminal service. The zero value of each limit or

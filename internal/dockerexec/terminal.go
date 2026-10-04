@@ -14,29 +14,48 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
+	"relist-panel/internal/hostmetrics"
 	"relist-panel/internal/terminal"
 )
+
+// wrapperMarker is the wrapper script's $0 (internal/terminal's wrapperCmd):
+// Docker maps an exec's Cmd[0] to ProcessConfig.entrypoint and Cmd[1:] to
+// ProcessConfig.arguments, so the marker sits at arguments[2]. The sweep
+// matches it to tell a panel shell from any other exec a Container runs.
+const wrapperMarker = "relist-terminal"
 
 // TerminalExec is the real terminal.Exec: HTTP over the daemon's unix socket.
 type TerminalExec struct {
 	socketPath string
 	client     *http.Client
+	// procRoot is the mounted host proc tree, where an exec's host pid maps
+	// to the pid inside its Container's namespace.
+	procRoot string
 }
 
-// NewTerminalExec constructs an adapter over the socket at socketPath.
-func NewTerminalExec(socketPath string) *TerminalExec {
+// NewTerminalExec constructs an adapter over the socket at socketPath, reading
+// container-namespace pids from the host proc tree at procRoot. An empty
+// procRoot takes hostmetrics.DefaultProcRoot.
+func NewTerminalExec(socketPath, procRoot string) *TerminalExec {
+	if procRoot == "" {
+		procRoot = hostmetrics.DefaultProcRoot
+	}
 	return &TerminalExec{
 		socketPath: socketPath,
 		client:     newSocketClient(socketPath),
+		procRoot:   procRoot,
 	}
 }
 
@@ -99,6 +118,156 @@ func (e *TerminalExec) ServiceContainers(ctx context.Context, project, service s
 	}
 	sort.Slice(containers, func(i, j int) bool { return containers[i].Number < containers[j].Number })
 	return containers, nil
+}
+
+// OrphanShells lists the marked terminal shells a crashed panel left running:
+// for every running Container of one of the named projects, the execs that are
+// Running and carry the wrapper marker. The exec's host pid is read from the
+// daemon, then mapped to the last NSpid field of its <procRoot>/<pid>/status —
+// the pid inside the Container's own namespace, which is the one a kill there
+// addresses. An exec whose proc entry has vanished is skipped: it is already
+// gone, which is the outcome the sweep wants.
+func (e *TerminalExec) OrphanShells(ctx context.Context, projects []string) ([]terminal.OrphanShell, error) {
+	if len(projects) == 0 {
+		return nil, nil
+	}
+	known := make(map[string]bool, len(projects))
+	for _, project := range projects {
+		known[project] = true
+	}
+
+	containers, err := e.projectContainers(ctx, known)
+	if err != nil {
+		return nil, err
+	}
+
+	var orphans []terminal.OrphanShell
+	for _, containerID := range containers {
+		execIDs, err := e.containerExecIDs(ctx, containerID)
+		if err != nil {
+			return nil, err
+		}
+		for _, execID := range execIDs {
+			pid, marked, err := e.markedExecPID(ctx, execID)
+			if err != nil {
+				return nil, err
+			}
+			if marked {
+				orphans = append(orphans, terminal.OrphanShell{ContainerID: containerID, PID: pid})
+			}
+		}
+	}
+	return orphans, nil
+}
+
+// projectContainers lists the ids of the running Containers whose Compose
+// project label is in known. The project set is matched client-side because
+// Docker ANDs repeated label filters, so a single /containers/json request
+// cannot express "one of these projects"; the list is small, and the metrics
+// collector already reads it the same way.
+func (e *TerminalExec) projectContainers(ctx context.Context, known map[string]bool) ([]string, error) {
+	path := "/containers/json"
+	resp, body, err := e.send(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !ok(resp.StatusCode) {
+		return nil, apiError(path, resp.Status, body)
+	}
+	var apiContainers []struct {
+		ID     string            `json:"Id"`
+		Labels map[string]string `json:"Labels"`
+	}
+	if err := json.Unmarshal(body, &apiContainers); err != nil {
+		return nil, fmt.Errorf("docker api %s: decode: %w", path, err)
+	}
+
+	var ids []string
+	for _, api := range apiContainers {
+		if known[api.Labels["com.docker.compose.project"]] {
+			ids = append(ids, api.ID)
+		}
+	}
+	return ids, nil
+}
+
+// containerExecIDs reads a Container's ExecIDs from GET /containers/{id}/json.
+func (e *TerminalExec) containerExecIDs(ctx context.Context, containerID string) ([]string, error) {
+	path := "/containers/" + url.PathEscape(containerID) + "/json"
+	resp, body, err := e.send(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !ok(resp.StatusCode) {
+		return nil, apiError(path, resp.Status, body)
+	}
+	var inspected struct {
+		ExecIDs []string `json:"ExecIDs"`
+	}
+	if err := json.Unmarshal(body, &inspected); err != nil {
+		return nil, fmt.Errorf("docker api %s: decode: %w", path, err)
+	}
+	return inspected.ExecIDs, nil
+}
+
+// markedExecPID reports the container-namespace pid of one exec and whether it
+// is a still-running marked shell. A non-marked or exited exec is not an
+// orphan, and a marked exec whose proc entry is gone is skipped, not an error.
+func (e *TerminalExec) markedExecPID(ctx context.Context, execID string) (int, bool, error) {
+	path := "/exec/" + url.PathEscape(execID) + "/json"
+	resp, body, err := e.send(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	if !ok(resp.StatusCode) {
+		return 0, false, apiError(path, resp.Status, body)
+	}
+	var inspected struct {
+		Running       bool `json:"Running"`
+		Pid           int  `json:"Pid"`
+		ProcessConfig struct {
+			Arguments []string `json:"arguments"`
+		} `json:"ProcessConfig"`
+	}
+	if err := json.Unmarshal(body, &inspected); err != nil {
+		return 0, false, fmt.Errorf("docker api %s: decode: %w", path, err)
+	}
+	if !inspected.Running || len(inspected.ProcessConfig.Arguments) < 3 || inspected.ProcessConfig.Arguments[2] != wrapperMarker {
+		return 0, false, nil
+	}
+
+	pid, err := e.nspid(inspected.Pid)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return pid, true, nil
+}
+
+// nspid reads the container-namespace pid from the last field of the NSpid:
+// line in <procRoot>/<pid>/status. The line lists the pid in each namespace
+// from the host's inward to the Container's own, so the last field is the pid
+// a kill inside the Container addresses.
+func (e *TerminalExec) nspid(pid int) (int, error) {
+	path := filepath.Join(e.procRoot, strconv.Itoa(pid), "status")
+	status, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range strings.Split(string(status), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "NSpid:" {
+			continue
+		}
+		containerPID, err := strconv.Atoi(fields[len(fields)-1])
+		if err != nil {
+			return 0, fmt.Errorf("proc %s: NSpid %q: %w", path, fields[len(fields)-1], err)
+		}
+		return containerPID, nil
+	}
+	return 0, fmt.Errorf("proc %s: no NSpid line", path)
 }
 
 // HasShell runs path as a non-TTY exec of `<path> -c "exit 0"` and reads the

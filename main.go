@@ -79,11 +79,12 @@ func main() {
 
 	volumeRunner := dockerexec.NewVolumeRunner()
 	volumeResolver := volumes.NewResolver(dockerexec.NewVolumeResolver(), cfg.DataDir)
+	terminalExec := dockerexec.NewTerminalExec(dockerexec.DefaultSocketPath, hostmetrics.DefaultProcRoot)
 
 	server := &http.Server{
 		Addr: cfg.Address(),
 		Handler: httpapi.NewHandler(db, dockerexec.New(), cfg.DataDir, sampler, collector, volumeRunner, volumeResolver, &terminal.Options{
-			Exec: dockerexec.NewTerminalExec(dockerexec.DefaultSocketPath),
+			Exec: terminalExec,
 		}),
 	}
 
@@ -91,6 +92,26 @@ func main() {
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- server.ListenAndServe()
+	}()
+
+	// The startup sweep is a backstop for a panel that crashed with a marked
+	// shell still running. It must neither delay nor fail startup, so it runs
+	// in the background under its own 30s budget, over the same frozen deploy
+	// identities the metrics collector uses. A failed listing is logged and
+	// the sweep skipped.
+	go func() {
+		sweepCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		projects, err := knownComposeProjects(db)(sweepCtx)
+		if err != nil {
+			log.Printf("warning: could not list composes for the terminal shell sweep: %v", err)
+			return
+		}
+		names := make([]string, 0, len(projects))
+		for name := range projects {
+			names = append(names, name)
+		}
+		terminal.Sweep(sweepCtx, terminalExec, names, log.Printf)
 	}()
 
 	select {
