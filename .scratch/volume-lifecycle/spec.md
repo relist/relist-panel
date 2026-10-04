@@ -68,6 +68,11 @@ malformed body to the safe one and the existing route's behaviour does not chang
 - Deploy's steps are split so both handlers share them: load-and-check, write-files, complete (record
   the deploy time and answer).
 - `down -v` removes every named volume the deployed Compose declares and nothing else.
+  Verified against Docker 29.8 / Compose v5.5: `down -v` also removes a volume declared with an
+  explicit `name:` that is not `external: true`, even when another Compose shares it, and it does not
+  reliably remove volumes of profile-gated Services that are not enabled. Both are Compose's own
+  behaviour, the same as deleting a Compose today; the confirmation dialog lists the volumes the
+  Compose declares so the operator sees a shared name before confirming.
 - **Failure window.** The steps are not atomic. If `down -v` fails, nothing was removed and the
   error is reported as such. If `down -v` succeeds and then writing the files or `up` fails, the
   volumes are already gone: the response is 502 and its message states that volumes were removed and
