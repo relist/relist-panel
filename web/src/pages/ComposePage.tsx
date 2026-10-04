@@ -120,6 +120,11 @@ export function ComposePage() {
   const [logLines, setLogLines] = useState(200);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [freshOpen, setFreshOpen] = useState(false);
+  // True from the first confirm until the whole save-then-deploy sequence ends:
+  // the save step runs under its own pending key, so `isPending('deploy:…')`
+  // alone leaves a window for a second click to start a second wipe.
+  const [freshRunning, setFreshRunning] = useState(false);
+  const freshRunningRef = useRef(false);
   // Action failures stay on this screen as an Alert (GUIDELINES §8) — the
   // control that retries them is right there.
   const [actionError, setActionError] = useState<string>();
@@ -323,6 +328,13 @@ export function ComposePage() {
   // `fresh` removes the Compose's named volumes before the same deploy; the
   // save-first steps are identical, so unsaved YAML is what gets deployed.
   const runDeploy = async (fresh: boolean) => {
+    if (fresh) {
+      if (freshRunningRef.current) {
+        return;
+      }
+      freshRunningRef.current = true;
+      setFreshRunning(true);
+    }
     try {
       for (const step of deploySteps(dirty)) {
         if (step === 'save') {
@@ -344,6 +356,8 @@ export function ComposePage() {
       }
     } finally {
       if (fresh) {
+        freshRunningRef.current = false;
+        setFreshRunning(false);
         setFreshOpen(false);
       }
     }
@@ -354,11 +368,11 @@ export function ComposePage() {
     try {
       await deleteOrphanVolume(compose.id, name);
       message.success(`Deleted volume ${name}`);
-    } catch (reason: unknown) {
-      fail(reason);
-      throw reason;
-    } finally {
       void fetchOrphans();
+    } catch (reason: unknown) {
+      // The delete dialog shows the message itself (an Alert behind the modal
+      // mask would be invisible), so it is rethrown rather than `fail`ed.
+      throw reason;
     }
   };
 
@@ -940,13 +954,13 @@ export function ComposePage() {
               <Paragraph>This Compose declares no named volumes, so nothing is removed before the deploy.</Paragraph>
             )}
             <Paragraph type="secondary">
-              Bind mounts are not deleted. To keep a copy first, download a tar.gz backup from the Volumes tab.
+              Bind mounts are not deleted, and neither are volumes declared <Text code>external: true</Text>. To keep a copy first, download a tar.gz backup from the Volumes tab.
               {dirty ? ' Your unsaved changes are saved first.' : ''}
             </Paragraph>
           </>
         }
         description="Deploy removes this Compose’s named volumes, then deploys it again from empty."
-        loading={isPending(`deploy:${compose.id}`)}
+        loading={freshRunning || isPending(`deploy:${compose.id}`)}
         okText="Deploy with fresh volumes"
         onCancel={() => setFreshOpen(false)}
         onConfirm={() => void runDeploy(true)}

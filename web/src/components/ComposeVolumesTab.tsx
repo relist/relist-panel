@@ -264,17 +264,20 @@ function OrphanVolumes({
   const view = orphansView(orphans && { orphans }, error);
   const [target, setTarget] = useState<string>();
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string>();
 
   const confirm = async () => {
     if (target === undefined) {
       return;
     }
     setDeleting(true);
+    setDeleteError(undefined);
     try {
       await onDelete(target);
       setTarget(undefined);
-    } catch {
-      // The page shows the API's message (409 while the volume is in use).
+    } catch (reason: unknown) {
+      // The API's own words (409 while the volume is in use) stay in the dialog.
+      setDeleteError(reason instanceof Error ? reason.message : 'Could not delete this volume');
     } finally {
       setDeleting(false);
     }
@@ -330,7 +333,10 @@ function OrphanVolumes({
               key: 'actions',
               render: (_value, orphan) => (
                 <Flex justify="flex-end">
-                  <Button danger icon={<DeleteOutlined />} onClick={() => setTarget(orphan.name)} size="small">
+                  <Button danger icon={<DeleteOutlined />} onClick={() => {
+                      setDeleteError(undefined);
+                      setTarget(orphan.name);
+                    }} size="small">
                     Delete
                   </Button>
                 </Flex>
@@ -349,14 +355,20 @@ function OrphanVolumes({
       <DangerModal
         confirmWord={target ?? ''}
         consequences={
-          <Paragraph type="secondary">
-            Deletes the volume <Text code>{target}</Text> from Docker. Its data is permanently lost; there is no trash.
-            A volume that a container still uses is refused.
-          </Paragraph>
+          <>
+            <Paragraph type="secondary">
+              Deletes the volume <Text code>{target}</Text> from Docker. Its data is permanently lost; there is no
+              trash. A volume that a container still uses is refused.
+            </Paragraph>
+            {deleteError && <Alert description={deleteError} showIcon title="Could not delete this volume" type="error" />}
+          </>
         }
         loading={deleting}
         okText="Delete volume"
-        onCancel={() => setTarget(undefined)}
+        onCancel={() => {
+          setTarget(undefined);
+          setDeleteError(undefined);
+        }}
         onConfirm={() => void confirm()}
         open={target !== undefined}
         title="Delete this orphan volume?"
