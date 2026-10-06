@@ -172,7 +172,7 @@ export function AppShell() {
   };
 
   const accountItems: MenuProps['items'] = [
-    { disabled: true, key: 'account', label: 'Admin account' },
+    { key: 'account', label: 'Account', onClick: () => navigate(paths.account) },
     { type: 'divider' },
     {
       key: 'signout',

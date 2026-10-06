@@ -308,7 +308,9 @@ UI — is the enforcer.
 
 Split layout: what the panel is on the left (in `colorPrimaryBg`), the form on the right. Setup is a
 two-step flow (Account → Ready) ending in a `Result` with the Project → Environment → Compose
-mental model restated.
+mental model restated. When the account has two-factor on, sign-in asks for the code as a second
+step: an autofocused six-digit `Input.OTP` replaces the password form, a complete code submits, and
+**Back** returns to the password step and clears it.
 
 ### 4.9 Design system (`#/design/flow`, `#/design/board`, `#/design/map`, `#/design/guidelines`, `#/design/states`)
 
@@ -342,6 +344,16 @@ live content can mount at any zoom — beside the reachability report `src/scene
 overlays nothing triggers (empty, and asserted), everything else no link targets (entry screens and
 forced states, listed with that reading stated), and the groups no menu item names. It is the surface
 for "does every state have a way in?", in the only terms the registry can honestly answer.
+
+### 4.10 Account (`/account`)
+
+The single admin account, reached from the header's account dropdown. One `PageHeader` over two
+cards: *Sign-in* shows the email read-only, and *Two-factor authentication* carries an `On`/`Off`
+tag, the action button, and a permanent note with the `reset-2fa` command for a lost authenticator.
+Turning on is a three-step modal (Password → Scan → Verify): the QR code comes from the setup URI
+with the secret copyable beside it for manual entry, and a complete six-digit code confirms it.
+Turning off is one danger button opening a modal that asks for the password and a current code. Both
+flows delete the account's other sessions, and both say so when they succeed.
 
 ## 5. Status vocabulary
 

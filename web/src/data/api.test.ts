@@ -90,6 +90,94 @@ describe('volumeRestoreUrl', () => {
   });
 });
 
+/**
+ * Sign-in is the one endpoint where a `401` and a `429` are answers rather than
+ * failures: the API tells the client to ask for a code or to wait. Every other
+ * non-2xx response stays an `ApiError`, so the page can show the API's message.
+ */
+describe('login', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('maps a 200 response to signedIn and POSTs the credentials as JSON', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.login({ email: 'admin@relist.local', password: 'hunter2' })).resolves.toEqual({
+      kind: 'signedIn',
+    });
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/auth/login');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ email: 'admin@relist.local', password: 'hunter2' });
+  });
+
+  it('maps a 401 that asks for a code to codeRequired', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (_url: string, _init?: RequestInit) =>
+          new Response(JSON.stringify({ error: 'two-factor code required', codeRequired: true }), { status: 401 }),
+      ),
+    );
+
+    await expect(api.login({ email: 'admin@relist.local', password: 'hunter2' })).resolves.toEqual({
+      kind: 'codeRequired',
+    });
+  });
+
+  it('maps a 429 with Retry-After to rateLimited', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (_url: string, _init?: RequestInit) =>
+          new Response(JSON.stringify({ error: 'too many attempts, try again in 42 seconds' }), {
+            status: 429,
+            headers: { 'Retry-After': '42' },
+          }),
+      ),
+    );
+
+    await expect(api.login({ email: 'admin@relist.local', password: 'hunter2' })).resolves.toEqual({
+      kind: 'rateLimited',
+      retryAfterSeconds: 42,
+    });
+  });
+
+  it('falls back to one second when a 429 has no usable Retry-After', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (_url: string, _init?: RequestInit) =>
+          new Response(JSON.stringify({ error: 'too many attempts, try again in 1 seconds' }), {
+            status: 429,
+            headers: { 'Retry-After': 'soon' },
+          }),
+      ),
+    );
+
+    await expect(api.login({ email: 'admin@relist.local', password: 'hunter2' })).resolves.toEqual({
+      kind: 'rateLimited',
+      retryAfterSeconds: 1,
+    });
+  });
+
+  it('rejects with an ApiError carrying invalid code on a 401 that is not a code prompt', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (_url: string, _init?: RequestInit) =>
+          new Response(JSON.stringify({ error: 'invalid code' }), { status: 401 }),
+      ),
+    );
+
+    await expect(api.login({ email: 'admin@relist.local', password: 'hunter2', code: '000000' })).rejects.toMatchObject({
+      message: 'invalid code',
+      status: 401,
+    });
+  });
+});
+
 describe('fresh deploy and orphan volumes', () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -146,5 +234,70 @@ describe('terminalServices', () => {
 
     await expect(api.terminalServices(location)).resolves.toEqual(payload);
     expect(fetch.mock.calls[0][0]).toBe('/api/projects/1/environments/2/composes/3/terminal/services');
+  });
+});
+
+/**
+ * The Account page's calls: one read of the admin account and the three
+ * two-factor mutations. Each one is a thin path/method/body wrapper, so the
+ * test pins the wire shape rather than the component.
+ */
+describe('account and two-factor', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('GETs the account', async () => {
+    const fetch = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ email: 'admin@relist.local', twoFactorEnabled: false }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.account()).resolves.toEqual({ email: 'admin@relist.local', twoFactorEnabled: false });
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/auth/account');
+    expect(init?.method).toBe('GET');
+  });
+
+  it('POSTs the password to setup and returns the secret and URI', async () => {
+    const fetch = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ secret: 'JBSWY3DPEHPK3PXP', otpauthUri: 'otpauth://totp/Relist' }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.twoFactorSetup('hunter2')).resolves.toEqual({
+      secret: 'JBSWY3DPEHPK3PXP',
+      otpauthUri: 'otpauth://totp/Relist',
+    });
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/auth/2fa/setup');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ password: 'hunter2' });
+  });
+
+  it('POSTs the code to enable and answers 204 with no body', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.twoFactorEnable('123456')).resolves.toBeUndefined();
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/auth/2fa/enable');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ code: '123456' });
+  });
+
+  it('POSTs the password and code to disable', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.twoFactorDisable('hunter2', '654321')).resolves.toBeUndefined();
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/auth/2fa/disable');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ password: 'hunter2', code: '654321' });
   });
 });
