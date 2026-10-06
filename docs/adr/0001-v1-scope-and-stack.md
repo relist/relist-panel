@@ -4,7 +4,7 @@ Relist Panel v1 manages only Projects → Environments → raw Compose stacks, e
 
 ## Explicit non-goals (v1)
 
-- No separate git-based "Application" type — users bring pre-built images in their Compose file.
+- No separate git-based "Application" type — users bring pre-built images in their Compose file. (Widened since: the panel now lists the host's images and loads `docker save` archives from the Images page — `.scratch/image-upload/spec.md` — while git builds and registries remain out of scope.)
 - No database-as-a-service.
 - No git webhook / auto-deploy — deploys are manual via "Save & Deploy".
 - No domain-management UI — Traefik labels are written by hand inside the Compose file.

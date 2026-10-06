@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CloudServerOutlined, DashboardOutlined, FolderOutlined, SyncOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, SyncOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -72,6 +72,8 @@ export function AppShell() {
         ? 'projects'
         : resolved.pattern === 'monitoring'
           ? 'monitoring'
+          : resolved.pattern === 'images'
+            ? 'images'
           : resolved.pattern === '/'
             ? 'overview'
             : undefined
@@ -97,6 +99,7 @@ export function AppShell() {
     { key: 'overview', icon: <AppstoreOutlined />, label: 'Overview' },
     { key: 'projects', icon: <FolderOutlined />, label: 'Projects' },
     { key: 'monitoring', icon: <DashboardOutlined />, label: 'Monitoring' },
+    { key: 'images', icon: <ContainerOutlined />, label: 'Images' },
     {
       type: 'group',
       label: 'Recent Projects',
@@ -120,6 +123,7 @@ export function AppShell() {
     if (key === 'overview') return navigate(paths.overview);
     if (key === 'projects') return navigate(paths.projects);
     if (key === 'monitoring') return navigate(paths.monitoring);
+    if (key === 'images') return navigate(paths.images);
     const projectId = Number(String(key).replace('project-', ''));
     if (Number.isFinite(projectId)) void navigate(paths.project(projectId));
   };
@@ -133,6 +137,8 @@ export function AppShell() {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Projects' });
       } else if (resolved?.pattern === 'monitoring') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Monitoring' });
+      } else if (resolved?.pattern === 'images') {
+        trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Images' });
       }
       return trail;
     }

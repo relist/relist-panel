@@ -355,6 +355,19 @@ with the secret copyable beside it for manual entry, and a complete six-digit co
 Turning off is one danger button opening a modal that asks for the password and a current code. Both
 flows delete the account's other sessions, and both say so when they succeed.
 
+### 4.11 Images (`/images`)
+
+The host's Docker images and the one way to add to them: loading a `docker save` archive. One
+`PageHeader` over an upload card and the list. The upload card is a single-file dragger that walks
+five states: *idle* (the dragger), *uploading* (file name, percent and a Cancel button), *loading*
+(all bytes sent, spinner and `Loading into Docker…`, no Cancel), *loaded* (a success `Alert` listing
+each name, copyable) and *failed* (an error `Alert` with the server's message, or `Upload cancelled`).
+The dragger is disabled while uploading or loading, and the browser warns before leaving the page. The
+client refuses a wrong extension or a file over 10 GiB before sending. The list columns are Image
+(every tag copyable, `<none>` when untagged), ID (12 hex characters), Size, Created (relative, absolute
+in a tooltip) and In use; a search box filters by tag, and the rows of the last load are highlighted.
+Uploads can run for up to one hour through Traefik; a longer one needs the direct-port fallback.
+
 ## 5. Status vocabulary
 
 One vocabulary, everywhere a Compose state appears. Derived entirely from the API's

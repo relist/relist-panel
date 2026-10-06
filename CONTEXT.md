@@ -24,6 +24,10 @@ _Avoid_: Container (a Service is the definition; a Container is one running inst
 One running instance of a Service, created by a deploy. Its identity is not stable: every deploy mints a new one, so anything that outlives a single deploy — metric history, for one — is keyed by Service, never by Container.
 _Avoid_: Instance
 
+**Image**:
+A Docker image present on the host, listed and loaded from the Images page. A Compose references one by name in its file; the panel never builds or pulls one itself.
+_Avoid_: Build, Artifact
+
 **Terminal Session**:
 One interactive shell in one Container of a Service, opened from the Compose page's Terminal tab and living only as long as that page. _Avoid_: Console, SSH.
 

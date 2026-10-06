@@ -15,6 +15,7 @@ describe('paths', () => {
     expect(paths.compose(1, 2, 3)).toBe('/projects/1/env/2/compose/3');
     expect(paths.compose(1, 2, 3, 'monitor')).toBe('/projects/1/env/2/compose/3/monitor');
     expect(paths.account).toBe('/account');
+    expect(paths.images).toBe('/images');
   });
 
   it('builds the Volume Explorer link with the source and path in the query', () => {
@@ -57,6 +58,7 @@ describe('resolvePath', () => {
       pattern: 'projects/:projectId/env/:environmentId/compose/:composeId/:tab?',
     });
     expect(resolvePath('/account')).toEqual({ params: {}, pattern: 'account' });
+    expect(resolvePath('/images')?.pattern).toBe('images');
   });
 
   it('serves the Editor and every Compose tab from one route, so the page is not remounted', () => {
