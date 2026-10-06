@@ -9,7 +9,7 @@ import { formatBytes } from '../components/MetricChart';
 import { EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { IMAGES_URL, listImages, uploadImage } from '../data/api';
 import type { HostImage } from '../data/types';
-import { checkImageArchive, filterImages, shortImageId } from './images-view';
+import { IMAGE_ARCHIVE_EXTENSIONS, checkImageArchive, filterImages, shortImageId } from './images-view';
 
 const { Text } = Typography;
 
@@ -37,7 +37,9 @@ export function ImagesPage() {
   // render's closure, so they see the current state.
   const mounted = useRef(true);
   const uploadKind = useRef<UploadState['kind']>('idle');
-  uploadKind.current = upload.kind;
+  useEffect(() => {
+    uploadKind.current = upload.kind;
+  }, [upload.kind]);
 
   // In-app navigation does not fire `beforeunload`, so leaving the page must
   // stop an upload still sending bytes. Once everything is sent (`loading`) the
@@ -182,6 +184,7 @@ export function ImagesPage() {
           )}
           {upload.kind === 'failed' && <Alert showIcon title={upload.message} type="error" />}
           <Upload.Dragger
+            accept={IMAGE_ARCHIVE_EXTENSIONS.join(',')}
             beforeUpload={(file) => {
               void start(file);
               return false;
