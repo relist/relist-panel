@@ -260,3 +260,29 @@ accept list.
   scope.
 - No new ADR. This extends ADR-0006's Engine-API-over-socket path, and the rejected options are
   recorded here.
+
+## Manual verification
+
+Run on 2026-10-07 against the host's real Docker daemon (Docker 29.8.1, Compose v5.5.1), branch
+`feat-image-upload`. There is no browser on the host, so the panel was built (`go build`), run as a
+plain local process (`RELIST_DATA_DIR` in a temp dir, `RELIST_PORT=18888`), and driven over HTTP with
+`curl` and a session cookie. `PUT /api/images --data-binary @file` was used for uploads, so curl sent
+Content-Length.
+
+| # | Step | Observed | Result |
+|---|------|----------|--------|
+| 1 | Start the panel, `POST /api/auth/setup`, `POST /api/auth/login` | Panel migrated and listened; `/healthz` ok; session cookie issued; `GET /api/images` returned the host's images. The panel created `relist-network` at startup. | PASS |
+| 2 | Upload a `docker save` archive (8 MB) of `relist-test:1` after `docker rmi` | `200 {"images":["relist-test:1"]}`; `GET /api/images` lists `relist-test:1` with `inUse: false`. | PASS (alert and highlight not verified, no browser) |
+| 3 | Project, environment, Compose (`image: relist-test:1`, `command: sleep 3600`) via the API; `POST .../deploy` | `200`, status `running 1/1`; `docker ps` shows `relist-c1-app-1` on `relist-test:1` Up; `GET /api/images` then shows `inUse: true` for it. | PASS (In use badge not verified, no browser) |
+| 4 | Re-upload the archive as `.tgz` (gzip), `.tar.zst` (zstd), `.tar.xz`, `.tar.bz2`, after untagging `relist-test:1` each time | All four: `200 {"images":["relist-test:1"]}`, tag present again in `docker images`. The daemon refused none, so `IMAGE_ARCHIVE_EXTENSIONS` and the spec stay unchanged. The host has no `zstd`; the `.zst` file was made with `zstd` inside a throwaway `alpine:3.20` container. | PASS |
+| 5 | Upload `tar cf not-image.tar web/src` | `422 {"error":"invalid archive: does not contain a manifest.json"}` (the daemon's message). | PASS (red alert not verified, no browser) |
+| 6 | Upload a 637 MB archive (600 MB random blob on `alpine:3.20`) with `curl --limit-rate 5M`, kill curl after about 8 s | `docker images` list identical before and after (nothing loaded); `/healthz` ok and `GET /api/images` still served; a fresh small upload afterwards loaded normally. The panel logged `images: docker api /images/load?quiet=1: ... context canceled`, a client abort logged as an internal error (cosmetic). | PASS at the HTTP level; `Upload cancelled` alert, progress bar, Cancel button and `beforeunload` not verified (no browser) |
+
+Not verified (no browser): progress bar, Cancel button, success and error alert rendering,
+highlight of the loaded image, `beforeunload` prompt, In use badge, and the Traefik 3600s read
+timeout (the panel was run directly, not behind Traefik).
+
+Notes: `docker pull` needed `DOCKER_CONFIG` pointed at an empty config (the host's credential helper
+failed); the build of the large image with `RUN head -c 600M` failed under BuildKit, so it was made with
+`docker run` plus `docker commit`. Test resources (Compose containers, test images, the pulled
+`alpine:3.20`, the `relist-network` the panel created, temp files) were removed afterwards.
