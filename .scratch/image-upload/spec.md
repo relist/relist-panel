@@ -48,6 +48,21 @@ and needs temp-file cleanup, and the use case does not need resume.
 Docker itself accepts gzip, bzip2, xz and zstd compressed archives, so the panel does nothing to
 support them.
 
+### Traefik read timeout
+
+The install's Traefik (`traefik:v3.7` in `docker-compose.yml`) uses v3's default
+`respondingTimeouts.readTimeout` of 60s, which covers reading the whole request body. A multi-GB
+upload through Traefik would be cut off at 60s. The panel's own `http.Server` sets no timeouts, so
+Traefik is the only limit.
+
+The install compose adds `--entrypoints.web.transport.respondingTimeouts.readTimeout=3600s`. This
+applies to every app on the `web` entrypoint, because the timeout can only be set per entrypoint. At
+one hour, a 10 GiB upload needs roughly 25 Mbit/s sustained. The README notes this limit, and notes
+that a slower link can upload through the panel's direct port, which bypasses Traefik.
+
+Rejected: `readTimeout=0`, which would remove the slow-body protection from every deployed app. Also
+rejected: a separate timeout-free entrypoint for the panel, which would move the panel to its own port.
+
 ### Package and seam
 
 New domain package `internal/images` owns the HTTP surface. Its seam is a consumer-side interface,
@@ -145,7 +160,10 @@ Before writing any UI code, read Ant Design's `llms.txt` and check every compone
   (untagged → `<none>`), short ID, the accepted-extension check, and the size check. Tests go in
   `images-view.test.ts`.
 - `web/src/data/api.ts` gets `listImages()` and `uploadImage(file, onProgress, signal)`. The upload
-  uses `XMLHttpRequest`, because `fetch` cannot report upload progress. `signal` aborts the XHR.
+  uses `XMLHttpRequest`, because `fetch` cannot report upload progress. `signal` aborts the XHR. It
+  sends cookies the way `request()` does (`withCredentials` is not needed on the same origin) and
+  rejects with the same `ApiError(status, message)`, parsing the `{"error"}` body the same way, so the
+  page handles a 401 or any other failure exactly as it does for `request()`.
 - `web/src/data/types.ts` gets the `HostImage` type.
 
 Data loading follows the existing page-local pattern: `useEffect` and state in the page, as in
@@ -223,12 +241,18 @@ Tests against an `httptest` server on a unix socket, as the existing adapter tes
 
 `docker save` a small image, `docker rmi` it, upload it on the Images page, confirm it appears in the
 list, deploy a Compose that references it, and confirm the container runs. Repeat with a `.tar.gz`
-and with a non-image tar.
+and with a non-image tar. Also try one archive per accepted extension (`.tgz`, `.tar.zst`,
+`.tar.xz`, `.tar.bz2`) against the host's daemon. Drop any extension the daemon refuses from the
+accept list.
 
 ## Documentation
 
 - `CONTEXT.md`: add **Image**: a Docker image present on the host, listed and loaded from the Images
   page. Avoid: Build, Artifact.
+- `README.md`: the one-hour upload window and the direct-port fallback (see Traefik read timeout).
 - `docs/GUIDELINES.md`: add a §4 entry for the Images screen.
+- ADR-0001: add a "Widened since" note, in the same form as ADR-0002's, saying that the panel now
+  lists images and loads image archives (this spec), while git builds and registries remain out of
+  scope.
 - No new ADR. This extends ADR-0006's Engine-API-over-socket path, and the rejected options are
   recorded here.
