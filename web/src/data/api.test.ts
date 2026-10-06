@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  ApiError,
+  IMAGES_URL,
   api,
+  listImages,
+  uploadImage,
   volumeArchiveUrl,
   volumeContentUrl,
   volumeDirectoryUrl,
@@ -299,5 +303,131 @@ describe('account and two-factor', () => {
     expect(url).toBe('/api/auth/2fa/disable');
     expect(init?.method).toBe('POST');
     expect(JSON.parse(String(init?.body))).toEqual({ password: 'hunter2', code: '654321' });
+  });
+});
+
+/** The image page's calls: the host's image list and the archive upload (XHR, for progress). */
+class FakeXhr {
+  static last: FakeXhr;
+  static created = 0;
+  method = '';
+  url = '';
+  body: unknown = undefined;
+  status = 0;
+  responseText = '';
+  upload: { onprogress?: (event: { loaded: number; total: number; lengthComputable: boolean }) => void } = {};
+  onload?: () => void;
+  onerror?: () => void;
+  onabort?: () => void;
+  abort = vi.fn(() => this.onabort?.());
+
+  constructor() {
+    FakeXhr.last = this;
+    FakeXhr.created += 1;
+  }
+
+  open(method: string, url: string) {
+    this.method = method;
+    this.url = url;
+  }
+
+  send(body: unknown) {
+    this.body = body;
+  }
+
+  respond(status: number, responseText: string) {
+    this.status = status;
+    this.responseText = responseText;
+    this.onload?.();
+  }
+}
+
+describe('uploadImage', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('PUTs the file to /api/images and resolves with the loaded names', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+    const file = new Blob(['tar']);
+
+    const result = uploadImage(file, () => {});
+    FakeXhr.last.respond(200, '{"images":["web:1"]}');
+
+    await expect(result).resolves.toEqual(['web:1']);
+    expect(FakeXhr.last.method).toBe('PUT');
+    expect(FakeXhr.last.url).toBe(IMAGES_URL);
+    expect(IMAGES_URL).toBe('/api/images');
+    expect(FakeXhr.last.body).toBe(file);
+  });
+
+  it('reports progress', () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+    const onProgress = vi.fn();
+
+    void uploadImage(new Blob(['tar']), onProgress);
+    FakeXhr.last.upload.onprogress?.({ loaded: 5, total: 10, lengthComputable: true });
+
+    expect(onProgress).toHaveBeenCalledWith(5, 10);
+  });
+
+  it("rejects with the server's error message", async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+
+    const result = uploadImage(new Blob(['tar']), () => {});
+    FakeXhr.last.respond(422, '{"error":"invalid tar header"}');
+
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({ status: 422, message: 'invalid tar header' });
+  });
+
+  it('falls back to a status message when the error body is not JSON', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+
+    const result = uploadImage(new Blob(['tar']), () => {});
+    FakeXhr.last.respond(504, '<html>gateway</html>');
+
+    await expect(result).rejects.toMatchObject({ status: 504, message: 'Request failed (504)' });
+  });
+
+  it('rejects a dropped connection', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+
+    const result = uploadImage(new Blob(['tar']), () => {});
+    FakeXhr.last.onerror?.();
+
+    await expect(result).rejects.toMatchObject({ status: 0, message: 'Upload failed — connection lost' });
+  });
+
+  it('rejects when cancelled', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+    const controller = new AbortController();
+
+    const result = uploadImage(new Blob(['tar']), () => {}, controller.signal);
+    controller.abort();
+
+    expect(FakeXhr.last.abort).toHaveBeenCalled();
+    await expect(result).rejects.toMatchObject({ status: 0, message: 'Upload cancelled' });
+  });
+
+  it('rejects at once, without sending, when the signal is already aborted', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+    FakeXhr.created = 0;
+
+    const result = uploadImage(new Blob(['tar']), () => {}, AbortSignal.abort());
+
+    await expect(result).rejects.toMatchObject({ status: 0, message: 'Upload cancelled' });
+    expect(FakeXhr.created).toBe(0);
+  });
+});
+
+describe('listImages', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('unwraps the list', async () => {
+    const images = [{ id: 'sha256:a', tags: ['web:1'], size: 10, created: '2026-01-01T00:00:00Z', inUse: false }];
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ images }), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(listImages()).resolves.toEqual(images);
+    expect(fetch.mock.calls[0][0]).toBe('/api/images');
   });
 });

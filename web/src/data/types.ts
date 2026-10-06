@@ -433,3 +433,6 @@ export type TerminalServices = {
     }[];
   }[];
 };
+
+/** One image on the host's Docker engine, from `GET /api/images`. */
+export type HostImage = { id: string; tags: string[]; size: number; created: string; inUse: boolean };

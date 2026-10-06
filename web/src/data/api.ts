@@ -11,6 +11,7 @@ import type {
   ComposeVolumes,
   Environment,
   EnvironmentVariable,
+  HostImage,
   HostMetrics,
   OrphanVolume,
   Project,
@@ -107,16 +108,21 @@ export class ApiError extends Error {
   }
 }
 
-async function responseError(response: Response): Promise<string> {
+/** The API's `error` message from a response body, or a status-based one when the body carries none. */
+function errorMessage(status: number, bodyText: string): string {
   try {
-    const payload = (await response.json()) as ErrorResponse;
-    if (payload.error) {
+    const payload = JSON.parse(bodyText) as ErrorResponse | null;
+    if (payload?.error) {
       return payload.error;
     }
   } catch {
     // Fall through to a status-based message when the response is not JSON.
   }
-  return `Request failed (${response.status})`;
+  return `Request failed (${status})`;
+}
+
+async function responseError(response: Response): Promise<string> {
+  return errorMessage(response.status, await response.text().catch(() => ''));
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -441,4 +447,61 @@ export function volumeAccessQuery(access?: VolumeAccess): string {
   }
   const encoded = query.toString();
   return encoded ? `&${encoded}` : '';
+}
+
+export const IMAGES_URL = '/api/images';
+
+/** The host's images, unwrapped from `{ images }`. */
+export async function listImages(): Promise<HostImage[]> {
+  return (await request<{ images: HostImage[] }>(IMAGES_URL)).images;
+}
+
+/**
+ * Loads an image archive onto the host: the file is the PUT body, sent over
+ * `XMLHttpRequest` because `fetch` cannot report upload progress. Resolves with
+ * the names the engine loaded; failures reject as `ApiError` (status 0 for a
+ * dropped connection or a cancel).
+ */
+export function uploadImage(
+  file: Blob,
+  onProgress: (sent: number, total: number) => void,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new ApiError(0, 'Upload cancelled'));
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    const onAbort = () => xhr.abort();
+    const done = () => signal?.removeEventListener('abort', onAbort);
+    xhr.open('PUT', IMAGES_URL);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress(event.loaded, event.total);
+      }
+    };
+    xhr.onload = () => {
+      done();
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve((JSON.parse(xhr.responseText) as { images: string[] }).images);
+        } catch {
+          reject(new ApiError(xhr.status, `Request failed (${xhr.status})`));
+        }
+        return;
+      }
+      reject(new ApiError(xhr.status, errorMessage(xhr.status, xhr.responseText)));
+    };
+    xhr.onerror = () => {
+      done();
+      reject(new ApiError(0, 'Upload failed — connection lost'));
+    };
+    xhr.onabort = () => {
+      done();
+      reject(new ApiError(0, 'Upload cancelled'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    xhr.send(file);
+  });
 }
