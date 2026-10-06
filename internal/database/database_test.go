@@ -2,8 +2,10 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pressly/goose/v3"
 
@@ -22,13 +24,63 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 11 {
-		t.Fatalf("migration version = %d, want 11", version)
+	if version != 12 {
+		t.Fatalf("migration version = %d, want 12", version)
 	}
 
 	var one int
 	if err := db.QueryRow("SELECT 1").Scan(&one); err != nil {
 		t.Fatalf("query migrated database: %v", err)
+	}
+}
+
+// A second process's writes must not fail outright when the panel already
+// holds the write lock: the busy timeout makes OpenAndMigrate wait, so the
+// reset-2fa command works against a running panel instead of returning
+// "database is locked".
+func TestOpenAndMigrateWaitsForABusyWriter(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "panel.db")
+
+	writer, err := OpenAndMigrate(databasePath)
+	if err != nil {
+		t.Fatalf("OpenAndMigrate(writer) error = %v", err)
+	}
+	defer writer.Close()
+
+	reader, err := OpenAndMigrate(databasePath)
+	if err != nil {
+		t.Fatalf("OpenAndMigrate(reader) error = %v", err)
+	}
+	defer reader.Close()
+
+	locked := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		if _, err := writer.Exec("BEGIN IMMEDIATE"); err != nil {
+			writerDone <- fmt.Errorf("begin immediate: %w", err)
+			return
+		}
+		if _, err := writer.Exec(`
+			INSERT INTO admin_credentials (id, email, password_hash, created_at)
+			VALUES (1, 'admin@example.com', 'hash', 1)
+		`); err != nil {
+			writer.Exec("ROLLBACK")
+			writerDone <- fmt.Errorf("insert admin: %w", err)
+			return
+		}
+		close(locked)
+		time.Sleep(300 * time.Millisecond)
+		_, err := writer.Exec("COMMIT")
+		writerDone <- err
+	}()
+
+	<-locked
+
+	if _, err := reader.Exec("UPDATE admin_credentials SET failed_attempts = 1 WHERE id = 1"); err != nil {
+		t.Fatalf("update while a writer holds the lock: %v", err)
+	}
+	if err := <-writerDone; err != nil {
+		t.Fatalf("writer: %v", err)
 	}
 }
 
