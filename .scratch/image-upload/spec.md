@@ -166,8 +166,11 @@ Before writing any UI code, read Ant Design's `llms.txt` and check every compone
   page handles a 401 or any other failure exactly as it does for `request()`.
 - `web/src/data/types.ts` gets the `HostImage` type.
 
-Data loading follows the existing page-local pattern: `useEffect` and state in the page, as in
-`VolumeExplorerPage`. There is no global store entry.
+The list is loaded with SWR, which is a new web dependency: `swr`, pinned exactly at `2.5.1`. Its
+peer range covers React 19. `useSWR('/api/images', listImages)` provides loading, error and data
+states, and a successful upload calls `mutate()` to refetch. This page is the first SWR user. Other
+pages keep their existing `useEffect` loading, and migrating them is out of scope. There is no global
+store entry.
 
 ### Upload area
 
@@ -198,7 +201,7 @@ Data loading follows the existing page-local pattern: `useEffect` and state in t
   - **In use**: a `Tag` when true.
 - Newest first. A search `Input` filters by tag substring on the client.
 - Loading, empty and error states follow `docs/GUIDELINES.md`.
-- After a successful load, the list refetches and the rows for the loaded names are highlighted until
+- After a successful load, the list refetches (`mutate()`) and the rows for the loaded names are highlighted until
   the next upload.
 
 ## Error handling
