@@ -71,7 +71,7 @@ as `terminal.Exec` and `volumes.Runner` are:
 ```go
 type Images interface {
     List(ctx context.Context) ([]Image, error)
-    Load(ctx context.Context, archive io.Reader) ([]string, error) // names loaded
+    Load(ctx context.Context, archive io.Reader, size int64) ([]string, error) // names loaded; size sets the outgoing Content-Length
 }
 
 type Image struct {
@@ -132,6 +132,7 @@ Body: the archive bytes, sent raw (no multipart form).
 | Success | `200 {"images": ["myapp:1.2"]}` |
 | `ErrLoadFailed` | `422 {"error": "<daemon message>"}` |
 | `ErrUnavailable` | `503 {"error": "Docker is not reachable"}` |
+| Any other error (for example, a body cut short of its declared length) | `500 {"error": "<message>"}` |
 
 The body is also wrapped in `http.MaxBytesReader` at the declared length, so a client sending more than
 it declared is cut off. The cap is hard-coded, with no env knob, matching the volume upload cap.
