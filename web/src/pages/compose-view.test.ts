@@ -30,6 +30,10 @@ describe('activeComposeTab', () => {
     expect(activeComposeTab('editor')).toBe('editor');
   });
 
+  it('recognises the terminal tab', () => {
+    expect(activeComposeTab('terminal')).toBe('terminal');
+  });
+
   it('falls back to Editor for anything else, including an absent segment', () => {
     expect(activeComposeTab('nope')).toBe('editor');
     expect(activeComposeTab(undefined)).toBe('editor');

@@ -50,19 +50,30 @@ describe('resolvePath', () => {
     });
     expect(resolvePath('/projects/1/env/2/compose/3')).toEqual({
       params: { composeId: '3', environmentId: '2', projectId: '1' },
-      pattern: 'projects/:projectId/env/:environmentId/compose/:composeId',
+      pattern: 'projects/:projectId/env/:environmentId/compose/:composeId/:tab?',
     });
     expect(resolvePath('/projects/1/env/2/compose/3/monitor')).toEqual({
       params: { composeId: '3', environmentId: '2', projectId: '1', tab: 'monitor' },
-      pattern: 'projects/:projectId/env/:environmentId/compose/:composeId/:tab',
+      pattern: 'projects/:projectId/env/:environmentId/compose/:composeId/:tab?',
     });
     expect(resolvePath('/account')).toEqual({ params: {}, pattern: 'account' });
+  });
+
+  it('serves the Editor and every Compose tab from one route, so the page is not remounted', () => {
+    const editor = resolvePath('/projects/1/env/2/compose/3');
+    const terminal = resolvePath('/projects/1/env/2/compose/3/terminal');
+    expect(editor?.pattern).toBe('projects/:projectId/env/:environmentId/compose/:composeId/:tab?');
+    expect(terminal?.pattern).toBe(editor?.pattern);
+    expect(terminal?.params.tab).toBe('terminal');
+    expect(resolvePath('/projects/1/env/2/compose/3/volumes/explorer')?.pattern).toBe(
+      'projects/:projectId/env/:environmentId/compose/:composeId/volumes/explorer',
+    );
   });
 
   it('prefers the compose route over the tab route', () => {
     // `compose` is static, so it must out-rank the environment's `:tab`.
     const resolved = resolvePath('/projects/1/env/2/compose/3');
-    expect(resolved?.pattern).toBe('projects/:projectId/env/:environmentId/compose/:composeId');
+    expect(resolved?.pattern).toBe('projects/:projectId/env/:environmentId/compose/:composeId/:tab?');
   });
 
   it('resolves the Volume Explorer leaf and keeps the Volumes tab on the Compose route', () => {
@@ -72,7 +83,7 @@ describe('resolvePath', () => {
     });
     expect(resolvePath('/projects/1/env/2/compose/3/volumes')).toEqual({
       params: { composeId: '3', environmentId: '2', projectId: '1', tab: 'volumes' },
-      pattern: 'projects/:projectId/env/:environmentId/compose/:composeId/:tab',
+      pattern: 'projects/:projectId/env/:environmentId/compose/:composeId/:tab?',
     });
   });
 

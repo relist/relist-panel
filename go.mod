@@ -3,6 +3,7 @@ module relist-panel
 go 1.25.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/pquerna/otp v1.5.0
 	github.com/pressly/goose/v3 v3.24.3
 	golang.org/x/crypto v0.38.0

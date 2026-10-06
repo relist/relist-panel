@@ -188,8 +188,8 @@ trouble?" without ssh'ing in — and be honest about what the panel can and cann
 ### 4.6 Compose (`…/compose/:composeId`)
 
 The core screen. Tabs in the path so each is linkable and the back button works:
-**Editor** (`…/compose/:composeId`, the default), **Logs** (`…/compose/:composeId/logs`) and **Monitor**
-(`…/compose/:composeId/monitor`).
+**Editor** (`…/compose/:composeId`, the default), **Logs** (`…/compose/:composeId/logs`), **Terminal**
+(`…/compose/:composeId/terminal`) and **Monitor** (`…/compose/:composeId/monitor`).
 An unknown segment falls back to Editor rather than a not-found page. Layout of the Editor tab:
 editor on the left, status rail on the right, both in normal document
 flow — the page scrolls as one, no nested scrollers. The two columns stretch to the same height, so
@@ -391,8 +391,10 @@ One vocabulary, everywhere a Compose state appears. Derived entirely from the AP
   with the editor stretched to the rail's height — `LAYOUT.editorMinHeight`
   (`clamp(640px, 80vh, 1000px)`) is the floor, so the file stays readable when the rail is short.
   Do not pass `align="top"` to that `Row`: stretching is what makes the match work.
-- No nested scrollers. Pages scroll with the document; the only bounded boxes are the editor and
-  the logs viewer, where a bounded box *is* the feature. Inside the full screen editor the modal itself
+- No nested scrollers. Pages scroll with the document; the only bounded boxes are the editor, the logs
+  viewer and the terminal, where a bounded box *is* the feature. The terminal's height is
+  `LAYOUT.terminalHeight` (`clamp(420px, 65vh, 800px)`), because a shell needs a viewport but the page
+  must still scroll as one. Inside the full screen editor the modal itself
   is the bounded box: it states its own height (`100vh`) and nothing in it scrolls the page — the one
   place that scrolls internally is the fixed 340px variables column beside the file, which has no
   height of its own to grow into.
@@ -417,6 +419,7 @@ Reusable pieces live in `web-design/src/components/`; port them into `web/src/` 
 | `EmptyState` | `components/primitives.tsx` | Glyph + title + one-line explanation + the action that resolves it. |
 | `MetricChart` | `components/MetricChart.tsx` | Fixed-height inline SVG, no chart dependency: 0–100 axis for percent (`axis="auto"` takes the maximum from the data instead, for a container that can exceed one core), nice-max for byte rates, hairline grid, crosshair tooltip, min/max downsampling to the plot width, and optional `markers` — dashed vertical references such as `Deployed`. Used by both Monitoring and the Compose screen's Monitor tab. `partial` and `unavailable` are first-class states. |
 | `ServiceMonitor` | `components/ServiceMonitor.tsx` | The Compose screen's Monitor tab body: service `Select`, window `Segmented`, facts strip, four `MetricChart`s and the deploy marker. History is keyed by (Compose, service). |
+| `ComposeTerminalTab` | `components/ComposeTerminalTab.tsx` | The Compose screen's Terminal tab body: Service/Container Select, Shell and User Segmented, Connect, and the xterm box at LAYOUT.terminalHeight. One session per page; output survives a lost connection. |
 | `DangerModal` | `components/DangerModal.tsx` | Type-the-name confirmation, lists what will be destroyed. |
 | `VariablesPanel` | `components/VariablesPanel.tsx` | Masking, reveal/copy, bulk `.env` paste. |
 | `YamlEditor` | `components/YamlEditor.tsx` | One editor surface; `path` keeps a Monaco model per Compose. Two editors on one `path` share that model — the second must set `keepCurrentModel`. Takes its theme from `ThemeModeContext`: Monaco themes itself, so it cannot read antd tokens off the React tree. |

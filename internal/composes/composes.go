@@ -42,10 +42,16 @@ type RunRequest struct {
 	EnvFilePath     string
 }
 
-// ComposeStatus summarizes a Compose's live container state.
+// ComposeStatus summarizes a Compose's live container state. Services are the
+// Compose's Service names as `docker compose ps --all` reported them, in
+// first-seen order; a Service whose Containers have all stopped is still
+// named. They are not on the wire — the Compose page renders running/total —
+// but they ride the status for the terminal listing, which needs the set of
+// Services without owning a runner or a lookup of its own.
 type ComposeStatus struct {
-	Running int `json:"running"`
-	Total   int `json:"total"`
+	Running  int      `json:"running"`
+	Total    int      `json:"total"`
+	Services []string `json:"-"`
 }
 
 // ComposeRunner is the one port in the system (ADR-0003): everything needed
@@ -709,6 +715,27 @@ func (s *Service) ComposeRunRequest(ctx context.Context, projectID, environmentI
 		return RunRequest{}, err
 	}
 	return runRequestFor(s.dataDir, compose), nil
+}
+
+// ServiceNames lists a Compose's Service names as its live status reports them
+// — the same `docker compose ps --all` status the Compose page shows — for a
+// sibling domain that needs the set but owns neither the runner nor the
+// 404 path. It takes an already-resolved RunRequest so the caller shares one
+// resolution with ComposeRunRequest.
+//
+// Like currentStatus, it only queries the runner once a Compose has actually
+// been deployed (its resolved compose file exists on disk). An undeployed
+// Compose has no Compose file for `docker compose ps` to read, so asking would
+// fail; it lists no Services instead, which the UI renders as its empty state.
+func (s *Service) ServiceNames(ctx context.Context, req RunRequest) ([]string, error) {
+	if _, err := os.Stat(req.ComposeFilePath); err != nil {
+		return nil, nil
+	}
+	status, err := s.runner.Status(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return status.Services, nil
 }
 
 // withRefreshedStatus re-reads a Compose's live status immediately after a
