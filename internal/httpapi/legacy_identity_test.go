@@ -175,7 +175,7 @@ func TestPartialParentTeardownCanRetryWithoutRepeatingCompletedChild(t *testing.
 	one := deployFixture(t, server, p.ID, e.ID, "first")
 	two := deployFixture(t, server, p.ID, e.ID, "second")
 	runner := &partialTeardownRunner{fakeComposeRunner: server.runner, failedProject: "relist-c" + lifecycleID(two.ID), fail: true}
-	server.handler = httpapi.NewHandler(server.db, runner, server.dataDir, nil, nil, server.volumeRunner, volumes.NewResolver(server.volumeCLI, server.dataDir), nil)
+	server.handler = httpapi.NewHandler(server.db, runner, server.dataDir, nil, nil, server.volumeRunner, volumes.NewResolver(server.volumeCLI, server.dataDir), nil, nil)
 	runner.calls = nil
 	parentPath := "/api/projects/" + lifecycleID(p.ID)
 	legacyStatus(t, server, http.MethodDelete, parentPath, http.StatusBadGateway)

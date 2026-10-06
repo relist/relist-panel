@@ -89,7 +89,7 @@ func main() {
 		Addr: cfg.Address(),
 		Handler: httpapi.NewHandler(db, dockerexec.New(), cfg.DataDir, sampler, collector, volumeRunner, volumeResolver, &terminal.Options{
 			Exec: terminalExec,
-		}),
+		}, nil),
 	}
 
 	log.Printf("relist-panel listening on %s", cfg.Address())

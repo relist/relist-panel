@@ -11,6 +11,7 @@ import (
 	"relist-panel/internal/composes"
 	"relist-panel/internal/environments"
 	"relist-panel/internal/environmentvariables"
+	"relist-panel/internal/images"
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/projects"
 	"relist-panel/internal/terminal"
@@ -28,8 +29,9 @@ import (
 // endpoints stay unregistered (an unwired panel has nothing to serve).
 // volumeRunner and volumeResolver are the Volume Explorer's operation seam
 // and its read side (ADR-0010). terminalOptions, when non-nil, is the terminal
-// seam and settings; nil leaves the terminal routes unregistered.
-func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts, volumeRunner volumes.Runner, volumeResolver *volumes.Resolver, terminalOptions *terminal.Options) http.Handler {
+// seam and settings; nil leaves the terminal routes unregistered. imageStore
+// is the Images page's Docker seam; nil leaves the image routes unregistered.
+func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts, volumeRunner volumes.Runner, volumeResolver *volumes.Resolver, terminalOptions *terminal.Options, imageStore images.Images) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
 	authService := auth.New(db)
@@ -45,6 +47,9 @@ func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, histo
 	volumeapi.New(composesService, volumeResolver, volumeRunner).RegisterRoutes(mux)
 	if terminalOptions != nil {
 		terminal.New(composesService, *terminalOptions).RegisterRoutes(mux)
+	}
+	if imageStore != nil {
+		images.New(imageStore).RegisterRoutes(mux)
 	}
 	if history != nil && services != nil {
 		metricsService := metrics.New(metrics.NewStore(db), history, services)

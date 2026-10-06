@@ -23,6 +23,7 @@ import (
 	"relist-panel/internal/composes"
 	"relist-panel/internal/database"
 	"relist-panel/internal/httpapi"
+	imagesfake "relist-panel/internal/images/faketest"
 	"relist-panel/internal/terminal"
 	terminalfake "relist-panel/internal/terminal/faketest"
 	"relist-panel/internal/volumes"
@@ -1394,7 +1395,7 @@ func TestComposeDeployRecordsDeployedAtOnSuccessOnly(t *testing.T) {
 	restartedVolumeCLI := &faketest.CLI{}
 	restartedVolumeRunner := &faketest.Runner{}
 	restarted := &testServer{
-		handler:      httpapi.NewHandler(server.db, restartedRunner, server.dataDir, newFakeHostHistory(), newFakeServiceFacts(), restartedVolumeRunner, volumes.NewResolver(restartedVolumeCLI, server.dataDir), nil),
+		handler:      httpapi.NewHandler(server.db, restartedRunner, server.dataDir, newFakeHostHistory(), newFakeServiceFacts(), restartedVolumeRunner, volumes.NewResolver(restartedVolumeCLI, server.dataDir), nil, nil),
 		db:           server.db,
 		dataDir:      server.dataDir,
 		runner:       restartedRunner,
@@ -2484,6 +2485,7 @@ type testServer struct {
 	volumeRunner *faketest.Runner
 	volumeCLI    *faketest.CLI
 	terminal     *terminalfake.Exec
+	images       *imagesfake.Images
 	cookies      map[string]*http.Cookie
 }
 
@@ -2501,6 +2503,7 @@ func newTestServer(t *testing.T) *testServer {
 	volumeRunner := &faketest.Runner{}
 	volumeCLI := &faketest.CLI{}
 	terminalExec := &terminalfake.Exec{}
+	imagesStore := &imagesfake.Images{}
 	return &testServer{
 		handler: httpapi.NewHandler(db, runner, dataDir, history, facts, volumeRunner, volumes.NewResolver(volumeCLI, dataDir), &terminal.Options{
 			Exec:         terminalExec,
@@ -2508,7 +2511,7 @@ func newTestServer(t *testing.T) *testServer {
 			PingInterval: 50 * time.Millisecond,
 			PingTimeout:  50 * time.Millisecond,
 			KillGrace:    50 * time.Millisecond,
-		}),
+		}, imagesStore),
 		db:           db,
 		dataDir:      dataDir,
 		runner:       runner,
@@ -2517,6 +2520,7 @@ func newTestServer(t *testing.T) *testServer {
 		volumeRunner: volumeRunner,
 		volumeCLI:    volumeCLI,
 		terminal:     terminalExec,
+		images:       imagesStore,
 		cookies:      make(map[string]*http.Cookie),
 	}
 }
