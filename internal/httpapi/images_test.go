@@ -1,10 +1,13 @@
 package httpapi_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"relist-panel/internal/volumes"
 	"strings"
 	"testing"
@@ -213,5 +216,104 @@ func TestImagesRoutesAbsentWithoutStore(t *testing.T) {
 	defer response.Body.Close()
 	if ct := response.Header.Get("Content-Type"); strings.HasPrefix(ct, "application/json") {
 		t.Fatalf("Content-Type = %q, want non-JSON", ct)
+	}
+}
+
+func TestImagesUploadWithNoNamesAnswers422(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	response := sendUpload(t, server, http.MethodPut, "/api/images", []byte("x"), 1)
+	if response.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", response.StatusCode)
+	}
+	if got := errorOf(t, response); got != "archive contained no images" {
+		t.Fatalf("error = %q", got)
+	}
+}
+
+// shortBody yields some bytes and then fails, like a client that disconnects
+// before its declared Content-Length.
+type shortBody struct{ sent bool }
+
+func (b *shortBody) Read(p []byte) (int, error) {
+	if b.sent {
+		return 0, io.ErrUnexpectedEOF
+	}
+	b.sent = true
+	return copy(p, "partial"), nil
+}
+
+func TestImagesUploadShorterThanDeclaredLengthNeverAnswers200(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	request := httptest.NewRequest(http.MethodPut, "http://relist-panel.test/api/images", &shortBody{})
+	request.ContentLength = 1000
+	response := server.serve(request)
+	if response.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", response.StatusCode)
+	}
+	if got := errorOf(t, response); got == "" {
+		t.Fatalf("error is empty")
+	}
+}
+
+// cancelOnRead cancels its request context on the first read, then fails.
+type cancelOnRead struct{ cancel context.CancelFunc }
+
+func (c *cancelOnRead) Read([]byte) (int, error) {
+	c.cancel()
+	return 0, io.ErrUnexpectedEOF
+}
+
+func TestImagesUploadClientCancelWritesNoErrorBody(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	server.images.LoadErr = context.Canceled
+	// The context is cancelled while Load reads the body (after auth has
+	// passed), as when the browser disconnects mid-upload.
+	ctx, cancel := context.WithCancel(context.Background())
+	request := httptest.NewRequest(http.MethodPut, "http://relist-panel.test/api/images", &cancelOnRead{cancel: cancel}).WithContext(ctx)
+	request.ContentLength = 1
+	response := server.serve(request)
+	// Asserted: the handler writes no 500 and no JSON error body (the
+	// recorder keeps its untouched 200 default and an empty body).
+	if response.StatusCode == http.StatusInternalServerError {
+		t.Fatalf("status = 500 after client cancel")
+	}
+	if raw := readBody(t, response); raw != "" {
+		t.Fatalf("body = %q, want empty", raw)
+	}
+}
+
+// countingBody counts the bytes read from it.
+type countingBody struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingBody) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+
+func TestImagesUploadLoadFailedDrainsTheBodyBefore422(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	server.images.LoadErr = fmt.Errorf("%w: %s", images.ErrLoadFailed, "invalid tar header")
+	server.images.ReadLimit = 4
+	payload := bytes.Repeat([]byte("z"), 100000)
+	body := &countingBody{r: bytes.NewReader(payload)}
+	request := httptest.NewRequest(http.MethodPut, "http://relist-panel.test/api/images", body)
+	request.ContentLength = int64(len(payload))
+	response := server.serve(request)
+	if response.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", response.StatusCode)
+	}
+	if got := errorOf(t, response); got != "invalid tar header" {
+		t.Fatalf("error = %q", got)
+	}
+	if body.n != len(payload) {
+		t.Fatalf("consumed %d of %d body bytes", body.n, len(payload))
 	}
 }

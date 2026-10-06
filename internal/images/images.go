@@ -73,6 +73,9 @@ type imageJSON struct {
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	listed, err := s.store.List(r.Context())
 	if err != nil {
+		if r.Context().Err() != nil {
+			return // the client went away; nobody is left to answer
+		}
 		s.writeStoreError(w, err)
 		return
 	}
@@ -106,11 +109,20 @@ func (s *Service) upload(w http.ResponseWriter, r *http.Request) {
 	body := http.MaxBytesReader(w, r.Body, r.ContentLength)
 	names, err := s.store.Load(r.Context(), body, r.ContentLength)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return // the client went away; nobody is left to answer
+		}
+		if errors.Is(err, ErrLoadFailed) {
+			// A browser still sending a large corrupt archive would see a
+			// connection reset instead of the daemon's message.
+			_, _ = io.Copy(io.Discard, body)
+		}
 		s.writeStoreError(w, err)
 		return
 	}
-	if names == nil {
-		names = []string{}
+	if len(names) == 0 {
+		writeError(w, http.StatusUnprocessableEntity, "archive contained no images")
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"images": names})
 }

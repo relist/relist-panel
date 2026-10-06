@@ -172,6 +172,10 @@ func TestImagesLoadStopsWhenTheContextIsCancelled(t *testing.T) {
 	case err := <-done:
 		if err == nil {
 			t.Error("Load returned nil after cancel")
+		} else if !errors.Is(err, context.Canceled) {
+			// The cancelled context aborts the in-flight POST before the pipe's
+			// io.ErrUnexpectedEOF is surfaced.
+			t.Errorf("err = %v, want context.Canceled", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Load did not return within 2s of cancel")

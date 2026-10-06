@@ -78,7 +78,8 @@ func (i *Images) List(ctx context.Context) ([]images.Image, error) {
 // /images/load?quiet=1 and returns the names the daemon reports loading. The
 // daemon answers 200 and reports a failure inside its JSON-lines stream, so
 // the stream is decoded to the end: an error line fails the load whatever
-// names preceded it, and a stream naming nothing is a failure too.
+// names preceded it, and a stream naming nothing is a failure too. It relies
+// on archive erroring when the client disconnects (true for a handler's r.Body).
 func (i *Images) Load(ctx context.Context, archive io.Reader, size int64) ([]string, error) {
 	path := "/images/load?" + url.Values{"quiet": {"1"}}.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker"+path, archive)

@@ -20,6 +20,9 @@ type Images struct {
 	ListErr error
 	Names   []string
 	LoadErr error
+	// ReadLimit, when positive, makes Load read only that many bytes of the
+	// archive and then return LoadErr, as a daemon rejecting early does.
+	ReadLimit int
 
 	mu     sync.Mutex
 	Loaded [][]byte
@@ -33,6 +36,10 @@ func (f *Images) List(context.Context) ([]images.Image, error) {
 // Load reads the whole archive, records it, and returns the scripted answer.
 // A failed read is returned instead.
 func (f *Images) Load(_ context.Context, archive io.Reader, _ int64) ([]string, error) {
+	if f.ReadLimit > 0 {
+		_, _ = io.CopyN(io.Discard, archive, int64(f.ReadLimit))
+		return nil, f.LoadErr
+	}
 	data, err := io.ReadAll(archive)
 	if err != nil {
 		return nil, err
