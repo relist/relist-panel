@@ -33,6 +33,23 @@ export function ImagesPage() {
   const [query, setQuery] = useState('');
   const abort = useRef<AbortController | undefined>(undefined);
 
+  // The unmount cleanup and the upload callbacks read these refs, not the
+  // render's closure, so they see the current state.
+  const mounted = useRef(true);
+  const uploadKind = useRef<UploadState['kind']>('idle');
+  uploadKind.current = upload.kind;
+
+  // In-app navigation does not fire `beforeunload`, so leaving the page must
+  // stop an upload still sending bytes. Once everything is sent (`loading`) the
+  // abort would make the daemon discard a complete archive, so it is left alone.
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (uploadKind.current === 'uploading') abort.current?.abort();
+    };
+  }, []);
+
   const busy = upload.kind === 'uploading' || upload.kind === 'loading';
 
   // Leaving the page mid-upload would drop the archive, so the browser asks
@@ -65,10 +82,10 @@ export function ImagesPage() {
           }),
         controller.signal,
       );
-      setUpload({ kind: 'loaded', names });
       void mutate();
+      if (mounted.current) setUpload({ kind: 'loaded', names });
     } catch (reason: unknown) {
-      setUpload({ kind: 'failed', message: reason instanceof Error ? reason.message : 'Upload failed' });
+      if (mounted.current) setUpload({ kind: 'failed', message: reason instanceof Error ? reason.message : 'Upload failed' });
     } finally {
       abort.current = undefined;
     }
@@ -206,7 +223,7 @@ export function ImagesPage() {
           dataSource={rows}
           loading={isLoading}
           locale={{
-            emptyText: isLoading ? (
+            emptyText: isLoading || error ? (
               ' '
             ) : (
               <EmptyState
