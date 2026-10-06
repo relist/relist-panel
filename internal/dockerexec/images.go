@@ -81,7 +81,7 @@ func (i *Images) List(ctx context.Context) ([]images.Image, error) {
 // names preceded it, and a stream naming nothing is a failure too.
 func (i *Images) Load(ctx context.Context, archive io.Reader, size int64) ([]string, error) {
 	path := "/images/load?" + url.Values{"quiet": {"1"}}.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker"+path, &ctxReader{ctx: ctx, r: archive})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker"+path, archive)
 	if err != nil {
 		return nil, fmt.Errorf("docker api %s: %w", path, err)
 	}
@@ -182,37 +182,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-// ctxReader makes a blocked Read give up when ctx ends. The HTTP transport
-// cannot interrupt a request-body Read already in flight, so without this a
-// stalled upload would outlive its cancelled request. The abandoned Read
-// finishes on its own goroutine once the underlying reader returns (the
-// handler's request body is closed when the client goes away).
-type ctxReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (c *ctxReader) Read(p []byte) (int, error) {
-	if err := c.ctx.Err(); err != nil {
-		return 0, err
-	}
-	type result struct {
-		n   int
-		err error
-	}
-	buf := make([]byte, len(p))
-	done := make(chan result, 1)
-	go func() {
-		n, err := c.r.Read(buf)
-		done <- result{n, err}
-	}()
-	select {
-	case res := <-done:
-		copy(p, buf[:res.n])
-		return res.n, res.err
-	case <-c.ctx.Done():
-		return 0, c.ctx.Err()
-	}
 }

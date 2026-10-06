@@ -156,7 +156,12 @@ func TestImagesLoadStopsWhenTheContextIsCancelled(t *testing.T) {
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { _ = pw.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(50*time.Millisecond, cancel)
+	// A client that disconnects cancels the request and ends the handler's
+	// r.Body with an error; model both.
+	time.AfterFunc(50*time.Millisecond, func() {
+		cancel()
+		_ = pw.CloseWithError(io.ErrUnexpectedEOF)
+	})
 
 	done := make(chan error, 1)
 	go func() {
