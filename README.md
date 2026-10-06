@@ -73,6 +73,11 @@ to the operator to configure — routing for anything deployed through the
 panel is controlled entirely by Traefik labels written directly in that
 Compose's YAML, per the v1 scope.
 
+Image uploads through the domain must finish within one hour: Traefik's read
+timeout on the `web` entrypoint is set to `3600s`, and 10 GiB needs roughly
+25 Mbit/s sustained. A slower link can upload through the panel's direct port
+(`RELIST_PORT`, default host port `8888`), which bypasses Traefik.
+
 ## Volume files
 
 Each Compose page has a **Volumes** tab listing the Volumes that Compose

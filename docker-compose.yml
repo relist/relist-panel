@@ -34,6 +34,10 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
+      # Traefik v3 defaults readTimeout to 60s for the whole request body. The
+      # Images upload streams up to 10 GiB, so the limit is one hour for every
+      # app on the `web` entrypoint.
+      - --entrypoints.web.transport.respondingTimeouts.readTimeout=3600s
     ports:
       - "${TRAEFIK_HTTP_PORT:-80}:80"
     volumes:
