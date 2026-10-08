@@ -88,9 +88,17 @@ has a domain. In each case the panel overwrites the value and the deploy respons
 - `traefik.enable=false` becomes `true`.
 - `traefik.docker.network` with another value becomes `relist-network`.
 - A hand-written router on that Service with no explicit `traefik.http.routers.<r>.service`. Traefik
-  links such a router to a service automatically only when the container defines exactly one
-  service. The panel adds one per domain, so that router stops working. The panel changes nothing in
-  this case and only warns, naming the router, so the operator can add `.service`.
+  links such a router automatically: to the only service defined on the container, or to a default
+  service it creates when none is defined. The panel adds one service per domain, which changes that
+  outcome. With no hand-written service label, the router now silently routes to the domain's
+  port. With a hand-written service as well, there are two services and the router errors. The
+  panel changes nothing here. It only warns, naming the router, so the operator can add `.service`.
+
+Two routers for the same host, one generated and one hand-written, are detected only within the
+same Compose. If a hand-written `traefik.http.routers.*.rule` in this Compose's YAML contains
+`` Host(`<host>`) `` for a host one of its domains manages, the deploy warns, naming the router.
+`UNIQUE (host, path)` does not see hand-written rules in other Composes or the panel's own
+`RELIST_DOMAIN`, so those collisions go undetected (see Error handling).
 
 `labels:` may be a list (`- key=value`) or a map (`key: value`). The panel reads either and writes
 back the same shape.
@@ -130,8 +138,11 @@ flags and labels conditionally. The alternative, a separate `docker-compose.http
 install modes, and the panel cannot see which one Traefik runs, so an HTTPS domain would fail silently
 in HTTP mode.
 
-**Must verify in planning:** whether Traefik v3.7's ACME accepts an empty email. If it refuses,
-`RELIST_ACME_EMAIL` becomes required (`${RELIST_ACME_EMAIL:?…}`) and the README says so.
+`RELIST_ACME_EMAIL` is optional. Traefik's reference marks `acme.email` as required, but a probe on
+2026-10-08 showed otherwise. It used `traefik:v3.7` (lego v5.4.1) with `acme.email=` against the Let's
+Encrypt staging CA: the account registered (`Register...`) and the run reached `new-order`, which
+failed only on the probe's forbidden `example.com` host. The README recommends setting the email
+anyway, both for Let's Encrypt account recovery and in case a later Traefik enforces it.
 
 Effect on local development:
 
@@ -363,6 +374,9 @@ When a deploy or deploy-fresh response has `warnings`, the Compose page shows th
 | Hand-written router without `.service` on a Service with a domain | Left as is; deploy warning naming the router |
 | Custom resolver name that Traefik does not know | Not detectable by the panel; Traefik logs it and serves its default cert. Covered by the form help text. |
 | Let's Encrypt cannot issue (DNS not pointing here, port 80 closed, `.localhost`) | Not detectable by the panel; Traefik serves its default cert and logs the ACME error. README explains this. |
+| Hand-written router in the same Compose with `Host()` of a managed host | Deploy warning naming the router |
+| Same host in a hand-written label of another Compose, or equal to `RELIST_DOMAIN` | Not detected; Traefik picks one router by priority. README notes it. |
+| Panel upgraded but install `docker-compose.yml` not (no `websecure`, no `letsencrypt` resolver) | Not detectable by the panel; every HTTPS domain fails, and only Traefik's log says why. The README's **Upgrading an existing install** section is the guard. |
 
 ## Known issue (not fixed here)
 
@@ -379,7 +393,8 @@ only keeps domains away from those Services. A fix for the injection itself is a
   order with operator middlewares.
 - `labels:` as a list and as a map, each keeping its shape; hand-written labels kept unchanged.
 - `traefik.enable=false` and a foreign `traefik.docker.network` overwritten with warnings; a
-  hand-written router without `.service` produces a warning naming it.
+  hand-written router without `.service` produces a warning naming it; a hand-written router whose
+  rule has `` Host(`<managed host>`) `` produces a warning naming it.
 - Two domains on one Service, with different ports.
 - Names are `relist-c<composeID>-d<domainID>` for both identity versions.
 
