@@ -124,7 +124,12 @@ export function DomainFormModal({
         >
           <InputNumber max={65535} min={1} precision={0} style={{ width: '100%' }} />
         </Form.Item>
-        <Form.Item label="Custom Entrypoint" name="customEntrypoint" valuePropName="checked">
+        <Form.Item
+          extra="Leave off to use web / websecure with an automatic HTTP→HTTPS redirect."
+          label="Custom Entrypoint"
+          name="customEntrypoint"
+          valuePropName="checked"
+        >
           <Switch />
         </Form.Item>
         {customEntrypoint && (

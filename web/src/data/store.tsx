@@ -467,7 +467,8 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           { projectId: location.project.id, environmentId: location.environment.id, composeId },
           { yamlContent },
         );
-        patchCompose(composeId, () => updated);
+        // Saving returns no warnings; keep the last deploy's.
+        patchCompose(composeId, (current) => ({ ...updated, warnings: current.warnings }));
       });
     },
     [patchCompose, track],
@@ -515,7 +516,12 @@ export function PanelProvider({ children }: { children: ReactNode }) {
               : key === 'stop'
                 ? await api.stopCompose(path)
                 : await api.restartCompose(path);
-        patchCompose(composeId, () => updated);
+        // Deploy and deploy-fresh replace the warnings with the new response's;
+        // stop and restart return none, so they keep the last deploy's.
+        const replacesWarnings = key === 'deploy' || key === 'deploy-fresh';
+        patchCompose(composeId, (current) =>
+          replacesWarnings ? updated : { ...updated, warnings: current.warnings },
+        );
         // The API returns no read timestamp; the rail's "checked N minutes ago"
         // is stamped client-side, as the prototype does (GUIDELINES §11). The
         // deploy time needs no stamp: `updated` carries the API's
