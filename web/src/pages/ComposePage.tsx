@@ -24,6 +24,7 @@ import {
   Dropdown,
   Empty,
   Flex,
+  Grid,
   Result,
   Row,
   Select,
@@ -119,6 +120,8 @@ export function ComposePage() {
   const [draft, setDraft] = useState(compose?.yamlContent ?? '');
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Below sm the editor header has room for icons only.
+  const screens = Grid.useBreakpoint();
   const [logsText, setLogsText] = useState<string>();
   const [logServices, setLogServices] = useState<string[]>([]);
   const [logLines, setLogLines] = useState(200);
@@ -575,17 +578,18 @@ export function ComposePage() {
                           )}
                           <Tooltip title="Discard local edits and reload the saved file">
                             <Button
+                              aria-label="Discard"
                               disabled={!dirty}
                               icon={<UndoOutlined />}
                               onClick={() => setDraft(compose.yamlContent)}
                               size="small"
                             >
-                              Discard
+                              {screens.sm && 'Discard'}
                             </Button>
                           </Tooltip>
                           <Tooltip title="Show the file a deploy would write, with the panel's additions">
-                            <Button icon={<EyeOutlined />} onClick={() => setPreviewOpen(true)} size="small">
-                              Preview
+                            <Button aria-label="Preview" icon={<EyeOutlined />} onClick={() => setPreviewOpen(true)} size="small">
+                              {screens.sm && 'Preview'}
                             </Button>
                           </Tooltip>
                           <Tooltip title="Edit docker-compose.yml full screen, with the Environment variables beside it">

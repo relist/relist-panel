@@ -208,7 +208,8 @@ has deployed before and `domainsChangedAt >= lastDeployedAt`. Above the tabs, a 
   `⋮` (Restart / Stop / Delete), `Save`, and one primary `Deploy` that becomes
   `Save & Deploy` while the editor is dirty.
 - **Editor**: `docker-compose.yml` label, `Modified` marker, `Preview`, `Discard`, a full screen button, and a banner
-  offering Save/Discard while dirty.
+  offering Save/Discard while dirty. Below the `sm` breakpoint `Discard` and `Preview` drop their text and keep
+  icon, tooltip and aria-label, so the full screen button stays on the header.
 - **Preview**: a read-only modal with the file a deploy would write for the current draft — the environment
   file, the Domains tab's Traefik labels, and relist-network with its `.internal` aliases where needed; `${KEY}` left as references, never values.
   It loads once per opening, says when the draft is unsaved, shows the deploy's warnings as `warning` alerts
