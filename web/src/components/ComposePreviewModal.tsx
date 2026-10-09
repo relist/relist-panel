@@ -1,5 +1,5 @@
 import { Alert, Button, Flex, Modal, Typography } from 'antd';
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { usePanel } from '../data/store';
 import type { ComposePreview } from '../data/types';
 import { YamlEditor } from './YamlEditor';
@@ -34,7 +34,9 @@ export function ComposePreviewModal({
   const draftRef = useRef(draft);
   draftRef.current = draft;
 
-  useEffect(() => {
+  // A layout effect clears the last preview before the reopened modal
+  // paints, so it never flashes the previous file.
+  useLayoutEffect(() => {
     if (!open) {
       return;
     }

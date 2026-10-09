@@ -92,4 +92,19 @@ describe('ComposePreviewModal', () => {
     await userEvent.click(footerClose as HTMLButtonElement);
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
+
+  it('reopens on the skeleton, never on the previous file', async () => {
+    panel.previewCompose.mockResolvedValueOnce({ warnings: [], yaml: 'first: file\n' });
+    const { rerender } = renderModal();
+    await screen.findByText('first: file');
+
+    rerender(<ComposePreviewModal composeId={7} dirty={false} draft="x" editorPath="1-2-7" onClose={() => undefined} open={false} />);
+    let settle!: (value: { warnings: string[]; yaml: string }) => void;
+    panel.previewCompose.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+    rerender(<ComposePreviewModal composeId={7} dirty={false} draft="x" editorPath="1-2-7" onClose={() => undefined} open />);
+
+    expect(screen.queryByText('first: file')).toBeNull();
+    settle({ warnings: [], yaml: 'second: file\n' });
+    expect(await screen.findByText('second: file')).toBeTruthy();
+  });
 });
