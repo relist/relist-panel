@@ -18,6 +18,15 @@ services:
     labels:
       - traefik.enable=true
       - traefik.http.routers.panel.rule=Host(`${RELIST_DOMAIN:-panel.localhost}`)
+      - traefik.http.routers.panel.entrypoints=websecure
+      - traefik.http.routers.panel.tls.certresolver=letsencrypt
+      - traefik.http.routers.panel.service=panel
+      - traefik.http.routers.panel-http.rule=Host(`${RELIST_DOMAIN:-panel.localhost}`)
+      - traefik.http.routers.panel-http.entrypoints=web
+      - traefik.http.routers.panel-http.middlewares=panel-redirect
+      - traefik.http.routers.panel-http.service=panel
+      - traefik.http.middlewares.panel-redirect.redirectscheme.scheme=https
+      - traefik.http.middlewares.panel-redirect.redirectscheme.permanent=true
       - traefik.http.services.panel.loadbalancer.server.port=${RELIST_PORT:-8080}
     cpus: 0.25
     mem_limit: 256M
@@ -38,9 +47,19 @@ services:
       # Images upload streams up to 10 GiB, so the limit is one hour for every
       # app on the `web` entrypoint.
       - --entrypoints.web.transport.respondingTimeouts.readTimeout=3600s
+      - --entrypoints.websecure.address=:443
+      # Same one-hour limit as `web`, so uploads work over HTTPS too.
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=3600s
+      # The email is optional (a probe on 2026-10-08 registered an account
+      # without one) but recommended; see ADR-0013.
+      - --certificatesresolvers.letsencrypt.acme.email=${RELIST_ACME_EMAIL:-}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
     ports:
       - "${TRAEFIK_HTTP_PORT:-80}:80"
+      - "${TRAEFIK_HTTPS_PORT:-443}:443"
     volumes:
+      - ${RELIST_DATA_DIR:-/var/lib/relist-panel}/traefik:/letsencrypt
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - relist-network

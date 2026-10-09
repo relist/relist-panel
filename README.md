@@ -45,9 +45,9 @@ This builds the panel image (Go binary + embedded frontend, per the
 `relist-network`. The panel is reachable two ways out of the box:
 
 - Directly, via its published port: `http://<host>:8888/`
-- Through Traefik, via `Host` routing: `http://panel.localhost/` (resolves to
-  loopback on most systems without any DNS setup) — override the hostname
-  with `RELIST_DOMAIN` for a real domain
+- Through Traefik, via `Host` routing: `https://panel.localhost/` (resolves to
+  loopback on most systems without any DNS setup; plain HTTP redirects to it) —
+  override the hostname with `RELIST_DOMAIN` for a real domain
 
 Override the defaults via environment variables (or a `.env` file next to
 `docker-compose.yml`):
@@ -61,23 +61,66 @@ Override the defaults via environment variables (or a `.env` file next to
   to the panel on
 - `TRAEFIK_HTTP_PORT` (default `80`) — the host port Traefik's HTTP
   entrypoint is published on
+- `TRAEFIK_HTTPS_PORT` (default `443`) — the host port Traefik's HTTPS
+  entrypoint is published on
+- `RELIST_ACME_EMAIL` (unset by default; optional but recommended) — the
+  contact address for your Let's Encrypt account. Traefik's reference marks it
+  as required, but an empty value registers an account anyway (ADR-0013). Set
+  it so Let's Encrypt can reach you about expiring certificates and so you can
+  recover the account, and in case a later Traefik enforces it
 - `RELIST_IMAGE` (unset by default) — the panel image that Volume file
   operations run from; set it only when the panel cannot name its own image
   (`docker inspect $(hostname)` fails, e.g. a custom `hostname:` on the panel
   service) by adding it to that service's `environment:`. The image must be on
   the host; `docker compose build` puts it there
 
-Traefik ships with a minimal default (`--providers.docker`, HTTP entrypoint
-only, `exposedbydefault=false`); TLS/ACME and additional entrypoints are left
-to the operator to configure — routing for anything deployed through the
-panel is controlled entirely by Traefik labels written directly in that
-Compose's YAML, per the v1 scope.
+Traefik ships with two entrypoints, `web` (port 80) and `websecure` (port 443),
+and a Let's Encrypt certificate resolver named `letsencrypt` that answers the
+HTTP-01 challenge on `web`. HTTPS is always on: the panel's own router uses
+`websecure` with `letsencrypt`, and plain HTTP for the panel redirects to it.
+Certificates are stored in `RELIST_DATA_DIR/traefik/acme.json`, so the same
+backup covers them. Other settings stay minimal (`--providers.docker`,
+`exposedbydefault=false`). To route a Compose's Services, add a **Domain** on
+its Domains tab; the panel injects the Traefik labels at the next deploy, and
+labels you write by hand in the YAML keep working. Let's Encrypt can only issue
+when the host's DNS points at this machine and port 80 is reachable from the
+internet. When it cannot, Traefik serves its default self-signed certificate and
+logs the ACME error; the panel cannot see this.
+
+Two limits on Domains: a hand-written router in another Compose, or one for
+`RELIST_DOMAIN`, that uses the same host as a Domain is not detected, and
+Traefik picks one of the two routers by priority. A custom resolver name that
+Traefik does not know shows only in Traefik's log.
 
 Image uploads through the domain must finish within one hour: Traefik's read
-timeout on the `web` entrypoint is set to `3600s` (this applies to every app on
-that entrypoint, not only the panel), and 10 GiB needs roughly
+timeout on the `web` and `websecure` entrypoints is set to `3600s` (this applies
+to every app on those entrypoints, not only the panel), and 10 GiB needs roughly
 25 Mbit/s sustained. A slower link can upload through the panel's direct port
 (`RELIST_PORT`, default host port `8888`), which bypasses Traefik.
+
+### Local development
+
+The bare binary on `:8080` and the direct port `:8888` bypass Traefik and do not
+change. `http://panel.localhost` now redirects to `https://panel.localhost`,
+which shows a self-signed certificate warning, because Let's Encrypt does not
+issue for `.localhost`. Traefik logs an ACME error for it on each retry; that is
+log noise only. Port 443 must be free on the host, or set `TRAEFIK_HTTPS_PORT`
+to another port. Domains that stay on HTTP, such as `myapp.localhost`, behave as
+before.
+
+### Upgrading an existing install
+
+A new panel with an old install `docker-compose.yml` has no `websecure`
+entrypoint and no `letsencrypt` resolver, so every HTTPS domain fails and only
+Traefik's log says why. To upgrade:
+
+1. Update `docker-compose.yml` from this version.
+2. Set `RELIST_ACME_EMAIL` in your `.env`.
+3. Open port 443 on the host's firewall (or the port you set as
+   `TRAEFIK_HTTPS_PORT`).
+4. Run `docker compose up -d`.
+
+Composes with hand-written Traefik labels keep routing as before.
 
 ## Volume files
 
@@ -108,9 +151,10 @@ panel's own image, which must be on the host, over the Docker socket this
 install mounts. Running the bare binary hides the Volumes tab.
 
 The feature assumes **TLS** on the panel's domain — a volume file manager over
-plain HTTP is a data-exfiltration channel. The install stack's Traefik is
-HTTP-only by default (above), so terminate TLS before exposing the panel
-beyond localhost.
+plain HTTP is a data-exfiltration channel. The install stack's Traefik serves the
+panel over HTTPS with a Let's Encrypt certificate (above), which needs a public
+`RELIST_DOMAIN` pointing at the host; on `panel.localhost` the certificate is
+self-signed, so do not expose the panel beyond localhost that way.
 
 New Composes use the immutable Docker project name `relist-c<ID>` and keep their
 deployment files under `RELIST_DATA_DIR/.composes/<ID>/`. Upgrading preserves

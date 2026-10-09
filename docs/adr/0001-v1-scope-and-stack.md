@@ -7,7 +7,7 @@ Relist Panel v1 manages only Projects → Environments → raw Compose stacks, e
 - No separate git-based "Application" type — users bring pre-built images in their Compose file. (Widened since: the panel now lists the host's images and loads `docker save` archives from the Images page — `.scratch/image-upload/spec.md` — while git builds and registries remain out of scope.)
 - No database-as-a-service.
 - No git webhook / auto-deploy — deploys are manual via "Save & Deploy".
-- No domain-management UI — Traefik labels are written by hand inside the Compose file.
+- No domain-management UI — Traefik labels are written by hand inside the Compose file. (Widened since: the panel now manages a Compose's domains on its Domains tab and injects the Traefik labels at deploy — ADR-0013.)
 - No multi-user/team/role system — single admin account only.
 - No Compose version history or rollback — editing overwrites the live file.
 

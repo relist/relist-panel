@@ -13,12 +13,16 @@ A named deployment target within a Project (e.g. "production", "staging"). Holds
 _Avoid_: Stage, Env (as a distinct entity name)
 
 **Compose**:
-One deployable Docker Compose stack (a `docker-compose.yml` edited via Monaco) belonging to exactly one Environment. An Environment can hold multiple Composes, each deployed/stopped independently. Traefik routing is configured by the user as labels inside the Compose file — the panel has no separate domain-management UI.
+One deployable Docker Compose stack (a `docker-compose.yml` edited via Monaco) belonging to exactly one Environment. An Environment can hold multiple Composes, each deployed/stopped independently. Routing is either a **Domain** managed by the panel or Traefik labels the user writes inside the Compose file.
 _Avoid_: Stack, App. Never "Service" — see **Service**: that word means one service inside the file, never the whole deployable unit.
 
 **Service**:
 One service defined inside a Compose file — the unit the panel starts, stops and monitors. A Service belongs to its Compose and is not addressable outside it.
 _Avoid_: Container (a Service is the definition; a Container is one running instance of it), Process
+
+**Domain**:
+A host and path that Traefik routes to one Service's port in a Compose, managed on the Compose's Domains tab and applied on deploy.
+_Avoid_: Route, Hostname (as the entity name)
 
 **Container**:
 One running instance of a Service, created by a deploy. Its identity is not stable: every deploy mints a new one, so anything that outlives a single deploy — metric history, for one — is keyed by Service, never by Container.
