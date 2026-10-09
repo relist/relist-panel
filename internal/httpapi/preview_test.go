@@ -47,10 +47,14 @@ func TestPreviewResolvesTheDraftWithoutDeploying(t *testing.T) {
 	}
 	router := "relist-c" + strconv.FormatInt(f.composeID, 10) + "-d" + strconv.FormatInt(domain.ID, 10)
 	envFile := filepath.Join(f.server.dataDir, ".composes", strconv.FormatInt(f.composeID, 10), ".env")
-	for _, want := range []string{"worker:", "relist-network", envFile, "traefik.http.routers." + router + ".rule=Host(`api.example.com`)", "${API_TOKEN}"} {
+	for _, want := range []string{"worker:", "relist-network", envFile, "traefik.http.routers." + router + ".rule=Host(`api.example.com`)", "${API_TOKEN}",
+		"web.relist-c" + strconv.FormatInt(f.composeID, 10) + ".internal", "web.web.production.deploy-domains.internal"} {
 		if !strings.Contains(body.YAML, want) {
 			t.Fatalf("preview yaml = %s, want it to contain %q", body.YAML, want)
 		}
+	}
+	if strings.Contains(body.YAML, "worker.relist-c") {
+		t.Fatalf("preview yaml = %s, want worker (no domain, no traefik labels) off relist-network", body.YAML)
 	}
 	if body.Warnings == nil || len(body.Warnings) != 0 || !strings.Contains(string(raw), `"warnings":[]`) {
 		t.Fatalf("body = %s, want warnings:[]", raw)

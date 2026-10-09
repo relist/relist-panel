@@ -452,7 +452,7 @@ func (s *Service) prepareDeployFiles(w http.ResponseWriter, r *http.Request, com
 		writeError(w, http.StatusInternalServerError, "could not load environment variables")
 		return deployFiles{}, false
 	}
-	resolvedYAML, warnings, ok := s.resolveForDeploy(w, r, compose.ID, compose.YAMLContent, req.EnvFilePath)
+	resolvedYAML, warnings, ok := s.resolveForDeploy(w, r, compose, compose.YAMLContent, req.EnvFilePath)
 	if !ok {
 		return deployFiles{}, false
 	}
@@ -463,13 +463,21 @@ func (s *Service) prepareDeployFiles(w http.ResponseWriter, r *http.Request, com
 // way a deploy writes it. It reads no environment variables, so preview can
 // share it without exposing their values. On false it has already written the
 // error response.
-func (s *Service) resolveForDeploy(w http.ResponseWriter, r *http.Request, composeID int64, yamlContent, envFilePath string) (string, []string, bool) {
-	composeDomains, err := s.domains.ListForCompose(r.Context(), composeID)
+func (s *Service) resolveForDeploy(w http.ResponseWriter, r *http.Request, compose Compose, yamlContent, envFilePath string) (string, []string, bool) {
+	composeDomains, err := s.domains.ListForCompose(r.Context(), compose.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load domains")
 		return "", nil, false
 	}
-	resolvedYAML, warnings, err := resolveCompose(yamlContent, dockernet.NetworkName, envFilePath, composeID, composeDomains)
+	// The route was validated before the Compose loaded.
+	projectID, _, _ := routeIDs(r)
+	projectName, environmentName, err := s.repository.parentNames(r.Context(), projectID, compose.EnvironmentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return "", nil, false
+	}
+	id := networkIdentity{DeployName: compose.DeployProjectName(), Compose: compose.Name, Environment: environmentName, Project: projectName}
+	resolvedYAML, warnings, err := resolveCompose(yamlContent, dockernet.NetworkName, envFilePath, compose.ID, composeDomains, id)
 	var target *domains.TargetError
 	if errors.As(err, &target) {
 		writeError(w, http.StatusBadRequest, target.Error())
@@ -540,7 +548,7 @@ func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := runRequestFor(s.dataDir, compose)
-	resolvedYAML, warnings, ok := s.resolveForDeploy(w, r, compose.ID, *input.YAMLContent, req.EnvFilePath)
+	resolvedYAML, warnings, ok := s.resolveForDeploy(w, r, compose, *input.YAMLContent, req.EnvFilePath)
 	if !ok {
 		return
 	}
@@ -956,8 +964,9 @@ func (r *repository) environmentExists(ctx context.Context, projectID, environme
 	return err == nil, err
 }
 
-// parentNames resolves the Project and Environment names a Compose's deploy
-// identity is frozen from at creation (ADR-0005).
+// parentNames resolves the current Project and Environment names: a new
+// Compose's deploy identity is frozen from them at creation (ADR-0005), and
+// every deploy builds the readable relist-network alias from them (ADR-0014).
 func (r *repository) parentNames(ctx context.Context, projectID, environmentID int64) (projectName, environmentName string, err error) {
 	err = r.db.QueryRowContext(ctx, `
 		SELECT p.name, e.name
@@ -1232,12 +1241,13 @@ func runRequestFor(dataDir string, compose Compose) RunRequest {
 	}
 }
 
-// resolveCompose parses yamlContent and returns it with the shared Traefik
-// network and the generated environment file injected into every service
-// (ADR-0002) — the one place the panel modifies user-authored YAML. The
-// Compose's domains become Traefik labels; the warnings say what that
-// overrode. A *domains.TargetError is returned as is.
-func resolveCompose(yamlContent, networkName, envFilePath string, composeID int64, ds []domains.Domain) (string, []string, error) {
+// resolveCompose parses yamlContent and returns it with the generated
+// environment file injected into every service (ADR-0002) — the one place the
+// panel modifies user-authored YAML. The Compose's domains become Traefik
+// labels, and only the Services that need the shared network join it, with
+// their aliases (ADR-0014). The warnings say what that overrode or skipped. A
+// *domains.TargetError is returned as is.
+func resolveCompose(yamlContent, networkName, envFilePath string, composeID int64, ds []domains.Domain, id networkIdentity) (string, []string, error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(yamlContent), &doc); err != nil {
 		return "", nil, fmt.Errorf("parse compose yaml: %w", err)
@@ -1253,18 +1263,21 @@ func resolveCompose(yamlContent, networkName, envFilePath string, composeID int6
 			if !ok {
 				continue
 			}
-			service["networks"] = addToNetworks(service["networks"], networkName)
 			service["env_file"] = addToEnvFile(service["env_file"], envFilePath)
 			services[name] = service
 		}
 	} else {
 		services = map[string]any{}
 	}
+	// Who joins is read from the YAML as written, before the domains add
+	// their own Traefik labels.
+	joins := sharedNetworkJoins(services, networkName, ds)
 	// With no services at all, a domain still has to be refused.
 	warnings, err := domains.Inject(services, composeID, ds, networkName)
 	if err != nil {
 		return "", nil, err
 	}
+	warnings = append(warnings, joinSharedNetwork(services, joins, networkName, id)...)
 
 	networks, ok := doc["networks"].(map[string]any)
 	if !ok {
@@ -1278,20 +1291,6 @@ func resolveCompose(yamlContent, networkName, envFilePath string, composeID int6
 		return "", nil, fmt.Errorf("marshal resolved compose yaml: %w", err)
 	}
 	return string(resolved), warnings, nil
-}
-
-func addToNetworks(existing any, networkName string) any {
-	switch value := existing.(type) {
-	case []any:
-		return appendUnique(value, networkName)
-	case map[string]any:
-		if _, ok := value[networkName]; !ok {
-			value[networkName] = nil
-		}
-		return value
-	default:
-		return []any{networkName}
-	}
 }
 
 func addToEnvFile(existing any, envFilePath string) any {

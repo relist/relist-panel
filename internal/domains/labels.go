@@ -272,3 +272,29 @@ func isFalse(value string) bool {
 	b, err := strconv.ParseBool(strings.TrimSpace(value))
 	return err == nil && !b
 }
+
+// HasTraefikLabels reports whether a Service carries any label whose key
+// starts with "traefik.", in list or map form.
+func HasTraefikLabels(service map[string]any) bool {
+	for _, key := range readLabels(service["labels"]).keys {
+		if strings.HasPrefix(key, "traefik.") {
+			return true
+		}
+	}
+	return false
+}
+
+// EnsureLabel sets key=value on a Service unless the key is already there,
+// keeping the labels' list or map shape. It reports whether it added it.
+func EnsureLabel(service map[string]any, key, value string) bool {
+	labels := readLabels(service["labels"])
+	if _, ok := labels.get(key); ok {
+		return false
+	}
+	if service["labels"] == nil {
+		labels.asMap = false
+	}
+	labels.set(key, value)
+	service["labels"] = labels.value()
+	return true
+}

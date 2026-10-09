@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// NetworkName is the Docker network shared by the panel, Traefik, and every
-// deployed Compose, per ADR-0002. It is a fixed name, not configurable,
+// NetworkName is the Docker network shared by the panel, Traefik, and the
+// deployed Services that need it, per ADR-0002 as narrowed by ADR-0014. It is a fixed name, not configurable,
 // because docker-compose.yml (the install bootstrap) references it by this
 // exact literal, marked external there — see the ADR for why.
 const NetworkName = "relist-network"
