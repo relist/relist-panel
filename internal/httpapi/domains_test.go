@@ -420,3 +420,36 @@ func TestDeployRefusedWhenDomainServiceRemoved(t *testing.T) {
 		t.Fatalf("resolved file changed after refused deploy:\n%s\nwas\n%s", after, first)
 	}
 }
+
+func TestDeployFreshRefusedWhenDomainServiceRemoved(t *testing.T) {
+	f := newDeployDomainsFixture(t)
+	f.createDomain(t, "api.example.com", "/")
+	if status, raw := f.deploy(t, "/deploy", nil); status != http.StatusOK {
+		t.Fatalf("first deploy status = %d, body %s", status, raw)
+	}
+	first := f.resolvedFile(t)
+
+	f.saveYAML(t, "services: {db: {image: postgres:16}}")
+	status, raw := f.deploy(t, "/deploy-fresh", map[string]string{"confirmName": "web"})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, body %s", status, raw)
+	}
+	want := `domain api.example.com/ points at service "web", which is not in the compose file`
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &refusal); err != nil || refusal.Error != want {
+		t.Fatalf("body = %s, want exactly the refusal copy %q", raw, want)
+	}
+	for _, call := range f.server.runner.calls {
+		if call.method == "down-with-volumes" {
+			t.Fatal("deploy-fresh removed volumes although the deploy was refused")
+		}
+	}
+	if n := f.upCalls(); n != 1 {
+		t.Fatalf("up calls = %d, want 1", n)
+	}
+	if after := f.resolvedFile(t); after != first {
+		t.Fatalf("resolved file changed after refused deploy:\n%s\nwas\n%s", after, first)
+	}
+}
