@@ -453,3 +453,49 @@ func TestDeployFreshRefusedWhenDomainServiceRemoved(t *testing.T) {
 		t.Fatalf("resolved file changed after refused deploy:\n%s\nwas\n%s", after, first)
 	}
 }
+
+func TestDeployNamesLegacyComposeRoutersFromDatabaseIDs(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Legacy Domains", "")
+	environment := productionEnvironment(t, server, project)
+	// Slugs that would be tempting (and wrong) to derive router names from.
+	composeID := legacyCompose(t, server, environment.ID, "legacy-domains", "production", "web")
+	f := domainsFixture{
+		server:    server,
+		project:   project,
+		base:      "/api/projects/" + idString(project.ID) + "/environments/" + idString(environment.ID) + "/composes/" + idString(composeID),
+		composeID: composeID,
+	}
+	domain := f.createDomain(t, "legacy.example.com", "/")
+
+	status, raw := f.deploy(t, "/deploy", nil)
+	if status != http.StatusOK {
+		t.Fatalf("deploy status = %d, body %s", status, raw)
+	}
+
+	if len(server.runner.calls) == 0 {
+		t.Fatal("deploy reached no runner call")
+	}
+	for _, call := range server.runner.calls {
+		if call.method == "up" && call.request.ProjectName != "legacy-domains-production-web" {
+			t.Fatalf("deploy project name = %q, want the legacy one", call.request.ProjectName)
+		}
+	}
+	resolved := f.resolvedFile(t)
+	router := "relist-c" + strconv.FormatInt(composeID, 10) + "-d" + strconv.FormatInt(domain.ID, 10)
+	for _, want := range []string{
+		"traefik.http.routers." + router + ".rule=Host(`legacy.example.com`)",
+		"traefik.http.services." + router + ".loadbalancer.server.port=3000",
+		"traefik.http.routers." + router + "-http.entrypoints=web",
+	} {
+		if !strings.Contains(resolved, want) {
+			t.Fatalf("resolved compose = %s, want it to contain %q", resolved, want)
+		}
+	}
+	for _, line := range strings.Split(resolved, "\n") {
+		if strings.Contains(line, "traefik.") && strings.Contains(line, "legacy-domains") {
+			t.Fatalf("label %q derives a Traefik name from slugs", line)
+		}
+	}
+}
