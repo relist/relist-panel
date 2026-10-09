@@ -3,6 +3,7 @@ package domains
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -32,8 +33,10 @@ func Inject(services map[string]any, composeID int64, domains []Domain, network 
 		}
 	}
 
-	// Hand-written routers are read before anything is added, so the host
-	// check never sees the panel's own labels.
+	// Hand-written routers are snapshotted here, but the label sets are mutated
+	// before hostWarnings runs, so they do contain the panel's own routers by
+	// then. The check skips them through the relist-c<ID>- prefix filter in
+	// handWrittenRouters, not through the order of operations.
 	handWritten := map[string]*labelSet{}
 	for name, raw := range services {
 		if service, ok := raw.(map[string]any); ok {
@@ -65,7 +68,7 @@ func Inject(services map[string]any, composeID int64, domains []Domain, network 
 // returns their warnings.
 func prepareService(name string, labels *labelSet, generated, network string) []string {
 	var warnings []string
-	if old, ok := labels.get("traefik.enable"); ok && old == "false" {
+	if old, ok := labels.get("traefik.enable"); ok && isFalse(old) {
 		warnings = append(warnings, fmt.Sprintf("service %q: traefik.enable=false was overridden to true because a domain points at it", name))
 	}
 	labels.set("traefik.enable", "true")
@@ -163,7 +166,7 @@ func hostWarnings(handWritten map[string]*labelSet, generated string, ordered []
 		for _, router := range handWrittenRouters(labels, generated) {
 			rule, _ := labels.get(routerPrefix + router + ".rule")
 			for _, host := range hosts {
-				if strings.Contains(rule, "Host(`"+host+"`)") {
+				if strings.Contains(strings.ToLower(rule), "host(`"+strings.ToLower(host)+"`)") {
 					warnings = append(warnings, fmt.Sprintf("router %q also matches Host(`%s`), which a domain manages", router, host))
 				}
 			}
@@ -261,4 +264,11 @@ func (s *labelSet) value() any {
 		list = append(list, key+"="+s.values[key])
 	}
 	return list
+}
+
+// isFalse reports whether a traefik.enable label value reads as false the way
+// Traefik parses it (false, False, 0, f, ...).
+func isFalse(value string) bool {
+	b, err := strconv.ParseBool(strings.TrimSpace(value))
+	return err == nil && !b
 }

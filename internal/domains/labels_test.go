@@ -221,8 +221,10 @@ func TestInjectKeepsLabelShape(t *testing.T) {
 func TestInjectOverridesWithWarnings(t *testing.T) {
 	enable := `service "web": traefik.enable=false was overridden to true because a domain points at it`
 	for name, src := range map[string]string{
-		"map":  "services:\n  web:\n    labels:\n      traefik.enable: false\n",
-		"list": "services:\n  web:\n    labels:\n      - traefik.enable=false\n",
+		"map":         "services:\n  web:\n    labels:\n      traefik.enable: false\n",
+		"list":        "services:\n  web:\n    labels:\n      - traefik.enable=false\n",
+		"capitalised": "services:\n  web:\n    labels:\n      - traefik.enable=False\n",
+		"zero":        "services:\n  web:\n    labels:\n      - traefik.enable=0\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			services, warnings := inject(t, src, base())
@@ -258,6 +260,15 @@ func TestInjectWarnsOnImplicitRouter(t *testing.T) {
 
 func TestInjectWarnsOnSameHostRouter(t *testing.T) {
 	src := "services:\n  web:\n    image: x\n  other:\n    labels:\n      - traefik.http.routers.old.rule=Host(`a.example.com`)\n      - traefik.http.routers.old.service=old\n"
+	_, warnings := inject(t, src, base())
+	want := []string{"router \"old\" also matches Host(`a.example.com`), which a domain manages"}
+	if !reflect.DeepEqual(warnings, want) {
+		t.Errorf("warnings = %q, want %q", warnings, want)
+	}
+}
+
+func TestInjectWarnsOnSameHostRouterIgnoringCase(t *testing.T) {
+	src := "services:\n  web:\n    image: x\n  other:\n    labels:\n      - traefik.http.routers.old.rule=Host(`A.Example.com`)\n      - traefik.http.routers.old.service=old\n"
 	_, warnings := inject(t, src, base())
 	want := []string{"router \"old\" also matches Host(`a.example.com`), which a domain manages"}
 	if !reflect.DeepEqual(warnings, want) {

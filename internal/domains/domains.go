@@ -102,8 +102,9 @@ func Validate(in Input, services []string) (Input, *FieldError) {
 	if in.InternalPath == "" {
 		in.InternalPath = "/"
 	}
-	if !validPath(in.Path) {
-		return in, &FieldError{"path", "path must start with / and contain no backtick, $, space, control character, ? or #"}
+	// Traefik splits stripprefix.prefixes on commas.
+	if !validPath(in.Path) || strings.Contains(in.Path, ",") {
+		return in, &FieldError{"path", "path must start with / and contain no backtick, $, comma, space, control character, ? or #"}
 	}
 	if !validPath(in.InternalPath) {
 		return in, &FieldError{"internalPath", "internal path must start with / and contain no backtick, $, space, control character, ? or #"}

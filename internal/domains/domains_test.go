@@ -63,6 +63,7 @@ func TestValidateRejects(t *testing.T) {
 		{"path with space", func(i *domains.Input) { i.Path = "/a b" }, "path"},
 		{"path with backtick", func(i *domains.Input) { i.Path = "/a`b" }, "path"},
 		{"path with dollar", func(i *domains.Input) { i.Path = "/a$b" }, "path"},
+		{"path with comma", func(i *domains.Input) { i.Path = "/a,b" }, "path"},
 		{"path with tab", func(i *domains.Input) { i.Path = "/a\tb" }, "path"},
 		{"path with newline", func(i *domains.Input) { i.Path = "/a\nb" }, "path"},
 		{"internal path with del", func(i *domains.Input) { i.InternalPath = "/a\x7fb" }, "internalPath"},
