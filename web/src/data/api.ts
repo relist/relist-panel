@@ -9,6 +9,7 @@
 import type {
   Compose,
   ComposeDomains,
+  ComposePreview,
   ComposeVolumes,
   Domain,
   DomainInput,
@@ -256,6 +257,9 @@ export const api = {
   /** Removes the Compose's volumes, then deploys; `confirmName` must equal the Compose's name exactly. */
   deployComposeFresh: (location: ComposePath, confirmName: string) =>
     request<Compose>(`${composePath(location)}/deploy-fresh`, jsonInit('POST', { confirmName })),
+  /** Resolves a draft exactly as a deploy would; saves nothing and never calls Docker. */
+  previewCompose: (location: ComposePath, yamlContent: string) =>
+    request<ComposePreview>(`${composePath(location)}/preview`, jsonInit('POST', { yamlContent })),
   stopCompose: (location: ComposePath) => request<Compose>(`${composePath(location)}/stop`, { method: 'POST' }),
   restartCompose: (location: ComposePath) => request<Compose>(`${composePath(location)}/restart`, { method: 'POST' }),
   logs: (location: ComposePath) => request<LogsPayload>(`${composePath(location)}/logs`),

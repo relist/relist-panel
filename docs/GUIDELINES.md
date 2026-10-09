@@ -207,8 +207,13 @@ has deployed before and `domainsChangedAt >= lastDeployedAt`. Above the tabs, a 
 - **Header**: name, status tag, `Unsaved changes` tag when dirty; actions graded by weight —
   `⋮` (Restart / Stop / Delete), `Save`, and one primary `Deploy` that becomes
   `Save & Deploy` while the editor is dirty.
-- **Editor**: `docker-compose.yml` label, `Modified` marker, `Discard`, a full screen button, and a banner
+- **Editor**: `docker-compose.yml` label, `Modified` marker, `Preview`, `Discard`, a full screen button, and a banner
   offering Save/Discard while dirty.
+- **Preview**: a read-only modal with the file a deploy would write for the current draft — relist-network,
+  the environment file and the Domains tab's Traefik labels added; `${KEY}` left as references, never values.
+  It loads once per opening, says when the draft is unsaved, shows the deploy's warnings as `warning` alerts
+  and a refusal as an inline `error` alert (not a toast), and copies the whole file from the title. Its
+  Monaco model has its own `path`, never the editor's.
 - **Full screen editor**: the icon-only button in the editor header opens the same file — one Monaco
   model, shared by `path`, so the two editors are the same document rather than a synced copy — in a
   true full screen modal. A 56px toolbar carries the filename, the `project / environment / compose`

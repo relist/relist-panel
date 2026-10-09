@@ -3,6 +3,7 @@ import {
   CopyOutlined,
   DeleteOutlined,
   DownOutlined,
+  EyeOutlined,
   FileTextOutlined,
   FullscreenOutlined,
   MoreOutlined,
@@ -43,6 +44,7 @@ import { useNavigate, useParams } from 'react-router';
 import { paths } from '../app/paths';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { ComposeDomainsTab } from '../components/ComposeDomainsTab';
+import { ComposePreviewModal } from '../components/ComposePreviewModal';
 import { ComposeTerminalTab } from '../components/ComposeTerminalTab';
 import { ComposeVolumesTab } from '../components/ComposeVolumesTab';
 import { DangerModal } from '../components/DangerModal';
@@ -116,6 +118,7 @@ export function ComposePage() {
 
   const [draft, setDraft] = useState(compose?.yamlContent ?? '');
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [logsText, setLogsText] = useState<string>();
   const [logServices, setLogServices] = useState<string[]>([]);
   const [logLines, setLogLines] = useState(200);
@@ -580,6 +583,11 @@ export function ComposePage() {
                               Discard
                             </Button>
                           </Tooltip>
+                          <Tooltip title="Show the file a deploy would write, with the panel's additions">
+                            <Button icon={<EyeOutlined />} onClick={() => setPreviewOpen(true)} size="small">
+                              Preview
+                            </Button>
+                          </Tooltip>
                           <Tooltip title="Edit docker-compose.yml full screen, with the Environment variables beside it">
                             <Button
                               aria-label="Full screen editor"
@@ -961,6 +969,14 @@ export function ComposePage() {
         }
       />
 
+      <ComposePreviewModal
+        composeId={compose.id}
+        dirty={dirty}
+        draft={draft}
+        editorPath={`${project.id}-${environment.id}-${compose.id}`}
+        onClose={() => setPreviewOpen(false)}
+        open={previewOpen}
+      />
       <FullscreenEditor
         compose={compose}
         dirty={dirty}

@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { Credentials, LoginResult, ProjectInput } from './api';
-import type { Compose, ComposeDomains, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
+import type { Compose, ComposeDomains, ComposePreview, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
@@ -74,6 +74,8 @@ type PanelValue = {
   deleteOrphanVolume: (composeId: number, name: string) => Promise<void>;
   /** The Compose's domains and the Services a domain can name. */
   loadDomains: (composeId: number) => Promise<ComposeDomains>;
+  /** The resolved file a deploy would write for `yamlContent`, which need not be saved. */
+  previewCompose: (composeId: number, yamlContent: string) => Promise<ComposePreview>;
   /** Each domain mutation refreshes the Compose afterwards, so `domainsChangedAt` reaches the page. */
   createDomain: (composeId: number, input: DomainInput) => Promise<Domain>;
   updateDomain: (composeId: number, domainId: number, input: DomainInput) => Promise<Domain>;
@@ -689,6 +691,12 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [domainLocation, track],
   );
 
+  const previewCompose = useCallback(
+    (composeId: number, yamlContent: string) =>
+      track(`preview:${composeId}`, () => api.previewCompose(domainLocation(composeId), yamlContent)),
+    [domainLocation, track],
+  );
+
   const createDomain = useCallback(
     (composeId: number, input: DomainInput) =>
       track(`domain-save:${composeId}`, async () => {
@@ -892,6 +900,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       createDomain,
       deleteDomain,
       loadDomains,
+      previewCompose,
       updateDomain,
       deployCompose,
       deployComposeFresh,
@@ -939,6 +948,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       createDomain,
       deleteDomain,
       loadDomains,
+      previewCompose,
       updateDomain,
       deployCompose,
       deployComposeFresh,

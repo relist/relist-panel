@@ -173,6 +173,12 @@ export type ComposeDomains = {
   services: string[];
 };
 
+/** The file a deploy would write for a draft, and the warnings it would return. */
+export type ComposePreview = {
+  yaml: string;
+  warnings: string[];
+};
+
 /** Derived lifecycle state of a Compose. Single source of truth for status colour and copy. */
 export type ComposeState = 'not-deployed' | 'partial' | 'running' | 'stopped';
 
