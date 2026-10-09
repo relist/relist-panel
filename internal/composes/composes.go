@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"relist-panel/internal/dockernet"
+	"relist-panel/internal/domains"
 	"relist-panel/internal/slug"
 )
 
@@ -72,6 +73,7 @@ type Service struct {
 	repository *repository
 	runner     ComposeRunner
 	dataDir    string
+	domains    *domains.Store
 	now        func() time.Time
 }
 
@@ -127,7 +129,7 @@ type composeUpdateInput struct {
 // database. runner drives deploy lifecycle actions; dataDir is the root
 // directory Compose files are resolved under (ADR-0002).
 func New(db *sql.DB, runner ComposeRunner, dataDir string) *Service {
-	return &Service{repository: &repository{db: db}, runner: runner, dataDir: dataDir, now: time.Now}
+	return &Service{repository: &repository{db: db}, runner: runner, dataDir: dataDir, domains: domains.NewStore(db), now: time.Now}
 }
 
 // RegisterRoutes adds the authenticated Compose endpoints to mux.
@@ -337,7 +339,7 @@ func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.completeDeploy(w, r, compose, req)
+	s.completeDeploy(w, r, compose, req, files.warnings)
 }
 
 // deployFresh deploys after deleting the Compose's named volumes. The order
@@ -384,7 +386,7 @@ func (s *Service) deployFresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.completeDeploy(w, r, compose, req)
+	s.completeDeploy(w, r, compose, req, files.warnings)
 }
 
 const volumesRemovedAdvice = "The Compose is stopped; fix the cause and deploy again."
@@ -438,6 +440,7 @@ func (s *Service) loadDeployable(w http.ResponseWriter, r *http.Request) (Compos
 type deployFiles struct {
 	composeYAML string
 	envFile     string
+	warnings    []string
 }
 
 // prepareDeployFiles resolves the YAML and loads the environment variables.
@@ -448,12 +451,21 @@ func (s *Service) prepareDeployFiles(w http.ResponseWriter, r *http.Request, com
 		writeError(w, http.StatusInternalServerError, "could not load environment variables")
 		return deployFiles{}, false
 	}
-	resolvedYAML, err := resolveCompose(compose.YAMLContent, dockernet.NetworkName, req.EnvFilePath)
+	composeDomains, err := s.domains.ListForCompose(r.Context(), compose.ID)
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load domains")
+		return deployFiles{}, false
+	}
+	resolvedYAML, warnings, err := resolveCompose(compose.YAMLContent, dockernet.NetworkName, req.EnvFilePath, compose.ID, composeDomains)
+	var target *domains.TargetError
+	if errors.As(err, &target) {
+		writeError(w, http.StatusBadRequest, target.Error())
+		return deployFiles{}, false
+	} else if err != nil {
 		writeError(w, http.StatusBadRequest, "compose yaml is invalid: "+err.Error())
 		return deployFiles{}, false
 	}
-	return deployFiles{composeYAML: resolvedYAML, envFile: renderEnvFile(variables)}, true
+	return deployFiles{composeYAML: resolvedYAML, envFile: renderEnvFile(variables), warnings: warnings}, true
 }
 
 // writeDeployFiles writes the prepared compose and environment files. On
@@ -481,9 +493,16 @@ func writeFiles(req RunRequest, files deployFiles) (string, error) {
 	return "", nil
 }
 
+// deployResponse is the Compose plus what the deploy has to tell the
+// operator. Only deploy and deploy-fresh answer with it.
+type deployResponse struct {
+	Compose
+	Warnings []string `json:"warnings"`
+}
+
 // completeDeploy records the deploy time and answers with the refreshed
-// Compose.
-func (s *Service) completeDeploy(w http.ResponseWriter, r *http.Request, compose Compose, req RunRequest) {
+// Compose and the deploy's warnings.
+func (s *Service) completeDeploy(w http.ResponseWriter, r *http.Request, compose Compose, req RunRequest, warnings []string) {
 	// The deploy timestamp records success only (deploy-timestamps spec): it
 	// lands after the runner returns without error, and no other action ever
 	// writes it — "has deployed" and "is running" stay two different facts.
@@ -498,7 +517,10 @@ func (s *Service) completeDeploy(w http.ResponseWriter, r *http.Request, compose
 		return
 	}
 
-	writeJSON(w, http.StatusOK, s.withRefreshedStatus(r.Context(), req, compose))
+	if warnings == nil {
+		warnings = []string{}
+	}
+	writeJSON(w, http.StatusOK, deployResponse{Compose: s.withRefreshedStatus(r.Context(), req, compose), Warnings: warnings})
 }
 
 func (s *Service) stop(w http.ResponseWriter, r *http.Request) {
@@ -1133,17 +1155,20 @@ func runRequestFor(dataDir string, compose Compose) RunRequest {
 
 // resolveCompose parses yamlContent and returns it with the shared Traefik
 // network and the generated environment file injected into every service
-// (ADR-0002) — the one place the panel modifies user-authored YAML.
-func resolveCompose(yamlContent, networkName, envFilePath string) (string, error) {
+// (ADR-0002) — the one place the panel modifies user-authored YAML. The
+// Compose's domains become Traefik labels; the warnings say what that
+// overrode. A *domains.TargetError is returned as is.
+func resolveCompose(yamlContent, networkName, envFilePath string, composeID int64, ds []domains.Domain) (string, []string, error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(yamlContent), &doc); err != nil {
-		return "", fmt.Errorf("parse compose yaml: %w", err)
+		return "", nil, fmt.Errorf("parse compose yaml: %w", err)
 	}
 	if doc == nil {
 		doc = map[string]any{}
 	}
 
-	if services, ok := doc["services"].(map[string]any); ok {
+	services, ok := doc["services"].(map[string]any)
+	if ok {
 		for name, raw := range services {
 			service, ok := raw.(map[string]any)
 			if !ok {
@@ -1153,6 +1178,13 @@ func resolveCompose(yamlContent, networkName, envFilePath string) (string, error
 			service["env_file"] = addToEnvFile(service["env_file"], envFilePath)
 			services[name] = service
 		}
+	} else {
+		services = map[string]any{}
+	}
+	// With no services at all, a domain still has to be refused.
+	warnings, err := domains.Inject(services, composeID, ds, networkName)
+	if err != nil {
+		return "", nil, err
 	}
 
 	networks, ok := doc["networks"].(map[string]any)
@@ -1164,9 +1196,9 @@ func resolveCompose(yamlContent, networkName, envFilePath string) (string, error
 
 	resolved, err := yaml.Marshal(doc)
 	if err != nil {
-		return "", fmt.Errorf("marshal resolved compose yaml: %w", err)
+		return "", nil, fmt.Errorf("marshal resolved compose yaml: %w", err)
 	}
-	return string(resolved), nil
+	return string(resolved), warnings, nil
 }
 
 func addToNetworks(existing any, networkName string) any {

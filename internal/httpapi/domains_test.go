@@ -3,6 +3,9 @@ package httpapi_test
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -283,5 +286,137 @@ func TestDomainsRequireKnownCompose(t *testing.T) {
 				t.Errorf("%s %s status = %d, want 404", method, path, response.StatusCode)
 			}
 		}
+	}
+}
+
+func (f domainsFixture) saveYAML(t *testing.T, yaml string) {
+	t.Helper()
+	response, raw := f.send(t, http.MethodPut, "", map[string]any{"yamlContent": yaml})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("save yaml status = %d, body %s", response.StatusCode, raw)
+	}
+}
+
+func (f domainsFixture) deploy(t *testing.T, suffix string, body any) (int, []byte) {
+	t.Helper()
+	response, raw := f.send(t, http.MethodPost, suffix, body)
+	return response.StatusCode, raw
+}
+
+func (f domainsFixture) upCalls() int {
+	n := 0
+	for _, call := range f.server.runner.calls {
+		if call.method == "up" {
+			n++
+		}
+	}
+	return n
+}
+
+func (f domainsFixture) resolvedFile(t *testing.T) string {
+	t.Helper()
+	for _, call := range f.server.runner.calls {
+		if call.method == "up" {
+			raw, err := os.ReadFile(call.request.ComposeFilePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(raw)
+		}
+	}
+	t.Fatal("no up call recorded")
+	return ""
+}
+
+func newDeployDomainsFixture(t *testing.T) domainsFixture {
+	t.Helper()
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	return newDomainsCompose(t, server, "Deploy Domains", "web")
+}
+
+func TestDeployInjectsDomainLabels(t *testing.T) {
+	f := newDeployDomainsFixture(t)
+	domain := f.createDomain(t, "api.example.com", "/")
+
+	status, raw := f.deploy(t, "/deploy", nil)
+	if status != http.StatusOK {
+		t.Fatalf("deploy status = %d, body %s", status, raw)
+	}
+	var body struct {
+		Warnings *[]string `json:"warnings"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Warnings == nil || len(*body.Warnings) != 0 {
+		t.Fatalf("warnings = %v in %s, want []", body.Warnings, raw)
+	}
+	if !strings.Contains(string(raw), `"warnings":[]`) {
+		t.Fatalf("body = %s, want warnings:[]", raw)
+	}
+
+	resolved := f.resolvedFile(t)
+	router := "relist-c" + strconv.FormatInt(f.composeID, 10) + "-d" + strconv.FormatInt(domain.ID, 10)
+	for _, want := range []string{"traefik.http.routers." + router + ".rule=Host(`api.example.com`)", "relist-network"} {
+		if !strings.Contains(resolved, want) {
+			t.Fatalf("resolved compose = %s, want it to contain %q", resolved, want)
+		}
+	}
+}
+
+func TestDeployReturnsWarnings(t *testing.T) {
+	for _, suffix := range []string{"/deploy", "/deploy-fresh"} {
+		t.Run(suffix, func(t *testing.T) {
+			f := newDeployDomainsFixture(t)
+			f.saveYAML(t, "services:\n  web:\n    image: nginx\n    labels:\n      - traefik.enable=false\n")
+			f.createDomain(t, "api.example.com", "/")
+
+			var body any
+			if suffix == "/deploy-fresh" {
+				body = map[string]string{"confirmName": "web"}
+			}
+			status, raw := f.deploy(t, suffix, body)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, body %s", status, raw)
+			}
+			var got struct {
+				Warnings []string `json:"warnings"`
+			}
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "traefik.enable=false was overridden") {
+				t.Fatalf("warnings = %v, want the enable warning", got.Warnings)
+			}
+		})
+	}
+}
+
+func TestDeployRefusedWhenDomainServiceRemoved(t *testing.T) {
+	f := newDeployDomainsFixture(t)
+	f.createDomain(t, "api.example.com", "/")
+	if status, raw := f.deploy(t, "/deploy", nil); status != http.StatusOK {
+		t.Fatalf("first deploy status = %d, body %s", status, raw)
+	}
+	first := f.resolvedFile(t)
+
+	f.saveYAML(t, "services: {db: {image: postgres:16}}")
+	status, raw := f.deploy(t, "/deploy", nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, body %s", status, raw)
+	}
+	want := `domain api.example.com/ points at service "web", which is not in the compose file`
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &refusal); err != nil || refusal.Error != want {
+		t.Fatalf("body = %s, want exactly the refusal copy %q", raw, want)
+	}
+	if n := f.upCalls(); n != 1 {
+		t.Fatalf("up calls = %d, want 1", n)
+	}
+	if after := f.resolvedFile(t); after != first {
+		t.Fatalf("resolved file changed after refused deploy:\n%s\nwas\n%s", after, first)
 	}
 }
