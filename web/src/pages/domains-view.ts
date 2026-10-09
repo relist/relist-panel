@@ -36,8 +36,10 @@ export function domainFormValues(domain?: Domain): DomainFormValues {
     port: domain.port,
     entrypoint: domain.entrypoint,
     https: domain.https,
-    certProvider: domain.certProvider,
-    certResolver: domain.certResolver,
+    // An HTTP domain is stored with provider "none"; default to Let's Encrypt so
+    // switching HTTPS on starts from the spec's default.
+    certProvider: domain.https ? domain.certProvider : 'letsencrypt',
+    certResolver: domain.https ? domain.certResolver : '',
     middlewares: [...domain.middlewares],
     customEntrypoint: domain.entrypoint !== '',
   };

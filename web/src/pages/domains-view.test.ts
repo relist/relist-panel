@@ -51,6 +51,14 @@ describe('domainInput', () => {
 });
 
 describe('domainFormValues', () => {
+  it('defaults an http domain to lets encrypt so switching https on is sensible', () => {
+    const http: Domain = { ...domain, https: false, certProvider: 'none', certResolver: '' };
+    const form = domainFormValues(http);
+    expect(form.https).toBe(false);
+    expect(form.certProvider).toBe('letsencrypt');
+    expect(form.certResolver).toBe('');
+  });
+
   it('gives the defaults for a new domain', () => {
     expect(domainFormValues(undefined)).toEqual({
       host: '',
