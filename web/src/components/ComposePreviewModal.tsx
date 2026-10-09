@@ -79,8 +79,8 @@ export function ComposePreviewModal({
     >
       <Flex gap={12} vertical>
         <Text type="secondary">
-          The file a deploy writes: your YAML with relist-network, the environment file and the Domains tab's Traefik labels
-          added. Variables stay as <Text code>{'${KEY}'}</Text> references; keys are re-sorted and comments dropped.
+          The file a deploy writes: your YAML with the environment file, the Domains tab&apos;s Traefik labels, and
+          relist-network with its .internal aliases for the Services that need it. Variables stay as <Text code>{'${KEY}'}</Text> references; keys are re-sorted and comments dropped.
         </Text>
         {dirty && <Alert showIcon title="Includes your unsaved changes." type="info" />}
         {result?.error && <Alert showIcon title={result.error} type="error" />}

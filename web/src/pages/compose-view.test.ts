@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ComposeVolumes } from '../data/types';
-import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
+import { activeComposeTab, composeDeployIdentity, internalHostnamePattern, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
 
 describe('composeDeployIdentity', () => {
   it('uses the API identity including the configured absolute directory for new Composes', () => {
@@ -170,5 +170,12 @@ describe('freshDeployView', () => {
   it('refuses while the resolution is in flight and when volume management is unavailable', () => {
     expect(freshDeployView(undefined, undefined).refusal).toMatch(/Resolving/);
     expect(freshDeployView(payload([], false), undefined).refusal).toBe('Volume management is unavailable on this host.');
+  });
+});
+
+describe('internalHostnamePattern', () => {
+  it('builds the stable alias from the docker compose project name', () => {
+    expect(internalHostnamePattern('relist-c12')).toBe('<service>.relist-c12.internal');
+    expect(internalHostnamePattern('hello-production-test')).toBe('<service>.hello-production-test.internal');
   });
 });

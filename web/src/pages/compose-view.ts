@@ -15,6 +15,11 @@ export function composeDeployIdentity(
   };
 }
 
+/** The stable Internal hostname pattern (ADR-0014), with `<service>` left for the operator. */
+export function internalHostnamePattern(projectName: string): string {
+  return `<service>.${projectName}.internal`;
+}
+
 /**
  * View decisions for the Compose screen, kept pure so the design's rules — the
  * tab a URL segment resolves to, when the file counts as unsaved, what a Deploy

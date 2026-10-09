@@ -64,7 +64,7 @@ import { ApiError } from '../data/api';
 import { usePanel } from '../data/store';
 import type { ComposeVolumes, OrphanVolume } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
-import { activeComposeTab, composeDeployIdentity, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
+import { activeComposeTab, composeDeployIdentity, internalHostnamePattern, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
 
 const { Text, Paragraph, Title } = Typography;
 
@@ -745,6 +745,16 @@ export function ComposePage() {
                             docker compose project
                           </Text>
                           <CodeValue copyable value={deployIdentity.projectName} />
+                        </div>
+                        <div>
+                          <Text strong style={{ fontSize: 12 }}>
+                            Internal hostname
+                          </Text>
+                          <CodeValue value={internalHostnamePattern(deployIdentity.projectName)} />
+                          <Text style={{ fontSize: 12 }} type="secondary">
+                            How other Composes reach a Service on relist-network: one with a Domain, Traefik labels, or
+                            relist-network in its YAML. Preview lists each Service&apos;s aliases.
+                          </Text>
                         </div>
                       </Flex>
                     </Card>

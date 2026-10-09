@@ -209,8 +209,8 @@ has deployed before and `domainsChangedAt >= lastDeployedAt`. Above the tabs, a 
   `Save & Deploy` while the editor is dirty.
 - **Editor**: `docker-compose.yml` label, `Modified` marker, `Preview`, `Discard`, a full screen button, and a banner
   offering Save/Discard while dirty.
-- **Preview**: a read-only modal with the file a deploy would write for the current draft — relist-network,
-  the environment file and the Domains tab's Traefik labels added; `${KEY}` left as references, never values.
+- **Preview**: a read-only modal with the file a deploy would write for the current draft — the environment
+  file, the Domains tab's Traefik labels, and relist-network with its `.internal` aliases where needed; `${KEY}` left as references, never values.
   It loads once per opening, says when the draft is unsaved, shows the deploy's warnings as `warning` alerts
   and a refusal as an inline `error` alert (not a toast), and copies the whole file from the title. Its
   Monaco model has its own `path`, never the editor's.
@@ -231,7 +231,9 @@ has deployed before and `domainsChangedAt >= lastDeployedAt`. Above the tabs, a 
 - **Status rail**: overall tag + "Checked 3 minutes ago"; per-service rows (name, health dot, state
   tag, image, ports); a warning alert when something is down; `Deploy now` when nothing has ever run.
 - **Deploy identity**: the on-disk path and the `docker compose -p` name, both copyable, with the
-  ADR-0005 note that identity is frozen at creation.
+  ADR-0005 note that identity is frozen at creation; then the stable Internal hostname pattern
+  `<service>.<project name>.internal` (not copyable — it has a placeholder) and one line on which
+  Services get it, pointing at Preview for each Service's exact aliases (ADR-0014).
 - **Environment**: which Environment supplies variables, count, and how to reference them.
 - **Activity**: this Compose's recent actions.
 - **Logs tab** (read on open, not a drawer): service filter, line count, copy; `Follow` is visible but disabled, with a tooltip
