@@ -9,6 +9,7 @@ import (
 
 	"relist-panel/internal/auth"
 	"relist-panel/internal/composes"
+	"relist-panel/internal/domains"
 	"relist-panel/internal/environments"
 	"relist-panel/internal/environmentvariables"
 	"relist-panel/internal/images"
@@ -44,6 +45,7 @@ func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, histo
 	environmentVariablesService := environmentvariables.New(db)
 	environmentVariablesService.RegisterRoutes(mux)
 	composesService.RegisterRoutes(mux)
+	domains.New(db).RegisterRoutes(mux)
 	volumeapi.New(composesService, volumeResolver, volumeRunner).RegisterRoutes(mux)
 	if terminalOptions != nil {
 		terminal.New(composesService, *terminalOptions).RegisterRoutes(mux)

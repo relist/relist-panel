@@ -95,8 +95,11 @@ type Compose struct {
 	// real timestamp on the wire: nil serializes as JSON null, while even a
 	// deploy at the Unix epoch is a non-nil time. Only a successful deploy
 	// ever sets it.
-	LastDeployedAt *time.Time    `json:"lastDeployedAt"`
-	Status         ComposeStatus `json:"status"`
+	LastDeployedAt *time.Time `json:"lastDeployedAt"`
+	// DomainsChangedAt is the last time one of the Compose's domains was
+	// created, updated or deleted; nil when none ever was.
+	DomainsChangedAt *time.Time    `json:"domainsChangedAt"`
+	Status           ComposeStatus `json:"status"`
 }
 
 // DeployIdentity is derived from the same RunRequest lifecycle actions use. It
@@ -948,7 +951,7 @@ func BackfillLegacyIdentities(ctx context.Context, db *sql.DB) error {
 
 func (r *repository) list(ctx context.Context, environmentID int64) ([]Compose, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at, identity_version
+		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at, identity_version, domains_changed_at
 		FROM composes
 		WHERE environment_id = ?
 		ORDER BY id ASC
@@ -989,7 +992,7 @@ func (r *repository) create(ctx context.Context, environmentID int64, projectSlu
 
 func (r *repository) findByID(ctx context.Context, environmentID, id int64) (Compose, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at, identity_version
+		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at, identity_version, domains_changed_at
 		FROM composes
 		WHERE environment_id = ? AND id = ?
 	`, environmentID, id)
@@ -1036,8 +1039,9 @@ func scanComposeValues(scan func(...any) error) (Compose, error) {
 		createdAt  int64
 		updatedAt  int64
 		deployedAt sql.NullInt64
+		changedAt  sql.NullInt64
 	)
-	if err := scan(&compose.ID, &compose.EnvironmentID, &compose.Name, &compose.ProjectSlug, &compose.EnvSlug, &compose.YAMLContent, &createdAt, &updatedAt, &deployedAt, &compose.IdentityVersion); err != nil {
+	if err := scan(&compose.ID, &compose.EnvironmentID, &compose.Name, &compose.ProjectSlug, &compose.EnvSlug, &compose.YAMLContent, &createdAt, &updatedAt, &deployedAt, &compose.IdentityVersion, &changedAt); err != nil {
 		return Compose{}, err
 	}
 	compose.CreatedAt = time.Unix(createdAt, 0).UTC()
@@ -1045,6 +1049,10 @@ func scanComposeValues(scan func(...any) error) (Compose, error) {
 	if deployedAt.Valid {
 		at := time.Unix(deployedAt.Int64, 0).UTC()
 		compose.LastDeployedAt = &at
+	}
+	if changedAt.Valid {
+		at := time.Unix(changedAt.Int64, 0).UTC()
+		compose.DomainsChangedAt = &at
 	}
 	return compose, nil
 }
