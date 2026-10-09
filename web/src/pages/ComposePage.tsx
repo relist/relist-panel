@@ -42,6 +42,7 @@ import { useNavigate, useParams } from 'react-router';
 
 import { paths } from '../app/paths';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
+import { ComposeDomainsTab } from '../components/ComposeDomainsTab';
 import { ComposeTerminalTab } from '../components/ComposeTerminalTab';
 import { ComposeVolumesTab } from '../components/ComposeVolumesTab';
 import { DangerModal } from '../components/DangerModal';
@@ -128,6 +129,8 @@ export function ComposePage() {
   // Action failures stay on this screen as an Alert (GUIDELINES §8) — the
   // control that retries them is right there.
   const [actionError, setActionError] = useState<string>();
+  // The deploy whose warnings were closed, by its lastDeployedAt: a newer deploy shows its own.
+  const [dismissedWarnings, setDismissedWarnings] = useState<string | null>();
   const fail = (reason: unknown) =>
     setActionError(reason instanceof Error ? reason.message : 'Something went wrong');
 
@@ -526,6 +529,23 @@ export function ComposePage() {
         />
       )}
 
+      {compose.warnings && compose.warnings.length > 0 && dismissedWarnings !== compose.lastDeployedAt && (
+        <Alert
+          closable={{ onClose: () => setDismissedWarnings(compose.lastDeployedAt ?? null) }}
+          description={
+            <ul style={{ margin: 0, paddingLeft: 20 }}>
+              {compose.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          }
+          title="The last deploy produced warnings"
+          showIcon
+          style={{ marginBottom: LAYOUT.gutterSmall }}
+          type="warning"
+        />
+      )}
+
       <Tabs
         activeKey={activeTab}
         items={[
@@ -767,6 +787,17 @@ export function ComposePage() {
             ),
             key: 'editor',
             label: 'Editor',
+          },
+          {
+            children: (
+              <ComposeDomainsTab
+                compose={compose}
+                deploying={isPending(`deploy:${compose.id}`)}
+                onDeploy={() => void deploy()}
+              />
+            ),
+            key: 'domains',
+            label: 'Domains',
           },
           {
             children: (

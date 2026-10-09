@@ -545,7 +545,8 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           environmentId: location.environment.id,
           composeId,
         });
-        patchCompose(composeId, () => fresh);
+        // Warnings come only from a deploy response; a status read must not drop them.
+        patchCompose(composeId, (current) => ({ ...fresh, warnings: current.warnings }));
         stampChecked(composeId);
       });
     },

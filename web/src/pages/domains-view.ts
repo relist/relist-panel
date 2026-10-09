@@ -38,7 +38,7 @@ export function domainFormValues(domain?: Domain): DomainFormValues {
     https: domain.https,
     certProvider: domain.certProvider,
     certResolver: domain.certResolver,
-    middlewares: domain.middlewares,
+    middlewares: [...domain.middlewares],
     customEntrypoint: domain.entrypoint !== '',
   };
 }

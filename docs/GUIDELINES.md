@@ -188,7 +188,7 @@ trouble?" without ssh'ing in — and be honest about what the panel can and cann
 ### 4.6 Compose (`…/compose/:composeId`)
 
 The core screen. Tabs in the path so each is linkable and the back button works:
-**Editor** (`…/compose/:composeId`, the default), **Logs** (`…/compose/:composeId/logs`), **Terminal**
+**Editor** (`…/compose/:composeId`, the default), **Domains** (`…/compose/:composeId/domains`), **Logs** (`…/compose/:composeId/logs`), **Terminal**
 (`…/compose/:composeId/terminal`) and **Monitor** (`…/compose/:composeId/monitor`).
 An unknown segment falls back to Editor rather than a not-found page. Layout of the Editor tab:
 editor on the left, status rail on the right, both in normal document
@@ -196,6 +196,13 @@ flow — the page scrolls as one, no nested scrollers. The two columns stretch t
 the editor is exactly as tall as the status rail beside it, with `LAYOUT.editorMinHeight`
 (`clamp(640px, 80vh, 1000px)`) as the floor for when the rail is short. Monaco needs a bounded
 height; it gets one from the rail rather than from a hard-coded number.
+
+**Domains tab**: a table of the Compose's domains (host + path as a link, `service:port`, an HTTPS tag, Edit and
+Delete) with an **Add domain** button in the header and an `EmptyState` when there are none. Add and Edit share one
+modal form. Delete is a `Popconfirm` naming the Address, not a `DangerModal`: nothing on the host changes until the next
+deploy. An `info` `Alert` with a **Deploy** button, "Domain changes apply on the next deploy.", shows when the Compose
+has deployed before and `domainsChangedAt >= lastDeployedAt`. Above the tabs, a deploy's `warnings` show in a closable
+`warning` `Alert` until it is closed or the next deploy replaces it.
 
 - **Header**: name, status tag, `Unsaved changes` tag when dirty; actions graded by weight —
   `⋮` (Restart / Stop / Delete), `Save`, and one primary `Deploy` that becomes
