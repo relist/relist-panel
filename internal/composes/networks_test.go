@@ -164,8 +164,23 @@ func TestReadableAliasSkippedWhenANameHasNoDNSCharacters(t *testing.T) {
 	if got := sharedAliases(t, services["web"]); !reflect.DeepEqual(got, []string{"web.relist-c12.internal"}) {
 		t.Fatalf("aliases = %v, want only the stable one", got)
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "service web: no readable alias") || !strings.Contains(warnings[0], "project name") {
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "no readable relist-network aliases") || !strings.Contains(warnings[0], "project name") {
 		t.Fatalf("warnings = %v", warnings)
+	}
+}
+
+func TestReadableAliasNameProblemWarnsOncePerCompose(t *testing.T) {
+	id := testIdentity
+	id.Environment = "ทดสอบ"
+	yamlContent := "services:\n  web: {image: a, labels: [traefik.enable=true]}\n  api: {image: b, networks: [relist-network]}\n  db: {image: c}\n"
+	services, warnings := resolveServices(t, yamlContent, nil, id)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "environment name") {
+		t.Fatalf("warnings = %v, want exactly one for the compose", warnings)
+	}
+	for _, name := range []string{"web", "api"} {
+		if got := sharedAliases(t, services[name]); len(got) != 1 || !strings.HasSuffix(got[0], ".relist-c12.internal") {
+			t.Fatalf("%s aliases = %v, want only the stable one", name, got)
+		}
 	}
 }
 

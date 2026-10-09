@@ -92,7 +92,11 @@ func joinSharedNetwork(services map[string]any, joins map[string]string, network
 	}
 
 	var warnings []string
+	// A name problem belongs to the Compose, so it warns once, not per Service.
 	readableParts, readableProblem := readableSuffix(id)
+	if readableProblem != "" && len(names) > 0 {
+		warnings = append(warnings, "no readable relist-network aliases: "+readableProblem)
+	}
 	for _, name := range names {
 		service := services[name].(map[string]any)
 		var aliases []string
@@ -108,12 +112,12 @@ func joinSharedNetwork(services map[string]any, joins map[string]string, network
 			} else {
 				aliases = append(aliases, alias)
 			}
-			if readableProblem != "" {
-				warnings = append(warnings, fmt.Sprintf("service %s: no readable alias: %s", name, readableProblem))
-			} else if alias, err := dnsName(append([]string{serviceSlug}, readableParts...)...); err != "" {
-				warnings = append(warnings, fmt.Sprintf("service %s: no readable alias: %s", name, err))
-			} else {
-				aliases = append(aliases, alias)
+			if readableProblem == "" {
+				if alias, err := dnsName(append([]string{serviceSlug}, readableParts...)...); err != "" {
+					warnings = append(warnings, fmt.Sprintf("service %s: no readable alias: %s", name, err))
+				} else {
+					aliases = append(aliases, alias)
+				}
 			}
 		}
 
