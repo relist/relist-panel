@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+	"gopkg.in/yaml.v3"
 
 	"relist-panel/internal/composes"
 	"relist-panel/internal/database"
@@ -1163,11 +1164,26 @@ func TestAuthenticatedAdminCanDeployCompose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read resolved compose file: %v", err)
 	}
-	if !strings.Contains(string(resolvedYAML), "relist-network") {
-		t.Fatalf("resolved compose yaml = %s, want it to contain the shared network", resolvedYAML)
+	// web has no Domain, no Traefik labels and no relist-network of its own,
+	// so it keeps only its custom network (ADR-0014); the shared network is
+	// still declared for the Services that do join.
+	var resolved struct {
+		Services map[string]struct {
+			Networks []string `yaml:"networks"`
+		} `yaml:"services"`
+		Networks map[string]map[string]any `yaml:"networks"`
 	}
-	if !strings.Contains(string(resolvedYAML), "custom") {
-		t.Fatalf("resolved compose yaml = %s, want the user's own network preserved", resolvedYAML)
+	if err := yaml.Unmarshal(resolvedYAML, &resolved); err != nil {
+		t.Fatalf("parse resolved compose yaml: %v\n%s", err, resolvedYAML)
+	}
+	if got := resolved.Services["web"].Networks; !reflect.DeepEqual(got, []string{"custom"}) {
+		t.Fatalf("web networks = %v, want only the user's own custom network", got)
+	}
+	if strings.Contains(string(resolvedYAML), ".internal") {
+		t.Fatalf("resolved compose yaml = %s, want no aliases for a service off relist-network", resolvedYAML)
+	}
+	if resolved.Networks["relist-network"]["external"] != true {
+		t.Fatalf("top-level networks = %v, want relist-network declared external", resolved.Networks)
 	}
 
 	envFile, err := os.ReadFile(upCall.request.EnvFilePath)
