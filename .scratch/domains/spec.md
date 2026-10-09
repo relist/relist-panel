@@ -119,8 +119,8 @@ Traefik `command` adds:
 ```
 
 - Port `"${TRAEFIK_HTTPS_PORT:-443}:443"`.
-- Volume `${RELIST_DATA_DIR:-/var/lib/relist-panel}/traefik:/letsencrypt`. The certificates live in
-  the data dir, so the same backup covers them. Traefik creates `acme.json` with mode 600 itself.
+- Volume `${RELIST_DATA_DIR:-/var/lib/relist-panel}/.traefik:/letsencrypt`. The certificates live in
+  the data dir, so the same backup covers them. Traefik creates `acme.json` with mode 600 itself. The directory is dotted, like `.composes`, so a legacy Project slugged `traefik` cannot share it.
 - `websecure` gets the same one-hour read timeout as `web`, so an image upload through the panel's
   domain still works over HTTPS.
 - Traefik answers `/.well-known/acme-challenge/` on `web` at top priority, ahead of the panel's

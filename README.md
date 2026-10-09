@@ -78,7 +78,7 @@ Traefik ships with two entrypoints, `web` (port 80) and `websecure` (port 443),
 and a Let's Encrypt certificate resolver named `letsencrypt` that answers the
 HTTP-01 challenge on `web`. HTTPS is always on: the panel's own router uses
 `websecure` with `letsencrypt`, and plain HTTP for the panel redirects to it.
-Certificates are stored in `RELIST_DATA_DIR/traefik/acme.json`, so the same
+Certificates are stored in `RELIST_DATA_DIR/.traefik/acme.json`, so the same
 backup covers them. Other settings stay minimal (`--providers.docker`,
 `exposedbydefault=false`). To route a Compose's Services, add a **Domain** on
 its Domains tab; the panel injects the Traefik labels at the next deploy, and
