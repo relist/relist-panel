@@ -444,3 +444,39 @@ only keeps domains away from those Services. A fix for the injection itself is a
     `RELIST_ACME_EMAIL`, open port 443, `docker compose up -d`.
   - Update the "Volume files" TLS note.
 - **docs/GUIDELINES.md:** a §4 entry for the Domains tab.
+
+## Manual verification
+
+Run on 2026-10-09 against the host's real Docker daemon (Docker 29.8.0, Compose v5.5.1), branch
+`feat-domains`. There is no browser, and the host's own Relist install (panel on :8888, Traefik on
+:80, plus another Compose) was running and had to stay untouched. So the panel was built (`task
+build`) and run as a bare process (`RELIST_DATA_DIR` in a temp dir, `RELIST_PORT=18888`), driven over
+HTTP with `curl` and a session cookie. A standalone `traefik:v3.7` container
+(`relist-domtest-traefik`) on `relist-network` published 18080→80 and 18443→443, with the same flags
+as the install file's `traefik` service plus the Let's Encrypt **staging** CA, and a provider
+constraint (`LabelRegex(com.docker.compose.project, ^relist-c[0-9]+$)`) so it ignored the host's
+other containers. The Compose ran `traefik/whoami` as service `web`.
+
+| # | Step | Observed | Result |
+|---|------|----------|--------|
+| a | `GET .../domains` on the new Compose | `{"domains":[],"services":["web"]}` | PASS |
+| b | HTTP domain `whoami.localhost`, path `/api`, internal path `/v1`, strip on; deploy; `curl -H 'Host: whoami.localhost' http://localhost:18080/api/x` | Deploy `200`, `warnings: []`. whoami printed `GET /v1/x` and `X-Forwarded-Prefix: /api`. | PASS |
+| c | HTTPS domain `whoami-tls.localhost` (`letsencrypt`, default entrypoint); redeploy | `curl -I` on HTTP: `308 Permanent Redirect`, `Location: https://whoami-tls.localhost/`. `curl -sk --resolve` on 18443 returned whoami output with Traefik's default cert (`CN=TRAEFIK DEFAULT CERT`). Traefik logged `Unable to obtain ACME certificate ... rejectedIdentifier ... Domain name does not end with a valid public suffix (TLD)`, as expected for `.localhost`. The earlier `/api/x` route still worked. | PASS |
+| d | YAML with `labels: [traefik.enable=false]` on `web`; deploy | `200`, `warnings: ["service \"web\": traefik.enable=false was overridden to true because a domain points at it"]` | PASS |
+| e | YAML with `web` renamed to `web2`; deploy | `400 {"error":"domain whoami.localhost/api points at service \"web\", which is not in the compose file"}`. The `relist-c1-web-1` container ID was unchanged, so nothing was redeployed. Restoring the YAML and redeploying gave `200`. | PASS |
+| f | `docker compose -f docker-compose.yml config` | Router `panel` (entrypoints `websecure`, `tls.certresolver=letsencrypt`, service `panel`); router `panel-http` (entrypoints `web`, middlewares `panel-redirect`, service `panel`); middleware `panel-redirect` (`redirectscheme.scheme=https`, `permanent=true`). Live panel redirect: not run, the host's install holds the default ports. | PASS (labels); live redirect NOT RUN |
+| g1 | Public host, Let's Encrypt issuance (staging, then production) | No public host available. | NOT RUN |
+| g2 | Upgrade path on an existing install with hand-written labels | Would modify the host's running install. | NOT RUN |
+| h | Host's own stack during the run | `http://localhost:8888/healthz` and `/` both `200`; `relist-panel-panel-1`, `relist-panel-traefik-1` and `hello-production-test-whoami-1` stayed Up (about 35 minutes, never restarted). | PASS |
+
+Not verified: a real Let's Encrypt certificate (neither staging nor production issued one, since
+`.localhost` cannot be certified and there was no public host); the live `panel.localhost` HTTP→HTTPS
+redirect with the self-signed cert; the README upgrade steps on an existing install; the Domains tab
+in a browser (banner, HTTPS tag, form behaviour).
+
+Notes: a first attempt at row c set `entrypoint` to `websecure` in the request, which the API treats
+as a custom entrypoint (spec: no `N-http` redirect router), so plain HTTP got 404; leaving
+`entrypoint` empty gave the default and the redirect. That matches the spec, not a bug. The Compose was
+deleted through the API (204), which removed its containers; the test Traefik container, the panel
+process and the temp directory were removed. No images were pulled or removed, and `relist-network`
+was left alone.
