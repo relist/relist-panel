@@ -103,10 +103,10 @@ func Validate(in Input, services []string) (Input, *FieldError) {
 		in.InternalPath = "/"
 	}
 	if !validPath(in.Path) {
-		return in, &FieldError{"path", "path must start with / and contain no backtick, $, space, ? or #"}
+		return in, &FieldError{"path", "path must start with / and contain no backtick, $, space, control character, ? or #"}
 	}
 	if !validPath(in.InternalPath) {
-		return in, &FieldError{"internalPath", "internal path must start with / and contain no backtick, $, space, ? or #"}
+		return in, &FieldError{"internalPath", "internal path must start with / and contain no backtick, $, space, control character, ? or #"}
 	}
 	if !contains(services, in.Service) {
 		return in, &FieldError{"service", fmt.Sprintf("service %q is not a service of this compose that can be routed to", in.Service)}
@@ -162,7 +162,15 @@ func validHost(host string) bool {
 }
 
 func validPath(path string) bool {
-	return strings.HasPrefix(path, "/") && len(path) <= 255 && !strings.ContainsAny(path, "`$ ?#")
+	if !strings.HasPrefix(path, "/") || len(path) > 255 || strings.ContainsAny(path, "`$ ?#") {
+		return false
+	}
+	for i := 0; i < len(path); i++ {
+		if path[i] < 0x20 || path[i] == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func contains(list []string, value string) bool {

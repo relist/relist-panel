@@ -184,24 +184,60 @@ func TestDomainsChangedAtMovesOnEveryChange(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
 	f := newDomainsCompose(t, server, "shop", "web")
+	other := newDomainsCompose(t, server, "blog", "site")
+
+	// backdate sets the stamp to a known past second, so any later write that
+	// stamps the Compose is visibly different.
+	const past = "1970-01-01T00:00:01Z"
+	backdate := func() {
+		t.Helper()
+		if _, err := server.db.Exec("UPDATE composes SET domains_changed_at = 1 WHERE id = ?", f.composeID); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.domainsChangedAt(t); got == nil || *got != past {
+			t.Fatalf("backdated domainsChangedAt = %v, want %s", got, past)
+		}
+	}
 
 	if got := f.domainsChangedAt(t); got != nil {
 		t.Fatalf("initial domainsChangedAt = %v, want null", *got)
 	}
+
+	// A rejected create (409) must not stamp: the stamp shares the domain write's transaction.
+	other.createDomain(t, "taken.example.com", "/")
+	if response, _ := f.send(t, http.MethodPost, "/domains", domainBody("taken.example.com", "/")); response.StatusCode != http.StatusConflict {
+		t.Fatalf("conflicting create status = %d, want 409", response.StatusCode)
+	}
+	if got := f.domainsChangedAt(t); got != nil {
+		t.Errorf("domainsChangedAt after rejected create = %v, want null", *got)
+	}
+
 	created := f.createDomain(t, "api.example.com", "/")
-	afterCreate := f.domainsChangedAt(t)
-	if afterCreate == nil {
+	if got := f.domainsChangedAt(t); got == nil {
 		t.Fatal("domainsChangedAt is null after create")
 	}
-	f.send(t, http.MethodPut, "/domains/"+idString(created.ID), domainBody("api.example.com", "/x"))
-	afterUpdate := f.domainsChangedAt(t)
-	if afterUpdate == nil || *afterUpdate < *afterCreate {
-		t.Errorf("after update = %v, want >= %v", afterUpdate, *afterCreate)
+
+	backdate()
+	if response, raw := f.send(t, http.MethodPut, "/domains/"+idString(created.ID), domainBody("api.example.com", "/x")); response.StatusCode != http.StatusOK {
+		t.Fatalf("update status = %d, body %s", response.StatusCode, raw)
 	}
-	f.send(t, http.MethodDelete, "/domains/"+idString(created.ID), nil)
-	afterDelete := f.domainsChangedAt(t)
-	if afterDelete == nil || *afterDelete < *afterUpdate {
-		t.Errorf("after delete = %v, want >= %v", afterDelete, *afterUpdate)
+	if got := f.domainsChangedAt(t); got == nil || *got == past {
+		t.Errorf("domainsChangedAt after update = %v, want a fresh stamp", got)
+	}
+
+	backdate()
+	if response, _ := f.send(t, http.MethodPut, "/domains/"+idString(created.ID), domainBody("taken.example.com", "/")); response.StatusCode != http.StatusConflict {
+		t.Fatalf("conflicting update status = %d, want 409", response.StatusCode)
+	}
+	if got := f.domainsChangedAt(t); got == nil || *got != past {
+		t.Errorf("domainsChangedAt after rejected update = %v, want it left at %s", got, past)
+	}
+
+	if response, _ := f.send(t, http.MethodDelete, "/domains/"+idString(created.ID), nil); response.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d", response.StatusCode)
+	}
+	if got := f.domainsChangedAt(t); got == nil || *got == past {
+		t.Errorf("domainsChangedAt after delete = %v, want a fresh stamp", got)
 	}
 }
 
