@@ -122,6 +122,30 @@ Traefik's log says why. To upgrade:
 
 Composes with hand-written Traefik labels keep routing as before.
 
+### Networks and internal hostnames
+
+Only Services that need Traefik join `relist-network`: a Service with a Domain,
+with hand-written `traefik.*` labels, or with `relist-network` listed in its own
+`networks:`. Every other Service stays on its Compose's private `default`
+network, so two Composes can both have a `db` without reaching each other's.
+
+Each Service on `relist-network` also answers to two names from other Composes:
+
+- `<service>.<docker compose project>.internal`, e.g. `web.relist-c12.internal`,
+  which never changes — use this one in config;
+- `<service>.<compose>.<environment>.<project>.internal`, e.g.
+  `web.api.production.shop.internal`, built from the current names, so a rename
+  changes it on the next deploy.
+
+The Compose page's Preview shows each Service's exact aliases. Call Services in
+other Composes by alias, never by bare name: once two Composes both put a `db`
+on `relist-network`, a lookup of `db` can land on the other one.
+
+**Upgrading from an earlier version:** on its next deploy, a Service with no
+Domain, no Traefik labels and no `relist-network` in its YAML leaves the shared
+network. If another Compose calls it, add `relist-network` to that Service's
+`networks:` and switch the caller to its alias.
+
 ## Volume files
 
 Each Compose page has a **Volumes** tab listing the Volumes that Compose

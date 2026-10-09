@@ -17,12 +17,16 @@ One deployable Docker Compose stack (a `docker-compose.yml` edited via Monaco) b
 _Avoid_: Stack, App. Never "Service" — see **Service**: that word means one service inside the file, never the whole deployable unit.
 
 **Service**:
-One service defined inside a Compose file — the unit the panel starts, stops and monitors. A Service belongs to its Compose and is not addressable outside it.
+One service defined inside a Compose file — the unit the panel starts, stops and monitors. A Service belongs to its Compose; other Composes reach it only by its **Internal hostname**, and only when it is on `relist-network`.
 _Avoid_: Container (a Service is the definition; a Container is one running instance of it), Process
 
 **Domain**:
 A host and path that Traefik routes to one Service's port in a Compose, managed on the Compose's Domains tab and applied on deploy.
 _Avoid_: Route, Hostname (as the entity name)
+
+**Internal hostname**:
+A `.internal` alias a Service answers to on `relist-network`, injected on deploy (ADR-0014): the stable `<service>.<docker compose project>.internal` and the readable `<service>.<compose>.<environment>.<project>.internal`. Only Services with a Domain, Traefik labels or an explicit `relist-network` get them.
+_Avoid_: Service name (the bare name is ambiguous across Composes), DNS name
 
 **Container**:
 One running instance of a Service, created by a deploy. Its identity is not stable: every deploy mints a new one, so anything that outlives a single deploy — metric history, for one — is keyed by Service, never by Container.

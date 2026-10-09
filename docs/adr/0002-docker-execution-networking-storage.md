@@ -8,3 +8,5 @@ The panel needs to drive Docker Compose on the host it runs on, and get Traefik 
 - Every Compose deploys under a deterministic Compose project name, `<project-slug>-<environment-slug>-<compose-slug>`, passed via `docker compose -p`, so multiple Composes never collide on container/network names.
 
 **Identity/storage revision:** ADR-0011 replaces the name-derived layout for new Composes with `relist-c<ID>` and `<data dir>/.composes/<ID>/`. Existing deployments retain the layout above.
+
+**Network revision:** ADR-0014 narrows "every service" to the Services that need the shared network (a Domain, Traefik labels, or an explicit opt-in), and gives each of them unique `.internal` aliases.
