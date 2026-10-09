@@ -138,6 +138,39 @@ export type Compose = {
    * panel recorded stamps also read `null`.
    */
   lastDeployedAt?: string | null;
+  /** When a domain of this Compose last changed, or `null` when none ever has. Set by the API on every domain write. */
+  domainsChangedAt?: string | null;
+  /** Deploy-time notes from the API (overwritten Traefik labels, router hints); present on deploy responses only. */
+  warnings?: string[];
+};
+
+export type CertProvider = 'none' | 'letsencrypt' | 'custom';
+
+/** A Domain's writable fields, as the domains API takes them. */
+export type DomainInput = {
+  host: string;
+  path: string;
+  internalPath: string;
+  stripPath: boolean;
+  service: string;
+  port: number;
+  entrypoint: string;
+  https: boolean;
+  certProvider: CertProvider;
+  certResolver: string;
+  middlewares: string[];
+};
+
+export type Domain = DomainInput & {
+  id: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** `GET …/domains`: the Compose's domains and the Services a domain can point at. */
+export type ComposeDomains = {
+  domains: Domain[];
+  services: string[];
 };
 
 /** Derived lifecycle state of a Compose. Single source of truth for status colour and copy. */

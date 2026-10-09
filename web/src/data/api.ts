@@ -8,7 +8,10 @@
 
 import type {
   Compose,
+  ComposeDomains,
   ComposeVolumes,
+  Domain,
+  DomainInput,
   Environment,
   EnvironmentVariable,
   HostImage,
@@ -100,25 +103,33 @@ type ErrorResponse = {
  */
 export class ApiError extends Error {
   readonly status: number;
+  /** The request field the API refused, when its 400 names one (e.g. `host`). */
+  readonly field?: string;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, field?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.field = field;
   }
 }
 
 /** The API's `error` message from a response body, or a status-based one when the body carries none. */
 function errorMessage(status: number, bodyText: string): string {
+  return errorBody(status, bodyText).message;
+}
+
+/** The message and, when the body names one, the refused field. */
+function errorBody(status: number, bodyText: string): { message: string; field?: string } {
   try {
-    const payload = JSON.parse(bodyText) as ErrorResponse | null;
+    const payload = JSON.parse(bodyText) as (ErrorResponse & { field?: string }) | null;
     if (payload?.error) {
-      return payload.error;
+      return { message: payload.error, field: payload.field || undefined };
     }
   } catch {
     // Fall through to a status-based message when the response is not JSON.
   }
-  return `Request failed (${status})`;
+  return { message: `Request failed (${status})` };
 }
 
 async function responseError(response: Response): Promise<string> {
@@ -128,7 +139,8 @@ async function responseError(response: Response): Promise<string> {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { credentials: 'same-origin', ...init });
   if (!response.ok) {
-    throw new ApiError(response.status, await responseError(response));
+    const { message, field } = errorBody(response.status, await response.text().catch(() => ''));
+    throw new ApiError(response.status, message, field);
   }
   // Deletes (and logout) answer 204 with no body to parse.
   if (response.status === 204) {
@@ -248,6 +260,16 @@ export const api = {
   restartCompose: (location: ComposePath) => request<Compose>(`${composePath(location)}/restart`, { method: 'POST' }),
   logs: (location: ComposePath) => request<LogsPayload>(`${composePath(location)}/logs`),
 
+  /** The Compose's domains, and the saved YAML's Services a domain can point at. */
+  listDomains: (location: ComposePath) => request<ComposeDomains>(domainsPath(location)),
+  createDomain: (location: ComposePath, input: DomainInput) =>
+    request<Domain>(domainsPath(location), jsonInit('POST', input)),
+  updateDomain: (location: ComposePath, domainId: number, input: DomainInput) =>
+    request<Domain>(`${domainsPath(location)}/${domainId}`, jsonInit('PUT', input)),
+  /** Success is 204. */
+  deleteDomain: (location: ComposePath, domainId: number) =>
+    request<void>(`${domainsPath(location)}/${domainId}`, { method: 'DELETE' }),
+
   /**
    * The Terminal tab's Service/Container listing, with a bash/sh probe per
    * running Container. `available: false` carries the reason the feature
@@ -362,6 +384,10 @@ function composesPath(projectId: number, environmentId: number): string {
 
 function composePath(location: ComposePath): string {
   return `${composesPath(location.projectId, location.environmentId)}/${location.composeId}`;
+}
+
+function domainsPath(location: ComposePath): string {
+  return `${composePath(location)}/domains`;
 }
 
 /**

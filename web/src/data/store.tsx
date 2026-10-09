@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { Credentials, LoginResult, ProjectInput } from './api';
-import type { Compose, ComposeService, ComposeVolumes, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
+import type { Compose, ComposeDomains, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
@@ -72,6 +72,12 @@ type PanelValue = {
   /** The Compose's orphan Volumes: Docker volumes under its project that the file no longer declares. */
   loadOrphanVolumes: (composeId: number) => Promise<OrphanVolume[]>;
   deleteOrphanVolume: (composeId: number, name: string) => Promise<void>;
+  /** The Compose's domains and the Services a domain can name. */
+  loadDomains: (composeId: number) => Promise<ComposeDomains>;
+  /** Each domain mutation refreshes the Compose afterwards, so `domainsChangedAt` reaches the page. */
+  createDomain: (composeId: number, input: DomainInput) => Promise<Domain>;
+  updateDomain: (composeId: number, domainId: number, input: DomainInput) => Promise<Domain>;
+  deleteDomain: (composeId: number, domainId: number) => Promise<void>;
   /** The Compose's resolved Volumes and pre-flight statuses, from the Compose CLI. */
   loadVolumes: (composeId: number) => Promise<ComposeVolumes>;
   /** One directory inside a resolved Volume, for the Explorer's current path. */
@@ -659,6 +665,52 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [track],
   );
 
+  // Domains are stored on the API, not in the tree: the Domains tab reads them
+  // fresh. A write refreshes the Compose, which carries the `domainsChangedAt`
+  // stamp the redeploy banner reads.
+  const domainLocation = useCallback((composeId: number) => {
+    const location = findComposeLocation(projectsRef.current, composeId);
+    if (!location) {
+      throw new Error('Compose not found');
+    }
+    return { projectId: location.project.id, environmentId: location.environment.id, composeId };
+  }, []);
+
+  const loadDomains = useCallback(
+    (composeId: number) =>
+      track(`domains:${composeId}`, () => api.listDomains(domainLocation(composeId))),
+    [domainLocation, track],
+  );
+
+  const createDomain = useCallback(
+    (composeId: number, input: DomainInput) =>
+      track(`domain-save:${composeId}`, async () => {
+        const created = await api.createDomain(domainLocation(composeId), input);
+        await refreshStatus(composeId);
+        return created;
+      }),
+    [domainLocation, refreshStatus, track],
+  );
+
+  const updateDomain = useCallback(
+    (composeId: number, domainId: number, input: DomainInput) =>
+      track(`domain-save:${composeId}`, async () => {
+        const updated = await api.updateDomain(domainLocation(composeId), domainId, input);
+        await refreshStatus(composeId);
+        return updated;
+      }),
+    [domainLocation, refreshStatus, track],
+  );
+
+  const deleteDomain = useCallback(
+    (composeId: number, domainId: number) =>
+      track(`domain-delete:${composeId}:${domainId}`, async () => {
+        await api.deleteDomain(domainLocation(composeId), domainId);
+        await refreshStatus(composeId);
+      }),
+    [domainLocation, refreshStatus, track],
+  );
+
   const loadVariables = useCallback(
     async (environmentId: number) => {
       await track(`variables:${environmentId}`, async () => {
@@ -830,6 +882,10 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteVariable,
       deleteOrphanVolume,
       deleteVolumeEntry,
+      createDomain,
+      deleteDomain,
+      loadDomains,
+      updateDomain,
       deployCompose,
       deployComposeFresh,
       isPending,
@@ -873,6 +929,10 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteVariable,
       deleteOrphanVolume,
       deleteVolumeEntry,
+      createDomain,
+      deleteDomain,
+      loadDomains,
+      updateDomain,
       deployCompose,
       deployComposeFresh,
       isPending,

@@ -34,6 +34,10 @@ describe('activeComposeTab', () => {
     expect(activeComposeTab('terminal')).toBe('terminal');
   });
 
+  it('recognises the domains tab', () => {
+    expect(activeComposeTab('domains')).toBe('domains');
+  });
+
   it('falls back to Editor for anything else, including an absent segment', () => {
     expect(activeComposeTab('nope')).toBe('editor');
     expect(activeComposeTab(undefined)).toBe('editor');

@@ -182,6 +182,33 @@ describe('login', () => {
   });
 });
 
+describe('domain errors', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('carries the invalid field from a 400 body onto the ApiError', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ error: 'x', field: 'host' }), { status: 400 })),
+    );
+
+    await expect(
+      api.createDomain(location, {
+        host: 'bad_host',
+        path: '/',
+        internalPath: '/',
+        stripPath: false,
+        service: 'web',
+        port: 3000,
+        entrypoint: '',
+        https: false,
+        certProvider: 'none',
+        certResolver: '',
+        middlewares: [],
+      }),
+    ).rejects.toMatchObject({ message: 'x', status: 400, field: 'host' });
+  });
+});
+
 describe('fresh deploy and orphan volumes', () => {
   afterEach(() => vi.unstubAllGlobals());
 
