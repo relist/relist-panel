@@ -11,7 +11,7 @@ import (
 // Project mutation gates cover lifecycle actions, parent teardown and child
 // creation together. Different Projects remain independent. Volume reads also
 // hold the gate: deleting their parent must not remove a mounted source halfway
-// through an operation. Metadata reads need no gate.
+// through an operation. Metadata reads and Compose previews need no gate.
 type projectGate struct {
 	token chan struct{}
 	refs  int
@@ -46,6 +46,11 @@ func coordinatedProject(r *http.Request) int64 {
 		if len(parts) < 8 || parts[7] != "volumes" {
 			return 0
 		}
+	}
+	// A Compose preview only reads the database, so it never waits behind a
+	// deploy (compose-preview spec).
+	if r.Method == http.MethodPost && len(parts) == 8 && parts[5] == "composes" && parts[7] == "preview" {
+		return 0
 	}
 	id, _ := strconv.ParseInt(parts[2], 10, 64)
 	if id < 1 {

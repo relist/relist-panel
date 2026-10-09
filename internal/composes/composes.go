@@ -140,6 +140,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.update)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/deploy", s.deploy)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/deploy-fresh", s.deployFresh)
+	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/preview", s.preview)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/stop", s.stop)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/restart", s.restart)
 	mux.HandleFunc("DELETE /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.delete)
@@ -451,21 +452,99 @@ func (s *Service) prepareDeployFiles(w http.ResponseWriter, r *http.Request, com
 		writeError(w, http.StatusInternalServerError, "could not load environment variables")
 		return deployFiles{}, false
 	}
-	composeDomains, err := s.domains.ListForCompose(r.Context(), compose.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load domains")
-		return deployFiles{}, false
-	}
-	resolvedYAML, warnings, err := resolveCompose(compose.YAMLContent, dockernet.NetworkName, req.EnvFilePath, compose.ID, composeDomains)
-	var target *domains.TargetError
-	if errors.As(err, &target) {
-		writeError(w, http.StatusBadRequest, target.Error())
-		return deployFiles{}, false
-	} else if err != nil {
-		writeError(w, http.StatusBadRequest, "compose yaml is invalid: "+err.Error())
+	resolvedYAML, warnings, ok := s.resolveForDeploy(w, r, compose.ID, compose.YAMLContent, req.EnvFilePath)
+	if !ok {
 		return deployFiles{}, false
 	}
 	return deployFiles{composeYAML: resolvedYAML, envFile: renderEnvFile(variables), warnings: warnings}, true
+}
+
+// resolveForDeploy loads the Compose's domains and resolves yamlContent the
+// way a deploy writes it. It reads no environment variables, so preview can
+// share it without exposing their values. On false it has already written the
+// error response.
+func (s *Service) resolveForDeploy(w http.ResponseWriter, r *http.Request, composeID int64, yamlContent, envFilePath string) (string, []string, bool) {
+	composeDomains, err := s.domains.ListForCompose(r.Context(), composeID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load domains")
+		return "", nil, false
+	}
+	resolvedYAML, warnings, err := resolveCompose(yamlContent, dockernet.NetworkName, envFilePath, composeID, composeDomains)
+	var target *domains.TargetError
+	if errors.As(err, &target) {
+		writeError(w, http.StatusBadRequest, target.Error())
+		return "", nil, false
+	} else if err != nil {
+		writeError(w, http.StatusBadRequest, "compose yaml is invalid: "+err.Error())
+		return "", nil, false
+	}
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return resolvedYAML, warnings, true
+}
+
+// previewResponse is the file a deploy would write and the warnings it
+// would return.
+type previewResponse struct {
+	YAML     string   `json:"yaml"`
+	Warnings []string `json:"warnings"`
+}
+
+// preview resolves a draft of the Compose's YAML exactly as a deploy would,
+// without saving it, writing files or calling Docker (compose-preview spec).
+// The deploy-identity check is skipped: it is about the project name, not
+// the file.
+func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "composes are temporarily unavailable")
+		return
+	}
+
+	projectID, environmentID, err := routeIDs(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id, err := composeID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
+		return
+	}
+	if err := s.requireEnvironment(r.Context(), projectID, environmentID); err != nil {
+		writeParentError(w, err)
+		return
+	}
+
+	var input composeUpdateInput
+	if err := decodeInput(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if input.YAMLContent == nil {
+		writeError(w, http.StatusBadRequest, "yamlContent is required")
+		return
+	}
+
+	compose, err := s.repository.findByID(r.Context(), environmentID, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "compose not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return
+	}
+	if strings.TrimSpace(*input.YAMLContent) == "" {
+		writeError(w, http.StatusBadRequest, "compose has no YAML content to deploy")
+		return
+	}
+
+	req := runRequestFor(s.dataDir, compose)
+	resolvedYAML, warnings, ok := s.resolveForDeploy(w, r, compose.ID, *input.YAMLContent, req.EnvFilePath)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, previewResponse{YAML: resolvedYAML, Warnings: warnings})
 }
 
 // writeDeployFiles writes the prepared compose and environment files. On
