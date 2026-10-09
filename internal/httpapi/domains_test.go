@@ -477,10 +477,18 @@ func TestDeployNamesLegacyComposeRoutersFromDatabaseIDs(t *testing.T) {
 	if len(server.runner.calls) == 0 {
 		t.Fatal("deploy reached no runner call")
 	}
+	ups := 0
 	for _, call := range server.runner.calls {
-		if call.method == "up" && call.request.ProjectName != "legacy-domains-production-web" {
+		if call.method != "up" {
+			continue
+		}
+		ups++
+		if call.request.ProjectName != "legacy-domains-production-web" {
 			t.Fatalf("deploy project name = %q, want the legacy one", call.request.ProjectName)
 		}
+	}
+	if ups == 0 {
+		t.Fatal("deploy recorded no up call")
 	}
 	resolved := f.resolvedFile(t)
 	router := "relist-c" + strconv.FormatInt(composeID, 10) + "-d" + strconv.FormatInt(domain.ID, 10)
