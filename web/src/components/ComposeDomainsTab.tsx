@@ -31,7 +31,7 @@ export function ComposeDomainsTab({
   onDeploy: () => void;
 }) {
   const { createDomain, deleteDomain, loadDomains, updateDomain } = usePanel();
-  const [data, setData] = useState<{ composeId: number; payload?: ComposeDomains; error?: string }>();
+  const [data, setData] = useState<{ composeId: number; payload?: ComposeDomains; error?: string; refreshing?: boolean }>();
   const [modal, setModal] = useState<{ domain?: Domain }>();
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiError>();
@@ -41,7 +41,13 @@ export function ComposeDomainsTab({
 
   const fetchDomains = useCallback(async () => {
     const mine = ++request.current;
-    setData({ composeId });
+    // The previous payload stays valid for the same Compose: keep it on screen
+    // while refetching. Another Compose starts from the skeleton.
+    setData((previous) =>
+      previous?.composeId === composeId && previous.payload
+        ? { composeId, payload: previous.payload, refreshing: true }
+        : { composeId },
+    );
     try {
       const payload = await loadDomains(composeId);
       if (request.current === mine) {
@@ -49,7 +55,11 @@ export function ComposeDomainsTab({
       }
     } catch (reason: unknown) {
       if (request.current === mine) {
-        setData({ composeId, error: reason instanceof Error ? reason.message : 'Could not load this Compose’s domains' });
+        const error = reason instanceof Error ? reason.message : 'Could not load this Compose’s domains';
+        // A failed refetch keeps the last good table; the error shows above it.
+        setData((previous) =>
+          previous?.composeId === composeId && previous.payload ? { composeId, error, payload: previous.payload } : { composeId, error },
+        );
       }
     }
   }, [composeId, loadDomains]);
@@ -134,6 +144,20 @@ export function ComposeDomainsTab({
           type="info"
         />
       )}
+      {current.error && (
+        <Alert
+          action={
+            <Button onClick={() => void fetchDomains()} size="small">
+              Retry
+            </Button>
+          }
+          description={current.error}
+          title="Could not refresh the domains"
+          showIcon
+          style={{ marginBottom: LAYOUT.gutterSmall }}
+          type="error"
+        />
+      )}
       {deleteError && (
         <Alert
           closable={{ afterClose: () => setDeleteError(undefined) }}
@@ -196,6 +220,7 @@ export function ComposeDomainsTab({
               },
             ]}
             dataSource={payload.domains}
+            loading={current.refreshing}
             pagination={false}
             rowKey="id"
             scroll={{ x: 'max-content' }}
