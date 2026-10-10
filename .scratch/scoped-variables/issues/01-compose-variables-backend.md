@@ -20,7 +20,7 @@ in a pure function that ticket 03 extends with sets and the effective-variables 
 
 **Blocked by: —**
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Migration applies on a database at version 13 and on an empty one; `database_test.go` asserts 14
 - [ ] CRUD round-trips through a real migrated SQLite; duplicate key in one Compose → 409; invalid key → 400; Compose not in the route's Environment → 404

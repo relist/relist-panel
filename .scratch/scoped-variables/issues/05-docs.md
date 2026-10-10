@@ -15,7 +15,7 @@ conventions.
 
 **Blocked by: 03**
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Terms match the code's identifiers as shipped in 01–03 (fix the docs, not the code, if they diverged)
 - [ ] ADR-0002 links to ADR-0015

@@ -17,7 +17,7 @@ work did.
 
 **Blocked by: 01**
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Add, edit, delete, secret toggle, reveal and copy work exactly as on Environment Settings
 - [ ] Override hint appears and disappears as matching Environment Variables come and go

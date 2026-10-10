@@ -29,7 +29,7 @@
 
 **Blocked by: 01**
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Sets and entries CRUD round-trip on real SQLite, including name and key validation and uniqueness
 - [ ] Delete of a bound set → 409 listing binders; after unbinding it succeeds

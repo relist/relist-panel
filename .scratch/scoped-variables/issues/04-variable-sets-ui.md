@@ -21,7 +21,7 @@ Rebuild the embedded frontend and commit it separately.
 
 **Blocked by: 02, 03**
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Create, rename, delete a set; edit its entries with secret masking; "used by" reflects bindings
 - [ ] Bind, reorder and unbind sets per Service; the redeploy banner follows
