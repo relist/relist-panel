@@ -23,7 +23,7 @@
 
 **Blocked by: 06**
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Environment's Variables tab shows no Variable Sets card
 - [ ] Compose Variables tab: create, rename, delete (with the bound-Services confirmation) and edit entries of a set; secret masking works

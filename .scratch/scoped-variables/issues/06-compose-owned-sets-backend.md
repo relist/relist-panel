@@ -24,7 +24,7 @@ Decisions ("Deleting a set removes its bindings", "A set can only be bound withi
 
 **Blocked by: —**
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Migration 00014 creates `variable_sets.compose_id` with cascade + unique + index; database tests pass at version 14
 - [ ] Sets/entries CRUD under the Compose route round-trips on real SQLite; name/key validation and uniqueness per Compose (same name allowed in two Composes)

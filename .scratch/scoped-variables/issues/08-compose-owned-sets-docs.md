@@ -15,7 +15,7 @@ Language).
 
 **Blocked by: 06**
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Every statement about set ownership, deletion and binding checks matches the code after 06/07
 - [ ] No doc still says sets belong to an Environment or can be shared across Composes
