@@ -14,8 +14,8 @@ Scope of this pass: information architecture, screen layouts, state coverage, co
 interaction rules that hold them together. Out of scope: backend changes, routing-library choice,
 dark mode as a shipped feature (it is wired here only to prove the tokens hold).
 
-- Domain model is unchanged: Project → Environment → Compose (+ Environment Variables, Compose Variables, Variable Sets), exactly as
-  `CONTEXT.md` defines it.
+- Domain model is unchanged: Project → Environment → Compose (+ Environment Variables, Compose Variables, Variable Sets, which
+  belong to their Compose, ADR-0015), exactly as `CONTEXT.md` defines it.
 - Design system is unchanged: Ant Design v6 default tokens, documented in `DESIGN.md`. The prototype
   uses the same antd version as `web/` (6.5.1) so tokens, component APIs and class names line up.
 - The prototype's own rules (hash router, prototype strip, latency switch) are review scaffolding,
@@ -184,6 +184,7 @@ trouble?" without ssh'ing in — and be honest about what the panel can and cann
 - **Paste a `.env` file**: textarea, live parse preview, duplicate-key error, and an explicit
   "replace N variables with M" confirm — because operators have the file already.
 - Standing note: changes apply on the next deploy of each Compose in the Environment.
+- No Variable Sets card: sets belong to a Compose and are managed only on the Compose's Variables tab (ADR-0015).
 
 ### 4.6 Compose (`…/compose/:composeId`)
 
@@ -197,21 +198,25 @@ the editor is exactly as tall as the status rail beside it, with `LAYOUT.editorM
 (`clamp(640px, 80vh, 1000px)`) as the floor for when the rail is short. Monaco needs a bounded
 height; it gets one from the rail rather than from a hard-coded number.
 
-**Variables tab**: the Compose's own variables in the §4.5 editor (add, edit, delete, secret flag, reveal,
+**Variables tab** has three cards, in this order:
+
+1. **Compose variables**: the Compose's own variables in the §4.5 editor (add, edit, delete, secret flag, reveal,
 copy; no paste-in). A row whose key is also an Environment Variable shows `overrides <environment>: <value>`,
 masked as `••••` when that Environment Variable is secret. The Editor tab's Environment card counts distinct keys
 across both.
-
-Below the Compose Variables, a **Service bindings** card lists one row per Service in the saved YAML (the list the Domains
-form uses) with a multi-select of the Environment's Variable Sets (ADR-0015); tag order is binding order and a later
-set wins. Bindings for a Service the YAML no longer declares are listed apart and can only be removed. Each Service row
+2. **Variable Sets**: the Compose's named sets (ADR-0015), each a collapsible row with its name, entry count and the
+Services that bind it. Expanding a row shows the §4.5 key-value editor for its entries. A set is created, renamed and
+deleted here only. Deleting a set shows a `Popconfirm` naming the bound Services ("Unbinds it from
+api, worker. Takes effect on the next deploy.") and removes its bindings with it; an unbound set deletes without the note.
+3. **Service bindings**: one row per Service in the saved YAML (the list the Domains form uses) with a multi-select of
+this Compose's Variable Sets (ADR-0015); tag order is binding order and a later set wins. Bindings for a Service the YAML no longer declares are listed apart and can only be removed. Each Service row
 opens an **Effective env** modal: the Service's winning value per key, its source (Environment, Compose, or a set), the
 layers it shadows, and the YAML's own `environment:` keys as `defined in the YAML` rows, with an `overridden by YAML` tag
 on a merged row whose key the YAML also sets. Values follow the §4.5 masking.
 
 The "changes apply on the next deploy" banner, shared with Domains, shows when a Compose Variable, a domain, a
-binding, or an entry of a bound Variable Set changed since the last deploy (a set rename does not count). Editing a
-set in the Project's Variable Sets card refreshes the Composes that bind it, so the banner shows without a reload.
+binding, or an entry of a bound Variable Set changed since the last deploy (a set rename does not count). Every write
+in the Variable Sets and bindings cards reloads the tab, so the banner shows without a page reload.
 
 **Domains tab**: a table of the Compose's domains (host + path as a link, `service:port`, an HTTPS tag, Edit and
 Delete) with an **Add domain** button in the header and an `EmptyState` when there are none. Add and Edit share one

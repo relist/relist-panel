@@ -60,7 +60,7 @@ A key-value pair scoped to one Compose. It overrides an Environment Variable of 
 _Avoid_: Local variable, Override (the overriding is a behaviour, not the entity).
 
 **Variable Set**:
-A named list of key-value pairs belonging to an Environment, delivered to the containers of the Services it is bound to and to no others. Never interpolated into YAML.
+A named list of key-value pairs belonging to one Compose, delivered to the containers of the Services it is bound to and to no others. Never interpolated into YAML.
 _Avoid_: Env, Env group, Env file (the file is how it is delivered, not what it is).
 
 **Binding**:
