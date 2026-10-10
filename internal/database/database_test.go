@@ -24,8 +24,8 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 13 {
-		t.Fatalf("migration version = %d, want 13", version)
+	if version != 14 {
+		t.Fatalf("migration version = %d, want 14", version)
 	}
 
 	var one int
@@ -146,5 +146,50 @@ func TestDeployTimestampsMigrationBackfillsExistingRowsToNull(t *testing.T) {
 	// needs 00009 itself to have been applied on the way to latest.
 	if version < 9 {
 		t.Fatalf("migration version = %d, want at least 9", version)
+	}
+}
+
+// The scoped-variables migration must apply on a database that already holds
+// composes at version 13, keeping them and adding the redeploy marker.
+func TestScopedVariablesMigrationUpgradesVersion13(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	goose.SetBaseFS(migrations.FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(db, ".", 13); err != nil {
+		t.Fatalf("migrate to 13: %v", err)
+	}
+	now := time.Now().Unix()
+	if _, err := db.Exec("INSERT INTO projects (name, description, created_at, updated_at) VALUES ('p', '', ?, ?)", now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO environments (project_id, name, created_at) VALUES (1, 'production', ?)", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO composes (environment_id, name, yaml_content, created_at, updated_at) VALUES (1, 'web', '', ?, ?)", now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate 13 -> latest: %v", err)
+	}
+	var changedAt sql.NullInt64
+	if err := db.QueryRow("SELECT variables_changed_at FROM composes WHERE id = 1").Scan(&changedAt); err != nil {
+		t.Fatalf("existing compose lost or column missing: %v", err)
+	}
+	if changedAt.Valid {
+		t.Fatalf("variables_changed_at = %d, want NULL", changedAt.Int64)
+	}
+	for _, table := range []string{"compose_variables", "variable_sets", "variable_set_entries", "service_bindings"} {
+		if _, err := db.Exec("SELECT 1 FROM " + table); err != nil {
+			t.Errorf("table %s missing: %v", table, err)
+		}
 	}
 }

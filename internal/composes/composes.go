@@ -100,8 +100,11 @@ type Compose struct {
 	LastDeployedAt *time.Time `json:"lastDeployedAt"`
 	// DomainsChangedAt is the last time one of the Compose's domains was
 	// created, updated or deleted; nil when none ever was.
-	DomainsChangedAt *time.Time    `json:"domainsChangedAt"`
-	Status           ComposeStatus `json:"status"`
+	DomainsChangedAt *time.Time `json:"domainsChangedAt"`
+	// VariablesChangedAt is the last time one of the Compose's variables was
+	// created, updated or deleted; nil when none ever was.
+	VariablesChangedAt *time.Time    `json:"variablesChangedAt"`
+	Status             ComposeStatus `json:"status"`
 }
 
 // DeployIdentity is derived from the same RunRequest lifecycle actions use. It
@@ -447,16 +450,21 @@ type deployFiles struct {
 // prepareDeployFiles resolves the YAML and loads the environment variables.
 // It touches no files. On false it has already written the error response.
 func (s *Service) prepareDeployFiles(w http.ResponseWriter, r *http.Request, compose Compose, req RunRequest) (deployFiles, bool) {
-	variables, err := s.repository.listEnvironmentVariables(r.Context(), compose.EnvironmentID)
+	environmentVariables, err := s.repository.listEnvironmentVariables(r.Context(), compose.EnvironmentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load environment variables")
+		return deployFiles{}, false
+	}
+	composeVariables, err := s.repository.listComposeVariables(r.Context(), compose.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose variables")
 		return deployFiles{}, false
 	}
 	resolvedYAML, warnings, ok := s.resolveForDeploy(w, r, compose, compose.YAMLContent, req.EnvFilePath)
 	if !ok {
 		return deployFiles{}, false
 	}
-	return deployFiles{composeYAML: resolvedYAML, envFile: renderEnvFile(variables), warnings: warnings}, true
+	return deployFiles{composeYAML: resolvedYAML, envFile: renderEnvFile(mergeVariables(environmentVariables, composeVariables)), warnings: warnings}, true
 }
 
 // resolveForDeploy loads the Compose's domains and resolves yamlContent the
@@ -1005,6 +1013,29 @@ func (r *repository) listEnvironmentVariables(ctx context.Context, environmentID
 	return variables, rows.Err()
 }
 
+func (r *repository) listComposeVariables(ctx context.Context, composeID int64) ([]environmentVariable, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT key, value
+		FROM compose_variables
+		WHERE compose_id = ?
+		ORDER BY id ASC
+	`, composeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	variables := make([]environmentVariable, 0)
+	for rows.Next() {
+		var variable environmentVariable
+		if err := rows.Scan(&variable.Key, &variable.Value); err != nil {
+			return nil, err
+		}
+		variables = append(variables, variable)
+	}
+	return variables, rows.Err()
+}
+
 // BackfillLegacyIdentities freezes the deploy identity of composes created
 // before identity was stored on the row (ADR-0005): it fills any empty slugs
 // from the parents' current names, which is what those stacks were deployed
@@ -1061,7 +1092,7 @@ func BackfillLegacyIdentities(ctx context.Context, db *sql.DB) error {
 
 func (r *repository) list(ctx context.Context, environmentID int64) ([]Compose, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at, identity_version, domains_changed_at
+		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at, identity_version, domains_changed_at, variables_changed_at
 		FROM composes
 		WHERE environment_id = ?
 		ORDER BY id ASC
@@ -1102,7 +1133,7 @@ func (r *repository) create(ctx context.Context, environmentID int64, projectSlu
 
 func (r *repository) findByID(ctx context.Context, environmentID, id int64) (Compose, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at, identity_version, domains_changed_at
+		SELECT id, environment_id, name, project_slug, env_slug, yaml_content, created_at, updated_at, deployed_at, identity_version, domains_changed_at, variables_changed_at
 		FROM composes
 		WHERE environment_id = ? AND id = ?
 	`, environmentID, id)
@@ -1150,8 +1181,9 @@ func scanComposeValues(scan func(...any) error) (Compose, error) {
 		updatedAt  int64
 		deployedAt sql.NullInt64
 		changedAt  sql.NullInt64
+		varsAt     sql.NullInt64
 	)
-	if err := scan(&compose.ID, &compose.EnvironmentID, &compose.Name, &compose.ProjectSlug, &compose.EnvSlug, &compose.YAMLContent, &createdAt, &updatedAt, &deployedAt, &compose.IdentityVersion, &changedAt); err != nil {
+	if err := scan(&compose.ID, &compose.EnvironmentID, &compose.Name, &compose.ProjectSlug, &compose.EnvSlug, &compose.YAMLContent, &createdAt, &updatedAt, &deployedAt, &compose.IdentityVersion, &changedAt, &varsAt); err != nil {
 		return Compose{}, err
 	}
 	compose.CreatedAt = time.Unix(createdAt, 0).UTC()
@@ -1163,6 +1195,10 @@ func scanComposeValues(scan func(...any) error) (Compose, error) {
 	if changedAt.Valid {
 		at := time.Unix(changedAt.Int64, 0).UTC()
 		compose.DomainsChangedAt = &at
+	}
+	if varsAt.Valid {
+		at := time.Unix(varsAt.Int64, 0).UTC()
+		compose.VariablesChangedAt = &at
 	}
 	return compose, nil
 }

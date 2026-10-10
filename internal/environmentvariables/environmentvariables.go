@@ -398,7 +398,14 @@ func decodeInput(w http.ResponseWriter, r *http.Request) (environmentVariableInp
 }
 
 func validateInput(input environmentVariableInput) (string, string, error) {
-	key := strings.TrimSpace(input.Key)
+	return ValidateKeyValue(input.Key, input.Value)
+}
+
+// ValidateKeyValue applies the Environment Variable key and value rules and
+// returns the trimmed key and the value. Compose Variables share them, so the
+// two kinds of variable can never disagree about what a valid key is.
+func ValidateKeyValue(rawKey string, rawValue *string) (string, string, error) {
+	key := strings.TrimSpace(rawKey)
 	if key == "" {
 		return "", "", errors.New("environment variable key is required")
 	}
@@ -411,13 +418,13 @@ func validateInput(input environmentVariableInput) (string, string, error) {
 	if !environmentKeyPattern.MatchString(key) {
 		return "", "", errors.New("environment variable key must match [A-Za-z_][A-Za-z0-9_]*")
 	}
-	if input.Value == nil {
+	if rawValue == nil {
 		return "", "", errors.New("environment variable value is required")
 	}
-	if strings.ContainsRune(*input.Value, 0) {
+	if strings.ContainsRune(*rawValue, 0) {
 		return "", "", errors.New("environment variable value must not contain NUL")
 	}
-	return key, *input.Value, nil
+	return key, *rawValue, nil
 }
 
 func isUniqueConstraint(err error) bool {

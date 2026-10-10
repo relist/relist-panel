@@ -53,7 +53,7 @@ func (s *Service) TeardownEnvironment(ctx context.Context, projectID, environmen
 	return s.teardownChildren(ctx, projectID, environmentID)
 }
 func (s *Service) teardownChildren(ctx context.Context, projectID, environmentID int64) error {
-	rows, err := s.repository.db.QueryContext(ctx, `SELECT c.id,c.environment_id,c.name,c.project_slug,c.env_slug,c.yaml_content,c.created_at,c.updated_at,c.deployed_at,c.identity_version,c.domains_changed_at FROM composes c JOIN environments e ON e.id=c.environment_id WHERE e.project_id=? AND (?=0 OR e.id=?) ORDER BY c.id`, projectID, environmentID, environmentID)
+	rows, err := s.repository.db.QueryContext(ctx, `SELECT c.id,c.environment_id,c.name,c.project_slug,c.env_slug,c.yaml_content,c.created_at,c.updated_at,c.deployed_at,c.identity_version,c.domains_changed_at,c.variables_changed_at FROM composes c JOIN environments e ON e.id=c.environment_id WHERE e.project_id=? AND (?=0 OR e.id=?) ORDER BY c.id`, projectID, environmentID, environmentID)
 	if err != nil {
 		return err
 	}
