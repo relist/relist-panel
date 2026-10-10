@@ -17,6 +17,7 @@ import (
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/projects"
 	"relist-panel/internal/terminal"
+	"relist-panel/internal/variablesets"
 	"relist-panel/internal/volumeapi"
 	"relist-panel/internal/volumes"
 	"relist-panel/internal/webassets"
@@ -48,6 +49,7 @@ func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, histo
 	composesService.RegisterRoutes(mux)
 	domains.New(db).RegisterRoutes(mux)
 	composevariables.New(db).RegisterRoutes(mux)
+	variablesets.New(db).RegisterRoutes(mux)
 	volumeapi.New(composesService, volumeResolver, volumeRunner).RegisterRoutes(mux)
 	if terminalOptions != nil {
 		terminal.New(composesService, *terminalOptions).RegisterRoutes(mux)
