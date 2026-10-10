@@ -148,6 +148,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/restart", s.restart)
 	mux.HandleFunc("DELETE /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.delete)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/logs", s.logs)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/services/{service}/effective-variables", s.effectiveVariables)
 }
 
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
@@ -444,60 +445,62 @@ func (s *Service) loadDeployable(w http.ResponseWriter, r *http.Request) (Compos
 type deployFiles struct {
 	composeYAML string
 	envFile     string
-	warnings    []string
+	// setFiles is the content of each sets/<id>.env the resolved YAML points at.
+	setFiles map[int64]string
+	warnings []string
 }
 
 // prepareDeployFiles resolves the YAML and loads the environment variables.
 // It touches no files. On false it has already written the error response.
 func (s *Service) prepareDeployFiles(w http.ResponseWriter, r *http.Request, compose Compose, req RunRequest) (deployFiles, bool) {
-	environmentVariables, err := s.repository.listEnvironmentVariables(r.Context(), compose.EnvironmentID)
+	vars, err := s.repository.loadDeployVariables(r.Context(), compose, true)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load environment variables")
+		writeError(w, http.StatusInternalServerError, "could not load variables")
 		return deployFiles{}, false
 	}
-	composeVariables, err := s.repository.listComposeVariables(r.Context(), compose.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose variables")
-		return deployFiles{}, false
-	}
-	resolvedYAML, warnings, ok := s.resolveForDeploy(w, r, compose, compose.YAMLContent, req.EnvFilePath)
+	resolvedYAML, usedSets, warnings, ok := s.resolveForDeploy(w, r, compose, compose.YAMLContent, req.EnvFilePath, vars)
 	if !ok {
 		return deployFiles{}, false
 	}
-	return deployFiles{composeYAML: resolvedYAML, envFile: renderEnvFile(mergeVariables(environmentVariables, composeVariables)), warnings: warnings}, true
+	return deployFiles{
+		composeYAML: resolvedYAML,
+		envFile:     renderEnvFile(mergeVariables(vars.Environment, vars.Compose, nil).Interpolated),
+		setFiles:    vars.setFiles(usedSets),
+		warnings:    warnings,
+	}, true
 }
 
 // resolveForDeploy loads the Compose's domains and resolves yamlContent the
-// way a deploy writes it. It reads no environment variables, so preview can
-// share it without exposing their values. On false it has already written the
-// error response.
-func (s *Service) resolveForDeploy(w http.ResponseWriter, r *http.Request, compose Compose, yamlContent, envFilePath string) (string, []string, bool) {
+// way a deploy writes it, returning the IDs of the sets it points at. vars
+// only has to carry keys, so preview can share it without reading values. On
+// false it has already written the error response.
+func (s *Service) resolveForDeploy(w http.ResponseWriter, r *http.Request, compose Compose, yamlContent, envFilePath string, vars deployVariables) (string, []int64, []string, bool) {
 	composeDomains, err := s.domains.ListForCompose(r.Context(), compose.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load domains")
-		return "", nil, false
+		return "", nil, nil, false
 	}
 	// The route was validated before the Compose loaded.
 	projectID, _, _ := routeIDs(r)
 	projectName, environmentName, err := s.repository.parentNames(r.Context(), projectID, compose.EnvironmentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return "", nil, false
+		return "", nil, nil, false
 	}
 	id := networkIdentity{DeployName: compose.DeployProjectName(), Compose: compose.Name, Environment: environmentName, Project: projectName}
-	resolvedYAML, warnings, err := resolveCompose(yamlContent, dockernet.NetworkName, envFilePath, compose.ID, composeDomains, id)
+	resolvedYAML, usedSets, warnings, err := resolveCompose(yamlContent, dockernet.NetworkName, envFilePath, compose.ID, composeDomains, id, vars)
 	var target *domains.TargetError
 	if errors.As(err, &target) {
 		writeError(w, http.StatusBadRequest, target.Error())
-		return "", nil, false
+		return "", nil, nil, false
 	} else if err != nil {
 		writeError(w, http.StatusBadRequest, "compose yaml is invalid: "+err.Error())
-		return "", nil, false
+		return "", nil, nil, false
 	}
 	if warnings == nil {
 		warnings = []string{}
 	}
-	return resolvedYAML, warnings, true
+	return resolvedYAML, usedSets, warnings, true
 }
 
 // previewResponse is the file a deploy would write and the warnings it
@@ -556,7 +559,12 @@ func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := runRequestFor(s.dataDir, compose)
-	resolvedYAML, warnings, ok := s.resolveForDeploy(w, r, compose, *input.YAMLContent, req.EnvFilePath)
+	vars, err := s.repository.loadDeployVariables(r.Context(), compose, false)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load variables")
+		return
+	}
+	resolvedYAML, _, warnings, ok := s.resolveForDeploy(w, r, compose, *input.YAMLContent, req.EnvFilePath, vars)
 	if !ok {
 		return
 	}
@@ -573,7 +581,7 @@ func (s *Service) writeDeployFiles(w http.ResponseWriter, req RunRequest, files 
 	return true
 }
 
-// writeFiles creates the Compose directory and writes both files, returning
+// writeFiles creates the Compose directory and writes the files, returning
 // the user-facing description of the step that failed.
 func writeFiles(req RunRequest, files deployFiles) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(req.ComposeFilePath), composeDirPerm); err != nil {
@@ -584,6 +592,22 @@ func writeFiles(req RunRequest, files deployFiles) (string, error) {
 	}
 	if err := os.WriteFile(req.EnvFilePath, []byte(files.envFile), envFilePerm); err != nil {
 		return "could not write environment file", err
+	}
+	// The sets directory always matches the resolved YAML: sets that are no
+	// longer bound are removed, since they can hold secret values.
+	dir := setsDir(req.EnvFilePath)
+	if err := os.RemoveAll(dir); err != nil {
+		return "could not clear variable set files", err
+	}
+	if len(files.setFiles) > 0 {
+		if err := os.MkdirAll(dir, composeDirPerm); err != nil {
+			return "could not prepare variable set files", err
+		}
+		for id, content := range files.setFiles {
+			if err := os.WriteFile(setEnvPath(req.EnvFilePath, id), []byte(content), envFilePerm); err != nil {
+				return "could not write variable set file", err
+			}
+		}
 	}
 	return "", nil
 }
@@ -986,17 +1010,29 @@ func (r *repository) parentNames(ctx context.Context, projectID, environmentID i
 }
 
 type environmentVariable struct {
-	Key   string
-	Value string
+	Key    string
+	Value  string
+	Secret bool
 }
 
-func (r *repository) listEnvironmentVariables(ctx context.Context, environmentID int64) ([]environmentVariable, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT key, value
-		FROM environment_variables
-		WHERE environment_id = ?
-		ORDER BY id ASC
-	`, environmentID)
+func (r *repository) listEnvironmentVariables(ctx context.Context, environmentID int64, withValues bool) ([]environmentVariable, error) {
+	return r.listVariables(ctx, "environment_variables", "environment_id", environmentID, withValues)
+}
+
+func (r *repository) listComposeVariables(ctx context.Context, composeID int64, withValues bool) ([]environmentVariable, error) {
+	return r.listVariables(ctx, "compose_variables", "compose_id", composeID, withValues)
+}
+
+// listVariables reads one scope's variables in ID order. Without withValues
+// the value column is never selected, so a caller that only needs the keys
+// (preview) cannot expose a value.
+func (r *repository) listVariables(ctx context.Context, table, scopeColumn string, scopeID int64, withValues bool) ([]environmentVariable, error) {
+	valueColumn := "''"
+	if withValues {
+		valueColumn = "value"
+	}
+	// table, scopeColumn and valueColumn are constants from this file.
+	rows, err := r.db.QueryContext(ctx, "SELECT key, "+valueColumn+", secret FROM "+table+" WHERE "+scopeColumn+" = ? ORDER BY id ASC", scopeID)
 	if err != nil {
 		return nil, err
 	}
@@ -1005,30 +1041,7 @@ func (r *repository) listEnvironmentVariables(ctx context.Context, environmentID
 	variables := make([]environmentVariable, 0)
 	for rows.Next() {
 		var variable environmentVariable
-		if err := rows.Scan(&variable.Key, &variable.Value); err != nil {
-			return nil, err
-		}
-		variables = append(variables, variable)
-	}
-	return variables, rows.Err()
-}
-
-func (r *repository) listComposeVariables(ctx context.Context, composeID int64) ([]environmentVariable, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT key, value
-		FROM compose_variables
-		WHERE compose_id = ?
-		ORDER BY id ASC
-	`, composeID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	variables := make([]environmentVariable, 0)
-	for rows.Next() {
-		var variable environmentVariable
-		if err := rows.Scan(&variable.Key, &variable.Value); err != nil {
+		if err := rows.Scan(&variable.Key, &variable.Value, &variable.Secret); err != nil {
 			return nil, err
 		}
 		variables = append(variables, variable)
@@ -1281,17 +1294,20 @@ func runRequestFor(dataDir string, compose Compose) RunRequest {
 // environment file injected into every service (ADR-0002) — the one place the
 // panel modifies user-authored YAML. The Compose's domains become Traefik
 // labels, and only the Services that need the shared network join it, with
-// their aliases (ADR-0014). The warnings say what that overrode or skipped. A
-// *domains.TargetError is returned as is.
-func resolveCompose(yamlContent, networkName, envFilePath string, composeID int64, ds []domains.Domain, id networkIdentity) (string, []string, error) {
+// their aliases (ADR-0014). Each Service's bound Variable Sets follow the
+// panel's env file, in binding order; the IDs of the sets used are returned.
+// The warnings say what that overrode or skipped. A *domains.TargetError is
+// returned as is.
+func resolveCompose(yamlContent, networkName, envFilePath string, composeID int64, ds []domains.Domain, id networkIdentity, vars deployVariables) (string, []int64, []string, error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(yamlContent), &doc); err != nil {
-		return "", nil, fmt.Errorf("parse compose yaml: %w", err)
+		return "", nil, nil, fmt.Errorf("parse compose yaml: %w", err)
 	}
 	if doc == nil {
 		doc = map[string]any{}
 	}
 
+	var usedSets []int64
 	services, ok := doc["services"].(map[string]any)
 	if ok {
 		for name, raw := range services {
@@ -1299,7 +1315,12 @@ func resolveCompose(yamlContent, networkName, envFilePath string, composeID int6
 			if !ok {
 				continue
 			}
-			service["env_file"] = addToEnvFile(service["env_file"], envFilePath)
+			var setPaths []string
+			for _, set := range vars.setsFor(name) {
+				setPaths = append(setPaths, setEnvPath(envFilePath, set.ID))
+				usedSets = append(usedSets, set.ID)
+			}
+			service["env_file"] = addSetFiles(addToEnvFile(service["env_file"], envFilePath), setPaths)
 			services[name] = service
 		}
 	} else {
@@ -1311,9 +1332,10 @@ func resolveCompose(yamlContent, networkName, envFilePath string, composeID int6
 	// With no services at all, a domain still has to be refused.
 	warnings, err := domains.Inject(services, composeID, ds, networkName)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	warnings = append(warnings, joinSharedNetwork(services, joins, networkName, id)...)
+	warnings = append(warnings, variableWarnings(yamlContent, services, vars)...)
 
 	networks, ok := doc["networks"].(map[string]any)
 	if !ok {
@@ -1324,9 +1346,9 @@ func resolveCompose(yamlContent, networkName, envFilePath string, composeID int6
 
 	resolved, err := yaml.Marshal(doc)
 	if err != nil {
-		return "", nil, fmt.Errorf("marshal resolved compose yaml: %w", err)
+		return "", nil, nil, fmt.Errorf("marshal resolved compose yaml: %w", err)
 	}
-	return string(resolved), warnings, nil
+	return string(resolved), usedSets, warnings, nil
 }
 
 func addToEnvFile(existing any, envFilePath string) any {
