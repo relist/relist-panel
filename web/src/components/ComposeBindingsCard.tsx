@@ -36,6 +36,11 @@ export function ComposeBindingsCard({
   const [error, setError] = useState<string>();
   const [effectiveFor, setEffectiveFor] = useState<string>();
   const request = useRef(0);
+  // The Select shows what the operator picked, not the last server answer: a second pick made before
+  // the first save returns builds on the first. Saves for one Service run in order, one at a time.
+  const [draft, setDraft] = useState<Record<string, number[]>>({});
+  const chains = useRef<Record<string, Promise<void>>>({});
+  const waiting = useRef<Record<string, number>>({});
   const composeId = compose.id;
   const environmentId = environment.id;
 
@@ -62,14 +67,31 @@ export function ComposeBindingsCard({
 
   const current = data?.composeId === composeId ? data : undefined;
 
-  const bind = async (service: string, setIds: number[]) => {
-    try {
-      await saveBindings(composeId, service, setIds);
-      message.success(setIds.length === 0 ? `Unbound all sets from ${service}` : `Updated bindings for ${service}`);
-    } catch (reason: unknown) {
-      onError(reason);
-    }
-    await reload();
+  const bind = (service: string, setIds: number[]) => {
+    setDraft((previous) => ({ ...previous, [service]: setIds }));
+    waiting.current[service] = (waiting.current[service] ?? 0) + 1;
+    const save = async () => {
+      let failed = false;
+      try {
+        await saveBindings(composeId, service, setIds);
+        message.success(setIds.length === 0 ? `Unbound all sets from ${service}` : `Updated bindings for ${service}`);
+      } catch (reason: unknown) {
+        failed = true;
+        onError(reason);
+      }
+      waiting.current[service] -= 1;
+      // Only the last save of a burst hands the row back to the server's answer.
+      if (waiting.current[service] === 0 || failed) {
+        await reload();
+        if (waiting.current[service] === 0) {
+          setDraft((previous) => {
+            const { [service]: _done, ...rest } = previous;
+            return rest;
+          });
+        }
+      }
+    };
+    chains.current[service] = (chains.current[service] ?? Promise.resolve()).then(save);
   };
 
   let body;
@@ -105,12 +127,12 @@ export function ComposeBindingsCard({
               aria-label={`Variable Sets for ${row.service}`}
               loading={isPending(`save-bindings:${composeId}:${row.service}`)}
               mode="multiple"
-              onChange={(ids) => void bind(row.service, ids)}
+              onChange={(ids) => bind(row.service, ids)}
               optionFilterProp="label"
               options={options}
               placeholder="No sets bound"
               style={{ flex: '1 1 240px', minWidth: 0 }}
-              value={row.setIds}
+              value={draft[row.service] ?? row.setIds}
             />
             <Button icon={<ThunderboltOutlined />} onClick={() => setEffectiveFor(row.service)}>
               Effective env
@@ -131,7 +153,7 @@ export function ComposeBindingsCard({
             <Button
               danger
               loading={isPending(`save-bindings:${composeId}:${row.service}`)}
-              onClick={() => void bind(row.service, [])}
+              onClick={() => bind(row.service, [])}
             >
               Remove
             </Button>

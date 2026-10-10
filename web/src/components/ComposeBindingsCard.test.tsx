@@ -69,6 +69,21 @@ describe('ComposeBindingsCard', () => {
     await waitFor(() => expect(panel.saveBindings).toHaveBeenCalledWith(7, 'web', [2, 1]));
   });
 
+  it('builds a second pick on the first when the first save has not returned', async () => {
+    let release: () => void = () => {};
+    panel.saveBindings.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+    const user = userEvent.setup();
+    renderCard();
+    await screen.findByText('web');
+    await user.click(screen.getByRole('combobox', { name: 'Variable Sets for web' }));
+    await user.click(await screen.findByTitle('cache'));
+    await user.click(await screen.findByTitle('db'));
+    release();
+    await waitFor(() => expect(panel.saveBindings).toHaveBeenCalledTimes(2));
+    expect(panel.saveBindings).toHaveBeenNthCalledWith(1, 7, 'web', [2]);
+    expect(panel.saveBindings).toHaveBeenNthCalledWith(2, 7, 'web', [2, 1]);
+  });
+
   it('shows a stale binding with a warning and removes it with an empty list', async () => {
     panel.loadBindings.mockResolvedValue([{ service: 'old-api', setIds: [1] }]);
     const user = userEvent.setup();
