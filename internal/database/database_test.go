@@ -192,4 +192,27 @@ func TestScopedVariablesMigrationUpgradesVersion13(t *testing.T) {
 			t.Errorf("table %s missing: %v", table, err)
 		}
 	}
+
+	// Sets belong to a Compose: unique per Compose, removed with it.
+	for _, statement := range []string{
+		"INSERT INTO variable_sets (compose_id, name, created_at, updated_at) VALUES (1, 's', 0, 0)",
+		"INSERT INTO variable_set_entries (set_id, key, value) VALUES (1, 'K', 'v')",
+		"INSERT INTO service_bindings (compose_id, service, set_id, position) VALUES (1, 'api', 1, 0)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	if _, err := db.Exec("INSERT INTO variable_sets (compose_id, name, created_at, updated_at) VALUES (1, 's', 0, 0)"); err == nil {
+		t.Error("duplicate set name in one compose was accepted")
+	}
+	if _, err := db.Exec("DELETE FROM composes WHERE id = 1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"variable_sets", "variable_set_entries", "service_bindings"} {
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+			t.Errorf("%s rows after compose delete = %d (%v)", table, count, err)
+		}
+	}
 }

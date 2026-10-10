@@ -199,7 +199,7 @@ func TestLoadDeployVariablesWithoutValuesReadsNoValue(t *testing.T) {
 		`INSERT INTO composes (id, environment_id, name, yaml_content, created_at, updated_at) VALUES (1, 1, 'c', '', 0, 0)`,
 		`INSERT INTO environment_variables (environment_id, key, value) VALUES (1, 'ENV_KEY', 'env-secret')`,
 		`INSERT INTO compose_variables (compose_id, key, value) VALUES (1, 'COMPOSE_KEY', 'compose-secret')`,
-		`INSERT INTO variable_sets (id, environment_id, name, created_at, updated_at) VALUES (1, 1, 's', 0, 0)`,
+		`INSERT INTO variable_sets (id, compose_id, name, created_at, updated_at) VALUES (1, 1, 's', 0, 0)`,
 		`INSERT INTO variable_set_entries (set_id, key, value) VALUES (1, 'SET_KEY', 'set-secret')`,
 		`INSERT INTO service_bindings (compose_id, service, set_id, position) VALUES (1, 'api', 1, 0)`,
 	} {

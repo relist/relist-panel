@@ -24,7 +24,7 @@ type bindingsInput struct {
 // listBindings answers every binding of the Compose, grouped by Service. The
 // Service need not exist in the saved YAML, so stale bindings stay visible.
 func (s *Service) listBindings(w http.ResponseWriter, r *http.Request) {
-	_, composeID, ok := s.requireCompose(w, r)
+	composeID, ok := s.requireCompose(w, r)
 	if !ok {
 		return
 	}
@@ -60,7 +60,7 @@ func (s *Service) listBindings(w http.ResponseWriter, r *http.Request) {
 // replaceBindings makes one Service's bindings exactly the given sets, in the
 // given order. An empty list removes them all.
 func (s *Service) replaceBindings(w http.ResponseWriter, r *http.Request) {
-	environmentID, composeID, ok := s.requireCompose(w, r)
+	composeID, ok := s.requireCompose(w, r)
 	if !ok {
 		return
 	}
@@ -85,7 +85,7 @@ func (s *Service) replaceBindings(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		defer tx.Rollback()
-		if err := checkSets(r.Context(), tx, environmentID, setIDs); err != nil {
+		if err := checkSets(r.Context(), tx, composeID, setIDs); err != nil {
 			return err
 		}
 		current, err := currentSetIDs(r.Context(), tx, composeID, service)
@@ -120,8 +120,8 @@ func (s *Service) replaceBindings(w http.ResponseWriter, r *http.Request) {
 }
 
 // checkSets refuses duplicates and sets that are missing or belong to another
-// Environment.
-func checkSets(ctx context.Context, tx *sql.Tx, environmentID int64, setIDs []int64) error {
+// Compose.
+func checkSets(ctx context.Context, tx *sql.Tx, composeID int64, setIDs []int64) error {
 	seen := make(map[int64]bool, len(setIDs))
 	for _, setID := range setIDs {
 		if seen[setID] {
@@ -129,9 +129,9 @@ func checkSets(ctx context.Context, tx *sql.Tx, environmentID int64, setIDs []in
 		}
 		seen[setID] = true
 		var one int
-		err := tx.QueryRowContext(ctx, `SELECT 1 FROM variable_sets WHERE id = ? AND environment_id = ?`, setID, environmentID).Scan(&one)
+		err := tx.QueryRowContext(ctx, `SELECT 1 FROM variable_sets WHERE id = ? AND compose_id = ?`, setID, composeID).Scan(&one)
 		if errors.Is(err, sql.ErrNoRows) {
-			return invalidInput(fmt.Sprintf("variable set %d does not exist in this environment", setID))
+			return invalidInput(fmt.Sprintf("variable set %d does not exist in this compose", setID))
 		}
 		if err != nil {
 			return err

@@ -1,6 +1,6 @@
 // Package variablesets owns Variable Sets, their entries and their bindings to
 // Services, and the HTTP API for them. A Variable Set is a named list of
-// key/value pairs in one Environment that reaches only the containers of the
+// key/value pairs in one Compose that reaches only the containers of the
 // Services it is bound to (ADR-0015). The deploy-time files are written by
 // internal/composes.
 package variablesets
@@ -25,22 +25,15 @@ type Entry struct {
 	Secret bool   `json:"secret"`
 }
 
-// Binder is a Service of a Compose a set is bound to.
-type Binder struct {
-	ComposeID   int64  `json:"composeId"`
-	ComposeName string `json:"composeName"`
-	Service     string `json:"service"`
-}
-
 // Set is the API representation of a Variable Set.
 type Set struct {
 	ID            int64     `json:"id"`
-	EnvironmentID int64     `json:"environmentId"`
+	ComposeID     int64     `json:"composeId"`
 	Name          string    `json:"name"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
 	Entries       []Entry   `json:"entries"`
-	UsedBy        []Binder  `json:"usedBy"`
+	BoundServices []string  `json:"boundServices"`
 }
 
 type setInput struct {
@@ -61,7 +54,8 @@ func New(db *sql.DB) *Service {
 // RegisterRoutes adds the authenticated Variable Set endpoints to mux.
 func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	const environment = "/api/projects/{projectID}/environments/{environmentID}"
-	const sets = environment + "/variable-sets"
+	const compose = environment + "/composes/{composeID}"
+	const sets = compose + "/variable-sets"
 	mux.HandleFunc("GET "+sets, s.list)
 	mux.HandleFunc("POST "+sets, s.create)
 	mux.HandleFunc("PUT "+sets+"/{setID}", s.rename)
@@ -69,8 +63,8 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+sets+"/{setID}/entries", s.createEntry)
 	mux.HandleFunc("PUT "+sets+"/{setID}/entries/{entryID}", s.updateEntry)
 	mux.HandleFunc("DELETE "+sets+"/{setID}/entries/{entryID}", s.deleteEntry)
-	mux.HandleFunc("GET "+environment+"/composes/{composeID}/bindings", s.listBindings)
-	mux.HandleFunc("PUT "+environment+"/composes/{composeID}/bindings/{service}", s.replaceBindings)
+	mux.HandleFunc("GET "+compose+"/bindings", s.listBindings)
+	mux.HandleFunc("PUT "+compose+"/bindings/{service}", s.replaceBindings)
 }
 
 var setName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
@@ -83,11 +77,11 @@ func validateName(name string) error {
 }
 
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
-	environmentID, ok := s.requireEnvironment(w, r)
+	composeID, ok := s.requireCompose(w, r)
 	if !ok {
 		return
 	}
-	sets, err := s.loadSets(r.Context(), environmentID, 0)
+	sets, err := s.loadSets(r.Context(), composeID, 0)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load variable sets")
 		return
@@ -96,7 +90,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) create(w http.ResponseWriter, r *http.Request) {
-	environmentID, ok := s.requireEnvironment(w, r)
+	composeID, ok := s.requireCompose(w, r)
 	if !ok {
 		return
 	}
@@ -106,9 +100,9 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.now().Unix()
 	result, err := s.db.ExecContext(r.Context(), `
-		INSERT INTO variable_sets (environment_id, name, created_at, updated_at)
+		INSERT INTO variable_sets (compose_id, name, created_at, updated_at)
 		VALUES (?, ?, ?, ?)
-	`, environmentID, name, now, now)
+	`, composeID, name, now, now)
 	if err != nil {
 		writeWriteError(w, err, "could not create variable set")
 		return
@@ -118,11 +112,11 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create variable set")
 		return
 	}
-	s.respond(w, r, http.StatusCreated, environmentID, id)
+	s.respond(w, r, http.StatusCreated, composeID, id)
 }
 
 func (s *Service) rename(w http.ResponseWriter, r *http.Request) {
-	environmentID, setID, ok := s.requireSet(w, r)
+	composeID, setID, ok := s.requireSet(w, r)
 	if !ok {
 		return
 	}
@@ -134,8 +128,8 @@ func (s *Service) rename(w http.ResponseWriter, r *http.Request) {
 	// so nothing deployed changes.
 	err := func() error {
 		result, err := s.db.ExecContext(r.Context(), `
-			UPDATE variable_sets SET name = ?, updated_at = ? WHERE environment_id = ? AND id = ?
-		`, name, s.now().Unix(), environmentID, setID)
+			UPDATE variable_sets SET name = ?, updated_at = ? WHERE compose_id = ? AND id = ?
+		`, name, s.now().Unix(), composeID, setID)
 		if err != nil {
 			return err
 		}
@@ -145,52 +139,50 @@ func (s *Service) rename(w http.ResponseWriter, r *http.Request) {
 		writeWriteError(w, err, "could not rename variable set")
 		return
 	}
-	s.respond(w, r, http.StatusOK, environmentID, setID)
+	s.respond(w, r, http.StatusOK, composeID, setID)
 }
 
 func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
-	environmentID, setID, ok := s.requireSet(w, r)
+	composeID, setID, ok := s.requireSet(w, r)
 	if !ok {
 		return
 	}
-	var binders []Binder
+	// Deleting cascades the set's entries and bindings. When it had bindings the
+	// next deploy changes, so the Compose is stamped in the same transaction.
 	err := func() error {
 		tx, err := s.db.BeginTx(r.Context(), nil)
 		if err != nil {
 			return err
 		}
 		defer tx.Rollback()
-		if binders, err = loadBinders(r.Context(), tx, setID); err != nil {
+		var bindings int
+		if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM service_bindings WHERE set_id = ?`, setID).Scan(&bindings); err != nil {
 			return err
 		}
-		if len(binders) > 0 {
-			return nil
-		}
-		result, err := tx.ExecContext(r.Context(), `DELETE FROM variable_sets WHERE environment_id = ? AND id = ?`, environmentID, setID)
+		result, err := tx.ExecContext(r.Context(), `DELETE FROM variable_sets WHERE compose_id = ? AND id = ?`, composeID, setID)
 		if err != nil {
 			return err
 		}
 		if err := requireAffected(result); err != nil {
 			return err
 		}
+		if bindings > 0 {
+			if _, err := tx.ExecContext(r.Context(), `UPDATE composes SET variables_changed_at = ? WHERE id = ?`, s.now().Unix(), composeID); err != nil {
+				return err
+			}
+		}
 		return tx.Commit()
 	}()
-	switch {
-	case err != nil:
+	if err != nil {
 		writeWriteError(w, err, "could not delete variable set")
-	case len(binders) > 0:
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error":  "variable set is still bound to services; unbind it first",
-			"usedBy": binders,
-		})
-	default:
-		w.WriteHeader(http.StatusNoContent)
+		return
 	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // respond reads the stored set back and writes it.
-func (s *Service) respond(w http.ResponseWriter, r *http.Request, status int, environmentID, setID int64) {
-	sets, err := s.loadSets(r.Context(), environmentID, setID)
+func (s *Service) respond(w http.ResponseWriter, r *http.Request, status int, composeID, setID int64) {
+	sets, err := s.loadSets(r.Context(), composeID, setID)
 	if err != nil || len(sets) != 1 {
 		writeError(w, http.StatusInternalServerError, "could not load variable set")
 		return
@@ -198,15 +190,15 @@ func (s *Service) respond(w http.ResponseWriter, r *http.Request, status int, en
 	writeJSON(w, status, sets[0])
 }
 
-// loadSets reads the Environment's sets with their entries and binders, or
+// loadSets reads the Compose's sets with their entries and bound Services, or
 // only set setID when it is non-zero.
-func (s *Service) loadSets(ctx context.Context, environmentID, setID int64) ([]Set, error) {
+func (s *Service) loadSets(ctx context.Context, composeID, setID int64) ([]Set, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, environment_id, name, created_at, updated_at
+		SELECT id, compose_id, name, created_at, updated_at
 		FROM variable_sets
-		WHERE environment_id = ? AND (? = 0 OR id = ?)
+		WHERE compose_id = ? AND (? = 0 OR id = ?)
 		ORDER BY name ASC
-	`, environmentID, setID, setID)
+	`, composeID, setID, setID)
 	if err != nil {
 		return nil, err
 	}
@@ -216,11 +208,11 @@ func (s *Service) loadSets(ctx context.Context, environmentID, setID int64) ([]S
 	for rows.Next() {
 		var set Set
 		var createdAt, updatedAt int64
-		if err := rows.Scan(&set.ID, &set.EnvironmentID, &set.Name, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&set.ID, &set.ComposeID, &set.Name, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		set.CreatedAt, set.UpdatedAt = time.Unix(createdAt, 0).UTC(), time.Unix(updatedAt, 0).UTC()
-		set.Entries, set.UsedBy = []Entry{}, []Binder{}
+		set.Entries, set.BoundServices = []Entry{}, []string{}
 		index[set.ID] = len(sets)
 		sets = append(sets, set)
 	}
@@ -233,9 +225,9 @@ func (s *Service) loadSets(ctx context.Context, environmentID, setID int64) ([]S
 		SELECT e.id, e.set_id, e.key, e.value, e.secret
 		FROM variable_set_entries e
 		JOIN variable_sets s ON s.id = e.set_id
-		WHERE s.environment_id = ? AND (? = 0 OR s.id = ?)
+		WHERE s.compose_id = ? AND (? = 0 OR s.id = ?)
 		ORDER BY e.id ASC
-	`, environmentID, setID, setID)
+	`, composeID, setID, setID)
 	if err != nil {
 		return nil, err
 	}
@@ -251,60 +243,31 @@ func (s *Service) loadSets(ctx context.Context, environmentID, setID int64) ([]S
 		return nil, err
 	}
 
-	binders, err := s.db.QueryContext(ctx, `
-		SELECT b.set_id, c.id, c.name, b.service
+	bound, err := s.db.QueryContext(ctx, `
+		SELECT b.set_id, b.service
 		FROM service_bindings b
-		JOIN composes c ON c.id = b.compose_id
 		JOIN variable_sets s ON s.id = b.set_id
-		WHERE s.environment_id = ? AND (? = 0 OR s.id = ?)
-		ORDER BY c.name ASC, b.service ASC
-	`, environmentID, setID, setID)
+		WHERE s.compose_id = ? AND (? = 0 OR s.id = ?)
+		ORDER BY b.service ASC
+	`, composeID, setID, setID)
 	if err != nil {
 		return nil, err
 	}
-	defer binders.Close()
-	for binders.Next() {
-		var binder Binder
+	defer bound.Close()
+	for bound.Next() {
 		var id int64
-		if err := binders.Scan(&id, &binder.ComposeID, &binder.ComposeName, &binder.Service); err != nil {
+		var service string
+		if err := bound.Scan(&id, &service); err != nil {
 			return nil, err
 		}
-		sets[index[id]].UsedBy = append(sets[index[id]].UsedBy, binder)
+		sets[index[id]].BoundServices = append(sets[index[id]].BoundServices, service)
 	}
-	return sets, binders.Err()
+	return sets, bound.Err()
 }
 
-type queryer interface {
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-}
-
-// loadBinders lists every Compose and Service a set is bound to.
-func loadBinders(ctx context.Context, q queryer, setID int64) ([]Binder, error) {
-	rows, err := q.QueryContext(ctx, `
-		SELECT c.id, c.name, b.service
-		FROM service_bindings b
-		JOIN composes c ON c.id = b.compose_id
-		WHERE b.set_id = ?
-		ORDER BY c.name ASC, b.service ASC
-	`, setID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var binders []Binder
-	for rows.Next() {
-		var binder Binder
-		if err := rows.Scan(&binder.ComposeID, &binder.ComposeName, &binder.Service); err != nil {
-			return nil, err
-		}
-		binders = append(binders, binder)
-	}
-	return binders, rows.Err()
-}
-
-// inTx runs write, then stamps variables_changed_at on every Compose that
-// binds the set and bumps the set's updated_at, all in one transaction, so a
-// change and its redeploy marker land together.
+// inTx runs write, then bumps the set's updated_at and, when the set is bound
+// to at least one Service, stamps its Compose's variables_changed_at, all in
+// one transaction, so a change and its redeploy marker land together.
 func (s *Service) inTx(ctx context.Context, setID int64, write func(*sql.Tx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -320,8 +283,9 @@ func (s *Service) inTx(ctx context.Context, setID int64, write func(*sql.Tx) err
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE composes SET variables_changed_at = ?
-		WHERE id IN (SELECT compose_id FROM service_bindings WHERE set_id = ?)
-	`, now, setID); err != nil {
+		WHERE id = (SELECT compose_id FROM variable_sets WHERE id = ?)
+		  AND EXISTS (SELECT 1 FROM service_bindings WHERE set_id = ?)
+	`, now, setID, setID); err != nil {
 		return err
 	}
 	return tx.Commit()

@@ -48,10 +48,35 @@ func (s *Service) requireEnvironment(w http.ResponseWriter, r *http.Request) (in
 	return environmentID, true
 }
 
-// requireSet is requireEnvironment plus a check that the route's set belongs
-// to that Environment.
-func (s *Service) requireSet(w http.ResponseWriter, r *http.Request) (environmentID, setID int64, ok bool) {
-	environmentID, ok = s.requireEnvironment(w, r)
+// requireCompose is requireEnvironment plus a check that the route's Compose
+// lives in that Environment.
+func (s *Service) requireCompose(w http.ResponseWriter, r *http.Request) (composeID int64, ok bool) {
+	environmentID, ok := s.requireEnvironment(w, r)
+	if !ok {
+		return 0, false
+	}
+	composeID, err := parsePositiveID(r.PathValue("composeID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
+		return 0, false
+	}
+	var one int
+	err = s.db.QueryRowContext(r.Context(), `SELECT 1 FROM composes WHERE id = ? AND environment_id = ?`, composeID, environmentID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "compose not found")
+		return 0, false
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return 0, false
+	}
+	return composeID, true
+}
+
+// requireSet is requireCompose plus a check that the route's set belongs to
+// that Compose.
+func (s *Service) requireSet(w http.ResponseWriter, r *http.Request) (composeID, setID int64, ok bool) {
+	composeID, ok = s.requireCompose(w, r)
 	if !ok {
 		return 0, 0, false
 	}
@@ -61,7 +86,7 @@ func (s *Service) requireSet(w http.ResponseWriter, r *http.Request) (environmen
 		return 0, 0, false
 	}
 	var one int
-	err = s.db.QueryRowContext(r.Context(), `SELECT 1 FROM variable_sets WHERE id = ? AND environment_id = ?`, setID, environmentID).Scan(&one)
+	err = s.db.QueryRowContext(r.Context(), `SELECT 1 FROM variable_sets WHERE id = ? AND compose_id = ?`, setID, composeID).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "variable set not found")
 		return 0, 0, false
@@ -70,32 +95,7 @@ func (s *Service) requireSet(w http.ResponseWriter, r *http.Request) (environmen
 		writeError(w, http.StatusInternalServerError, "could not load variable set")
 		return 0, 0, false
 	}
-	return environmentID, setID, true
-}
-
-// requireCompose is requireEnvironment plus a check that the route's Compose
-// lives in that Environment.
-func (s *Service) requireCompose(w http.ResponseWriter, r *http.Request) (environmentID, composeID int64, ok bool) {
-	environmentID, ok = s.requireEnvironment(w, r)
-	if !ok {
-		return 0, 0, false
-	}
-	composeID, err := parsePositiveID(r.PathValue("composeID"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
-		return 0, 0, false
-	}
-	var one int
-	err = s.db.QueryRowContext(r.Context(), `SELECT 1 FROM composes WHERE id = ? AND environment_id = ?`, composeID, environmentID).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "compose not found")
-		return 0, 0, false
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return 0, 0, false
-	}
-	return environmentID, composeID, true
+	return composeID, setID, true
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, into any) bool {

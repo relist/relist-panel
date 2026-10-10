@@ -14,7 +14,7 @@ type entryInput struct {
 }
 
 func (s *Service) createEntry(w http.ResponseWriter, r *http.Request) {
-	environmentID, setID, ok := s.requireSet(w, r)
+	composeID, setID, ok := s.requireSet(w, r)
 	if !ok {
 		return
 	}
@@ -37,11 +37,11 @@ func (s *Service) createEntry(w http.ResponseWriter, r *http.Request) {
 		writeWriteError(w, err, "could not create entry")
 		return
 	}
-	s.respondEntry(w, r, http.StatusCreated, environmentID, setID, id)
+	s.respondEntry(w, r, http.StatusCreated, composeID, setID, id)
 }
 
 func (s *Service) updateEntry(w http.ResponseWriter, r *http.Request) {
-	environmentID, setID, ok := s.requireSet(w, r)
+	composeID, setID, ok := s.requireSet(w, r)
 	if !ok {
 		return
 	}
@@ -66,7 +66,7 @@ func (s *Service) updateEntry(w http.ResponseWriter, r *http.Request) {
 		writeWriteError(w, err, "could not update entry")
 		return
 	}
-	s.respondEntry(w, r, http.StatusOK, environmentID, setID, entryID)
+	s.respondEntry(w, r, http.StatusOK, composeID, setID, entryID)
 }
 
 func (s *Service) deleteEntry(w http.ResponseWriter, r *http.Request) {
@@ -92,8 +92,8 @@ func (s *Service) deleteEntry(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Service) respondEntry(w http.ResponseWriter, r *http.Request, status int, environmentID, setID, id int64) {
-	sets, err := s.loadSets(r.Context(), environmentID, setID)
+func (s *Service) respondEntry(w http.ResponseWriter, r *http.Request, status int, composeID, setID, id int64) {
+	sets, err := s.loadSets(r.Context(), composeID, setID)
 	if err != nil || len(sets) != 1 {
 		writeError(w, http.StatusInternalServerError, "could not load entry")
 		return

@@ -23,18 +23,12 @@ type setEntryResponse struct {
 	Secret bool   `json:"secret"`
 }
 
-type binderResponse struct {
-	ComposeID   int64  `json:"composeId"`
-	ComposeName string `json:"composeName"`
-	Service     string `json:"service"`
-}
-
 type setResponse struct {
 	ID            int64              `json:"id"`
-	EnvironmentID int64              `json:"environmentId"`
+	ComposeID     int64              `json:"composeId"`
 	Name          string             `json:"name"`
 	Entries       []setEntryResponse `json:"entries"`
-	UsedBy        []binderResponse   `json:"usedBy"`
+	BoundServices []string           `json:"boundServices"`
 	Error         string             `json:"error"`
 }
 
@@ -52,7 +46,7 @@ func newSetsFixture(t *testing.T, yaml string) setsFixture {
 }
 
 func (f setsFixture) setsPath(suffix string) string {
-	return environmentPath(f.projectID, f.environmentID) + "/variable-sets" + suffix
+	return composePath(f.projectID, f.environmentID, f.composeID) + "/variable-sets" + suffix
 }
 
 func (f setsFixture) bindingsPath(suffix string) string {
@@ -176,7 +170,7 @@ func TestVariableSetsCRUD(t *testing.T) {
 		t.Fatalf("empty list = %d %s", status, raw)
 	}
 	set := f.createSet(t, "db-creds")
-	if set.ID == 0 || set.Name != "db-creds" || set.EnvironmentID != f.environmentID || len(set.Entries) != 0 || set.UsedBy == nil {
+	if set.ID == 0 || set.Name != "db-creds" || set.ComposeID != f.composeID || len(set.Entries) != 0 || set.BoundServices == nil {
 		t.Fatalf("created = %+v", set)
 	}
 
@@ -268,7 +262,7 @@ func TestVariableSetValidation(t *testing.T) {
 	if status, _ := f.call(t, http.MethodPost, entries, map[string]any{"key": "KEY", "value": "x"}); status != http.StatusConflict {
 		t.Errorf("duplicate key status = %d, want 409", status)
 	}
-	// The same key and name in another set or Environment is fine.
+	// The same key in another set is fine.
 	if status, _ := f.call(t, http.MethodPost, f.setsPath("/"+idString(other.ID)+"/entries"), map[string]any{"key": "KEY", "value": "x"}); status != http.StatusCreated {
 		t.Errorf("same key in another set status = %d, want 201", status)
 	}
@@ -281,52 +275,101 @@ func TestVariableSetRouteScoping(t *testing.T) {
 
 	otherProject := createProject(t, f.server, "Blog", "")
 	otherEnvironment := defaultEnvironment(t, f.server, otherProject.ID)
-	crossBase := environmentPath(otherProject.ID, otherEnvironment.ID) + "/variable-sets/" + idString(set.ID)
-	for _, c := range []struct{ method, path string }{
-		{http.MethodPut, crossBase},
-		{http.MethodDelete, crossBase},
-		{http.MethodPost, crossBase + "/entries"},
-		{http.MethodPut, crossBase + "/entries/" + idString(entry.ID)},
-		{http.MethodDelete, crossBase + "/entries/" + idString(entry.ID)},
-		{http.MethodGet, environmentPath(f.projectID, 9999) + "/variable-sets"},
-		{http.MethodGet, f.bindingsPath("")[:len(f.bindingsPath(""))-len("/bindings")] + "9/bindings"},
+	// A Compose of the same Environment, and one of another Environment.
+	sibling := createCompose(t, f.server, f.projectID, f.environmentID, "sibling")
+	foreign := createCompose(t, f.server, otherProject.ID, otherEnvironment.ID, "foreign")
+	suffix := "/variable-sets/" + idString(set.ID)
+	for name, base := range map[string]string{
+		"sibling compose":           composePath(f.projectID, f.environmentID, sibling.ID) + suffix,
+		"compose of another env":    composePath(f.projectID, f.environmentID, foreign.ID) + suffix,
+		"right compose, wrong env":  composePath(otherProject.ID, otherEnvironment.ID, f.composeID) + suffix,
+		"right compose, wrong proj": composePath(otherProject.ID, f.environmentID, f.composeID) + suffix,
 	} {
-		if status, raw := f.call(t, c.method, c.path, map[string]any{"name": "x", "key": "B", "value": "2"}); status != http.StatusNotFound {
-			t.Errorf("%s %s status = %d, want 404 (%s)", c.method, c.path, status, raw)
+		for _, c := range []struct{ method, path string }{
+			{http.MethodPut, base},
+			{http.MethodDelete, base},
+			{http.MethodPost, base + "/entries"},
+			{http.MethodPut, base + "/entries/" + idString(entry.ID)},
+			{http.MethodDelete, base + "/entries/" + idString(entry.ID)},
+		} {
+			if status, raw := f.call(t, c.method, c.path, map[string]any{"name": "x", "key": "B", "value": "2"}); status != http.StatusNotFound {
+				t.Errorf("%s: %s %s status = %d, want 404 (%s)", name, c.method, c.path, status, raw)
+			}
 		}
+	}
+	for name, path := range map[string]string{
+		"list in unknown compose": composePath(f.projectID, f.environmentID, 9999) + "/variable-sets",
+		"list in foreign compose": composePath(f.projectID, f.environmentID, foreign.ID) + "/variable-sets",
+		"bindings unknown":        composePath(f.projectID, f.environmentID, 9999) + "/bindings",
+	} {
+		if status, raw := f.call(t, http.MethodGet, path, nil); status != http.StatusNotFound {
+			t.Errorf("%s: status = %d, want 404 (%s)", name, status, raw)
+		}
+	}
+	if status, raw := f.call(t, http.MethodPost, composePath(f.projectID, f.environmentID, foreign.ID)+"/variable-sets", map[string]any{"name": "x"}); status != http.StatusNotFound {
+		t.Errorf("create in foreign compose status = %d, want 404 (%s)", status, raw)
+	}
+	var count int
+	if err := f.server.db.QueryRow("SELECT COUNT(*) FROM variable_sets").Scan(&count); err != nil || count != 1 {
+		t.Errorf("variable_sets rows = %d (%v), want 1", count, err)
 	}
 	if sets := f.listSets(t); len(sets) != 1 || len(sets[0].Entries) != 1 || sets[0].Name != "stripe" {
 		t.Errorf("set changed through a wrong route: %+v", sets)
 	}
 }
 
-func TestDeletingABoundSetIsRefusedUntilUnbound(t *testing.T) {
+func TestDeletingABoundSetRemovesItsBindingsAndStampsTheCompose(t *testing.T) {
 	f := newSetsFixture(t, setsYAML)
-	stripe := f.createSet(t, "stripe")
+	stripe, keep := f.createSet(t, "stripe"), f.createSet(t, "keep")
 	f.addEntry(t, stripe, "K", "v", false)
-	f.bind(t, "api", stripe)
+	f.bind(t, "api", keep, stripe)
 	f.bind(t, "worker", stripe)
-
-	status, raw := f.call(t, http.MethodDelete, f.setsPath("/"+idString(stripe.ID)), nil)
-	var body struct {
-		Error  string           `json:"error"`
-		UsedBy []binderResponse `json:"usedBy"`
+	if sets := f.listSets(t); !reflect.DeepEqual(sets[1].BoundServices, []string{"api", "worker"}) || !reflect.DeepEqual(sets[0].BoundServices, []string{"api"}) {
+		t.Fatalf("boundServices = %+v", sets)
 	}
-	if status != http.StatusConflict || json.Unmarshal(raw, &body) != nil || body.Error == "" {
-		t.Fatalf("delete bound status = %d, body %s", status, raw)
-	}
-	want := []binderResponse{{f.composeID, "web", "api"}, {f.composeID, "web", "worker"}}
-	if !reflect.DeepEqual(body.UsedBy, want) {
-		t.Fatalf("usedBy = %+v, want %+v", body.UsedBy, want)
-	}
-	if sets := f.listSets(t); len(sets) != 1 || !reflect.DeepEqual(sets[0].UsedBy, want) || len(sets[0].Entries) != 1 {
-		t.Fatalf("set after refused delete = %+v", sets)
+	if _, err := f.server.db.Exec("UPDATE composes SET variables_changed_at = 1"); err != nil {
+		t.Fatal(err)
 	}
 
-	f.bind(t, "api")
-	f.bind(t, "worker")
-	if status, _ = f.call(t, http.MethodDelete, f.setsPath("/"+idString(stripe.ID)), nil); status != http.StatusNoContent {
-		t.Fatalf("delete after unbind status = %d", status)
+	if status, raw := f.call(t, http.MethodDelete, f.setsPath("/"+idString(stripe.ID)), nil); status != http.StatusNoContent {
+		t.Fatalf("delete bound set status = %d, body %s", status, raw)
+	}
+	if sets := f.listSets(t); len(sets) != 1 || sets[0].ID != keep.ID {
+		t.Fatalf("sets after delete = %+v", sets)
+	}
+	_, raw := f.call(t, http.MethodGet, f.bindingsPath(""), nil)
+	if want := `[{"service":"api","setIds":[` + idString(keep.ID) + `]}]`; strings.TrimSpace(string(raw)) != want {
+		t.Fatalf("bindings after delete = %s, want %s", raw, want)
+	}
+	if got := f.variablesChangedAt(t); got == nil || *got == "1970-01-01T00:00:01Z" {
+		t.Fatalf("variablesChangedAt = %v, want stamped", got)
+	}
+
+	// An unbound set deletes without stamping.
+	loose := f.createSet(t, "loose")
+	f.addEntry(t, loose, "K", "v", false)
+	if _, err := f.server.db.Exec("UPDATE composes SET variables_changed_at = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := f.call(t, http.MethodDelete, f.setsPath("/"+idString(loose.ID)), nil); status != http.StatusNoContent {
+		t.Fatalf("delete unbound set status = %d", status)
+	}
+	if got := f.variablesChangedAt(t); got == nil || *got != "1970-01-01T00:00:01Z" {
+		t.Fatalf("variablesChangedAt after unbound delete = %v, want untouched", got)
+	}
+}
+
+func TestSameSetNameIsAllowedInTwoComposes(t *testing.T) {
+	f := newSetsFixture(t, setsYAML)
+	other := createCompose(t, f.server, f.projectID, f.environmentID, "other")
+	g := setsFixture{composeVariablesFixture{server: f.server, projectID: f.projectID, environmentID: f.environmentID, composeID: other.ID}}
+	f.createSet(t, "stripe")
+	g.createSet(t, "stripe")
+	if status, _ := f.call(t, http.MethodPost, f.setsPath(""), map[string]any{"name": "stripe"}); status != http.StatusConflict {
+		t.Errorf("duplicate in the same compose status = %d, want 409", status)
+	}
+	if len(f.listSets(t)) != 1 || len(g.listSets(t)) != 1 {
+		t.Errorf("each compose should list only its own set")
 	}
 }
 
@@ -355,6 +398,23 @@ func TestDeletingAnEnvironmentWithBoundSetsSucceeds(t *testing.T) {
 		var count int
 		if err := f.server.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 			t.Errorf("%s rows after environment delete = %d (%v)", table, count, err)
+		}
+	}
+}
+
+func TestDeletingAComposeWithBoundSetsSucceeds(t *testing.T) {
+	f := newSetsFixture(t, setsYAML)
+	set := f.createSet(t, "stripe")
+	f.addEntry(t, set, "K", "v", false)
+	f.bind(t, "api", set)
+
+	if status, raw := f.call(t, http.MethodDelete, composePath(f.projectID, f.environmentID, f.composeID), nil); status != http.StatusNoContent {
+		t.Fatalf("delete compose status = %d, body %s", status, raw)
+	}
+	for _, table := range []string{"variable_sets", "variable_set_entries", "service_bindings"} {
+		var count int
+		if err := f.server.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+			t.Errorf("%s rows after compose delete = %d (%v)", table, count, err)
 		}
 	}
 }
@@ -391,8 +451,8 @@ func TestBindingsAPI(t *testing.T) {
 		t.Fatalf("api bindings after replace = %v", groups[0].SetIDs)
 	}
 	sets := f.listSets(t)
-	if len(sets[2].UsedBy) != 2 || sets[2].UsedBy[0].Service != "api" || sets[2].UsedBy[1].Service != "redis" {
-		t.Fatalf("c.usedBy = %+v", sets[2].UsedBy)
+	if !reflect.DeepEqual(sets[2].BoundServices, []string{"api", "redis"}) {
+		t.Fatalf("c.boundServices = %+v", sets[2].BoundServices)
 	}
 
 	f.bind(t, "api")
@@ -414,25 +474,26 @@ func TestBindingsAPI(t *testing.T) {
 	}
 }
 
-func TestCrossEnvironmentBindingIsRefused(t *testing.T) {
+func TestBindingAnotherComposesSetIsRefused(t *testing.T) {
 	f := newSetsFixture(t, setsYAML)
 	local := f.createSet(t, "local")
-	status, raw := f.call(t, http.MethodPost, projectEnvironmentsPath(f.projectID), map[string]any{"name": "Staging"})
-	var staging environmentResponse
-	if status != http.StatusCreated || json.Unmarshal(raw, &staging) != nil {
-		t.Fatalf("create environment = %d %s", status, raw)
-	}
-	foreign := setsFixture{composeVariablesFixture{server: f.server, projectID: f.projectID, environmentID: staging.ID}}.createSet(t, "foreign")
+	other := createCompose(t, f.server, f.projectID, f.environmentID, "other")
+	g := setsFixture{composeVariablesFixture{server: f.server, projectID: f.projectID, environmentID: f.environmentID, composeID: other.ID}}
+	foreign := g.createSet(t, "foreign")
 
 	f.bind(t, "api", local)
-	status, raw = f.call(t, http.MethodPut, f.bindingsPath("/api"), map[string]any{"setIds": []int64{local.ID, foreign.ID}})
+	status, raw := f.call(t, http.MethodPut, f.bindingsPath("/api"), map[string]any{"setIds": []int64{local.ID, foreign.ID}})
 	if status != http.StatusBadRequest {
-		t.Fatalf("cross-environment bind status = %d, want 400 (%s)", status, raw)
+		t.Fatalf("cross-compose bind status = %d, want 400 (%s)", status, raw)
 	}
 	// The refused request changed nothing.
 	_, raw = f.call(t, http.MethodGet, f.bindingsPath(""), nil)
 	if !strings.Contains(string(raw), `"setIds":[`+idString(local.ID)+`]`) {
 		t.Fatalf("bindings after refused bind = %s", raw)
+	}
+	_, raw = g.call(t, http.MethodGet, g.bindingsPath(""), nil)
+	if strings.TrimSpace(string(raw)) != "[]" {
+		t.Fatalf("other compose bindings = %s", raw)
 	}
 }
 
@@ -489,14 +550,27 @@ func TestVariablesChangedAtMovesWithSetsAndBindings(t *testing.T) {
 	f.call(t, http.MethodDelete, f.setsPath("/"+idString(set.ID)+"/entries/"+idString(entry.ID)), nil)
 	check("delete entry", true, false)
 
-	// Bound by both Composes: both are stamped.
+	// Another Compose's set and its writes never stamp this Compose.
 	g := setsFixture{composeVariablesFixture{server: f.server, projectID: f.projectID, environmentID: f.environmentID, composeID: other.ID}}
-	g.bind(t, "web", set)
+	foreign := g.createSet(t, "foreign")
+	g.bind(t, "web", foreign)
 	reset()
-	f.addEntry(t, set, "K2", "v", false)
-	check("entry with two binders", true, true)
+	g.addEntry(t, foreign, "K", "v", false)
+	check("entry on the other compose's set", false, true)
+
+	// An unbound set: entry writes, create and rename never stamp.
+	reset()
+	loose := f.createSet(t, "loose")
+	check("create set", false, false)
+	entryLoose := f.addEntry(t, loose, "K", "v", false)
+	check("entry on unbound set", false, false)
+	f.call(t, http.MethodPut, f.setsPath("/"+idString(loose.ID)+"/entries/"+idString(entryLoose.ID)), map[string]any{"key": "K", "value": "w"})
+	f.call(t, http.MethodDelete, f.setsPath("/"+idString(loose.ID)+"/entries/"+idString(entryLoose.ID)), nil)
+	f.call(t, http.MethodPut, f.setsPath("/"+idString(loose.ID)), map[string]any{"name": "loose2"})
+	check("update/delete entry and rename on unbound set", false, false)
 
 	// A rejected write must not stamp.
+	f.addEntry(t, set, "K2", "v", false)
 	reset()
 	f.call(t, http.MethodPost, f.setsPath("/"+idString(set.ID)+"/entries"), map[string]any{"key": "K2", "value": "dup"})
 	check("rejected entry", false, false)
