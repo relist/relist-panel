@@ -10,5 +10,3 @@ The panel needs to drive Docker Compose on the host it runs on, and get Traefik 
 **Identity/storage revision:** ADR-0011 replaces the name-derived layout for new Composes with `relist-c<ID>` and `<data dir>/.composes/<ID>/`. Existing deployments retain the layout above.
 
 **Network revision:** ADR-0014 narrows "every service" to the Services that need the shared network (a Domain, Traefik labels, or an explicit opt-in), and gives each of them unique `.internal` aliases.
-
-**Variables revision:** ADR-0015 amends the "one env file injected into every Service" rule. Compose Variables merge into the Compose's `.env`, and Variable Sets reach only the Services they are bound to, through their own per-set files.

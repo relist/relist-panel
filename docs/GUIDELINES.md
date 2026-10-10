@@ -14,7 +14,7 @@ Scope of this pass: information architecture, screen layouts, state coverage, co
 interaction rules that hold them together. Out of scope: backend changes, routing-library choice,
 dark mode as a shipped feature (it is wired here only to prove the tokens hold).
 
-- Domain model is unchanged: Project → Environment → Compose (+ Environment Variables), exactly as
+- Domain model is unchanged: Project → Environment → Compose (+ Environment Variables, Compose Variables, Variable Sets), exactly as
   `CONTEXT.md` defines it.
 - Design system is unchanged: Ant Design v6 default tokens, documented in `DESIGN.md`. The prototype
   uses the same antd version as `web/` (6.5.1) so tokens, component APIs and class names line up.
