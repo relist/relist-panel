@@ -207,7 +207,7 @@ across both.
 2. **Variable Sets**: the Compose's named sets (ADR-0015), each a collapsible row with its name, entry count and the
 Services that bind it. Expanding a row shows the §4.5 key-value editor for its entries. A set is created, renamed and
 deleted here only. Deleting a set shows a `Popconfirm` naming the bound Services ("Unbinds it from
-api, worker. Takes effect on the next deploy.") and removes its bindings with it; an unbound set deletes without the note.
+api, worker. Takes effect on the next deploy.") and removes its bindings with it; an unbound set's confirmation reads "Its entries are deleted with it."
 3. **Service bindings**: one row per Service in the saved YAML (the list the Domains form uses) with a multi-select of
 this Compose's Variable Sets (ADR-0015); tag order is binding order and a later set wins. Bindings for a Service the YAML no longer declares are listed apart and can only be removed. Each Service row
 opens an **Effective env** modal: the Service's winning value per key, its source (Environment, Compose, or a set), the
