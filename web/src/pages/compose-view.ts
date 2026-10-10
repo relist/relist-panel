@@ -27,11 +27,11 @@ export function internalHostnamePattern(projectName: string): string {
  * are testable without a router or a store.
  */
 
-export type ComposeTab = 'editor' | 'domains' | 'logs' | 'terminal' | 'monitor' | 'volumes';
+export type ComposeTab = 'editor' | 'variables' | 'domains' | 'logs' | 'terminal' | 'monitor' | 'volumes';
 
 /** The tab a path segment resolves to; an unknown segment falls back to Editor (GUIDELINES §4.6). */
 export function activeComposeTab(tab?: string): ComposeTab {
-  if (tab === 'domains' || tab === 'logs' || tab === 'terminal' || tab === 'monitor' || tab === 'volumes') {
+  if (tab === 'variables' || tab === 'domains' || tab === 'logs' || tab === 'terminal' || tab === 'monitor' || tab === 'volumes') {
     return tab;
   }
   return 'editor';

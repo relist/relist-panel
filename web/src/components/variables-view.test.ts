@@ -5,8 +5,11 @@ import {
   invalidKeys,
   isSecret,
   isSecretKey,
+  effectiveVariableCount,
   isValidKey,
   maskedValue,
+  overrideHint,
+  overriddenVariable,
   parseDotEnv,
   replacePlan,
   visibleVariables,
@@ -115,7 +118,7 @@ describe('visibleVariables', () => {
     { id: 3, environmentId: 1, key: 'TZ', secret: false, updatedAt: '', value: 'x' },
     { id: 1, environmentId: 1, key: 'DATABASE_URL', secret: true, updatedAt: '', value: 'y' },
     { id: 2, environmentId: 1, key: 'JWT_SECRET', secret: true, updatedAt: '', value: 'z' },
-  ] as Parameters<typeof visibleVariables>[0];
+  ];
 
   it('sorts by key', () => {
     expect(visibleVariables(variables, '').map((v) => v.key)).toEqual(['DATABASE_URL', 'JWT_SECRET', 'TZ']);
@@ -144,5 +147,43 @@ describe('replacePlan', () => {
   it('replaces everything when the Environment is empty, and empties it when the paste is', () => {
     expect(replacePlan([], parseDotEnv('A=1'))).toEqual({ added: ['A'], removed: [], updated: [] });
     expect(replacePlan([{ key: 'A' }], [])).toEqual({ added: [], removed: ['A'], updated: [] });
+  });
+});
+
+describe('overrideHint', () => {
+  const environmentVariables = [
+    { key: 'LOG_LEVEL', secret: false, value: 'info' },
+    { key: 'API_TOKEN', secret: true, value: 'hunter2' },
+  ];
+
+  it('names the Environment and shows a plain value', () => {
+    expect(overrideHint('LOG_LEVEL', 'production', environmentVariables)).toBe('overrides production: info');
+  });
+
+  it('masks a secret Environment Variable, whatever its length', () => {
+    const hint = overrideHint('API_TOKEN', 'production', environmentVariables);
+    expect(hint).toBe('overrides production: ••••');
+    expect(hint).not.toContain('hunter2');
+  });
+
+  it('is null when no Environment Variable has the key, and follows it coming and going', () => {
+    expect(overrideHint('DEBUG', 'production', environmentVariables)).toBeNull();
+    expect(overrideHint('LOG_LEVEL', 'production', [])).toBeNull();
+    expect(overrideHint('log_level', 'production', environmentVariables)).toBeNull();
+  });
+});
+
+describe('overriddenVariable', () => {
+  it('finds the Environment Variable with the same key', () => {
+    expect(overriddenVariable('A', [{ key: 'B' }, { key: 'A' }])).toEqual({ key: 'A' });
+    expect(overriddenVariable('C', [{ key: 'B' }])).toBeUndefined();
+  });
+});
+
+describe('effectiveVariableCount', () => {
+  it('counts an overridden key once and adds Compose-only keys', () => {
+    expect(effectiveVariableCount([{ key: 'A' }, { key: 'B' }], [{ key: 'B' }, { key: 'C' }])).toBe(3);
+    expect(effectiveVariableCount([], [])).toBe(0);
+    expect(effectiveVariableCount([{ key: 'A' }], [])).toBe(1);
   });
 });

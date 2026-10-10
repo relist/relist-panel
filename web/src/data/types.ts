@@ -24,6 +24,15 @@ export type EnvironmentVariable = {
   value: string;
 };
 
+/** A key-value pair scoped to one Compose; it overrides an Environment Variable of the same key. */
+export type ComposeVariable = {
+  id: number;
+  composeId: number;
+  key: string;
+  secret: boolean;
+  value: string;
+};
+
 export type Environment = {
   id: number;
   projectId: number;
@@ -140,6 +149,8 @@ export type Compose = {
   lastDeployedAt?: string | null;
   /** When a domain of this Compose last changed, or `null` when none ever has. Set by the API on every domain write. */
   domainsChangedAt?: string | null;
+  /** When a Compose Variable of this Compose last changed, or `null` when none ever has. Set by the API on every write. */
+  variablesChangedAt?: string | null;
   /** Deploy-time notes from the API (overwritten Traefik labels, router hints); present on deploy responses only. */
   warnings?: string[];
 };

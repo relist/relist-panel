@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { Credentials, LoginResult, ProjectInput } from './api';
-import type { Compose, ComposeDomains, ComposePreview, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
+import type { Compose, ComposeDomains, ComposeVariable, ComposePreview, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
@@ -80,6 +80,10 @@ type PanelValue = {
   createDomain: (composeId: number, input: DomainInput) => Promise<Domain>;
   updateDomain: (composeId: number, domainId: number, input: DomainInput) => Promise<Domain>;
   deleteDomain: (composeId: number, domainId: number) => Promise<void>;
+  /** The Compose's own variables. Each write refreshes the Compose, so `variablesChangedAt` reaches the page. */
+  loadComposeVariables: (composeId: number) => Promise<ComposeVariable[]>;
+  saveComposeVariable: (composeId: number, variable: NewVariable, variableId?: number) => Promise<void>;
+  deleteComposeVariable: (composeId: number, variableId: number) => Promise<void>;
   /** The Compose's resolved Volumes and pre-flight statuses, from the Compose CLI. */
   loadVolumes: (composeId: number) => Promise<ComposeVolumes>;
   /** One directory inside a resolved Volume, for the Explorer's current path. */
@@ -726,6 +730,35 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [domainLocation, refreshStatus, track],
   );
 
+  const loadComposeVariables = useCallback(
+    (composeId: number) =>
+      track(`compose-variables:${composeId}`, () => api.listComposeVariables(domainLocation(composeId))),
+    [domainLocation, track],
+  );
+
+  const saveComposeVariable = useCallback(
+    (composeId: number, variable: NewVariable, variableId?: number) =>
+      track(`save-compose-variable:${composeId}`, async () => {
+        const location = domainLocation(composeId);
+        if (variableId) {
+          await api.updateComposeVariable(location, variableId, variable);
+        } else {
+          await api.createComposeVariable(location, variable);
+        }
+        await refreshStatus(composeId);
+      }),
+    [domainLocation, refreshStatus, track],
+  );
+
+  const deleteComposeVariable = useCallback(
+    (composeId: number, variableId: number) =>
+      track(`delete-compose-variable:${variableId}`, async () => {
+        await api.deleteComposeVariable(domainLocation(composeId), variableId);
+        await refreshStatus(composeId);
+      }),
+    [domainLocation, refreshStatus, track],
+  );
+
   const loadVariables = useCallback(
     async (environmentId: number) => {
       await track(`variables:${environmentId}`, async () => {
@@ -899,6 +932,9 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteVolumeEntry,
       createDomain,
       deleteDomain,
+      deleteComposeVariable,
+      loadComposeVariables,
+      saveComposeVariable,
       loadDomains,
       previewCompose,
       updateDomain,
@@ -947,6 +983,9 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteVolumeEntry,
       createDomain,
       deleteDomain,
+      deleteComposeVariable,
+      loadComposeVariables,
+      saveComposeVariable,
       loadDomains,
       previewCompose,
       updateDomain,

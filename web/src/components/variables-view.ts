@@ -90,7 +90,7 @@ export function maskedValue(value: string): string {
 }
 
 /** The panel's view of an Environment's variables: key-sorted, narrowed by the filter. */
-export function visibleVariables(variables: EnvironmentVariable[], query: string): EnvironmentVariable[] {
+export function visibleVariables<T extends { key: string }>(variables: T[], query: string): T[] {
   const needle = query.trim().toLowerCase();
   const sorted = [...variables].sort((a, b) => a.key.localeCompare(b.key));
   return needle ? sorted.filter((variable) => variable.key.toLowerCase().includes(needle)) : sorted;
@@ -114,4 +114,33 @@ export function replacePlan(current: readonly { key: string }[], rows: readonly 
     removed: current.filter((variable) => !nextKeys.has(variable.key)).map((variable) => variable.key),
     updated: rows.filter((row) => currentKeys.has(row.key)).map((row) => row.key),
   };
+}
+
+/**
+ * The Environment Variable a Compose Variable overrides, if any: the one with
+ * the same key. Matching is exact — keys are case-sensitive in `.env`.
+ */
+export function overriddenVariable<T extends { key: string }>(key: string, environmentVariables: readonly T[]): T | undefined {
+  return environmentVariables.find((variable) => variable.key === key);
+}
+
+/** The Compose Variables row's hint, or `null` when nothing is overridden. A secret's value stays masked. */
+export function overrideHint(
+  key: string,
+  environmentName: string,
+  environmentVariables: readonly Pick<EnvironmentVariable, 'key' | 'secret' | 'value'>[],
+): string | null {
+  const overridden = overriddenVariable(key, environmentVariables);
+  if (!overridden) {
+    return null;
+  }
+  return `overrides ${environmentName}: ${overridden.secret ? '••••' : overridden.value}`;
+}
+
+/** How many distinct keys a deploy writes: the Environment's, plus the Compose-only ones. */
+export function effectiveVariableCount(
+  environmentVariables: readonly { key: string }[],
+  composeVariables: readonly { key: string }[],
+): number {
+  return new Set([...environmentVariables, ...composeVariables].map((variable) => variable.key)).size;
 }

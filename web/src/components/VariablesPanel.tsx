@@ -1,17 +1,27 @@
 import { DeleteOutlined, EditOutlined, EyeInvisibleOutlined, EyeOutlined, PlusOutlined, SearchOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { Alert, App, Button, Card, Flex, Form, Input, Modal, Popconfirm, Space, Spin, Switch, Table, Tag, Tooltip, Typography, theme } from 'antd';
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { CODE_FONT_STACK } from '../app/theme';
-import { usePanel } from '../data/store';
-import type { Environment, EnvironmentVariable } from '../data/types';
+import { usePanel, type NewVariable } from '../data/store';
+import type { Environment } from '../data/types';
 import { EmptyState, RelativeTime } from './primitives';
 import { duplicateKeys, invalidKeys, isSecret, isSecretKey, maskedValue, parseDotEnv, replacePlan, VARIABLE_KEY_PATTERN, visibleVariables } from './variables-view';
 
 const { Text, Paragraph } = Typography;
 
+/** One row of any variable list the editor shows: an Environment Variable, a Compose Variable, later a Variable Set entry. */
+export type VariableRow = {
+  id: number;
+  key: string;
+  secret: boolean;
+  value: string;
+  /** Absent for lists whose rows carry no timestamp; the Updated column is then left out. */
+  updatedAt?: string;
+};
+
 /** One value cell: masked until revealed, copy always at hand (GUIDELINES §4.5). */
-function ValueCell({ variable }: { variable: EnvironmentVariable }) {
+function ValueCell({ variable }: { variable: VariableRow }) {
   const [revealed, setRevealed] = useState(false);
   const secret = isSecret(variable);
 
@@ -35,21 +45,69 @@ function ValueCell({ variable }: { variable: EnvironmentVariable }) {
 }
 
 /**
- * Environment Variables (GUIDELINES §4.5): shared config for every Compose in
- * one Environment, injected at deploy time. Values are masked until revealed,
- * and a paste-in bulk editor takes a whole `.env` file at once, because that is
- * where these values already live.
+ * The key-value editor behind every variable list (GUIDELINES §4.5): masked
+ * values with reveal and copy, a key filter, and an add/edit modal with the
+ * secret toggle. The list and every operation come in as props, so the
+ * Environment's Variables, a Compose's Variables and (later) a Variable Set's
+ * entries share one editor. A paste-in bulk editor appears when `onReplace` is
+ * given, because for an Environment that is where the values already live.
  *
- * The variable load itself is the page's (ProjectPage), so a failure joins the
- * screen's error Alert; this panel only renders the wait.
+ * The load itself is the page's, so a failure joins the screen's error Alert;
+ * this editor only renders the wait.
  */
-export function VariablesPanel({ environment, onError }: { environment: Environment; onError?: (reason: unknown) => void }) {
-  const { deleteVariable, isPending, replaceVariables, saveVariable } = usePanel();
+export type VariablesEditorProps = {
+  title: string;
+  /** The standing note under the title. */
+  description: ReactNode;
+  /** Plural noun for messages and the bulk editor, e.g. "Environment Variables". */
+  noun: string;
+  variables: VariableRow[];
+  loading: boolean;
+  saving: boolean;
+  isDeleting: (variable: VariableRow) => boolean;
+  /** Rejects with the message the modal shows next to the form. */
+  onSave: (values: NewVariable, id?: number) => Promise<void>;
+  onDelete: (variable: VariableRow) => Promise<void>;
+  onError?: (reason: unknown) => void;
+  /** Present: the Paste .env editor is offered, and confirming replaces the whole list. */
+  onReplace?: (rows: NewVariable[]) => Promise<void>;
+  replacing?: boolean;
+  /** Present: the stored-in-SQLite notice above the table. */
+  notice?: string;
+  emptyTitle: string;
+  emptyDescription: string;
+  /** Shown in the delete confirmation. */
+  deleteNote: string;
+  /** Extra content under a row's value, e.g. the override hint. */
+  annotate?: (variable: VariableRow) => ReactNode;
+  footer?: ReactNode;
+};
+
+export function VariablesEditor({
+  annotate,
+  deleteNote,
+  description,
+  emptyDescription,
+  emptyTitle,
+  footer,
+  isDeleting,
+  loading,
+  noun,
+  notice,
+  onDelete,
+  onError,
+  onReplace,
+  onSave,
+  replacing = false,
+  saving,
+  title,
+  variables,
+}: VariablesEditorProps) {
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const [form] = Form.useForm<{ key: string; value: string; secret: boolean }>();
   const [query, setQuery] = useState('');
-  const [editing, setEditing] = useState<EnvironmentVariable>();
+  const [editing, setEditing] = useState<VariableRow>();
   const [modalOpen, setModalOpen] = useState(false);
   // Modal submissions keep their failure next to the form (GUIDELINES §8) —
   // the operator edits and resubmits without losing what they typed.
@@ -62,13 +120,12 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
   // answer for the typed key.
   const secretTouched = useRef(false);
 
-  const loading = isPending(`variables:${environment.id}`);
-  const visible = useMemo(() => visibleVariables(environment.variables, query), [environment.variables, query]);
+  const visible = useMemo(() => visibleVariables(variables, query), [variables, query]);
 
   const parsed = useMemo(() => parseDotEnv(bulkText), [bulkText]);
   const duplicated = useMemo(() => duplicateKeys(parsed), [parsed]);
   const invalid = useMemo(() => invalidKeys(parsed), [parsed]);
-  const plan = useMemo(() => replacePlan(environment.variables, parsed), [environment.variables, parsed]);
+  const plan = useMemo(() => replacePlan(variables, parsed), [variables, parsed]);
   const bulkBlocked = parsed.length === 0 || duplicated.length > 0 || invalid.length > 0;
 
   const openCreate = () => {
@@ -79,7 +136,7 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
     setModalOpen(true);
   };
 
-  const openEdit = (variable: EnvironmentVariable) => {
+  const openEdit = (variable: VariableRow) => {
     setEditing(variable);
     setFormError(undefined);
     form.setFieldsValue({ key: variable.key, value: variable.value, secret: variable.secret });
@@ -89,7 +146,7 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
   const submit = async (values: { key: string; value: string; secret: boolean }) => {
     setFormError(undefined);
     try {
-      await saveVariable(environment.id, values, editing?.id);
+      await onSave(values, editing?.id);
       setModalOpen(false);
       message.success(editing ? `Saved ${values.key}` : `Added ${values.key}`);
     } catch (reason: unknown) {
@@ -97,9 +154,9 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
     }
   };
 
-  const remove = async (variable: EnvironmentVariable) => {
+  const remove = async (variable: VariableRow) => {
     try {
-      await deleteVariable(environment.id, variable.id);
+      await onDelete(variable);
       message.success(`Deleted ${variable.key}`);
     } catch (reason: unknown) {
       onError?.(reason);
@@ -113,17 +170,18 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
   };
 
   const replaceAll = () => {
+    if (!onReplace) return;
     setBulkError(undefined);
     // A keyed notification (GUIDELINES §8): the waiting line is replaced by the
     // outcome rather than stacked on top of it.
-    message.open({ content: 'Replacing Environment Variables…', key: 'bulk-variables', type: 'loading' });
+    message.open({ content: `Replacing ${noun}…`, key: 'bulk-variables', type: 'loading' });
     // The paste format carries no flag, so every row lands plain — a per-row
     // toggle afterwards is the correction path.
-    replaceVariables(environment.id, parsed.map((row) => ({ ...row, secret: false })))
+    onReplace(parsed.map((row) => ({ ...row, secret: false })))
       .then(() => {
         setBulkOpen(false);
         message.open({
-          content: `Replaced Environment Variables with ${parsed.length} key${parsed.length === 1 ? '' : 's'}`,
+          content: `Replaced ${noun} with ${parsed.length} key${parsed.length === 1 ? '' : 's'}`,
           key: 'bulk-variables',
           type: 'success',
         });
@@ -138,29 +196,24 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
     <Card
       extra={
         <Space>
-          <Button icon={<SnippetsOutlined />} onClick={openBulk}>
-            Paste .env
-          </Button>
+          {onReplace && (
+            <Button icon={<SnippetsOutlined />} onClick={openBulk}>
+              Paste .env
+            </Button>
+          )}
           <Button icon={<PlusOutlined />} onClick={openCreate} type="primary">
             New Variable
           </Button>
         </Space>
       }
-      title={`Environment Variables · ${environment.name}`}
+      title={title}
       variant="outlined"
     >
-      <Paragraph type="secondary">
-        Injected into every Compose in this Environment at deploy time. Changing a value takes effect on the next deploy.
-      </Paragraph>
+      <Paragraph type="secondary">{description}</Paragraph>
 
-      <Alert
-        title="Values are stored in the panel's SQLite database and written to a mode-600 env file on deploy."
-        showIcon
-        style={{ marginBottom: 16 }}
-        type="info"
-      />
+      {notice && <Alert title={notice} showIcon style={{ marginBottom: 16 }} type="info" />}
 
-      {environment.variables.length > 0 && (
+      {variables.length > 0 && (
         <Input
           allowClear
           onChange={(event) => setQuery(event.target.value)}
@@ -171,27 +224,29 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
         />
       )}
 
-      {loading && environment.variables.length === 0 ? (
+      {loading && variables.length === 0 ? (
         <Flex justify="center" style={{ padding: '48px 0' }}>
           <Spin />
         </Flex>
-      ) : environment.variables.length === 0 ? (
+      ) : variables.length === 0 ? (
         <EmptyState
           action={
             <Space>
-              <Button icon={<SnippetsOutlined />} onClick={openBulk}>
-                Paste a .env file
-              </Button>
+              {onReplace && (
+                <Button icon={<SnippetsOutlined />} onClick={openBulk}>
+                  Paste a .env file
+                </Button>
+              )}
               <Button icon={<PlusOutlined />} onClick={openCreate} type="primary">
                 Add a Variable
               </Button>
             </Space>
           }
-          description="Anything shared by every Compose here — database URLs, secrets, log level, timezone."
-          title="No Environment Variables yet"
+          description={emptyDescription}
+          title={emptyTitle}
         />
       ) : (
-        <Table<EnvironmentVariable>
+        <Table<VariableRow>
           columns={[
             {
               dataIndex: 'key',
@@ -205,7 +260,12 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
             {
               dataIndex: 'value',
               key: 'value',
-              render: (_value, variable) => <ValueCell variable={variable} />,
+              render: (_value, variable) => (
+                <>
+                  <ValueCell variable={variable} />
+                  {annotate?.(variable)}
+                </>
+              ),
               title: 'Value',
             },
             {
@@ -221,31 +281,36 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
               title: '',
               width: 90,
             },
-            {
-              dataIndex: 'updatedAt',
-              key: 'updatedAt',
-              render: (value: string) => (
-                <Text type="secondary">
-                  <RelativeTime value={value} />
-                </Text>
-              ),
-              title: 'Updated',
-              width: 140,
-            },
+            ...(variables.some((variable) => variable.updatedAt)
+              ? [
+                  {
+                    dataIndex: 'updatedAt',
+                    key: 'updatedAt',
+                    render: (value?: string) =>
+                      value ? (
+                        <Text type="secondary">
+                          <RelativeTime value={value} />
+                        </Text>
+                      ) : null,
+                    title: 'Updated',
+                    width: 140,
+                  },
+                ]
+              : []),
             {
               key: 'actions',
               render: (_value, variable) => (
                 <Space size={4}>
-                  <Button icon={<EditOutlined />} onClick={() => openEdit(variable)} size="small" type="text" />
+                  <Button aria-label={`Edit ${variable.key}`} icon={<EditOutlined />} onClick={() => openEdit(variable)} size="small" type="text" />
                   <Popconfirm
                     cancelText="Keep"
-                    description="Composes pick this up on their next deploy."
+                    description={deleteNote}
                     okButtonProps={{ danger: true }}
                     okText="Delete"
                     onConfirm={() => void remove(variable)}
                     title={`Delete ${variable.key}?`}
                   >
-                    <Button danger icon={<DeleteOutlined />} loading={isPending(`delete-variable:${variable.id}`)} size="small" type="text" />
+                    <Button aria-label={`Delete ${variable.key}`} danger icon={<DeleteOutlined />} loading={isDeleting(variable)} size="small" type="text" />
                   </Popconfirm>
                 </Space>
               ),
@@ -257,18 +322,20 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
           locale={{ emptyText: <Text type="secondary">No keys match “{query}”.</Text> }}
           pagination={false}
           rowKey="id"
+          // At phone width the table scrolls inside the card rather than crushing the value column.
+          scroll={{ x: 'max-content' }}
           size="middle"
         />
       )}
 
       <Modal
-        confirmLoading={isPending(`save-variable:${environment.id}`)}
+        confirmLoading={saving}
         destroyOnHidden
         okText={editing ? 'Save changes' : 'Add Variable'}
         onCancel={() => setModalOpen(false)}
         onOk={() => form.submit()}
         open={modalOpen}
-        title={editing ? `Edit ${editing.key}` : 'New Environment Variable'}
+        title={editing ? `Edit ${editing.key}` : 'New Variable'}
       >
         {formError && (
           <Alert title={formError} showIcon style={{ marginBottom: 16 }} type="error" />
@@ -319,10 +386,10 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
       </Modal>
 
       <Modal
-        confirmLoading={isPending(`bulk-variables:${environment.id}`)}
+        confirmLoading={replacing}
         destroyOnHidden
         okButtonProps={{ disabled: bulkBlocked }}
-        okText={`Replace ${environment.variables.length} variable${environment.variables.length === 1 ? '' : 's'} with ${parsed.length}`}
+        okText={`Replace ${variables.length} variable${variables.length === 1 ? '' : 's'} with ${parsed.length}`}
         onCancel={() => setBulkOpen(false)}
         onOk={replaceAll}
         open={bulkOpen}
@@ -331,7 +398,7 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
       >
         <Paragraph type="secondary">
           One <Text code>KEY=value</Text> per line. Comments and blank lines are ignored, quotes are stripped. This
-          <strong> replaces</strong> the Environment's variables — keys missing from the paste are removed.
+          <strong> replaces</strong> the existing variables — keys missing from the paste are removed.
         </Paragraph>
         <Input.TextArea
           onChange={(event) => setBulkText(event.target.value)}
@@ -400,10 +467,46 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
       </Modal>
       <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, marginTop: 16, paddingTop: 12 }}>
         <Text type="secondary" style={{ fontSize: 12 }}>
-          {environment.variables.length} variable{environment.variables.length === 1 ? '' : 's'} · applied to{' '}
-          {environment.composes.length} Compose{environment.composes.length === 1 ? '' : 's'} in this Environment
+          {variables.length} variable{variables.length === 1 ? '' : 's'}
+          {footer}
         </Text>
       </div>
     </Card>
+  );
+}
+
+/**
+ * Environment Variables (GUIDELINES §4.5): shared config for every Compose in
+ * one Environment, injected at deploy time. The variable load itself is the
+ * page's (ProjectPage), so a failure joins the screen's error Alert.
+ */
+export function VariablesPanel({ environment, onError }: { environment: Environment; onError?: (reason: unknown) => void }) {
+  const { deleteVariable, isPending, replaceVariables, saveVariable } = usePanel();
+
+  return (
+    <VariablesEditor
+      deleteNote="Composes pick this up on their next deploy."
+      description="Injected into every Compose in this Environment at deploy time. Changing a value takes effect on the next deploy."
+      emptyDescription="Anything shared by every Compose here — database URLs, secrets, log level, timezone."
+      emptyTitle="No Environment Variables yet"
+      footer={
+        <>
+          {' '}
+          · applied to {environment.composes.length} Compose{environment.composes.length === 1 ? '' : 's'} in this Environment
+        </>
+      }
+      isDeleting={(variable) => isPending(`delete-variable:${variable.id}`)}
+      loading={isPending(`variables:${environment.id}`)}
+      noun="Environment Variables"
+      notice="Values are stored in the panel's SQLite database and written to a mode-600 env file on deploy."
+      onDelete={(variable) => deleteVariable(environment.id, variable.id)}
+      onError={onError}
+      onReplace={(rows) => replaceVariables(environment.id, rows)}
+      onSave={(values, id) => saveVariable(environment.id, values, id)}
+      replacing={isPending(`bulk-variables:${environment.id}`)}
+      saving={isPending(`save-variable:${environment.id}`)}
+      title={`Environment Variables · ${environment.name}`}
+      variables={environment.variables}
+    />
   );
 }

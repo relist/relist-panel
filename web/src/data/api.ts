@@ -9,6 +9,7 @@
 import type {
   Compose,
   ComposeDomains,
+  ComposeVariable,
   ComposePreview,
   ComposeVolumes,
   Domain,
@@ -270,6 +271,14 @@ export const api = {
     request<Domain>(domainsPath(location), jsonInit('POST', input)),
   updateDomain: (location: ComposePath, domainId: number, input: DomainInput) =>
     request<Domain>(`${domainsPath(location)}/${domainId}`, jsonInit('PUT', input)),
+  listComposeVariables: (location: ComposePath) => request<ComposeVariable[]>(composeVariablesPath(location)),
+  createComposeVariable: (location: ComposePath, input: EnvironmentVariableInput) =>
+    request<ComposeVariable>(composeVariablesPath(location), jsonInit('POST', input)),
+  updateComposeVariable: (location: ComposePath, variableId: number, input: EnvironmentVariableInput) =>
+    request<ComposeVariable>(`${composeVariablesPath(location)}/${variableId}`, jsonInit('PUT', input)),
+  /** Success is 204. */
+  deleteComposeVariable: (location: ComposePath, variableId: number) =>
+    request<void>(`${composeVariablesPath(location)}/${variableId}`, { method: 'DELETE' }),
   /** Success is 204. */
   deleteDomain: (location: ComposePath, domainId: number) =>
     request<void>(`${domainsPath(location)}/${domainId}`, { method: 'DELETE' }),
@@ -388,6 +397,10 @@ function composesPath(projectId: number, environmentId: number): string {
 
 function composePath(location: ComposePath): string {
   return `${composesPath(location.projectId, location.environmentId)}/${location.composeId}`;
+}
+
+function composeVariablesPath(location: ComposePath): string {
+  return `${composePath(location)}/variables`;
 }
 
 function domainsPath(location: ComposePath): string {

@@ -188,7 +188,7 @@ trouble?" without ssh'ing in — and be honest about what the panel can and cann
 ### 4.6 Compose (`…/compose/:composeId`)
 
 The core screen. Tabs in the path so each is linkable and the back button works:
-**Editor** (`…/compose/:composeId`, the default), **Domains** (`…/compose/:composeId/domains`), **Logs** (`…/compose/:composeId/logs`), **Terminal**
+**Editor** (`…/compose/:composeId`, the default), **Variables** (`…/compose/:composeId/variables`), **Domains** (`…/compose/:composeId/domains`), **Logs** (`…/compose/:composeId/logs`), **Terminal**
 (`…/compose/:composeId/terminal`) and **Monitor** (`…/compose/:composeId/monitor`).
 An unknown segment falls back to Editor rather than a not-found page. Layout of the Editor tab:
 editor on the left, status rail on the right, both in normal document
@@ -196,6 +196,12 @@ flow — the page scrolls as one, no nested scrollers. The two columns stretch t
 the editor is exactly as tall as the status rail beside it, with `LAYOUT.editorMinHeight`
 (`clamp(640px, 80vh, 1000px)`) as the floor for when the rail is short. Monaco needs a bounded
 height; it gets one from the rail rather than from a hard-coded number.
+
+**Variables tab**: the Compose's own variables in the §4.5 editor (add, edit, delete, secret flag, reveal,
+copy; no paste-in). A row whose key is also an Environment Variable shows `overrides <environment>: <value>`,
+masked as `••••` when that Environment Variable is secret. The "changes apply on the next deploy" banner, shared
+with Domains, shows when a Compose Variable or a domain changed since the last deploy. The Editor tab's
+Environment card counts distinct keys across both.
 
 **Domains tab**: a table of the Compose's domains (host + path as a link, `service:port`, an HTTPS tag, Edit and
 Delete) with an **Add domain** button in the header and an `EmptyState` when there are none. Add and Edit share one
