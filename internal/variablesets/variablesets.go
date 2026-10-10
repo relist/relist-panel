@@ -130,15 +130,17 @@ func (s *Service) rename(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := s.inTx(r.Context(), setID, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(r.Context(), `
-			UPDATE variable_sets SET name = ? WHERE environment_id = ? AND id = ?
-		`, name, environmentID, setID)
+	// A rename does not stamp variables_changed_at: set files are named by ID,
+	// so nothing deployed changes.
+	err := func() error {
+		result, err := s.db.ExecContext(r.Context(), `
+			UPDATE variable_sets SET name = ?, updated_at = ? WHERE environment_id = ? AND id = ?
+		`, name, s.now().Unix(), environmentID, setID)
 		if err != nil {
 			return err
 		}
 		return requireAffected(result)
-	})
+	}()
 	if err != nil {
 		writeWriteError(w, err, "could not rename variable set")
 		return

@@ -587,18 +587,10 @@ func writeFiles(req RunRequest, files deployFiles) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(req.ComposeFilePath), composeDirPerm); err != nil {
 		return "could not prepare compose files", err
 	}
-	if err := os.WriteFile(req.ComposeFilePath, []byte(files.composeYAML), composeFilePerm); err != nil {
-		return "could not write compose file", err
-	}
-	if err := os.WriteFile(req.EnvFilePath, []byte(files.envFile), envFilePerm); err != nil {
-		return "could not write environment file", err
-	}
-	// The sets directory always matches the resolved YAML: sets that are no
-	// longer bound are removed, since they can hold secret values.
+	// Order keeps every path in either the old or the new YAML on disk at each
+	// step: set files are written first and nothing is deleted until the new
+	// YAML is in place.
 	dir := setsDir(req.EnvFilePath)
-	if err := os.RemoveAll(dir); err != nil {
-		return "could not clear variable set files", err
-	}
 	if len(files.setFiles) > 0 {
 		if err := os.MkdirAll(dir, composeDirPerm); err != nil {
 			return "could not prepare variable set files", err
@@ -609,7 +601,48 @@ func writeFiles(req RunRequest, files deployFiles) (string, error) {
 			}
 		}
 	}
+	if err := os.WriteFile(req.EnvFilePath, []byte(files.envFile), envFilePerm); err != nil {
+		return "could not write environment file", err
+	}
+	if err := os.WriteFile(req.ComposeFilePath, []byte(files.composeYAML), composeFilePerm); err != nil {
+		return "could not write compose file", err
+	}
+	// The sets directory then matches the resolved YAML: sets that are no
+	// longer bound are removed, since they can hold secret values.
+	if err := removeStaleSetFiles(dir, req.EnvFilePath, files.setFiles); err != nil {
+		return "could not clear variable set files", err
+	}
 	return "", nil
+}
+
+// removeStaleSetFiles deletes every file in the sets directory that keep does
+// not name, and the directory itself once it is empty.
+func removeStaleSetFiles(dir, envFilePath string, keep map[int64]string) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	wanted := make(map[string]bool, len(keep))
+	for id := range keep {
+		wanted[setEnvPath(envFilePath, id)] = true
+	}
+	remaining := 0
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		if wanted[path] {
+			remaining++
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+	}
+	if remaining == 0 {
+		return os.Remove(dir)
+	}
+	return nil
 }
 
 // deployResponse is the Compose plus what the deploy has to tell the

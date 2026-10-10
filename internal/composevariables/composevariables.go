@@ -272,7 +272,7 @@ func decodeAndValidate(w http.ResponseWriter, r *http.Request) (input, string, s
 		writeError(w, http.StatusBadRequest, "request must contain one JSON object")
 		return input{}, "", "", false
 	}
-	key, value, err := environmentvariables.ValidateKeyValue(in.Key, in.Value)
+	key, value, err := environmentvariables.ValidateKeyValue("compose variable", in.Key, in.Value)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return input{}, "", "", false

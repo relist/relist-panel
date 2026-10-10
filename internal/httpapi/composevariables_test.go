@@ -162,7 +162,7 @@ func TestComposeVariablesValidation(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
 	f := newComposeVariablesFixture(t, server, "services: {web: {image: nginx}}")
-	first := f.create(t, "LOG_LEVEL", "debug", false)
+	f.create(t, "LOG_LEVEL", "debug", false)
 	second := f.create(t, "OTHER", "x", false)
 
 	for name, body := range map[string]map[string]any{
@@ -181,7 +181,6 @@ func TestComposeVariablesValidation(t *testing.T) {
 	if response, _ := f.send(t, http.MethodPut, "/"+idString(second.ID), map[string]any{"key": "LOG_LEVEL", "value": "x"}); response.StatusCode != http.StatusConflict {
 		t.Errorf("duplicate update status = %d, want 409", response.StatusCode)
 	}
-	_ = first
 
 	// The same key in a different Compose is fine: uniqueness is per Compose.
 	other := createCompose(t, server, f.projectID, f.environmentID, "other")

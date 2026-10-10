@@ -200,7 +200,60 @@ func variableWarnings(yamlContent string, services map[string]any, vars deployVa
 			}
 		}
 	}
+
+	// A bare environment: key resolves from the .env only, so a value that only
+	// a bound set holds is lost.
+	plain := make(map[string]bool, len(vars.Environment)+len(vars.Compose))
+	for _, variable := range append(append([]environmentVariable{}, vars.Environment...), vars.Compose...) {
+		plain[variable.Key] = true
+	}
+	serviceNames := make([]string, 0, len(services))
+	for name := range services {
+		serviceNames = append(serviceNames, name)
+	}
+	sort.Strings(serviceNames)
+	for _, name := range serviceNames {
+		if !declaredService(services, name) {
+			continue
+		}
+		inSet := map[string]string{}
+		for _, set := range vars.setsFor(name) {
+			for _, entry := range set.Entries {
+				inSet[entry.Key] = set.Name
+			}
+		}
+		if len(inSet) == 0 {
+			continue
+		}
+		for _, key := range yamlBareEnvironmentKeys(services[name].(map[string]any)["environment"]) {
+			if setName, ok := inSet[key]; ok && !plain[key] {
+				warnings = append(warnings, fmt.Sprintf("service %q lists %s in environment: without a value, so Compose resolves it from the .env and the value from variable set %q is lost", name, key, setName))
+			}
+		}
+	}
 	return warnings
+}
+
+// yamlBareEnvironmentKeys lists the keys of an environment: block that have no
+// value: a list entry without "=" or a map key with a null value. Sorted.
+func yamlBareEnvironmentKeys(environment any) []string {
+	var keys []string
+	switch environment := environment.(type) {
+	case map[string]any:
+		for key, value := range environment {
+			if value == nil {
+				keys = append(keys, key)
+			}
+		}
+	case []any:
+		for _, item := range environment {
+			if entry, ok := item.(string); ok && !strings.Contains(entry, "=") {
+				keys = append(keys, entry)
+			}
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // interpolation matches Compose's $$ escape, ${NAME...} and $NAME, in order.
@@ -287,7 +340,17 @@ func (s *Service) effectiveVariables(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	effective := mergeVariables(vars.Environment, vars.Compose, vars.setsFor(service)).Effective
-	for _, key := range yamlEnvironmentKeys(compose.YAMLContent, service) {
+	yamlKeys := yamlEnvironmentKeys(compose.YAMLContent, service)
+	inYAML := make(map[string]bool, len(yamlKeys))
+	for _, key := range yamlKeys {
+		inYAML[key] = true
+	}
+	for i := range effective {
+		if inYAML[effective[i].Key] {
+			effective[i].Overrides = append(effective[i].Overrides, variableSource{Kind: "yaml"})
+		}
+	}
+	for _, key := range yamlKeys {
 		effective = append(effective, effectiveVariable{Key: key, Source: variableSource{Kind: "yaml"}, Overrides: []variableSource{}})
 	}
 	writeJSON(w, http.StatusOK, effective)

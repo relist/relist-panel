@@ -475,7 +475,7 @@ func TestVariablesChangedAtMovesWithSetsAndBindings(t *testing.T) {
 	f.bind(t, "worker", set) // no change at all
 	check("identical rebind", false, false)
 
-	// The set is bound only by f's Compose: entry writes and renames stamp it.
+	// The set is bound only by f's Compose: entry writes stamp it; a rename does not (set files are named by ID).
 	reset()
 	entry := f.addEntry(t, set, "K", "v", false)
 	check("add entry", true, false)
@@ -484,7 +484,7 @@ func TestVariablesChangedAtMovesWithSetsAndBindings(t *testing.T) {
 	check("update entry", true, false)
 	reset()
 	f.call(t, http.MethodPut, f.setsPath("/"+idString(set.ID)), map[string]any{"name": "billing"})
-	check("rename", true, false)
+	check("rename", false, false)
 	reset()
 	f.call(t, http.MethodDelete, f.setsPath("/"+idString(set.ID)+"/entries/"+idString(entry.ID)), nil)
 	check("delete entry", true, false)
@@ -738,7 +738,9 @@ func TestEffectiveVariablesMatchWhatTheDeployWrites(t *testing.T) {
 	api := map[string]effectiveRow{}
 	var order []string
 	for _, row := range f.effective(t, "api") {
-		api[row.Key] = row
+		if _, seen := api[row.Key]; !seen {
+			api[row.Key] = row
+		}
 		order = append(order, row.Key)
 	}
 	wantOrder := []string{"ENV_ONLY", "SHARED", "LOG_LEVEL", "COMPOSE_ONLY", "SET_KEY", "FROM_YAML", "LOG_LEVEL"}
@@ -758,6 +760,14 @@ func TestEffectiveVariablesMatchWhatTheDeployWrites(t *testing.T) {
 	}
 	if row := api["SET_KEY"]; row.Value != "late" || !row.Secret || len(row.Overrides) != 1 {
 		t.Errorf("SET_KEY = %+v", row)
+	}
+	// A key the YAML also sets is marked as overridden by it on the merged row,
+	// and keeps its separate yaml row.
+	if row := api["LOG_LEVEL"]; len(row.Overrides) != 2 || string(row.Overrides[0]) != `"environment"` || string(row.Overrides[1]) != `"yaml"` {
+		t.Errorf("LOG_LEVEL overrides = %q, want environment then yaml", row.Overrides)
+	}
+	if row := api["SET_KEY"]; len(row.Overrides) != 1 {
+		t.Errorf("SET_KEY overrides = %q, want none from yaml", row.Overrides)
 	}
 	if row := api["FROM_YAML"]; string(row.Source) != `"yaml"` || row.Value != "" {
 		t.Errorf("FROM_YAML = %+v", row)

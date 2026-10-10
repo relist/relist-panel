@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -398,31 +399,33 @@ func decodeInput(w http.ResponseWriter, r *http.Request) (environmentVariableInp
 }
 
 func validateInput(input environmentVariableInput) (string, string, error) {
-	return ValidateKeyValue(input.Key, input.Value)
+	return ValidateKeyValue("environment variable", input.Key, input.Value)
 }
 
 // ValidateKeyValue applies the Environment Variable key and value rules and
 // returns the trimmed key and the value. Compose Variables share them, so the
-// two kinds of variable can never disagree about what a valid key is.
-func ValidateKeyValue(rawKey string, rawValue *string) (string, string, error) {
+// two kinds of variable can never disagree about what a valid key is. noun
+// names the kind of variable in the messages ("environment variable",
+// "compose variable", "variable").
+func ValidateKeyValue(noun, rawKey string, rawValue *string) (string, string, error) {
 	key := strings.TrimSpace(rawKey)
 	if key == "" {
-		return "", "", errors.New("environment variable key is required")
+		return "", "", fmt.Errorf("%s key is required", noun)
 	}
 	if utf8.RuneCountInString(key) > maxEnvironmentKey {
-		return "", "", errors.New("environment variable key must be 255 characters or fewer")
+		return "", "", fmt.Errorf("%s key must be 255 characters or fewer", noun)
 	}
 	// Keys are interpolated into Compose files as ${KEY}, so anything the
 	// shell-parameter character set rejects would create a variable no
 	// reference could reach.
 	if !environmentKeyPattern.MatchString(key) {
-		return "", "", errors.New("environment variable key must match [A-Za-z_][A-Za-z0-9_]*")
+		return "", "", fmt.Errorf("%s key must match [A-Za-z_][A-Za-z0-9_]*", noun)
 	}
 	if rawValue == nil {
-		return "", "", errors.New("environment variable value is required")
+		return "", "", fmt.Errorf("%s value is required", noun)
 	}
 	if strings.ContainsRune(*rawValue, 0) {
-		return "", "", errors.New("environment variable value must not contain NUL")
+		return "", "", fmt.Errorf("%s value must not contain NUL", noun)
 	}
 	return key, *rawValue, nil
 }

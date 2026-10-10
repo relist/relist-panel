@@ -146,7 +146,7 @@ The bindings API rejects a set whose `environment_id` differs from the Compose's
 
 - any create, update or delete of that Compose's Compose Variables
 - any change to that Compose's bindings
-- any change to a set's entries, or a rename, for every Compose that binds the set
+- any change to a set's entries, for every Compose that binds the set (a rename does not: set files are named by ID, so nothing deployed changes)
 
 The Compose page shows the redeploy banner when `variables_changed_at >= lastDeployedAt`, the same
 way `domainsPendingRedeploy` (`web/src/pages/domains-view.ts`) works for Domains.

@@ -33,3 +33,12 @@ func TestValidateInputRequiresValue(t *testing.T) {
 		t.Error("validateInput without a value = nil, want an error")
 	}
 }
+
+func TestValidateKeyValueUsesTheCallersNoun(t *testing.T) {
+	if _, _, err := ValidateKeyValue("compose variable", " ", nil); err == nil || err.Error() != "compose variable key is required" {
+		t.Errorf("err = %v", err)
+	}
+	if _, _, err := ValidateKeyValue("variable", "K", nil); err == nil || err.Error() != "variable value is required" {
+		t.Errorf("err = %v", err)
+	}
+}

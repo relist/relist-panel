@@ -121,7 +121,7 @@ func decodeEntry(w http.ResponseWriter, r *http.Request) (entryInput, string, st
 	if !decodeBody(w, r, &in) {
 		return entryInput{}, "", "", false
 	}
-	key, value, err := environmentvariables.ValidateKeyValue(in.Key, in.Value)
+	key, value, err := environmentvariables.ValidateKeyValue("variable", in.Key, in.Value)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return entryInput{}, "", "", false
