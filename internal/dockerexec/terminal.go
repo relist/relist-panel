@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -374,10 +375,20 @@ func (e *TerminalExec) Kill(ctx context.Context, containerID string, pid int, si
 }
 
 // Start opens a TTY exec and returns the hijacked stream. The create carries
-// the requested shell, user, TERM and initial console size; the start asks the
-// daemon to upgrade the connection, and the 101's connection — with its
-// reader — becomes the Session.
+// the requested shell, user, TERM, a UTF-8 LANG when the image sets no locale
+// of its own, and the initial console size; the start asks the daemon to
+// upgrade the connection, and the 101's connection — with its reader —
+// becomes the Session.
 func (e *TerminalExec) Start(ctx context.Context, containerID string, opts terminal.ExecOptions) (terminal.Session, error) {
+	env := []string{"TERM=xterm-256color"}
+	hasLocale, err := e.containerHasLocale(ctx, containerID)
+	if err != nil {
+		return nil, err
+	}
+	if !hasLocale {
+		env = append(env, fallbackLocale)
+	}
+
 	createPath := "/containers/" + url.PathEscape(containerID) + "/exec"
 	consoleSize := [2]uint16{opts.Rows, opts.Cols}
 	resp, body, err := e.send(ctx, http.MethodPost, createPath, createExecRequest{
@@ -387,7 +398,7 @@ func (e *TerminalExec) Start(ctx context.Context, containerID string, opts termi
 		AttachStdout: true,
 		AttachStderr: true,
 		User:         opts.User,
-		Env:          []string{"TERM=xterm-256color"},
+		Env:          env,
 		ConsoleSize:  &consoleSize,
 	})
 	if err != nil {
@@ -407,6 +418,46 @@ func (e *TerminalExec) Start(ctx context.Context, containerID string, opts termi
 		return nil, err
 	}
 	return &session{exec: e, conn: conn, reader: reader, execID: execID}, nil
+}
+
+// fallbackLocale is the exec's LANG when the image sets none. Without a UTF-8
+// locale bash's readline runs in the C locale with convert-meta on, so every
+// byte of a multibyte character (Thai is three) reads as a Meta chord — the
+// 0xA1 ending "ม" is M-!, complete-command — and typing it floods the screen.
+// C.UTF-8 ships with glibc 2.35+ and Debian; where it is missing glibc falls
+// back to C without a warning, which is no worse than before.
+const fallbackLocale = "LANG=C.UTF-8"
+
+// localeVars are the variables that choose a character set: when the image
+// sets any of them, its choice stands and the exec adds nothing.
+var localeVars = []string{"LANG", "LC_ALL", "LC_CTYPE"}
+
+// containerHasLocale reads Config.Env from GET /containers/{id}/json and
+// reports whether it sets a non-empty LANG, LC_ALL or LC_CTYPE.
+func (e *TerminalExec) containerHasLocale(ctx context.Context, containerID string) (bool, error) {
+	path := "/containers/" + url.PathEscape(containerID) + "/json"
+	resp, body, err := e.send(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return false, err
+	}
+	if !ok(resp.StatusCode) {
+		return false, apiError(path, resp.Status, body)
+	}
+	var inspected struct {
+		Config struct {
+			Env []string `json:"Env"`
+		} `json:"Config"`
+	}
+	if err := json.Unmarshal(body, &inspected); err != nil {
+		return false, fmt.Errorf("docker api %s: decode: %w", path, err)
+	}
+	for _, kv := range inspected.Config.Env {
+		name, value, _ := strings.Cut(kv, "=")
+		if value != "" && slices.Contains(localeVars, name) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // hijack dials the socket, writes the start request with the upgrade headers
