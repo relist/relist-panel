@@ -1,19 +1,23 @@
 import { Typography } from 'antd';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { usePanel } from '../data/store';
-import type { Compose, ComposeVariable, Environment } from '../data/types';
+import type { Compose, ComposeVariable, Environment, VariableSet } from '../data/types';
 import { ComposeBindingsCard } from './ComposeBindingsCard';
 import { RedeployBanner } from './RedeployBanner';
+import { VariableSetsCard } from './VariableSetsCard';
 import { VariablesEditor } from './VariablesPanel';
 import { overrideHint } from './variables-view';
 
 const { Text } = Typography;
 
 /**
- * The Compose screen's Variables tab: this Compose's own variables, which
- * override an Environment Variable of the same key for this Compose only. The
- * list is the page's (it also feeds the Editor tab's Environment card); each
- * write refreshes the Compose, so the banner follows `variablesChangedAt`.
+ * The Compose screen's Variables tab, three cards: this Compose's own
+ * variables (they override an Environment Variable of the same key for this
+ * Compose only), its Variable Sets, and the Service bindings. The variables
+ * list is the page's (it also feeds the Editor tab's Environment card). The
+ * sets are loaded here because the sets card and the bindings card share them.
+ * Each write refreshes the Compose, so the banner follows `variablesChangedAt`.
  */
 export function ComposeVariablesTab({
   compose,
@@ -37,7 +41,29 @@ export function ComposeVariablesTab({
   /** `undefined` while the first load is in flight. */
   variables?: ComposeVariable[];
 }) {
-  const { deleteComposeVariable, isPending, saveComposeVariable } = usePanel();
+  const { deleteComposeVariable, isPending, loadVariableSets, saveComposeVariable } = usePanel();
+  const composeId = compose.id;
+  const [setsData, setSetsData] = useState<{ composeId: number; sets?: VariableSet[]; error?: string }>();
+  const request = useRef(0);
+
+  const reloadSets = useCallback(async () => {
+    const mine = ++request.current;
+    try {
+      const sets = await loadVariableSets(composeId);
+      if (request.current === mine) setSetsData({ composeId, sets });
+    } catch (reason: unknown) {
+      if (request.current === mine) {
+        const error = reason instanceof Error ? reason.message : 'Could not load the Variable Sets';
+        setSetsData((previous) => ({ composeId, error, sets: previous?.composeId === composeId ? previous.sets : undefined }));
+      }
+    }
+  }, [composeId, loadVariableSets]);
+
+  useEffect(() => {
+    void reloadSets();
+  }, [reloadSets]);
+
+  const current = setsData?.composeId === composeId ? setsData : undefined;
 
   return (
     <>
@@ -81,7 +107,8 @@ export function ComposeVariablesTab({
         title="Compose variables"
         variables={variables ?? []}
       />
-      <ComposeBindingsCard compose={compose} environment={environment} onError={onError} />
+      <VariableSetsCard compose={compose} error={current?.error} onError={onError} onReload={reloadSets} sets={current?.sets} />
+      <ComposeBindingsCard compose={compose} onChanged={() => void reloadSets()} onError={onError} sets={current?.sets} />
     </>
   );
 }

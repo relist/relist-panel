@@ -84,13 +84,13 @@ type PanelValue = {
   loadComposeVariables: (composeId: number) => Promise<ComposeVariable[]>;
   saveComposeVariable: (composeId: number, variable: NewVariable, variableId?: number) => Promise<void>;
   deleteComposeVariable: (composeId: number, variableId: number) => Promise<void>;
-  /** The Environment's Variable Sets with their entries and who binds them. Sets live on the API, not in the tree. */
-  loadVariableSets: (environmentId: number) => Promise<VariableSet[]>;
-  createVariableSet: (environmentId: number, name: string) => Promise<void>;
-  renameVariableSet: (environmentId: number, setId: number, name: string) => Promise<void>;
-  deleteVariableSet: (environmentId: number, setId: number) => Promise<void>;
-  saveSetEntry: (environmentId: number, setId: number, entry: NewVariable, entryId?: number) => Promise<void>;
-  deleteSetEntry: (environmentId: number, setId: number, entryId: number) => Promise<void>;
+  /** The Compose's Variable Sets with their entries and bound Services. Sets live on the API, not in the tree; each write refreshes the Compose. */
+  loadVariableSets: (composeId: number) => Promise<VariableSet[]>;
+  createVariableSet: (composeId: number, name: string) => Promise<void>;
+  renameVariableSet: (composeId: number, setId: number, name: string) => Promise<void>;
+  deleteVariableSet: (composeId: number, setId: number) => Promise<void>;
+  saveSetEntry: (composeId: number, setId: number, entry: NewVariable, entryId?: number) => Promise<void>;
+  deleteSetEntry: (composeId: number, setId: number, entryId: number) => Promise<void>;
   /** The Compose's Service bindings. Saving refreshes the Compose, so `variablesChangedAt` reaches the page. */
   loadBindings: (composeId: number) => Promise<ServiceBindings[]>;
   saveBindings: (composeId: number, service: string, setIds: number[]) => Promise<void>;
@@ -770,53 +770,14 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [domainLocation, refreshStatus, track],
   );
 
-  const setsLocation = useCallback((environmentId: number) => {
-    const location = findEnvironmentLocation(projectsRef.current, environmentId);
-    if (!location) {
-      throw new Error('Environment not found');
-    }
-    return location.project.id;
-  }, []);
-
-  const loadVariableSets = useCallback(
-    (environmentId: number) =>
-      track(`variable-sets:${environmentId}`, () => api.listVariableSets(setsLocation(environmentId), environmentId)),
-    [setsLocation, track],
-  );
-
-  const createVariableSet = useCallback(
-    (environmentId: number, name: string) =>
-      track(`create-variable-set:${environmentId}`, async () => {
-        await api.createVariableSet(setsLocation(environmentId), environmentId, name);
-      }),
-    [setsLocation, track],
-  );
-
-  const renameVariableSet = useCallback(
-    (environmentId: number, setId: number, name: string) =>
-      track(`rename-variable-set:${setId}`, async () => {
-        await api.renameVariableSet(setsLocation(environmentId), environmentId, setId, name);
-      }),
-    [setsLocation, track],
-  );
-
-  const deleteVariableSet = useCallback(
-    (environmentId: number, setId: number) =>
-      track(`delete-variable-set:${setId}`, async () => {
-        await api.deleteVariableSet(setsLocation(environmentId), environmentId, setId);
-      }),
-    [setsLocation, track],
-  );
-
-  // A set change stamps every Compose that binds the set, but the tree loads
-  // once, so those Composes are re-read here to show the redeploy banner. The
-  // write already succeeded, so a failed refresh must not report it as failed.
-  const refreshSetBinders = useCallback(
-    async (projectId: number, environmentId: number, setId: number) => {
+  // The Compose's sets. A write that can stamp `variablesChangedAt` (an entry
+  // write, a delete) refreshes this Compose so the banner follows; create and
+  // rename refresh too, which is harmless. The write already succeeded, so a
+  // failed refresh must not report it as failed.
+  const refreshQuietly = useCallback(
+    async (composeId: number) => {
       try {
-        const sets = await api.listVariableSets(projectId, environmentId);
-        const composeIds = new Set((sets.find((set) => set.id === setId)?.usedBy ?? []).map((usage) => usage.composeId));
-        await Promise.allSettled([...composeIds].map((composeId) => refreshStatus(composeId)));
+        await refreshStatus(composeId);
       } catch {
         // The banner appears on the next reload instead.
       }
@@ -824,28 +785,59 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [refreshStatus],
   );
 
-  const saveSetEntry = useCallback(
-    (environmentId: number, setId: number, entry: NewVariable, entryId?: number) =>
-      track(`save-set-entry:${setId}`, async () => {
-        const projectId = setsLocation(environmentId);
-        if (entryId) {
-          await api.updateSetEntry(projectId, environmentId, setId, entryId, entry);
-        } else {
-          await api.createSetEntry(projectId, environmentId, setId, entry);
-        }
-        await refreshSetBinders(projectId, environmentId, setId);
+  const loadVariableSets = useCallback(
+    (composeId: number) => track(`variable-sets:${composeId}`, () => api.listVariableSets(domainLocation(composeId))),
+    [domainLocation, track],
+  );
+
+  const createVariableSet = useCallback(
+    (composeId: number, name: string) =>
+      track(`create-variable-set:${composeId}`, async () => {
+        await api.createVariableSet(domainLocation(composeId), name);
+        await refreshQuietly(composeId);
       }),
-    [refreshSetBinders, setsLocation, track],
+    [domainLocation, refreshQuietly, track],
+  );
+
+  const renameVariableSet = useCallback(
+    (composeId: number, setId: number, name: string) =>
+      track(`rename-variable-set:${setId}`, async () => {
+        await api.renameVariableSet(domainLocation(composeId), setId, name);
+        await refreshQuietly(composeId);
+      }),
+    [domainLocation, refreshQuietly, track],
+  );
+
+  const deleteVariableSet = useCallback(
+    (composeId: number, setId: number) =>
+      track(`delete-variable-set:${setId}`, async () => {
+        await api.deleteVariableSet(domainLocation(composeId), setId);
+        await refreshQuietly(composeId);
+      }),
+    [domainLocation, refreshQuietly, track],
+  );
+
+  const saveSetEntry = useCallback(
+    (composeId: number, setId: number, entry: NewVariable, entryId?: number) =>
+      track(`save-set-entry:${setId}`, async () => {
+        const location = domainLocation(composeId);
+        if (entryId) {
+          await api.updateSetEntry(location, setId, entryId, entry);
+        } else {
+          await api.createSetEntry(location, setId, entry);
+        }
+        await refreshQuietly(composeId);
+      }),
+    [domainLocation, refreshQuietly, track],
   );
 
   const deleteSetEntry = useCallback(
-    (environmentId: number, setId: number, entryId: number) =>
+    (composeId: number, setId: number, entryId: number) =>
       track(`delete-set-entry:${entryId}`, async () => {
-        const projectId = setsLocation(environmentId);
-        await api.deleteSetEntry(projectId, environmentId, setId, entryId);
-        await refreshSetBinders(projectId, environmentId, setId);
+        await api.deleteSetEntry(domainLocation(composeId), setId, entryId);
+        await refreshQuietly(composeId);
       }),
-    [refreshSetBinders, setsLocation, track],
+    [domainLocation, refreshQuietly, track],
   );
 
   const loadBindings = useCallback(

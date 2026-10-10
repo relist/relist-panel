@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { EffectiveVariable } from '../data/types';
-import { bindingRows, effectiveRows, entryCountLabel, setName, sourceKind, sourceLabel, usageLabel } from './bindings-view';
+import { bindingRows, effectiveRows, entryCountLabel, setName, sourceKind, sourceLabel, deleteSetNote } from './bindings-view';
 
 describe('bindingRows', () => {
   it('gives every YAML Service a row, in YAML order, bound or not', () => {
@@ -43,7 +43,8 @@ describe('labels', () => {
   });
 
   it('writes compose/service and singular or plural entries', () => {
-    expect(usageLabel({ composeName: 'shop', service: 'web' })).toBe('shop/web');
+    expect(deleteSetNote([])).toBe('Its entries are deleted with it.');
+    expect(deleteSetNote(['api', 'worker'])).toBe('Unbinds it from api, worker. Takes effect on the next deploy.');
     expect(entryCountLabel(1)).toBe('1 entry');
     expect(entryCountLabel(0)).toBe('0 entries');
     expect(entryCountLabel(3)).toBe('3 entries');

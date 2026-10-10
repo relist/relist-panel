@@ -42,22 +42,16 @@ export type SetEntry = {
   value: string;
 };
 
-/** A Service that binds a Variable Set. */
-export type SetUsage = {
-  composeId: number;
-  composeName: string;
-  service: string;
-};
-
-/** A named list of key-value pairs belonging to an Environment, delivered only to the Services bound to it. */
+/** A named list of key-value pairs belonging to a Compose, delivered only to the Services bound to it. */
 export type VariableSet = {
   id: number;
-  environmentId: number;
+  composeId: number;
   name: string;
   createdAt: string;
   updatedAt: string;
   entries: SetEntry[];
-  usedBy: SetUsage[];
+  /** The Compose's Services that bind the set, sorted by name. */
+  boundServices: string[];
 };
 
 /** One Service's bindings: set ids in binding order (position = precedence). */

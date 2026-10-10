@@ -1,4 +1,4 @@
-import type { EffectiveVariable, ServiceBindings, SetUsage, VariableSet, VariableSource } from '../data/types';
+import type { EffectiveVariable, ServiceBindings, VariableSet, VariableSource } from '../data/types';
 
 /**
  * View decisions for Variable Sets and Service bindings, pure so row grouping,
@@ -30,14 +30,9 @@ export function bindingRows(services: readonly string[], bindings: readonly Serv
   };
 }
 
-/** The set's name for an id; an id the Environment no longer lists (a race with a delete) shows as `set #id`. */
+/** The set's name for an id; an id the Compose no longer lists (a race with a delete) shows as `set #id`. */
 export function setName(sets: readonly Pick<VariableSet, 'id' | 'name'>[], id: number): string {
   return sets.find((candidate) => candidate.id === id)?.name ?? `set #${id}`;
-}
-
-/** `compose/service`, the "used by" tag text. */
-export function usageLabel(usage: Pick<SetUsage, 'composeName' | 'service'>): string {
-  return `${usage.composeName}/${usage.service}`;
 }
 
 export function entryCountLabel(count: number): string {
@@ -78,4 +73,10 @@ export function effectiveRows(variables: readonly EffectiveVariable[]): Effectiv
     overriddenByYaml: row.overrides.includes('yaml'),
     overrides: row.overrides.filter((source) => source !== 'yaml'),
   }));
+}
+
+/** The delete confirmation's consequence line, naming the Services the set unbinds from. */
+export function deleteSetNote(boundServices: readonly string[]): string {
+  if (boundServices.length === 0) return 'Its entries are deleted with it.';
+  return `Unbinds it from ${boundServices.join(', ')}. Takes effect on the next deploy.`;
 }

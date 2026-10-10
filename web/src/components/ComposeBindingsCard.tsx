@@ -4,32 +4,38 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { CODE_FONT_STACK } from '../app/theme';
 import { usePanel } from '../data/store';
-import type { Compose, Environment, ServiceBindings, VariableSet } from '../data/types';
+import type { Compose, ServiceBindings, VariableSet } from '../data/types';
 import { bindingRows, setName } from './bindings-view';
 import { EffectiveEnvModal } from './EffectiveEnvModal';
 import { EmptyState } from './primitives';
 
 const { Text } = Typography;
 
-type Loaded = { composeId: number; bindings: ServiceBindings[]; services: string[]; sets: VariableSet[] };
+type Loaded = { composeId: number; bindings: ServiceBindings[]; services: string[] };
 
 /**
  * The Compose's Service bindings: one row per Service in the saved YAML (the
- * list the Domains form uses) with a multi-select of the Environment's sets.
+ * list the Domains form uses) with a multi-select of this Compose's sets (the Variables tab owns the list and passes it in).
  * Tag order is binding order. Bindings for Services the YAML no longer has are
  * listed apart and can only be removed. Each write refreshes the Compose, so
- * the redeploy banner follows `variablesChangedAt`.
+ * the redeploy banner follows `variablesChangedAt`. The bindings reload when
+ * the sets change (a deleted set takes its bindings with it); a binding change
+ * asks the tab to reload the sets, whose "bound to" tags it alters.
  */
 export function ComposeBindingsCard({
   compose,
-  environment,
+  onChanged,
   onError,
+  sets,
 }: {
   compose: Compose;
-  environment: Environment;
+  /** Called after a binding write, to reload the sets' "bound to" tags. */
+  onChanged?: () => void;
   onError: (reason: unknown) => void;
+  /** This Compose's sets; `undefined` while they load. */
+  sets?: VariableSet[];
 }) {
-  const { loadBindings, loadDomains, loadVariableSets, saveBindings, isPending } = usePanel();
+  const { loadBindings, loadDomains, saveBindings, isPending } = usePanel();
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const [data, setData] = useState<Loaded>();
@@ -42,28 +48,24 @@ export function ComposeBindingsCard({
   const chains = useRef<Record<string, Promise<void>>>({});
   const waiting = useRef<Record<string, number>>({});
   const composeId = compose.id;
-  const environmentId = environment.id;
 
   const reload = useCallback(async () => {
     const mine = ++request.current;
     try {
-      const [sets, bindings, domains] = await Promise.all([
-        loadVariableSets(environmentId),
-        loadBindings(composeId),
-        loadDomains(composeId),
-      ]);
+      const [bindings, domains] = await Promise.all([loadBindings(composeId), loadDomains(composeId)]);
       if (request.current === mine) {
-        setData({ bindings, composeId, services: domains.services, sets });
+        setData({ bindings, composeId, services: domains.services });
         setError(undefined);
       }
     } catch (reason: unknown) {
       if (request.current === mine) setError(reason instanceof Error ? reason.message : 'Could not load the bindings');
     }
-  }, [composeId, environmentId, loadBindings, loadDomains, loadVariableSets]);
+  }, [composeId, loadBindings, loadDomains]);
 
+  // Reload when the sets change as well: deleting a set removes its bindings.
   useEffect(() => {
     void reload();
-  }, [reload]);
+  }, [reload, sets]);
 
   const current = data?.composeId === composeId ? data : undefined;
 
@@ -83,6 +85,7 @@ export function ComposeBindingsCard({
       // Only the last save of a burst hands the row back to the server's answer.
       if (waiting.current[service] === 0 || failed) {
         await reload();
+        onChanged?.();
         if (waiting.current[service] === 0) {
           setDraft((previous) => {
             const { [service]: _done, ...rest } = previous;
@@ -101,11 +104,13 @@ export function ComposeBindingsCard({
     ) : (
       <Skeleton active paragraph={{ rows: 2 }} title={false} />
     );
-  } else if (current.sets.length === 0) {
-    // Nothing to bind yet: the sets are made in the Environment's Variables tab.
+  } else if (!sets) {
+    body = <Skeleton active paragraph={{ rows: 2 }} title={false} />;
+  } else if (sets.length === 0) {
+    // Nothing to bind yet: the sets are made in the card above.
     body = (
       <EmptyState
-        description="Create a Variable Set in this Environment's Variables tab, then bind it to a Service here."
+        description="Create a Variable Set in the Variable Sets card above, then bind it to a Service here."
         title="No Variable Sets to bind"
       />
     );
@@ -113,7 +118,7 @@ export function ComposeBindingsCard({
     body = <EmptyState description="Save a Compose file with Services, then bind sets to them here." title="No Services in the saved YAML" />;
   } else {
     const { live, stale } = bindingRows(current.services, current.bindings);
-    const options = current.sets.map((set) => ({ label: set.name, value: set.id }));
+    const options = sets.map((set) => ({ label: set.name, value: set.id }));
     const rowStyle = { borderBottom: `1px solid ${token.colorBorderSecondary}`, padding: '12px 0' };
     body = (
       <>
@@ -148,7 +153,7 @@ export function ComposeBindingsCard({
               </Text>
             </Flex>
             <Text style={{ flex: '1 1 240px' }} type="warning">
-              not in YAML · bound to {row.setIds.map((id) => setName(current.sets, id)).join(', ')}
+              not in YAML · bound to {row.setIds.map((id) => setName(sets, id)).join(', ')}
             </Text>
             <Button
               danger

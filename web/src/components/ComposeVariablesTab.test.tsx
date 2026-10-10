@@ -13,7 +13,12 @@ const panel = vi.hoisted(() => ({
   isPending: vi.fn(() => false),
   loadBindings: vi.fn(),
   loadDomains: vi.fn(),
+  createVariableSet: vi.fn(),
+  deleteSetEntry: vi.fn(),
+  deleteVariableSet: vi.fn(),
   loadVariableSets: vi.fn(),
+  renameVariableSet: vi.fn(),
+  saveSetEntry: vi.fn(),
   saveComposeVariable: vi.fn(),
 }));
 
@@ -156,6 +161,34 @@ describe('ComposeVariablesTab', () => {
 
     await waitFor(() => expect(panel.deleteComposeVariable).toHaveBeenCalledWith(7, 4));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it('shows the Compose variables, Variable Sets and Service bindings cards in that order', async () => {
+    renderTab();
+    await screen.findByText('No Variable Sets yet');
+    const titles = ['Compose variables', 'Variable Sets', 'Service bindings'].map((title) => screen.getByText(title, { selector: '.ant-card-head-title, .ant-card-head-title *' }));
+    for (let i = 1; i < titles.length; i += 1) {
+      expect(titles[i - 1].compareDocumentPosition(titles[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(await screen.findByText('No Variable Sets to bind')).toBeTruthy();
+    expect(panel.loadVariableSets).toHaveBeenCalledWith(7);
+  });
+
+  it('offers this Compose sets in the binding select and reloads them after a set is created', async () => {
+    panel.loadVariableSets.mockResolvedValueOnce([]).mockResolvedValue([
+      { boundServices: [], composeId: 7, createdAt: '', entries: [], id: 3, name: 'cache', updatedAt: '' },
+    ]);
+    panel.loadDomains.mockResolvedValue({ domains: [], services: ['web'] });
+    panel.createVariableSet.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderTab();
+    await user.click(await screen.findByRole('button', { name: /New set/ }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Name'), 'cache');
+    await user.click(within(dialog).getByRole('button', { name: 'Create set' }));
+    await waitFor(() => expect(panel.createVariableSet).toHaveBeenCalledWith(7, 'cache'));
+    await user.click(await screen.findByRole('combobox', { name: 'Variable Sets for web' }));
+    expect(await screen.findByTitle('cache')).toBeTruthy();
   });
 
   it('shows the redeploy banner only when a variable changed since the last deploy', () => {

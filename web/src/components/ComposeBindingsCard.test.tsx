@@ -5,7 +5,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Compose, Environment, VariableSet } from '../data/types';
+import type { Compose, VariableSet } from '../data/types';
 import { ComposeBindingsCard } from './ComposeBindingsCard';
 
 const panel = vi.hoisted(() => ({
@@ -13,40 +13,56 @@ const panel = vi.hoisted(() => ({
   loadBindings: vi.fn(),
   loadDomains: vi.fn(),
   loadEffectiveVariables: vi.fn(),
-  loadVariableSets: vi.fn(),
   saveBindings: vi.fn(),
 }));
 
 vi.mock('../data/store', () => ({ usePanel: () => panel }));
 
 const compose = { id: 7, name: 'shop' } as Compose;
-const environment = { id: 1, name: 'production' } as Environment;
-const set = (id: number, name: string): VariableSet => ({ createdAt: '', entries: [], environmentId: 1, id, name, updatedAt: '', usedBy: [] });
+const set = (id: number, name: string): VariableSet => ({ createdAt: '', entries: [], boundServices: [], composeId: 7, id, name, updatedAt: '' });
 
-function renderCard(onError = vi.fn()) {
-  render(
+function renderCard(sets: VariableSet[] | undefined = [set(1, 'db'), set(2, 'cache')], onError = vi.fn()) {
+  const onChanged = vi.fn();
+  const view = render(
     <App>
-      <ComposeBindingsCard compose={compose} environment={environment} onError={onError} />
+      <ComposeBindingsCard compose={compose} onChanged={onChanged} onError={onError} sets={sets} />
     </App>,
   );
-  return { onError };
+  return { ...view, onChanged, onError };
 }
 
 describe('ComposeBindingsCard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     panel.isPending.mockReturnValue(false);
-    panel.loadVariableSets.mockResolvedValue([set(1, 'db'), set(2, 'cache')]);
     panel.loadBindings.mockResolvedValue([]);
     panel.loadDomains.mockResolvedValue({ domains: [], services: ['web', 'worker'] });
     panel.saveBindings.mockResolvedValue(undefined);
   });
 
-  it('shows only an empty state when the Environment has no sets', async () => {
-    panel.loadVariableSets.mockResolvedValue([]);
-    renderCard();
+  it('shows only an empty state pointing at the sets card when the Compose has no sets', async () => {
+    renderCard([]);
     expect(await screen.findByText('No Variable Sets to bind')).toBeTruthy();
+    expect(screen.getByText(/in the Variable Sets card above/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Effective env' })).toBeNull();
+  });
+
+  it('reloads the bindings when the sets change, and tells the tab after a binding write', async () => {
+    panel.loadBindings.mockResolvedValueOnce([{ service: 'web', setIds: [1] }]).mockResolvedValue([]);
+    const user = userEvent.setup();
+    const { onChanged, rerender } = renderCard([set(1, 'db'), set(2, 'cache')]);
+    await screen.findByText('web');
+    expect(panel.loadBindings).toHaveBeenCalledTimes(1);
+    // The set is deleted: its binding goes with it.
+    rerender(
+      <App>
+        <ComposeBindingsCard compose={compose} onChanged={onChanged} onError={vi.fn()} sets={[set(2, 'cache')]} />
+      </App>,
+    );
+    await waitFor(() => expect(panel.loadBindings).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole('combobox', { name: 'Variable Sets for web' }));
+    await user.click(await screen.findByTitle('cache'));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
   it('lists one row per YAML Service with the bound set names in binding order', async () => {
