@@ -9,6 +9,7 @@
 import type {
   Compose,
   ComposeDomains,
+  ComposeVariable,
   ComposePreview,
   ComposeVolumes,
   Domain,
@@ -19,6 +20,10 @@ import type {
   HostMetrics,
   OrphanVolume,
   Project,
+  ServiceBindings,
+  SetEntry,
+  VariableSet,
+  EffectiveVariable,
   ServiceFacts,
   ServiceMetrics,
   TerminalServices,
@@ -125,7 +130,10 @@ function errorBody(status: number, bodyText: string): { message: string; field?:
   try {
     const payload = JSON.parse(bodyText) as (ErrorResponse & { field?: string }) | null;
     if (payload?.error) {
-      return { message: payload.error, field: payload.field || undefined };
+      return {
+        message: payload.error,
+        field: payload.field || undefined,
+      };
     }
   } catch {
     // Fall through to a status-based message when the response is not JSON.
@@ -270,6 +278,38 @@ export const api = {
     request<Domain>(domainsPath(location), jsonInit('POST', input)),
   updateDomain: (location: ComposePath, domainId: number, input: DomainInput) =>
     request<Domain>(`${domainsPath(location)}/${domainId}`, jsonInit('PUT', input)),
+  /** The Compose's own Variable Sets, with entries and the Services that bind each. */
+  listVariableSets: (location: ComposePath) => request<VariableSet[]>(setsPath(location)),
+  createVariableSet: (location: ComposePath, name: string) =>
+    request<VariableSet>(setsPath(location), jsonInit('POST', { name })),
+  renameVariableSet: (location: ComposePath, setId: number, name: string) =>
+    request<VariableSet>(`${setsPath(location)}/${setId}`, jsonInit('PUT', { name })),
+  /** Success is 204; the set's bindings go with it. */
+  deleteVariableSet: (location: ComposePath, setId: number) =>
+    request<void>(`${setsPath(location)}/${setId}`, { method: 'DELETE' }),
+  createSetEntry: (location: ComposePath, setId: number, input: EnvironmentVariableInput) =>
+    request<SetEntry>(`${setsPath(location)}/${setId}/entries`, jsonInit('POST', input)),
+  updateSetEntry: (location: ComposePath, setId: number, entryId: number, input: EnvironmentVariableInput) =>
+    request<SetEntry>(`${setsPath(location)}/${setId}/entries/${entryId}`, jsonInit('PUT', input)),
+  deleteSetEntry: (location: ComposePath, setId: number, entryId: number) =>
+    request<void>(`${setsPath(location)}/${setId}/entries/${entryId}`, { method: 'DELETE' }),
+  listComposeVariables: (location: ComposePath) => request<ComposeVariable[]>(composeVariablesPath(location)),
+  createComposeVariable: (location: ComposePath, input: EnvironmentVariableInput) =>
+    request<ComposeVariable>(composeVariablesPath(location), jsonInit('POST', input)),
+  updateComposeVariable: (location: ComposePath, variableId: number, input: EnvironmentVariableInput) =>
+    request<ComposeVariable>(`${composeVariablesPath(location)}/${variableId}`, jsonInit('PUT', input)),
+  /** Success is 204. */
+  deleteComposeVariable: (location: ComposePath, variableId: number) =>
+    request<void>(`${composeVariablesPath(location)}/${variableId}`, { method: 'DELETE' }),
+  listBindings: (location: ComposePath) => request<ServiceBindings[]>(`${composePath(location)}/bindings`),
+  /** Replaces one Service's bindings; the order of `setIds` is the binding order, `[]` removes them. */
+  saveBindings: (location: ComposePath, service: string, setIds: number[]) =>
+    request<ServiceBindings>(
+      `${composePath(location)}/bindings/${encodeURIComponent(service)}`,
+      jsonInit('PUT', { setIds }),
+    ),
+  effectiveVariables: (location: ComposePath, service: string) =>
+    request<EffectiveVariable[]>(`${composePath(location)}/services/${encodeURIComponent(service)}/effective-variables`),
   /** Success is 204. */
   deleteDomain: (location: ComposePath, domainId: number) =>
     request<void>(`${domainsPath(location)}/${domainId}`, { method: 'DELETE' }),
@@ -388,6 +428,14 @@ function composesPath(projectId: number, environmentId: number): string {
 
 function composePath(location: ComposePath): string {
   return `${composesPath(location.projectId, location.environmentId)}/${location.composeId}`;
+}
+
+function setsPath(location: ComposePath): string {
+  return `${composePath(location)}/variable-sets`;
+}
+
+function composeVariablesPath(location: ComposePath): string {
+  return `${composePath(location)}/variables`;
 }
 
 function domainsPath(location: ComposePath): string {

@@ -80,6 +80,30 @@ export function domainsPendingRedeploy(compose: Pick<Compose, 'domainsChangedAt'
   return Date.parse(compose.domainsChangedAt) >= Date.parse(compose.lastDeployedAt);
 }
 
+/** Whether a Compose Variable changed since the last deploy; same never-deployed and tie rules as domains. */
+export function variablesPendingRedeploy(compose: Pick<Compose, 'variablesChangedAt' | 'lastDeployedAt'>): boolean {
+  if (!compose.lastDeployedAt || !compose.variablesChangedAt) {
+    return false;
+  }
+  return Date.parse(compose.variablesChangedAt) >= Date.parse(compose.lastDeployedAt);
+}
+
+/** The redeploy banner's text, or `null` when neither domains nor Compose Variables changed since the deploy. */
+export function redeployNotice(compose: Pick<Compose, 'domainsChangedAt' | 'variablesChangedAt' | 'lastDeployedAt'>): string | null {
+  const domains = domainsPendingRedeploy(compose);
+  const variables = variablesPendingRedeploy(compose);
+  if (domains && variables) {
+    return 'Domain and variable changes apply on the next deploy.';
+  }
+  if (domains) {
+    return 'Domain changes apply on the next deploy.';
+  }
+  if (variables) {
+    return 'Variable changes apply on the next deploy.';
+  }
+  return null;
+}
+
 /** The HTTPS column's tag. */
 export function httpsTag(domain: Domain): string {
   if (!domain.https) {

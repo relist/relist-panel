@@ -24,6 +24,54 @@ export type EnvironmentVariable = {
   value: string;
 };
 
+/** A key-value pair scoped to one Compose; it overrides an Environment Variable of the same key. */
+export type ComposeVariable = {
+  id: number;
+  composeId: number;
+  key: string;
+  secret: boolean;
+  value: string;
+};
+
+/** One key-value pair of a Variable Set. */
+export type SetEntry = {
+  id: number;
+  setId: number;
+  key: string;
+  secret: boolean;
+  value: string;
+};
+
+/** A named list of key-value pairs belonging to a Compose, delivered only to the Services bound to it. */
+export type VariableSet = {
+  id: number;
+  composeId: number;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  entries: SetEntry[];
+  /** The Compose's Services that bind the set, sorted by name. */
+  boundServices: string[];
+};
+
+/** One Service's bindings: set ids in binding order (position = precedence). */
+export type ServiceBindings = {
+  service: string;
+  setIds: number[];
+};
+
+/** Where an effective variable comes from; the server's answer, never derived client-side. */
+export type VariableSource = 'environment' | 'compose' | 'yaml' | { set: { id: number; name: string } };
+
+/** One row of a Service's effective environment; `overrides` are the shadowed layers, lowest first; a trailing `yaml` means the YAML's `environment:` also sets the key and wins. */
+export type EffectiveVariable = {
+  key: string;
+  value: string;
+  secret: boolean;
+  source: VariableSource;
+  overrides: VariableSource[];
+};
+
 export type Environment = {
   id: number;
   projectId: number;
@@ -140,6 +188,8 @@ export type Compose = {
   lastDeployedAt?: string | null;
   /** When a domain of this Compose last changed, or `null` when none ever has. Set by the API on every domain write. */
   domainsChangedAt?: string | null;
+  /** When a Compose Variable of this Compose last changed, or `null` when none ever has. Set by the API on every write. */
+  variablesChangedAt?: string | null;
   /** Deploy-time notes from the API (overwritten Traefik labels, router hints); present on deploy responses only. */
   warnings?: string[];
 };

@@ -472,7 +472,9 @@ export function ProjectPage() {
                 label: `Composes (${composes.length})`,
               },
               {
-                children: activeEnvironment ? <VariablesPanel environment={activeEnvironment} onError={fail} /> : null,
+                children: activeEnvironment ? (
+                  <VariablesPanel environment={activeEnvironment} onError={fail} />
+                ) : null,
                 key: 'variables',
                 label: `Variables (${activeEnvironment?.variables.length ?? 0})`,
               },

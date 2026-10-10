@@ -47,6 +47,7 @@ import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { ComposeDomainsTab } from '../components/ComposeDomainsTab';
 import { ComposePreviewModal } from '../components/ComposePreviewModal';
 import { ComposeTerminalTab } from '../components/ComposeTerminalTab';
+import { ComposeVariablesTab } from '../components/ComposeVariablesTab';
 import { ComposeVolumesTab } from '../components/ComposeVolumesTab';
 import { DangerModal } from '../components/DangerModal';
 import { FullscreenEditor } from '../components/FullscreenEditor';
@@ -63,8 +64,9 @@ import { ServiceMonitor } from '../components/ServiceMonitor';
 import { YamlEditor } from '../components/YamlEditor';
 import { ApiError } from '../data/api';
 import { usePanel } from '../data/store';
-import type { ComposeVolumes, OrphanVolume } from '../data/types';
+import type { ComposeVariable, ComposeVolumes, OrphanVolume } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
+import { effectiveVariableCount } from '../components/variables-view';
 import { activeComposeTab, composeDeployIdentity, internalHostnamePattern, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
 
 const { Text, Paragraph, Title } = Typography;
@@ -99,6 +101,7 @@ export function ComposePage() {
     isPending,
     loadLogs,
     loadOrphanVolumes,
+    loadComposeVariables,
     loadVariables,
     loadServices,
     loadVolumes,
@@ -181,6 +184,33 @@ export function ComposePage() {
       loadVariables(variablesEnvironmentId).catch(fail);
     }
   }, [loadVariables, variablesEnvironmentId]);
+
+  // This Compose's own variables: the Variables tab edits them and the
+  // Environment card counts them, so the page owns the list. Keyed to its
+  // Compose so a slow answer never shows on another one.
+  const [composeVariables, setComposeVariables] = useState<{ composeId: number; list?: ComposeVariable[]; error?: string }>();
+  const composeVariablesRequest = useRef(0);
+  const reloadComposeVariables = useCallback(() => {
+    if (!Number.isInteger(composeId)) {
+      return;
+    }
+    const mine = ++composeVariablesRequest.current;
+    loadComposeVariables(composeId)
+      .then((list) => {
+        if (composeVariablesRequest.current === mine) setComposeVariables({ composeId, list });
+      })
+      .catch((reason: unknown) => {
+        if (composeVariablesRequest.current === mine) {
+          const error = reason instanceof Error ? reason.message : 'Something went wrong';
+          setComposeVariables((previous) => ({ composeId, error, list: previous?.composeId === composeId ? previous.list : undefined }));
+        }
+      });
+  }, [composeId, loadComposeVariables]);
+  useEffect(() => {
+    reloadComposeVariables();
+  }, [reloadComposeVariables]);
+  const composeVariablesForCompose = composeVariables?.composeId === composeId ? composeVariables : undefined;
+  const variableCount = effectiveVariableCount(environment?.variables ?? [], composeVariablesForCompose?.list ?? []);
 
   // The URL is the source of truth for navigation, so a stale path (renamed
   // parent, hand-edited URL) is redirected to the canonical one — tab included,
@@ -783,8 +813,8 @@ export function ComposePage() {
                           {
                             children: (
                               <Text>
-                                {environment.variables.length} variable
-                                {environment.variables.length === 1 ? '' : 's'} applied at deploy time
+                                {variableCount} variable
+                                {variableCount === 1 ? '' : 's'} applied at deploy time
                               </Text>
                             ),
                             key: 'vars',
@@ -809,6 +839,22 @@ export function ComposePage() {
             ),
             key: 'editor',
             label: 'Editor',
+          },
+          {
+            children: (
+              <ComposeVariablesTab
+                compose={compose}
+                deploying={isPending(`deploy:${compose.id}`)}
+                environment={environment}
+                loadError={composeVariablesForCompose?.error}
+                onChanged={reloadComposeVariables}
+                onDeploy={() => void deploy()}
+                onError={fail}
+                variables={composeVariablesForCompose?.list}
+              />
+            ),
+            key: 'variables',
+            label: 'Variables',
           },
           {
             children: (

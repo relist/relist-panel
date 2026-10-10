@@ -5,9 +5,10 @@ import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { ApiError } from '../data/api';
 import { usePanel } from '../data/store';
 import type { Compose, ComposeDomains, Domain, DomainInput } from '../data/types';
-import { domainUrl, domainsPendingRedeploy, httpsTag } from '../pages/domains-view';
+import { domainUrl, httpsTag } from '../pages/domains-view';
 import { DomainFormModal } from './DomainFormModal';
 import { EmptyState } from './primitives';
+import { RedeployBanner } from './RedeployBanner';
 
 const { Text } = Typography;
 
@@ -131,19 +132,7 @@ export function ComposeDomainsTab({
 
   return (
     <>
-      {domainsPendingRedeploy(compose) && (
-        <Alert
-          action={
-            <Button icon={<RocketOutlined />} loading={deploying} onClick={onDeploy} size="small" type="primary">
-              Deploy
-            </Button>
-          }
-          title="Domain changes apply on the next deploy."
-          showIcon
-          style={{ marginBottom: LAYOUT.gutterSmall }}
-          type="info"
-        />
-      )}
+      <RedeployBanner compose={compose} deploying={deploying} onDeploy={onDeploy} />
       {current.error && (
         <Alert
           action={

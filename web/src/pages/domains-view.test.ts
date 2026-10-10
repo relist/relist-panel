@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Compose, Domain } from '../data/types';
-import { domainFormValues, domainInput, domainUrl, domainsPendingRedeploy, httpsTag } from './domains-view';
+import { domainFormValues, domainInput, domainUrl, domainsPendingRedeploy, httpsTag, redeployNotice, variablesPendingRedeploy } from './domains-view';
 
 const domain: Domain = {
   id: 3,
@@ -135,5 +135,44 @@ describe('domainUrl', () => {
   it('uses https for an HTTPS domain and http otherwise', () => {
     expect(domainUrl(domain)).toBe('https://api.example.com/v1');
     expect(domainUrl({ ...domain, https: false, certProvider: 'none', path: '/' })).toBe('http://api.example.com/');
+  });
+});
+
+describe('variablesPendingRedeploy', () => {
+  const compose = (variablesChangedAt: string | null | undefined, lastDeployedAt: string | null | undefined) =>
+    ({ variablesChangedAt, lastDeployedAt }) as Pick<Compose, 'variablesChangedAt' | 'lastDeployedAt'>;
+
+  it('is false for a Compose that never deployed or never had a variable change', () => {
+    expect(variablesPendingRedeploy(compose('2026-10-02T00:00:00Z', null))).toBe(false);
+    expect(variablesPendingRedeploy(compose(null, '2026-10-01T00:00:00Z'))).toBe(false);
+    expect(variablesPendingRedeploy(compose(undefined, '2026-10-01T00:00:00Z'))).toBe(false);
+  });
+
+  it('counts a tie as pending, and clears once a deploy is newer', () => {
+    expect(variablesPendingRedeploy(compose('2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z'))).toBe(true);
+    expect(variablesPendingRedeploy(compose('2026-10-02T00:00:00Z', '2026-10-01T00:00:00Z'))).toBe(true);
+    expect(variablesPendingRedeploy(compose('2026-10-01T00:00:00Z', '2026-10-02T00:00:00Z'))).toBe(false);
+  });
+});
+
+describe('redeployNotice', () => {
+  const deployed = '2026-10-02T00:00:00Z';
+  const before = '2026-10-01T00:00:00Z';
+  const after = '2026-10-03T00:00:00Z';
+
+  it('is null when nothing changed since the deploy', () => {
+    expect(redeployNotice({ domainsChangedAt: before, variablesChangedAt: before, lastDeployedAt: deployed })).toBeNull();
+  });
+
+  it('names what changed', () => {
+    expect(redeployNotice({ domainsChangedAt: after, variablesChangedAt: before, lastDeployedAt: deployed })).toBe(
+      'Domain changes apply on the next deploy.',
+    );
+    expect(redeployNotice({ domainsChangedAt: before, variablesChangedAt: after, lastDeployedAt: deployed })).toBe(
+      'Variable changes apply on the next deploy.',
+    );
+    expect(redeployNotice({ domainsChangedAt: after, variablesChangedAt: after, lastDeployedAt: deployed })).toBe(
+      'Domain and variable changes apply on the next deploy.',
+    );
   });
 });

@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { Credentials, LoginResult, ProjectInput } from './api';
-import type { Compose, ComposeDomains, ComposePreview, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
+import type { Compose, ComposeDomains, ComposeVariable, ComposePreview, EffectiveVariable, ServiceBindings, VariableSet, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
@@ -80,6 +80,21 @@ type PanelValue = {
   createDomain: (composeId: number, input: DomainInput) => Promise<Domain>;
   updateDomain: (composeId: number, domainId: number, input: DomainInput) => Promise<Domain>;
   deleteDomain: (composeId: number, domainId: number) => Promise<void>;
+  /** The Compose's own variables. Each write refreshes the Compose, so `variablesChangedAt` reaches the page. */
+  loadComposeVariables: (composeId: number) => Promise<ComposeVariable[]>;
+  saveComposeVariable: (composeId: number, variable: NewVariable, variableId?: number) => Promise<void>;
+  deleteComposeVariable: (composeId: number, variableId: number) => Promise<void>;
+  /** The Compose's Variable Sets with their entries and bound Services. Sets live on the API, not in the tree; each write refreshes the Compose. */
+  loadVariableSets: (composeId: number) => Promise<VariableSet[]>;
+  createVariableSet: (composeId: number, name: string) => Promise<void>;
+  renameVariableSet: (composeId: number, setId: number, name: string) => Promise<void>;
+  deleteVariableSet: (composeId: number, setId: number) => Promise<void>;
+  saveSetEntry: (composeId: number, setId: number, entry: NewVariable, entryId?: number) => Promise<void>;
+  deleteSetEntry: (composeId: number, setId: number, entryId: number) => Promise<void>;
+  /** The Compose's Service bindings. Saving refreshes the Compose, so `variablesChangedAt` reaches the page. */
+  loadBindings: (composeId: number) => Promise<ServiceBindings[]>;
+  saveBindings: (composeId: number, service: string, setIds: number[]) => Promise<void>;
+  loadEffectiveVariables: (composeId: number, service: string) => Promise<EffectiveVariable[]>;
   /** The Compose's resolved Volumes and pre-flight statuses, from the Compose CLI. */
   loadVolumes: (composeId: number) => Promise<ComposeVolumes>;
   /** One directory inside a resolved Volume, for the Explorer's current path. */
@@ -726,6 +741,125 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [domainLocation, refreshStatus, track],
   );
 
+  const loadComposeVariables = useCallback(
+    (composeId: number) =>
+      track(`compose-variables:${composeId}`, () => api.listComposeVariables(domainLocation(composeId))),
+    [domainLocation, track],
+  );
+
+  const saveComposeVariable = useCallback(
+    (composeId: number, variable: NewVariable, variableId?: number) =>
+      track(`save-compose-variable:${composeId}`, async () => {
+        const location = domainLocation(composeId);
+        if (variableId) {
+          await api.updateComposeVariable(location, variableId, variable);
+        } else {
+          await api.createComposeVariable(location, variable);
+        }
+        await refreshStatus(composeId);
+      }),
+    [domainLocation, refreshStatus, track],
+  );
+
+  const deleteComposeVariable = useCallback(
+    (composeId: number, variableId: number) =>
+      track(`delete-compose-variable:${variableId}`, async () => {
+        await api.deleteComposeVariable(domainLocation(composeId), variableId);
+        await refreshStatus(composeId);
+      }),
+    [domainLocation, refreshStatus, track],
+  );
+
+  // The Compose's sets. A write that can stamp `variablesChangedAt` (an entry
+  // write, a delete) refreshes this Compose so the banner follows; create and
+  // rename refresh too, which is harmless. The write already succeeded, so a
+  // failed refresh must not report it as failed.
+  const refreshQuietly = useCallback(
+    async (composeId: number) => {
+      try {
+        await refreshStatus(composeId);
+      } catch {
+        // The banner appears on the next reload instead.
+      }
+    },
+    [refreshStatus],
+  );
+
+  const loadVariableSets = useCallback(
+    (composeId: number) => track(`variable-sets:${composeId}`, () => api.listVariableSets(domainLocation(composeId))),
+    [domainLocation, track],
+  );
+
+  const createVariableSet = useCallback(
+    (composeId: number, name: string) =>
+      track(`create-variable-set:${composeId}`, async () => {
+        await api.createVariableSet(domainLocation(composeId), name);
+        await refreshQuietly(composeId);
+      }),
+    [domainLocation, refreshQuietly, track],
+  );
+
+  const renameVariableSet = useCallback(
+    (composeId: number, setId: number, name: string) =>
+      track(`rename-variable-set:${setId}`, async () => {
+        await api.renameVariableSet(domainLocation(composeId), setId, name);
+        await refreshQuietly(composeId);
+      }),
+    [domainLocation, refreshQuietly, track],
+  );
+
+  const deleteVariableSet = useCallback(
+    (composeId: number, setId: number) =>
+      track(`delete-variable-set:${setId}`, async () => {
+        await api.deleteVariableSet(domainLocation(composeId), setId);
+        await refreshQuietly(composeId);
+      }),
+    [domainLocation, refreshQuietly, track],
+  );
+
+  const saveSetEntry = useCallback(
+    (composeId: number, setId: number, entry: NewVariable, entryId?: number) =>
+      track(`save-set-entry:${setId}`, async () => {
+        const location = domainLocation(composeId);
+        if (entryId) {
+          await api.updateSetEntry(location, setId, entryId, entry);
+        } else {
+          await api.createSetEntry(location, setId, entry);
+        }
+        await refreshQuietly(composeId);
+      }),
+    [domainLocation, refreshQuietly, track],
+  );
+
+  const deleteSetEntry = useCallback(
+    (composeId: number, setId: number, entryId: number) =>
+      track(`delete-set-entry:${entryId}`, async () => {
+        await api.deleteSetEntry(domainLocation(composeId), setId, entryId);
+        await refreshQuietly(composeId);
+      }),
+    [domainLocation, refreshQuietly, track],
+  );
+
+  const loadBindings = useCallback(
+    (composeId: number) => track(`bindings:${composeId}`, () => api.listBindings(domainLocation(composeId))),
+    [domainLocation, track],
+  );
+
+  const saveBindings = useCallback(
+    (composeId: number, service: string, setIds: number[]) =>
+      track(`save-bindings:${composeId}:${service}`, async () => {
+        await api.saveBindings(domainLocation(composeId), service, setIds);
+        await refreshStatus(composeId);
+      }),
+    [domainLocation, refreshStatus, track],
+  );
+
+  const loadEffectiveVariables = useCallback(
+    (composeId: number, service: string) =>
+      track(`effective:${composeId}:${service}`, () => api.effectiveVariables(domainLocation(composeId), service)),
+    [domainLocation, track],
+  );
+
   const loadVariables = useCallback(
     async (environmentId: number) => {
       await track(`variables:${environmentId}`, async () => {
@@ -899,6 +1033,18 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteVolumeEntry,
       createDomain,
       deleteDomain,
+      deleteComposeVariable,
+      loadComposeVariables,
+      saveComposeVariable,
+      loadVariableSets,
+      createVariableSet,
+      renameVariableSet,
+      deleteVariableSet,
+      saveSetEntry,
+      deleteSetEntry,
+      loadBindings,
+      saveBindings,
+      loadEffectiveVariables,
       loadDomains,
       previewCompose,
       updateDomain,
@@ -947,6 +1093,18 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteVolumeEntry,
       createDomain,
       deleteDomain,
+      deleteComposeVariable,
+      loadComposeVariables,
+      saveComposeVariable,
+      loadVariableSets,
+      createVariableSet,
+      renameVariableSet,
+      deleteVariableSet,
+      saveSetEntry,
+      deleteSetEntry,
+      loadBindings,
+      saveBindings,
+      loadEffectiveVariables,
       loadDomains,
       previewCompose,
       updateDomain,

@@ -52,8 +52,20 @@ A named Docker volume that Compose created for a Compose's project but whose YAM
 _Avoid_: Dangling volume — that is Docker's term for any unreferenced volume, whichever project made it.
 
 **Environment Variable**:
-A key-value pair scoped to an Environment, interpolated into all of that Environment's Composes at deploy time. A variable may be flagged **secret**, which masks its value on screen — a display tier owned by the user, not a security boundary: the value is stored and served as any other, and the panel's single admin can always reveal it.
+A key-value pair scoped to an Environment, interpolated into all of that Environment's Composes at deploy time, unless a Compose Variable of the same key overrides it. A variable may be flagged **secret**, which masks its value on screen — a display tier owned by the user, not a security boundary: the value is stored and served as any other, and the panel's single admin can always reveal it.
 _Avoid_: treating the secret flag as an encryption or access tier; "plain" is not a domain word, just the tag for the flag's absence.
+
+**Compose Variable**:
+A key-value pair scoped to one Compose. It overrides an Environment Variable of the same key for that Compose only, and is interpolated into the Compose's YAML like one. It has the same secret flag.
+_Avoid_: Local variable, Override (the overriding is a behaviour, not the entity).
+
+**Variable Set**:
+A named list of key-value pairs belonging to one Compose, delivered to the containers of the Services it is bound to and to no others. Never interpolated into YAML.
+_Avoid_: Env, Env group, Env file (the file is how it is delivered, not what it is).
+
+**Binding**:
+The link between one Service in a Compose and one Variable Set. Ordered per Service.
+_Avoid_: Attachment, Mount.
 
 **Two-factor**:
 A time-based one-time code (TOTP) the admin account may require at sign-in, on top of its password. Opt-in from the Account page. Recovery is deliberately the host: `relist-panel reset-2fa`, run inside the panel container, clears it — anyone who can run that already owns the Docker host.

@@ -7,7 +7,7 @@ ADR-0002 put every Service of every Compose on the shared `relist-network`. A Se
 - it carries a hand-written `traefik.*` label;
 - its YAML already lists `relist-network`. This is the opt-in for calls from other Composes.
 
-Every other Service keeps the networks its YAML gives it. That is the Compose's private `default` network when it has none. A joining Service with no `networks:` key gets `default` beside `relist-network`, so it still reaches its own siblings. A list-form `networks:` becomes a map so aliases can be attached. A Service that joins through hand-written labels and has no `traefik.docker.network` gets `traefik.docker.network=relist-network`, because it is now on two networks and Traefik must pick the routable one. This supersedes ADR-0002's "every service" rule. The `env_file` injection still covers every Service.
+Every other Service keeps the networks its YAML gives it. That is the Compose's private `default` network when it has none. A joining Service with no `networks:` key gets `default` beside `relist-network`, so it still reaches its own siblings. A list-form `networks:` becomes a map so aliases can be attached. A Service that joins through hand-written labels and has no `traefik.docker.network` gets `traefik.docker.network=relist-network`, because it is now on two networks and Traefik must pick the routable one. This supersedes ADR-0002's "every service" rule. The `env_file` injection still covers every Service; ADR-0015 adds per-Service variable sets beside it.
 
 Each joining Service gets two aliases on `relist-network`, added beside any the operator wrote:
 - **stable**, `<service>.<deploy project name>.internal`, e.g. `web.relist-c12.internal`. It never changes, by ADR-0005 and ADR-0011.

@@ -24,8 +24,8 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 13 {
-		t.Fatalf("migration version = %d, want 13", version)
+	if version != 15 {
+		t.Fatalf("migration version = %d, want 15", version)
 	}
 
 	var one int
@@ -146,5 +146,207 @@ func TestDeployTimestampsMigrationBackfillsExistingRowsToNull(t *testing.T) {
 	// needs 00009 itself to have been applied on the way to latest.
 	if version < 9 {
 		t.Fatalf("migration version = %d, want at least 9", version)
+	}
+}
+
+// The scoped-variables migration must apply on a database that already holds
+// composes at version 13, keeping them and adding the redeploy marker.
+func TestScopedVariablesMigrationUpgradesVersion13(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	goose.SetBaseFS(migrations.FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(db, ".", 13); err != nil {
+		t.Fatalf("migrate to 13: %v", err)
+	}
+	now := time.Now().Unix()
+	if _, err := db.Exec("INSERT INTO projects (name, description, created_at, updated_at) VALUES ('p', '', ?, ?)", now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO environments (project_id, name, created_at) VALUES (1, 'production', ?)", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO composes (environment_id, name, yaml_content, created_at, updated_at) VALUES (1, 'web', '', ?, ?)", now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate 13 -> latest: %v", err)
+	}
+	var changedAt sql.NullInt64
+	if err := db.QueryRow("SELECT variables_changed_at FROM composes WHERE id = 1").Scan(&changedAt); err != nil {
+		t.Fatalf("existing compose lost or column missing: %v", err)
+	}
+	if changedAt.Valid {
+		t.Fatalf("variables_changed_at = %d, want NULL", changedAt.Int64)
+	}
+	for _, table := range []string{"compose_variables", "variable_sets", "variable_set_entries", "service_bindings"} {
+		if _, err := db.Exec("SELECT 1 FROM " + table); err != nil {
+			t.Errorf("table %s missing: %v", table, err)
+		}
+	}
+
+	// Sets belong to a Compose: unique per Compose, removed with it.
+	for _, statement := range []string{
+		"INSERT INTO variable_sets (compose_id, name, created_at, updated_at) VALUES (1, 's', 0, 0)",
+		"INSERT INTO variable_set_entries (set_id, key, value) VALUES (1, 'K', 'v')",
+		"INSERT INTO service_bindings (compose_id, service, set_id, position) VALUES (1, 'api', 1, 0)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	if _, err := db.Exec("INSERT INTO variable_sets (compose_id, name, created_at, updated_at) VALUES (1, 's', 0, 0)"); err == nil {
+		t.Error("duplicate set name in one compose was accepted")
+	}
+	if _, err := db.Exec("DELETE FROM composes WHERE id = 1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"variable_sets", "variable_set_entries", "service_bindings"} {
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+			t.Errorf("%s rows after compose delete = %d (%v)", table, count, err)
+		}
+	}
+}
+
+// A database that applied 00014 holds Environment-owned sets. 00015 must move
+// them to the Compose without the cascade from dropping the old table taking
+// entries or bindings with it: every Compose of the Environment gets its own
+// copy, and each binding follows its Compose's copy in the same position.
+func TestComposeOwnedSetsMigrationMovesEnvironmentSets(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatal(err)
+	}
+
+	goose.SetBaseFS(migrations.FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(db, ".", 14); err != nil {
+		t.Fatalf("migrate to 14: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO projects (name, description, created_at, updated_at) VALUES ('p', '', 1, 1);
+		INSERT INTO environments (project_id, name, created_at) VALUES (1, 'production', 1);
+		INSERT INTO environments (project_id, name, created_at) VALUES (1, 'empty', 1);
+		INSERT INTO composes (environment_id, name, yaml_content, created_at, updated_at) VALUES (1, 'a', '', 1, 1);
+		INSERT INTO composes (environment_id, name, yaml_content, created_at, updated_at) VALUES (1, 'b', '', 1, 1);
+		INSERT INTO variable_sets (environment_id, name, created_at, updated_at) VALUES (1, 'shared', 5, 6);
+		INSERT INTO variable_sets (environment_id, name, created_at, updated_at) VALUES (1, 'payments', 5, 6);
+		INSERT INTO variable_sets (environment_id, name, created_at, updated_at) VALUES (2, 'orphan', 5, 6);
+		INSERT INTO variable_set_entries (set_id, key, value, secret) VALUES (1, 'LOG', 'debug', 0);
+		INSERT INTO variable_set_entries (set_id, key, value, secret) VALUES (1, 'TOKEN', 's3cret', 1);
+		INSERT INTO variable_set_entries (set_id, key, value, secret) VALUES (2, 'STRIPE', 'sk', 1);
+		INSERT INTO service_bindings (compose_id, service, set_id, position) VALUES (1, 'api', 2, 0);
+		INSERT INTO service_bindings (compose_id, service, set_id, position) VALUES (1, 'api', 1, 1);
+		INSERT INTO service_bindings (compose_id, service, set_id, position) VALUES (2, 'worker', 1, 0);
+	`); err != nil {
+		t.Fatalf("seed version 14 rows: %v", err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate 14 -> latest: %v", err)
+	}
+
+	// Every set of Environment 1 is copied into both of its Composes; the set
+	// in the Compose-less Environment is dropped.
+	rows, err := db.Query(`
+		SELECT c.name, s.name, s.created_at, s.updated_at,
+			(SELECT group_concat(key || '=' || value || ':' || secret, ',')
+			 FROM (SELECT * FROM variable_set_entries e WHERE e.set_id = s.id ORDER BY e.id))
+		FROM variable_sets s JOIN composes c ON c.id = s.compose_id
+		ORDER BY c.name, s.name`)
+	if err != nil {
+		t.Fatalf("read sets: %v", err)
+	}
+	var sets []string
+	for rows.Next() {
+		var compose, name, entries string
+		var createdAt, updatedAt int64
+		if err := rows.Scan(&compose, &name, &createdAt, &updatedAt, &entries); err != nil {
+			t.Fatal(err)
+		}
+		sets = append(sets, fmt.Sprintf("%s/%s@%d,%d[%s]", compose, name, createdAt, updatedAt, entries))
+	}
+	rows.Close()
+	wantSets := []string{
+		"a/payments@5,6[STRIPE=sk:1]",
+		"a/shared@5,6[LOG=debug:0,TOKEN=s3cret:1]",
+		"b/payments@5,6[STRIPE=sk:1]",
+		"b/shared@5,6[LOG=debug:0,TOKEN=s3cret:1]",
+	}
+	if fmt.Sprint(sets) != fmt.Sprint(wantSets) {
+		t.Fatalf("sets = %v, want %v", sets, wantSets)
+	}
+
+	// Each binding points at its own Compose's copy and keeps its position.
+	rows, err = db.Query(`
+		SELECT c.name, b.service, s.name, b.position, s.compose_id = b.compose_id
+		FROM service_bindings b
+		JOIN composes c ON c.id = b.compose_id
+		JOIN variable_sets s ON s.id = b.set_id
+		ORDER BY c.name, b.service, b.position`)
+	if err != nil {
+		t.Fatalf("read bindings: %v", err)
+	}
+	var bindings []string
+	for rows.Next() {
+		var compose, service, set string
+		var position int
+		var sameCompose bool
+		if err := rows.Scan(&compose, &service, &set, &position, &sameCompose); err != nil {
+			t.Fatal(err)
+		}
+		bindings = append(bindings, fmt.Sprintf("%s/%s:%d=%s,%t", compose, service, position, set, sameCompose))
+	}
+	rows.Close()
+	wantBindings := []string{"a/api:0=payments,true", "a/api:1=shared,true", "b/worker:0=shared,true"}
+	if fmt.Sprint(bindings) != fmt.Sprint(wantBindings) {
+		t.Fatalf("bindings = %v, want %v", bindings, wantBindings)
+	}
+
+	var violations int
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_foreign_key_check").Scan(&violations); err != nil {
+		t.Fatal(err)
+	}
+	if violations != 0 {
+		t.Fatalf("foreign key violations = %d", violations)
+	}
+
+	// The renamed tables keep their cascades: deleting a set takes its entries
+	// and bindings.
+	if _, err := db.Exec("DELETE FROM variable_sets WHERE compose_id = (SELECT id FROM composes WHERE name = 'a')"); err != nil {
+		t.Fatal(err)
+	}
+	var leftover int
+	if err := db.QueryRow(`
+		SELECT (SELECT COUNT(*) FROM variable_set_entries WHERE set_id NOT IN (SELECT id FROM variable_sets))
+			+ (SELECT COUNT(*) FROM service_bindings WHERE compose_id = 1)`).Scan(&leftover); err != nil {
+		t.Fatal(err)
+	}
+	if leftover != 0 {
+		t.Fatalf("rows left after deleting compose a's sets = %d", leftover)
+	}
+
+	// Down returns to Environment-owned sets and Up runs again cleanly.
+	if err := goose.Down(db, "."); err != nil {
+		t.Fatalf("migrate down: %v", err)
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate up again: %v", err)
 	}
 }
