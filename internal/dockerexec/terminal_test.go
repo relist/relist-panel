@@ -238,6 +238,9 @@ func TestTerminalExecStartHijacksATtyStream(t *testing.T) {
 	var starts []startRequest
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+		writeTerminalJSON(t, w, http.StatusOK, map[string]any{"Config": map[string]any{"Env": []string{"PATH=/usr/bin"}}})
+	})
 	mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
@@ -338,7 +341,7 @@ func TestTerminalExecStartHijacksATtyStream(t *testing.T) {
 	if strings.Contains(string(createA), `"User"`) {
 		t.Errorf("create body = %s, want User omitted for the image default", createA)
 	}
-	if want := []string{"TERM=xterm-256color"}; !reflect.DeepEqual(first.Env, want) {
+	if want := []string{"TERM=xterm-256color", "LANG=C.UTF-8"}; !reflect.DeepEqual(first.Env, want) {
 		t.Errorf("create Env = %v, want %v", first.Env, want)
 	}
 	if want := []uint16{24, 80}; !reflect.DeepEqual(first.ConsoleSize, want) {
@@ -375,12 +378,118 @@ func TestTerminalExecStartHijacksATtyStream(t *testing.T) {
 	}
 }
 
+// The image's own locale stands: any non-empty LANG, LC_ALL or LC_CTYPE in
+// Config.Env keeps the exec from adding LANG=C.UTF-8. An empty one does not
+// count, since it chooses nothing.
+func TestTerminalExecStartKeepsTheImageLocale(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     []string
+		wantEnv []string
+	}{
+		{"LANG", []string{"LANG=en_US.UTF-8"}, []string{"TERM=xterm-256color"}},
+		{"LC_ALL", []string{"LC_ALL=th_TH.UTF-8"}, []string{"TERM=xterm-256color"}},
+		{"LC_CTYPE", []string{"LC_CTYPE=C.UTF-8"}, []string{"TERM=xterm-256color"}},
+		{"empty LANG", []string{"LANG="}, []string{"TERM=xterm-256color", "LANG=C.UTF-8"}},
+		{"no env", nil, []string{"TERM=xterm-256color", "LANG=C.UTF-8"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var create []byte
+			var inspectPath string
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				inspectPath = r.URL.Path
+				mu.Unlock()
+				writeTerminalJSON(t, w, http.StatusOK, map[string]any{"Config": map[string]any{"Env": tc.env}})
+			})
+			mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				mu.Lock()
+				create = body
+				mu.Unlock()
+				writeTerminalJSON(t, w, http.StatusCreated, map[string]string{"Id": "e1"})
+			})
+			mux.HandleFunc("POST /exec/{id}/start", func(w http.ResponseWriter, r *http.Request) {
+				conn, rw, err := http.NewResponseController(w).Hijack()
+				if err != nil {
+					t.Errorf("hijack: %v", err)
+					return
+				}
+				defer conn.Close()
+				_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: tcp\r\nConnection: Upgrade\r\n\r\n")
+				_ = rw.Flush()
+				_, _ = io.Copy(io.Discard, conn)
+			})
+			socket := newTerminalDaemon(t, mux)
+
+			session, err := dockerexec.NewTerminalExec(socket, "").Start(context.Background(), "c1", terminal.ExecOptions{Rows: 24, Cols: 80})
+			if err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			t.Cleanup(func() { _ = session.Close() })
+
+			mu.Lock()
+			gotCreate, gotInspect := create, inspectPath
+			mu.Unlock()
+			if gotInspect != "/containers/c1/json" {
+				t.Errorf("inspect path = %q, want /containers/c1/json", gotInspect)
+			}
+			var body struct {
+				Env []string `json:"Env"`
+			}
+			if err := json.Unmarshal(gotCreate, &body); err != nil {
+				t.Fatalf("create body %q is not JSON: %v", gotCreate, err)
+			}
+			if !reflect.DeepEqual(body.Env, tc.wantEnv) {
+				t.Errorf("create Env = %v, want %v", body.Env, tc.wantEnv)
+			}
+		})
+	}
+}
+
+// A failed inspect fails Start before any exec is created: the daemon cannot
+// see the Container, so the create would fail too.
+func TestTerminalExecStartFailsOnAFailedInspect(t *testing.T) {
+	var mu sync.Mutex
+	created := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"No such container: c1"}`, http.StatusNotFound)
+	})
+	mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		created = true
+		mu.Unlock()
+		writeTerminalJSON(t, w, http.StatusCreated, map[string]string{"Id": "e1"})
+	})
+	socket := newTerminalDaemon(t, mux)
+
+	_, err := dockerexec.NewTerminalExec(socket, "").Start(context.Background(), "c1", terminal.ExecOptions{Rows: 24, Cols: 80})
+	if err == nil {
+		t.Fatal("Start() error = nil, want the inspect's 404")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("Start() error = %v, want it to mention 404", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if created {
+		t.Error("exec was created after a failed inspect")
+	}
+}
+
 func TestTerminalExecSessionResizeAndExitCode(t *testing.T) {
 	var mu sync.Mutex
 	var resizeMethod, resizePath, resizeQuery string
 	var inspectMethod, inspectPath string
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+		writeTerminalJSON(t, w, http.StatusOK, map[string]any{"Config": map[string]any{}})
+	})
 	mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
 		writeTerminalJSON(t, w, http.StatusCreated, map[string]string{"Id": "e1"})
 	})
@@ -730,6 +839,9 @@ func plainStartMux(t *testing.T, answers ...string) *http.ServeMux {
 func hijackingStartMux(t *testing.T, answers ...string) *http.ServeMux {
 	t.Helper()
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+		writeTerminalJSON(t, w, http.StatusOK, map[string]any{"Config": map[string]any{}})
+	})
 	mux.HandleFunc("POST /containers/{id}/exec", func(w http.ResponseWriter, r *http.Request) {
 		writeTerminalJSON(t, w, http.StatusCreated, map[string]string{"Id": "e1"})
 	})
