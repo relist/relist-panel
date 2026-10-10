@@ -2,6 +2,7 @@ import { Typography } from 'antd';
 
 import { usePanel } from '../data/store';
 import type { Compose, ComposeVariable, Environment } from '../data/types';
+import { ComposeBindingsCard } from './ComposeBindingsCard';
 import { RedeployBanner } from './RedeployBanner';
 import { VariablesEditor } from './VariablesPanel';
 import { overrideHint } from './variables-view';
@@ -80,6 +81,7 @@ export function ComposeVariablesTab({
         title="Compose variables"
         variables={variables ?? []}
       />
+      <ComposeBindingsCard compose={compose} environment={environment} onError={onError} />
     </>
   );
 }

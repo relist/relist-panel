@@ -33,6 +33,7 @@ import { useNavigate, useParams } from 'react-router';
 
 import { paths } from '../app/paths';
 import { DangerModal } from '../components/DangerModal';
+import { VariableSetsCard } from '../components/VariableSetsCard';
 import { VariablesPanel } from '../components/VariablesPanel';
 import { YamlEditor } from '../components/YamlEditor';
 import { ComposeStatusInline, ComposeStatusTag, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
@@ -472,7 +473,12 @@ export function ProjectPage() {
                 label: `Composes (${composes.length})`,
               },
               {
-                children: activeEnvironment ? <VariablesPanel environment={activeEnvironment} onError={fail} /> : null,
+                children: activeEnvironment ? (
+                  <>
+                    <VariablesPanel environment={activeEnvironment} onError={fail} />
+                    <VariableSetsCard environment={activeEnvironment} onError={fail} />
+                  </>
+                ) : null,
                 key: 'variables',
                 label: `Variables (${activeEnvironment?.variables.length ?? 0})`,
               },

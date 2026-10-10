@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { Credentials, LoginResult, ProjectInput } from './api';
-import type { Compose, ComposeDomains, ComposeVariable, ComposePreview, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
+import type { Compose, ComposeDomains, ComposeVariable, ComposePreview, EffectiveVariable, ServiceBindings, VariableSet, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
@@ -84,6 +84,17 @@ type PanelValue = {
   loadComposeVariables: (composeId: number) => Promise<ComposeVariable[]>;
   saveComposeVariable: (composeId: number, variable: NewVariable, variableId?: number) => Promise<void>;
   deleteComposeVariable: (composeId: number, variableId: number) => Promise<void>;
+  /** The Environment's Variable Sets with their entries and who binds them. Sets live on the API, not in the tree. */
+  loadVariableSets: (environmentId: number) => Promise<VariableSet[]>;
+  createVariableSet: (environmentId: number, name: string) => Promise<void>;
+  renameVariableSet: (environmentId: number, setId: number, name: string) => Promise<void>;
+  deleteVariableSet: (environmentId: number, setId: number) => Promise<void>;
+  saveSetEntry: (environmentId: number, setId: number, entry: NewVariable, entryId?: number) => Promise<void>;
+  deleteSetEntry: (environmentId: number, setId: number, entryId: number) => Promise<void>;
+  /** The Compose's Service bindings. Saving refreshes the Compose, so `variablesChangedAt` reaches the page. */
+  loadBindings: (composeId: number) => Promise<ServiceBindings[]>;
+  saveBindings: (composeId: number, service: string, setIds: number[]) => Promise<void>;
+  loadEffectiveVariables: (composeId: number, service: string) => Promise<EffectiveVariable[]>;
   /** The Compose's resolved Volumes and pre-flight statuses, from the Compose CLI. */
   loadVolumes: (composeId: number) => Promise<ComposeVolumes>;
   /** One directory inside a resolved Volume, for the Explorer's current path. */
@@ -759,6 +770,85 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [domainLocation, refreshStatus, track],
   );
 
+  const setsLocation = useCallback((environmentId: number) => {
+    const location = findEnvironmentLocation(projectsRef.current, environmentId);
+    if (!location) {
+      throw new Error('Environment not found');
+    }
+    return location.project.id;
+  }, []);
+
+  const loadVariableSets = useCallback(
+    (environmentId: number) =>
+      track(`variable-sets:${environmentId}`, () => api.listVariableSets(setsLocation(environmentId), environmentId)),
+    [setsLocation, track],
+  );
+
+  const createVariableSet = useCallback(
+    (environmentId: number, name: string) =>
+      track(`create-variable-set:${environmentId}`, async () => {
+        await api.createVariableSet(setsLocation(environmentId), environmentId, name);
+      }),
+    [setsLocation, track],
+  );
+
+  const renameVariableSet = useCallback(
+    (environmentId: number, setId: number, name: string) =>
+      track(`rename-variable-set:${setId}`, async () => {
+        await api.renameVariableSet(setsLocation(environmentId), environmentId, setId, name);
+      }),
+    [setsLocation, track],
+  );
+
+  const deleteVariableSet = useCallback(
+    (environmentId: number, setId: number) =>
+      track(`delete-variable-set:${setId}`, async () => {
+        await api.deleteVariableSet(setsLocation(environmentId), environmentId, setId);
+      }),
+    [setsLocation, track],
+  );
+
+  const saveSetEntry = useCallback(
+    (environmentId: number, setId: number, entry: NewVariable, entryId?: number) =>
+      track(`save-set-entry:${setId}`, async () => {
+        const projectId = setsLocation(environmentId);
+        if (entryId) {
+          await api.updateSetEntry(projectId, environmentId, setId, entryId, entry);
+        } else {
+          await api.createSetEntry(projectId, environmentId, setId, entry);
+        }
+      }),
+    [setsLocation, track],
+  );
+
+  const deleteSetEntry = useCallback(
+    (environmentId: number, setId: number, entryId: number) =>
+      track(`delete-set-entry:${entryId}`, async () => {
+        await api.deleteSetEntry(setsLocation(environmentId), environmentId, setId, entryId);
+      }),
+    [setsLocation, track],
+  );
+
+  const loadBindings = useCallback(
+    (composeId: number) => track(`bindings:${composeId}`, () => api.listBindings(domainLocation(composeId))),
+    [domainLocation, track],
+  );
+
+  const saveBindings = useCallback(
+    (composeId: number, service: string, setIds: number[]) =>
+      track(`save-bindings:${composeId}:${service}`, async () => {
+        await api.saveBindings(domainLocation(composeId), service, setIds);
+        await refreshStatus(composeId);
+      }),
+    [domainLocation, refreshStatus, track],
+  );
+
+  const loadEffectiveVariables = useCallback(
+    (composeId: number, service: string) =>
+      track(`effective:${composeId}:${service}`, () => api.effectiveVariables(domainLocation(composeId), service)),
+    [domainLocation, track],
+  );
+
   const loadVariables = useCallback(
     async (environmentId: number) => {
       await track(`variables:${environmentId}`, async () => {
@@ -935,6 +1025,15 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteComposeVariable,
       loadComposeVariables,
       saveComposeVariable,
+      loadVariableSets,
+      createVariableSet,
+      renameVariableSet,
+      deleteVariableSet,
+      saveSetEntry,
+      deleteSetEntry,
+      loadBindings,
+      saveBindings,
+      loadEffectiveVariables,
       loadDomains,
       previewCompose,
       updateDomain,
@@ -986,6 +1085,15 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteComposeVariable,
       loadComposeVariables,
       saveComposeVariable,
+      loadVariableSets,
+      createVariableSet,
+      renameVariableSet,
+      deleteVariableSet,
+      saveSetEntry,
+      deleteSetEntry,
+      loadBindings,
+      saveBindings,
+      loadEffectiveVariables,
       loadDomains,
       previewCompose,
       updateDomain,

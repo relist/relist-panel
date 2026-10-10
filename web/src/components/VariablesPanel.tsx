@@ -21,7 +21,7 @@ export type VariableRow = {
 };
 
 /** One value cell: masked until revealed, copy always at hand (GUIDELINES §4.5). */
-function ValueCell({ variable }: { variable: VariableRow }) {
+export function ValueCell({ variable }: { variable: Pick<VariableRow, 'secret' | 'value'> }) {
   const [revealed, setRevealed] = useState(false);
   const secret = isSecret(variable);
 
@@ -491,7 +491,13 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
   return (
     <VariablesEditor
       deleteNote="Composes pick this up on their next deploy."
-      description="Injected into every Compose in this Environment at deploy time. Changing a value takes effect on the next deploy."
+      description={
+        <>
+          Injected into every Compose in this Environment at deploy time. Changing a value takes effect on the next deploy.
+          <br />
+          Used by every Compose · usable as <Text code>{'${VAR}'}</Text>
+        </>
+      }
       emptyDescription="Anything shared by every Compose here — database URLs, secrets, log level, timezone."
       emptyTitle="No Environment Variables yet"
       footer={

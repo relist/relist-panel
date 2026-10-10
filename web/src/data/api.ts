@@ -20,6 +20,11 @@ import type {
   HostMetrics,
   OrphanVolume,
   Project,
+  ServiceBindings,
+  SetEntry,
+  SetUsage,
+  VariableSet,
+  EffectiveVariable,
   ServiceFacts,
   ServiceMetrics,
   TerminalServices,
@@ -108,11 +113,15 @@ export class ApiError extends Error {
   /** The request field the API refused, when its 400 names one (e.g. `host`). */
   readonly field?: string;
 
-  constructor(status: number, message: string, field?: string) {
+  /** Who still binds a Variable Set, on the 409 a delete answers with. */
+  readonly usedBy?: SetUsage[];
+
+  constructor(status: number, message: string, field?: string, usedBy?: SetUsage[]) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.field = field;
+    this.usedBy = usedBy;
   }
 }
 
@@ -122,11 +131,15 @@ function errorMessage(status: number, bodyText: string): string {
 }
 
 /** The message and, when the body names one, the refused field. */
-function errorBody(status: number, bodyText: string): { message: string; field?: string } {
+function errorBody(status: number, bodyText: string): { message: string; field?: string; usedBy?: SetUsage[] } {
   try {
-    const payload = JSON.parse(bodyText) as (ErrorResponse & { field?: string }) | null;
+    const payload = JSON.parse(bodyText) as (ErrorResponse & { field?: string; usedBy?: SetUsage[] }) | null;
     if (payload?.error) {
-      return { message: payload.error, field: payload.field || undefined };
+      return {
+        message: payload.error,
+        field: payload.field || undefined,
+        usedBy: Array.isArray(payload.usedBy) ? payload.usedBy : undefined,
+      };
     }
   } catch {
     // Fall through to a status-based message when the response is not JSON.
@@ -141,8 +154,8 @@ async function responseError(response: Response): Promise<string> {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { credentials: 'same-origin', ...init });
   if (!response.ok) {
-    const { message, field } = errorBody(response.status, await response.text().catch(() => ''));
-    throw new ApiError(response.status, message, field);
+    const { message, field, usedBy } = errorBody(response.status, await response.text().catch(() => ''));
+    throw new ApiError(response.status, message, field, usedBy);
   }
   // Deletes (and logout) answer 204 with no body to parse.
   if (response.status === 204) {
@@ -271,6 +284,21 @@ export const api = {
     request<Domain>(domainsPath(location), jsonInit('POST', input)),
   updateDomain: (location: ComposePath, domainId: number, input: DomainInput) =>
     request<Domain>(`${domainsPath(location)}/${domainId}`, jsonInit('PUT', input)),
+  listVariableSets: (projectId: number, environmentId: number) =>
+    request<VariableSet[]>(setsPath(projectId, environmentId)),
+  createVariableSet: (projectId: number, environmentId: number, name: string) =>
+    request<VariableSet>(setsPath(projectId, environmentId), jsonInit('POST', { name })),
+  renameVariableSet: (projectId: number, environmentId: number, setId: number, name: string) =>
+    request<VariableSet>(`${setsPath(projectId, environmentId)}/${setId}`, jsonInit('PUT', { name })),
+  /** Success is 204; a still-bound set answers 409 with `usedBy`. */
+  deleteVariableSet: (projectId: number, environmentId: number, setId: number) =>
+    request<void>(`${setsPath(projectId, environmentId)}/${setId}`, { method: 'DELETE' }),
+  createSetEntry: (projectId: number, environmentId: number, setId: number, input: EnvironmentVariableInput) =>
+    request<SetEntry>(`${setsPath(projectId, environmentId)}/${setId}/entries`, jsonInit('POST', input)),
+  updateSetEntry: (projectId: number, environmentId: number, setId: number, entryId: number, input: EnvironmentVariableInput) =>
+    request<SetEntry>(`${setsPath(projectId, environmentId)}/${setId}/entries/${entryId}`, jsonInit('PUT', input)),
+  deleteSetEntry: (projectId: number, environmentId: number, setId: number, entryId: number) =>
+    request<void>(`${setsPath(projectId, environmentId)}/${setId}/entries/${entryId}`, { method: 'DELETE' }),
   listComposeVariables: (location: ComposePath) => request<ComposeVariable[]>(composeVariablesPath(location)),
   createComposeVariable: (location: ComposePath, input: EnvironmentVariableInput) =>
     request<ComposeVariable>(composeVariablesPath(location), jsonInit('POST', input)),
@@ -279,6 +307,15 @@ export const api = {
   /** Success is 204. */
   deleteComposeVariable: (location: ComposePath, variableId: number) =>
     request<void>(`${composeVariablesPath(location)}/${variableId}`, { method: 'DELETE' }),
+  listBindings: (location: ComposePath) => request<ServiceBindings[]>(`${composePath(location)}/bindings`),
+  /** Replaces one Service's bindings; the order of `setIds` is the binding order, `[]` removes them. */
+  saveBindings: (location: ComposePath, service: string, setIds: number[]) =>
+    request<ServiceBindings>(
+      `${composePath(location)}/bindings/${encodeURIComponent(service)}`,
+      jsonInit('PUT', { setIds }),
+    ),
+  effectiveVariables: (location: ComposePath, service: string) =>
+    request<EffectiveVariable[]>(`${composePath(location)}/services/${encodeURIComponent(service)}/effective-variables`),
   /** Success is 204. */
   deleteDomain: (location: ComposePath, domainId: number) =>
     request<void>(`${domainsPath(location)}/${domainId}`, { method: 'DELETE' }),
@@ -397,6 +434,10 @@ function composesPath(projectId: number, environmentId: number): string {
 
 function composePath(location: ComposePath): string {
   return `${composesPath(location.projectId, location.environmentId)}/${location.composeId}`;
+}
+
+function setsPath(projectId: number, environmentId: number): string {
+  return `/api/projects/${projectId}/environments/${environmentId}/variable-sets`;
 }
 
 function composeVariablesPath(location: ComposePath): string {

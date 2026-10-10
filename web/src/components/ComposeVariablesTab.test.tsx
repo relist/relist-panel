@@ -11,6 +11,9 @@ import { ComposeVariablesTab } from './ComposeVariablesTab';
 const panel = vi.hoisted(() => ({
   deleteComposeVariable: vi.fn(),
   isPending: vi.fn(() => false),
+  loadBindings: vi.fn(),
+  loadDomains: vi.fn(),
+  loadVariableSets: vi.fn(),
   saveComposeVariable: vi.fn(),
 }));
 
@@ -66,6 +69,9 @@ describe('ComposeVariablesTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     panel.isPending.mockReturnValue(false);
+    panel.loadVariableSets.mockResolvedValue([]);
+    panel.loadBindings.mockResolvedValue([]);
+    panel.loadDomains.mockResolvedValue({ domains: [], services: [] });
   });
 
   it('shows only the empty state and one add button when there are no Compose variables', () => {

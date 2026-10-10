@@ -33,6 +33,51 @@ export type ComposeVariable = {
   value: string;
 };
 
+/** One key-value pair of a Variable Set. */
+export type SetEntry = {
+  id: number;
+  setId: number;
+  key: string;
+  secret: boolean;
+  value: string;
+};
+
+/** A Service that binds a Variable Set. */
+export type SetUsage = {
+  composeId: number;
+  composeName: string;
+  service: string;
+};
+
+/** A named list of key-value pairs belonging to an Environment, delivered only to the Services bound to it. */
+export type VariableSet = {
+  id: number;
+  environmentId: number;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  entries: SetEntry[];
+  usedBy: SetUsage[];
+};
+
+/** One Service's bindings: set ids in binding order (position = precedence). */
+export type ServiceBindings = {
+  service: string;
+  setIds: number[];
+};
+
+/** Where an effective variable comes from; the server's answer, never derived client-side. */
+export type VariableSource = 'environment' | 'compose' | 'yaml' | { set: { id: number; name: string } };
+
+/** One row of a Service's effective environment; `overrides` are the shadowed layers, lowest first. */
+export type EffectiveVariable = {
+  key: string;
+  value: string;
+  secret: boolean;
+  source: VariableSource;
+  overrides: VariableSource[];
+};
+
 export type Environment = {
   id: number;
   projectId: number;
