@@ -69,7 +69,7 @@ export type ServiceBindings = {
 /** Where an effective variable comes from; the server's answer, never derived client-side. */
 export type VariableSource = 'environment' | 'compose' | 'yaml' | { set: { id: number; name: string } };
 
-/** One row of a Service's effective environment; `overrides` are the shadowed layers, lowest first. */
+/** One row of a Service's effective environment; `overrides` are the shadowed layers, lowest first; a trailing `yaml` means the YAML's `environment:` also sets the key and wins. */
 export type EffectiveVariable = {
   key: string;
   value: string;

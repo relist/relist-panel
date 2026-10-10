@@ -96,7 +96,7 @@ describe('ComposeBindingsCard', () => {
 
   it('opens the Effective env modal with the server sources, masking a secret and marking a YAML override', async () => {
     panel.loadEffectiveVariables.mockResolvedValue([
-      { key: 'LOG_LEVEL', overrides: ['environment'], secret: false, source: 'compose', value: 'debug' },
+      { key: 'LOG_LEVEL', overrides: ['environment', 'yaml'], secret: false, source: 'compose', value: 'debug' },
       { key: 'DB_PASSWORD', overrides: [], secret: true, source: { set: { id: 1, name: 'db' } }, value: 'hunter2' },
       { key: 'LOG_LEVEL', overrides: [], secret: false, source: 'yaml', value: '' },
     ]);

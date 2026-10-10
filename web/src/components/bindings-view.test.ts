@@ -69,7 +69,7 @@ describe('effectiveRows', () => {
   });
 
   it('marks a merged row whose key the YAML also sets', () => {
-    const rows = effectiveRows([row('A', 'compose', ['environment']), row('B', 'environment'), row('A', 'yaml')]);
+    const rows = effectiveRows([row('A', 'compose', ['environment', 'yaml']), row('B', 'environment'), row('A', 'yaml')]);
     expect(rows.map((r) => [r.key, r.source, r.overriddenByYaml])).toEqual([
       ['A', 'compose', true],
       ['B', 'environment', false],
@@ -77,10 +77,13 @@ describe('effectiveRows', () => {
     ]);
   });
 
-  it('leaves the server order and the overrides untouched', () => {
-    const input = [row('A', { set: { id: 1, name: 'x' } }, ['environment', 'compose'])];
-    const [only] = effectiveRows(input);
-    expect(only.overrides).toEqual(['environment', 'compose']);
-    expect(only.overriddenByYaml).toBe(false);
+  it('keeps the shadowed layers but not the yaml mark among them', () => {
+    const [plain, marked] = effectiveRows([
+      row('A', { set: { id: 1, name: 'x' } }, ['environment', 'compose']),
+      row('B', 'compose', ['environment', 'yaml']),
+    ]);
+    expect(plain.overrides).toEqual(['environment', 'compose']);
+    expect(plain.overriddenByYaml).toBe(false);
+    expect(marked.overrides).toEqual(['environment']);
   });
 });

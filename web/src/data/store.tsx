@@ -808,6 +808,22 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [setsLocation, track],
   );
 
+  // A set change stamps every Compose that binds the set, but the tree loads
+  // once, so those Composes are re-read here to show the redeploy banner. The
+  // write already succeeded, so a failed refresh must not report it as failed.
+  const refreshSetBinders = useCallback(
+    async (projectId: number, environmentId: number, setId: number) => {
+      try {
+        const sets = await api.listVariableSets(projectId, environmentId);
+        const composeIds = new Set((sets.find((set) => set.id === setId)?.usedBy ?? []).map((usage) => usage.composeId));
+        await Promise.allSettled([...composeIds].map((composeId) => refreshStatus(composeId)));
+      } catch {
+        // The banner appears on the next reload instead.
+      }
+    },
+    [refreshStatus],
+  );
+
   const saveSetEntry = useCallback(
     (environmentId: number, setId: number, entry: NewVariable, entryId?: number) =>
       track(`save-set-entry:${setId}`, async () => {
@@ -817,16 +833,19 @@ export function PanelProvider({ children }: { children: ReactNode }) {
         } else {
           await api.createSetEntry(projectId, environmentId, setId, entry);
         }
+        await refreshSetBinders(projectId, environmentId, setId);
       }),
-    [setsLocation, track],
+    [refreshSetBinders, setsLocation, track],
   );
 
   const deleteSetEntry = useCallback(
     (environmentId: number, setId: number, entryId: number) =>
       track(`delete-set-entry:${entryId}`, async () => {
-        await api.deleteSetEntry(setsLocation(environmentId), environmentId, setId, entryId);
+        const projectId = setsLocation(environmentId);
+        await api.deleteSetEntry(projectId, environmentId, setId, entryId);
+        await refreshSetBinders(projectId, environmentId, setId);
       }),
-    [setsLocation, track],
+    [refreshSetBinders, setsLocation, track],
   );
 
   const loadBindings = useCallback(

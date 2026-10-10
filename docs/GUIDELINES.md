@@ -199,9 +199,19 @@ height; it gets one from the rail rather than from a hard-coded number.
 
 **Variables tab**: the Compose's own variables in the §4.5 editor (add, edit, delete, secret flag, reveal,
 copy; no paste-in). A row whose key is also an Environment Variable shows `overrides <environment>: <value>`,
-masked as `••••` when that Environment Variable is secret. The "changes apply on the next deploy" banner, shared
-with Domains, shows when a Compose Variable or a domain changed since the last deploy. The Editor tab's
-Environment card counts distinct keys across both.
+masked as `••••` when that Environment Variable is secret. The Editor tab's Environment card counts distinct keys
+across both.
+
+Below the Compose Variables, a **Service bindings** card lists one row per Service in the saved YAML (the list the Domains
+form uses) with a multi-select of the Environment's Variable Sets (ADR-0015); tag order is binding order and a later
+set wins. Bindings for a Service the YAML no longer declares are listed apart and can only be removed. Each Service row
+opens an **Effective env** modal: the Service's winning value per key, its source (Environment, Compose, or a set), the
+layers it shadows, and the YAML's own `environment:` keys as `defined in the YAML` rows, with an `overridden by YAML` tag
+on a merged row whose key the YAML also sets. Values follow the §4.5 masking.
+
+The "changes apply on the next deploy" banner, shared with Domains, shows when a Compose Variable, a domain, a
+binding, or an entry of a bound Variable Set changed since the last deploy (a set rename does not count). Editing a
+set in the Project's Variable Sets card refreshes the Composes that bind it, so the banner shows without a reload.
 
 **Domains tab**: a table of the Compose's domains (host + path as a link, `service:port`, an HTTPS tag, Edit and
 Delete) with an **Add domain** button in the header and an `EmptyState` when there are none. Add and Edit share one

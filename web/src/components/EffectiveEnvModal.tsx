@@ -23,8 +23,8 @@ function SourceTag({ source }: { source: VariableSource }) {
 /**
  * One Service's effective environment, as the server resolves it: the winning
  * value per key, where it came from, and the layers it shadows. Precedence is
- * the server's; the only client mark is on a merged row whose key the saved
- * YAML also sets.
+ * the server's; the only client mark reads the server's "yaml" override on a merged
+ * row whose key the saved YAML also sets.
  */
 export function EffectiveEnvModal({
   composeId,

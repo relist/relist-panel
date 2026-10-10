@@ -64,12 +64,18 @@ export function sourceLabel(source: VariableSource): string {
 }
 
 export type EffectiveRow = EffectiveVariable & {
-  /** The merged row's key is also set by the YAML's `environment:`, which wins at runtime. */
+  /** The server listed "yaml" among the layers: the YAML's `environment:` also sets this key and wins at runtime. */
   overriddenByYaml: boolean;
 };
 
-/** Marks merged rows whose key the saved YAML also sets; the YAML rows themselves stay as the server sent them. */
+/**
+ * Reads the server's "yaml" override into a flag and keeps it out of the
+ * shadowed layers, which are real sources. The YAML's own rows stay as sent.
+ */
 export function effectiveRows(variables: readonly EffectiveVariable[]): EffectiveRow[] {
-  const yamlKeys = new Set(variables.filter((row) => row.source === 'yaml').map((row) => row.key));
-  return variables.map((row) => ({ ...row, overriddenByYaml: row.source !== 'yaml' && yamlKeys.has(row.key) }));
+  return variables.map((row) => ({
+    ...row,
+    overriddenByYaml: row.overrides.includes('yaml'),
+    overrides: row.overrides.filter((source) => source !== 'yaml'),
+  }));
 }
