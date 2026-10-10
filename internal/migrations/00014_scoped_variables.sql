@@ -10,11 +10,11 @@ CREATE TABLE compose_variables (
 
 CREATE TABLE variable_sets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    compose_id INTEGER NOT NULL REFERENCES composes(id) ON DELETE CASCADE,
+    environment_id INTEGER NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    UNIQUE (compose_id, name)
+    UNIQUE (environment_id, name)
 );
 
 CREATE TABLE variable_set_entries (
@@ -36,7 +36,7 @@ CREATE TABLE service_bindings (
 );
 
 CREATE INDEX compose_variables_compose_id_idx ON compose_variables(compose_id);
-CREATE INDEX variable_sets_compose_id_idx ON variable_sets(compose_id);
+CREATE INDEX variable_sets_environment_id_idx ON variable_sets(environment_id);
 CREATE INDEX variable_set_entries_set_id_idx ON variable_set_entries(set_id);
 CREATE INDEX service_bindings_compose_id_idx ON service_bindings(compose_id);
 CREATE INDEX service_bindings_set_id_idx ON service_bindings(set_id);

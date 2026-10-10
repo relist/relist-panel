@@ -175,7 +175,8 @@ the view lists `environment:` keys from the saved YAML and marks them "set in YA
 
 ## Data model
 
-Migration `00014_scoped_variables.sql`:
+Migrations `00014_scoped_variables.sql` and `00015_compose_owned_variable_sets.sql` end at this
+schema:
 
 ```sql
 CREATE TABLE compose_variables (
@@ -219,8 +220,11 @@ ALTER TABLE composes ADD COLUMN variables_changed_at INTEGER;
 
 Plus an index on each foreign key column, as the earlier migrations do.
 
-Migration 00014 is edited in place for the revision: the branch has not been merged or installed
-anywhere, so no database outside throwaway test directories has applied it.
+00014 keeps its original Environment-owned `variable_sets` (`environment_id`), because a live
+install had already applied it. 00015 rebuilds the three set tables in the shape above: each
+Environment set is copied into every Compose of its Environment, entries included, and each binding
+points at its own Compose's copy at the same position. A set in an Environment with no Compose is
+dropped. Down collapses same-named copies back into one Environment set (lossy).
 
 Key validation is the same as Environment Variables (`validateInput` in
 `internal/environmentvariables`). A set name is 1–63 characters of lowercase letters, digits and
@@ -302,7 +306,7 @@ Five, each ending in a working, tested state:
 
 Revision (sets owned by the Compose):
 
-- `06-compose-owned-sets-backend.md` — migration 00014 edited, sets API moved under the Compose,
+- `06-compose-owned-sets-backend.md` — migration 00015 (00014 restored), sets API moved under the Compose,
   delete removes bindings, same-Compose binding check, stamps. (No blockers.)
 - `07-compose-owned-sets-ui.md` — Variable Sets card moved to the Compose Variables tab, removed from
   the Environment. (Blocked by 06.)

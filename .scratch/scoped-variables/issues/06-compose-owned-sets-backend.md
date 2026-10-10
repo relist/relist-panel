@@ -38,3 +38,8 @@ Decisions ("Deleting a set removes its bindings", "A set can only be bound withi
 - [ ] `go test ./...`, `go vet ./...`, `gofmt -l .` clean
 
 ## Comments
+
+2026-10-10: the in-place edit of 00014 was wrong. The user's live install had already applied the
+original 00014, so goose skipped the edited one and the sets API failed against
+`variable_sets.environment_id`. 00014 is restored to its original text and
+`00015_compose_owned_variable_sets.sql` moves the data to the Compose.
