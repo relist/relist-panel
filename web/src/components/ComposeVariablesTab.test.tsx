@@ -71,7 +71,8 @@ describe('ComposeVariablesTab', () => {
   it('shows only the empty state and one add button when there are no Compose variables', () => {
     renderTab();
     expect(screen.getByText('No Compose variables yet')).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: /New Variable|Add a Variable/ }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /New Variable|Add a Variable/ })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /Add a Variable/ })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Paste/ })).toBeNull();
   });
 
@@ -116,7 +117,7 @@ describe('ComposeVariablesTab', () => {
     const user = userEvent.setup();
     const { onChanged } = renderTab();
 
-    await user.click(screen.getAllByRole('button', { name: /New Variable/ })[0]);
+    await user.click(screen.getByRole('button', { name: /Add a Variable/ }));
     const dialog = await screen.findByRole('dialog');
     await user.type(within(dialog).getByLabelText('Key'), 'API_TOKEN');
     await user.type(within(dialog).getByLabelText('Value'), 'abc');

@@ -81,6 +81,8 @@ export type VariablesEditorProps = {
   /** Extra content under a row's value, e.g. the override hint. */
   annotate?: (variable: VariableRow) => ReactNode;
   footer?: ReactNode;
+  /** True: while the list is empty the card header drops its add button, leaving the empty state's as the only one. */
+  singleAddWhenEmpty?: boolean;
 };
 
 export function VariablesEditor({
@@ -100,6 +102,7 @@ export function VariablesEditor({
   onSave,
   replacing = false,
   saving,
+  singleAddWhenEmpty = false,
   title,
   variables,
 }: VariablesEditorProps) {
@@ -201,9 +204,11 @@ export function VariablesEditor({
               Paste .env
             </Button>
           )}
-          <Button icon={<PlusOutlined />} onClick={openCreate} type="primary">
-            New Variable
-          </Button>
+          {!(singleAddWhenEmpty && variables.length === 0 && !loading) && (
+            <Button icon={<PlusOutlined />} onClick={openCreate} type="primary">
+              New Variable
+            </Button>
+          )}
         </Space>
       }
       title={title}

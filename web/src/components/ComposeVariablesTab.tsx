@@ -75,6 +75,7 @@ export function ComposeVariablesTab({
           await saveComposeVariable(compose.id, values, id);
           onChanged();
         }}
+        singleAddWhenEmpty
         saving={isPending(`save-compose-variable:${compose.id}`)}
         title="Compose variables"
         variables={variables ?? []}
