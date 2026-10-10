@@ -2,6 +2,11 @@
 
 Date: 2026-10-10.
 
+Revised 2026-10-10 (tickets 06–08): Variable Sets belong to a **Compose**, not an Environment. They
+are created, edited and bound on the Compose's Variables tab only, and can no longer be shared
+across Composes. Every section below is updated to the revised design; tickets 01–05 shipped the
+Environment-owned version first.
+
 ## Problem
 
 Every variable the panel knows is an **Environment Variable**: it belongs to one Environment and
@@ -24,11 +29,13 @@ That leaves two gaps:
 - A Compose page has a **Variables** tab. Variables added there apply to that Compose only, override
   an Environment Variable with the same key, and work in `${VAR}` interpolation just like
   Environment Variables.
-- An Environment holds named **Variable Sets** (e.g. `db-creds`, `stripe`), each a list of
-  key/value pairs with the same secret flag as Environment Variables.
-- On a Compose's Variables tab, the operator binds Variable Sets to individual Services. On the next
-  deploy only those Services' containers receive the set's variables.
-- One set can be bound to many Services across many Composes in its Environment.
+- A Compose holds named **Variable Sets** (e.g. `db-creds`, `stripe`), each a list of
+  key/value pairs with the same secret flag as Environment Variables. The operator creates, edits
+  and deletes them on the Compose's Variables tab; nothing about sets appears on the Environment
+  screens.
+- On the same tab, the operator binds the Compose's Variable Sets to individual Services. On the
+  next deploy only those Services' containers receive the set's variables.
+- One set can be bound to many Services of its Compose.
 - For each Service, the operator can see the **effective** variables: the final value for each key
   and the layer it came from.
 - A Compose with no Compose Variables and no bindings deploys a byte-identical `.env` and an
@@ -36,7 +43,7 @@ That leaves two gaps:
 
 ## Out of scope
 
-- Variable Sets shared across Environments or Projects.
+- Variable Sets shared across Composes, Environments or Projects.
 - `${VAR}` interpolation from Variable Sets (see Decisions, "Sets reach containers only").
 - A redeploy marker for Environment Variables themselves. They have none today, and this spec does
   not add one.
@@ -54,7 +61,7 @@ that Compose only, and is interpolated into the Compose's YAML like one. It has 
 _Avoid_: Local variable, Override (the overriding is a behaviour, not the entity).
 
 **Variable Set**:
-A named list of key-value pairs belonging to an Environment, delivered to the containers of the
+A named list of key-value pairs belonging to one Compose, delivered to the containers of the
 Services it is bound to and to no others. Never interpolated into YAML.
 _Avoid_: Env, Env group, Env file (the file is how it is delivered, not what it is).
 
@@ -126,19 +133,17 @@ The binding is kept, so a renamed Service can be re-bound without re-entering an
 This differs from Domains on purpose: a missing Domain target means traffic goes nowhere, while a
 missing binding only means a container that no longer exists would have had extra variables.
 
-### A set that is still bound cannot be deleted
+### Deleting a set removes its bindings, after a confirmation
 
-`DELETE` on a bound set returns 409 with the list of Compose and Service names that bind it. The
-operator unbinds first. This prevents the next deploy from silently removing secrets from a running
-Service.
+A set and every Service it is bound to are on the same screen, so deleting a bound set no longer
+needs a 409 round trip. `DELETE` removes the set and its bindings (FK `ON DELETE CASCADE`) and, when
+it had any bindings, stamps the Compose's `variables_changed_at` in the same transaction. The UI's
+delete confirmation names the bound Services ("Unbinds it from api, worker. Takes effect on the next
+deploy."), so nothing is removed silently.
 
-The `service_bindings.set_id` foreign key still uses `ON DELETE CASCADE`, not `RESTRICT`, so that
-deleting a whole Environment (which cascades to both its sets and its Composes) never fails on
-cascade ordering. The 409 is enforced in the API, not by the schema.
+### A set can only be bound within its own Compose
 
-### A set can only be bound within its own Environment
-
-The bindings API rejects a set whose `environment_id` differs from the Compose's with 400.
+The bindings API rejects a set whose `compose_id` differs from the route's Compose with 400.
 
 ### Redeploy marker
 
@@ -146,7 +151,9 @@ The bindings API rejects a set whose `environment_id` differs from the Compose's
 
 - any create, update or delete of that Compose's Compose Variables
 - any change to that Compose's bindings
-- any change to a set's entries, for every Compose that binds the set (a rename does not: set files are named by ID, so nothing deployed changes)
+- any change to a set's entries, when the set is bound to at least one Service (a rename does not:
+  set files are named by ID, so nothing deployed changes; creating a set does not: it is unbound)
+- deleting a set that had bindings
 
 The Compose page shows the redeploy banner when `variables_changed_at >= lastDeployedAt`, the same
 way `domainsPendingRedeploy` (`web/src/pages/domains-view.ts`) works for Domains.
@@ -182,11 +189,11 @@ CREATE TABLE compose_variables (
 
 CREATE TABLE variable_sets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    environment_id INTEGER NOT NULL REFERENCES environments(id) ON DELETE CASCADE,
+    compose_id INTEGER NOT NULL REFERENCES composes(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    UNIQUE (environment_id, name)
+    UNIQUE (compose_id, name)
 );
 
 CREATE TABLE variable_set_entries (
@@ -212,6 +219,9 @@ ALTER TABLE composes ADD COLUMN variables_changed_at INTEGER;
 
 Plus an index on each foreign key column, as the earlier migrations do.
 
+Migration 00014 is edited in place for the revision: the branch has not been merged or installed
+anywhere, so no database outside throwaway test directories has applied it.
+
 Key validation is the same as Environment Variables (`validateInput` in
 `internal/environmentvariables`). A set name is 1–63 characters of lowercase letters, digits and
 `-`, starting with a letter.
@@ -224,10 +234,10 @@ All under `/api/projects/{projectID}/environments/{environmentID}`:
 |---|---|
 | `GET/POST /composes/{composeID}/variables` | List, create Compose Variables |
 | `PUT/DELETE /composes/{composeID}/variables/{variableID}` | Update, delete one |
-| `GET/POST /variable-sets` | List sets (with entries and a `usedBy` list of `{composeId, composeName, service}`), create one |
-| `PUT/DELETE /variable-sets/{setID}` | Rename, delete (409 while bound) |
-| `POST /variable-sets/{setID}/entries` | Add an entry |
-| `PUT/DELETE /variable-sets/{setID}/entries/{entryID}` | Update, delete an entry |
+| `GET/POST /composes/{composeID}/variable-sets` | List the Compose's sets (with entries and `boundServices: ["api", ...]`), create one |
+| `PUT/DELETE /composes/{composeID}/variable-sets/{setID}` | Rename; delete (also removes its bindings) |
+| `POST /composes/{composeID}/variable-sets/{setID}/entries` | Add an entry |
+| `PUT/DELETE /composes/{composeID}/variable-sets/{setID}/entries/{entryID}` | Update, delete an entry |
 | `GET /composes/{composeID}/bindings` | Every binding of the Compose, grouped by Service |
 | `PUT /composes/{composeID}/bindings/{service}` | Replace one Service's bindings: `{"setIds": [3, 7]}`, order = position. `[]` removes them all |
 | `GET /composes/{composeID}/services/{service}/effective-variables` | `[{key, value, secret, source, overrides}]`, where `source` is `environment`, `compose` or `{set: {id, name}}` and `overrides` lists the shadowed layers |
@@ -241,20 +251,19 @@ listed and removed.
 
 Follow `docs/GUIDELINES.md`, and read Ant Design's `llms.txt` before changing `web/` (AGENTS.md).
 
-**Environment Settings** (where `VariablesPanel` is mounted today, `ProjectPage.tsx`):
-
-- The existing Variables card gains the note "Used by every Compose · usable as `${VAR}`".
-- A new **Variable Sets** card lists sets as collapsible rows: name, entry count, and "used by"
-  (`compose/service` tags). Expanding a row shows the same editor as `VariablesPanel`, reused rather
-  than copied. The card's note says "Only for Services you bind · not usable as `${VAR}`".
-- "New set" opens a small name form. Deleting a bound set shows the 409's list in the error.
+**Environment's Variables tab** (`ProjectPage.tsx`): only the existing Environment Variables card,
+with the note "Used by every Compose · usable as `${VAR}`". No Variable Sets card.
 
 **Compose page**, new **Variables** tab between Editor and Domains (`ComposePage.tsx`):
 
 - **Compose variables** card: the `VariablesPanel` editor. A row whose key also exists as an
   Environment Variable shows "overrides <environment>: <value or ••••>".
+- **Variable Sets** card: the Compose's sets as collapsible rows with name, entry count and
+  "bound to" Service tags. Expanding a row shows the same editor as `VariablesPanel`, reused rather
+  than copied. "New set" opens a small name form; rename in place; delete asks for confirmation and
+  names the Services it unbinds. Note: "Only for Services you bind · not usable as `${VAR}`".
 - **Service bindings** card: one row per Service in the saved YAML, using the same Service list the
-  Domains form gets (`DomainFormModal`). Each row has a `Select mode="multiple"` of the Environment's
+  Domains form gets (`DomainFormModal`). Each row has a `Select mode="multiple"` of this Compose's
   sets. Tag order is binding order. Bindings for Services not in the YAML appear below with a warning
   icon and "not in YAML" and can only be removed.
 - Each Service row has an **Effective env** button that opens a modal backed by the
@@ -265,8 +274,8 @@ Follow `docs/GUIDELINES.md`, and read Ant Design's `llms.txt` before changing `w
 The Editor tab's existing "Environment" card ("N variables applied at deploy time") also counts
 Compose Variables.
 
-When an Environment has no sets and a Compose has no Compose Variables, both new cards show only
-their empty state and a single add button. Nothing else changes for an operator who does not use them.
+When a Compose has no Compose Variables and no sets, its cards show only their empty state and a
+single add button (the bindings card says to create a set first). Nothing else changes for an operator who does not use them.
 
 ## Docs
 
@@ -291,6 +300,14 @@ Five, each ending in a working, tested state:
   Effective env modal. (Blocked by 02 and 03.)
 - `05-docs.md` — CONTEXT.md and ADR-0015. (Blocked by 03.)
 
+Revision (sets owned by the Compose):
+
+- `06-compose-owned-sets-backend.md` — migration 00014 edited, sets API moved under the Compose,
+  delete removes bindings, same-Compose binding check, stamps. (No blockers.)
+- `07-compose-owned-sets-ui.md` — Variable Sets card moved to the Compose Variables tab, removed from
+  the Environment. (Blocked by 06.)
+- `08-compose-owned-sets-docs.md` — CONTEXT.md, ADR-0015, GUIDELINES. (Blocked by 06.)
+
 ## Verification
 
 - Backend: `go test ./...`, `go vet ./...`, gofmt. Tests must cover:
@@ -298,9 +315,9 @@ Five, each ending in a working, tested state:
   - per-set files written and stale ones removed on redeploy
   - `resolveCompose` output for bound, unbound and missing Services
   - each warning
-  - the 409 on deleting a bound set
-  - a cross-Environment binding refused
-  - deleting an Environment with bound sets succeeding
+  - deleting a bound set removes its bindings and stamps the Compose
+  - a binding to another Compose's set refused
+  - deleting a Compose, and an Environment, with bound sets succeeding
   - a Compose with no new data producing the same `.env` and YAML as before
 - A real deploy on the dev host: a Service bound to a set has the variable inside its container
   (`docker compose exec <svc> env`) and an unbound Service does not. Stop and terminal still work
