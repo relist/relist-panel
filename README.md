@@ -152,8 +152,10 @@ Each Compose page has a **Volumes** tab listing the Volumes that Compose
 mounts, with a **Volume Explorer** behind each one for browsing, editing,
 uploading, deleting, and downloading or restoring a tar.gz.
 
-Deploy runs `docker compose up -d --build --remove-orphans`, so the containers of
-Services you removed from the YAML are removed with the next deploy. Volumes are
+Deploy runs `docker compose up -d --remove-orphans`, with `--build` for a Compose
+without a Source and `--no-build` for one with a Source, whose images are built
+first (see "Building from a Source"). Either way, the containers of Services you
+removed from the YAML are removed with the next deploy. Volumes are
 left alone. The Compose page also offers **Deploy with fresh volumes**, which
 removes the Compose's named volumes (`down -v`) before redeploying, and the
 Volumes tab lists **orphan volumes** — named volumes Compose created for this
@@ -239,7 +241,7 @@ they are relative and stay inside `src/`.
 
 An upload replaces the code and never merges with it. A failed upload leaves
 the previous code in place. An upload does not deploy, so the card shows
-"Uploaded, not built yet" until you Build & Deploy.
+"Not built yet" until you Build & Deploy.
 
 ### Deployments
 
