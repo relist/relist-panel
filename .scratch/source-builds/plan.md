@@ -191,6 +191,7 @@
 - [ ] **Step 3: Write the migration.** Use the spec's SQL plus `head_sha`, with a `-- +goose Down` that drops both tables.
 - [ ] **Step 4: Implement both stores.**
   - `Steps` and `Warnings` are JSON TEXT columns. Times are Unix seconds, as `composes` stores them.
+  - The DB has a single connection (`SetMaxOpenConns(1)` in `internal/database/database.go`), so transactions are serialised. Inside a transaction, use only `tx`: a query on `db` would wait for the one connection and deadlock.
   - `Enqueue` runs in one transaction: `SELECT … WHERE compose_id=? AND status='queued'`, then `MAX(number)+1`, then INSERT. On a unique-constraint error (`isUniqueConstraint`, the same check `composes` uses) it re-reads the queued row and returns it with `created == false`.
 - [ ] **Step 5: Run the tests and confirm they pass.** Run `go test -race ./internal/sources/ ./internal/deployments/ ./internal/database/`. Expected: PASS, including the migration test in `database`.
 - [ ] **Step 6: Commit.** `feat: add the sources and deployments tables and stores`
@@ -402,11 +403,12 @@
   type Request struct{ Mode Mode; NoCache, FreshVolumes bool }
   var ErrNotCancelable = errors.New("deployment can no longer be canceled")
   func NewQueue(d Deps) *Queue
-  func (q *Queue) Run(ctx context.Context)  // FailRunning("panel restarted"), then loops until ctx is done
+  func (q *Queue) Run(ctx context.Context)  // FailRunning("panel restarted"), then loops until ctx is done; returns after any Deploy step in progress finishes
   func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deployment, bool, error)
   func (q *Queue) Cancel(ctx context.Context, composeID int64, number int) error
   func (q *Queue) CancelForComposes(ctx context.Context, composeIDs []int64) // satisfies composes.DeploymentCanceler
   func (q *Queue) IsRunning(composeID int64) bool
+  func (q *Queue) TryLockSource(composeID int64) (unlock func(), ok bool)
   func LogPath(composeDir string, number int) string // <dir>/.deployments/<n>.log
   ```
 
@@ -426,6 +428,10 @@
   - `TestGateOnlyForDeployStep`: the fake gate records acquisitions. It has none during fetch and build, and exactly one around `RunDeploy`.
   - `TestCancelQueued`, and `TestCancelWhileBuilding`: the builder's ctx is done, the status is `canceled`, and the gate is never acquired.
   - `TestCancelDuringDeployRefused`: `ErrNotCancelable`.
+  - `TestCancelWhileWaitingForGate`: the fake gate blocks, then `CancelForComposes` runs while the worker waits on it. The result is `canceled`, and `RunDeploy` is never called.
+  - `TestComposeGoneAfterGate`: the row is deleted while the worker waits on the gate, then the gate is released. `RunDeploy` is never called.
+  - `TestDeployStepSurvivesShutdown`: cancel `Run`'s ctx while `RunDeploy` blocks. `RunDeploy`'s ctx is not done, and `Run` returns only after it finishes.
+  - `TestTryLockSourceFailsDuringBuild`
   - `TestCancelForComposesWaitsForExit`: it returns only after the building fake has returned. During the Deploy step it does not wait, and that Deployment finishes.
   - `TestTimeout`: with `Timeout: 50ms`, the result is `failed` with reason `timeout`.
   - `TestRestartRecovery`: seed one `running` and one `queued` row. `Run` marks the first `failed` with `panel restarted`, then runs the queued one.
@@ -436,7 +442,10 @@
 - [ ] **Step 3: Implement.**
   - The worker loop: `NextQueued`, then `Target` (a missing Compose finishes as `failed` with reason `compose deleted`), then `CheckDeployable`, then work out the steps, then `Start`. It runs the steps with a per-Deployment `context.WithTimeout` whose cancel function is held in `q.running` under a mutex. Then `Finish`, then `Prune` (removing log files too).
   - A wake-up channel, buffered to 1, is signalled by `Enqueue`.
-  - The phase (`fetching`, `building` or `deploying`) is kept in memory next to the cancel function, so `Cancel` and `CancelForComposes` can refuse during Deploy and wait otherwise, through a `done` channel per run.
+  - The phase (`fetching`, `building`, `waiting-gate` or `deploying`) is kept in memory next to the cancel function, so `Cancel` and `CancelForComposes` can refuse during Deploy and wait otherwise, through a `done` channel per run.
+  - **The phase becomes `deploying` only after `Gate.Acquire` returns.** While the worker waits for the gate, the Deployment can still be canceled, and `Acquire` returns on ctx cancel. After acquiring, the worker re-checks that the Compose row exists, by existence only, so the snapshot rule holds. If it is gone, it releases the gate and finishes `canceled`, reason `compose deleted`, without calling `RunDeploy`. Otherwise a Delete that held the gate would have its directory recreated and containers started for a Compose with no row.
+  - **Contexts.** Fetch and build run under `ctx` (from `Run`) plus the timeout, so shutdown may cut them, and they end `failed` with reason `panel restarted` on the next start. The Deploy step runs under `context.WithoutCancel(ctx)` plus the remaining timeout, so SIGTERM never kills `docker compose up` halfway.
+  - **Source lock.** `q.srcLocks` is a per-Compose `sync.Mutex`. The worker holds it from fetch through the end of the build steps. It exports `func (q *Queue) TryLockSource(composeID int64) (unlock func(), ok bool)` for Task 8.
   - The log file opens with `O_APPEND|O_CREATE`, mode 0600, and every step writes a header line `==> <step>`.
 - [ ] **Step 4: Run the tests and confirm they pass.** Run `go test -race ./internal/deployments/`. Expected: PASS.
 - [ ] **Step 5: Commit.** `feat: run deployments one at a time from a host-wide queue`
@@ -447,8 +456,8 @@
 - Create: `internal/deployments/http.go`
 - Modify:
   - `internal/httpapi/coordination.go`: exported `func (c *coordinator) Acquire(ctx, projectID) (func(), error)` and the exemptions.
-  - `internal/httpapi/httpapi.go`: `NewHandler(ctx context.Context, db, …)`, building the queue, `go queue.Run(ctx)`, `composesService.SetDeploymentCanceler(queue)`.
-  - `main.go`.
+  - `internal/httpapi/httpapi.go`: `NewHandler(ctx context.Context, db, …) (http.Handler, func())`. It builds the queue, starts `go queue.Run(ctx)` and calls `composesService.SetDeploymentCanceler(queue)`. The returned `wait` blocks until `Run` has returned.
+  - `main.go`: after `server.Shutdown`, call `wait()` within the shutdown deadline, so an in-progress Deploy step finishes before exit.
   - `internal/composes/composes.go`: remove the `deploy` and `deployFresh` routes and handlers.
   - Every httpapi test that deploys.
 - Test: `internal/httpapi/deployments_test.go`, `internal/deployments/logfile_test.go`
@@ -488,7 +497,7 @@
     - `POST …/source/test`
     - `GET …/source/dockerfiles`
     - `POST …/source/upload` (Task 8 gates the swap itself)
-  - `newTestServer` passes `t.Context()`.
+  - `newTestServer` creates its own `context.WithCancel`, and registers `t.Cleanup(func(){ cancel(); wait() })` **after** the DB cleanup, so the LIFO order stops the worker before the DB closes and `TempDir` is removed. Do not use `t.Context()`: it is canceled before cleanups run, but nothing would wait for the worker.
 - [ ] **Step 4: Run the tests and confirm they pass.** Run `go test -race ./...`. Expected: PASS.
 - [ ] **Step 5: Commit.** `feat: enqueue every deploy as a deployment with a live log`
 
@@ -500,8 +509,8 @@
 - Test: `internal/httpapi/sources_test.go`
 
 **Interfaces:**
-- Consumes: Tasks 1, 4 and 5; `Queue.IsRunning` through `type RunningChecker interface{ IsRunning(composeID int64) bool }`.
-- Produces: `type Gate interface{ Acquire(ctx context.Context, projectID int64) (func(), error) }` (declared in `sources`, same shape as Task 6's), and `func New(db *sql.DB, composes *composes.Service, git Git, running RunningChecker, gate Gate) *Service` and `RegisterRoutes(mux)`, serving the spec's `/source` table. The response type never carries `PrivateKey`.
+- Consumes: Tasks 1, 4 and 5; `Queue.TryLockSource` through `type SourceLocker interface{ TryLockSource(composeID int64) (unlock func(), ok bool) }`.
+- Produces: `type Gate interface{ Acquire(ctx context.Context, projectID int64) (func(), error) }` (declared in `sources`, same shape as Task 6's), and `func New(db *sql.DB, composes *composes.Service, git Git, locker SourceLocker, gate Gate) *Service` and `RegisterRoutes(mux)`, serving the spec's `/source` table. The response type never carries `PrivateKey`.
 
 - [ ] **Step 1: Write the failing tests.**
   - PUT a git Source with an empty branch gives `200` with `publicKey` starting `ssh-ed25519 ` and no `privateKey` field. A second PUT keeps the same key.
@@ -511,7 +520,7 @@
   - Upload a small zip (multipart) gives `200` with `kind:"zip"`, `zipName` and `zipFiles`. `src/` holds the files.
   - An upload over 500 MiB is simulated by setting a smaller test cap through an unexported field and expecting `413`.
   - An upload with `../x` gives `400`, and the old `src/` is unchanged.
-  - Upload, PUT, DELETE and regenerate while `IsRunning` is true each give `409` with `A deployment is running`. Use a stub checker.
+  - Upload, PUT, DELETE and regenerate while `TryLockSource` fails each give `409` with `A deployment is running`. Use a stub locker.
   - `GET /source/dockerfiles` returns the detected list.
   - `POST /source/known-hosts/reset` gives `204`, and `.ssh/known_hosts` is gone.
   - `DELETE /source` gives `204`. `src/` is gone, `GET /source` gives `404`, and Deployment history remains.
@@ -519,7 +528,7 @@
 - [ ] **Step 2: Run them and confirm they fail.** Run `go test ./internal/httpapi/ -run Source`. Expected: FAIL.
 - [ ] **Step 3: Implement.**
   - The upload uses `http.MaxBytesReader(500<<20)` and `r.MultipartReader()`, and streams the part to `<dir>/.upload-*.zip`.
-  - It checks `IsRunning` before streaming and again just before `ReplaceSrc`, extracts into `<dir>/.src.new`, and removes the temp files on every path.
+  - It calls `TryLockSource` before streaming and returns `409` when that fails, then streams outside the Project gate. It takes the lock again just before `ReplaceSrc` (another `409` if that fails) and holds it through the swap. It extracts into `<dir>/.src.new` and removes the temp files on every path. PUT, DELETE and regenerate hold the lock for their whole handler, so `IsRunning` checks are never separate from the action.
   - The upload's swap step takes the Project gate by calling the coordinator. `sources` declares its own `Gate` interface, identical in shape to Task 6's, so it does not import `deployments`.
 - [ ] **Step 4: Run the tests and confirm they pass.** Run `go test -race ./...`. Expected: PASS.
 - [ ] **Step 5: Commit.** `feat: configure git and zip sources for a compose`
@@ -629,7 +638,7 @@
     - "replace image" appears only for names in `existingServices`.
     - `onInsert` receives the edited targets.
 - [ ] **Step 2: Run them and confirm they fail.** Run `cd web && pnpm test SourceModal DetectDockerfilesModal`. Expected: FAIL.
-- [ ] **Step 3: Implement** to the spec's UI section and the mockups in `.superpowers/brainstorm/*/content/source-card.html`.
+- [ ] **Step 3: Implement** to the spec's UI section and the mockups in `.scratch/source-builds/mockups/` (`source-card.html`, `source-and-builds.html`). They predate two spec changes: the "Builds" tab is now **Deployments**, and the "2 new" tag is now **New commits**. The spec wins.
   - After `onSaved(…, firstTime=true)` or the first upload, open Detect with `detectDockerfiles`.
   - The danger area holds `Regenerate key` and `Remove source` (`Popconfirm`), and `Reset host key`.
   - The snippets are the spec's two YAML blocks, inserted with `insertBuildBlocks` for args. Secrets are a text insert at the end of the draft.

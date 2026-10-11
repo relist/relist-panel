@@ -1,0 +1,75 @@
+<h2>แท็บ Source และ Build log</h2>
+<p class="subtitle">Compose ที่เป็น Git source: ปุ่มหลักเปลี่ยนจาก "Deploy" เป็น "Build &amp; Deploy" และมีแท็บใหม่ 2 แท็บ คือ Source กับ Builds</p>
+
+<div class="mockup">
+  <div class="mockup-header">Header ของหน้า Compose (Git source)</div>
+  <div class="mockup-body" style="padding:10px;display:flex;justify-content:space-between;align-items:center">
+    <div><b>shop</b> <span style="font-size:12px;opacity:.7">⎇ acme/shop · main · deployed a1b2c3d</span> <span style="font-size:11px;background:#fde68a;padding:1px 6px;border-radius:8px">2 new commits</span></div>
+    <div><button class="mock-button">Save</button> <button class="mock-button"><b>Build &amp; Deploy</b> ▾</button></div>
+  </div>
+  <div style="padding:0 10px 10px;font-size:12px">▾ เมนู: Deploy without building (ใช้ image เดิม) · Build without cache · Deploy with fresh volumes · Restart · Stop · Delete</div>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">แท็บ Source</div>
+  <div class="mockup-body">
+    <div class="mock-nav">Editor | Variables | Domains | <b>Source</b> | Builds | Logs | Terminal | Monitor | Volumes</div>
+    <div style="padding:10px;display:flex;gap:16px">
+      <div style="flex:1">
+        <h3 style="margin-top:0">Repository</h3>
+        <div class="label">SSH URL</div>
+        <input class="mock-input" value="git@github.com:acme/shop.git" style="width:100%">
+        <div class="label" style="margin-top:8px">Branch</div>
+        <div class="mock-input" style="width:50%">main ▾</div>
+        <div style="margin-top:8px">━◉ Enable submodules</div>
+        <div style="margin-top:8px;font-size:12px">Latest on main: <code>f00ba12</code> "fix checkout" · 2h ago<br>Deployed: <code>a1b2c3d</code> "add cart" · 1d ago</div>
+        <div style="text-align:right;margin-top:8px"><button class="mock-button">Save</button></div>
+        <p style="font-size:12px">เปลี่ยน URL/branch แล้วมีผลตอน Build &amp; Deploy ครั้งถัดไป</p>
+      </div>
+      <div style="flex:1">
+        <h3 style="margin-top:0">Deploy key</h3>
+        <div class="placeholder" style="font-family:monospace;font-size:11px;text-align:left;word-break:break-all">ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHx…k9Q relist-shop</div>
+        <div style="margin-top:6px"><button class="mock-button">Copy</button> <button class="mock-button">Test connection</button></div>
+        <div style="margin-top:4px;color:green;font-size:12px">✓ Last test: connected · 5 min ago</div>
+        <div style="margin-top:12px;border:1px solid #e66;border-radius:6px;padding:8px">
+          <b style="color:#c33">Regenerate key</b>
+          <p style="font-size:12px;margin:4px 0">Key เดิมใช้ไม่ได้ทันที ต้องเพิ่ม key ใหม่ที่ GitHub ก่อน build ครั้งถัดไป</p>
+          <button class="mock-button">Regenerate…</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">แท็บ Builds — กด Build &amp; Deploy แล้วสลับมาแท็บนี้อัตโนมัติ</div>
+  <div class="mockup-body">
+    <div class="mock-nav">Editor | Variables | Domains | Source | <b>Builds</b> | Logs | Terminal | Monitor | Volumes</div>
+    <div style="padding:10px;display:flex;gap:12px">
+      <div style="width:38%;font-size:12px">
+        <div class="label">History (เก็บ 20 ครั้งล่าสุด)</div>
+        <div style="border:2px solid #3b82f6;border-radius:6px;padding:6px;margin-bottom:4px">⟳ <b>#14</b> f00ba12 · main · running 1m 12s<br><span style="opacity:.7">fix checkout</span></div>
+        <div style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:4px">✓ <b>#13</b> a1b2c3d · 2m 40s · 1d ago</div>
+        <div style="border:1px solid #ccc;border-radius:6px;padding:6px;margin-bottom:4px">✗ <b>#12</b> 9e8d7c6 · failed at build web · 1d ago</div>
+        <div style="border:1px solid #ccc;border-radius:6px;padding:6px">✓ <b>#11</b> 77aa001 · 3m 05s · 3d ago</div>
+      </div>
+      <div style="flex:1">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+          <span>✓ Clone · ✓ Build api · ⟳ <b>Build web</b> · ◯ Deploy</span>
+          <span><button class="mock-button">Cancel</button></span>
+        </div>
+        <div style="background:#111;color:#ddd;font-family:monospace;font-size:11px;padding:8px;border-radius:6px;white-space:pre;height:200px;overflow:hidden">$ git fetch --depth 1 origin main
+HEAD is now at f00ba12 fix checkout
+$ docker compose build
+#5 [api 3/6] RUN go build -o /app ./cmd/api
+#5 DONE 41.2s
+#9 [web 2/5] RUN npm ci
+#9 12.31 added 812 packages in 12s
+#11 [web 4/5] RUN npm run build
+#11 3.02 vite v6 building for production...
+▌</div>
+        <p style="font-size:12px">Log stream สด, ปิดหน้าแล้วกลับมาดูต่อได้ · ถ้า build fail → ไม่แตะ container ที่รันอยู่ (ของเดิมยังรันต่อ)</p>
+      </div>
+    </div>
+  </div>
+</div>
