@@ -239,3 +239,26 @@ func TestKeyFileRemoved(t *testing.T) {
 		t.Fatalf("key files left: %v", left)
 	}
 }
+
+func TestFetchMarkerSymlinkNotFollowed(t *testing.T) {
+	r := newRemoteRepo(t)
+	if err := os.Symlink("../outside.txt", filepath.Join(r.work, MarkerName)); err != nil {
+		t.Fatal(err)
+	}
+	r.commit("main", "a.txt", "a", "with marker link")
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "outside.txt")
+
+	for i := 0; i < 2; i++ {
+		if _, err := (Git{}).Fetch(context.Background(), gitSource(r.url, "main"), dir, &bytes.Buffer{}); err != nil {
+			t.Fatalf("fetch %d: %v", i, err)
+		}
+		if _, err := os.Lstat(outside); !os.IsNotExist(err) {
+			t.Fatalf("fetch %d: outside file exists: %v", i, err)
+		}
+		info, err := os.Lstat(filepath.Join(dir, "src", MarkerName))
+		if err != nil || !info.Mode().IsRegular() {
+			t.Fatalf("fetch %d: marker not a regular file: %v %v", i, info, err)
+		}
+	}
+}

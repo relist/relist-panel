@@ -103,11 +103,9 @@ func (g Git) Fetch(ctx context.Context, src Source, composeDir string, out io.Wr
 	if err := os.MkdirAll(srcDir, 0o755); err != nil {
 		return Ref{}, fmt.Errorf("create src: %w", err)
 	}
-	marker, err := os.OpenFile(filepath.Join(srcDir, MarkerName), os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return Ref{}, fmt.Errorf("mark src: %w", err)
+	if err := ensureMarker(srcDir); err != nil {
+		return Ref{}, err
 	}
-	_ = marker.Close()
 
 	env, cleanup, err := sshEnv(src, composeDir)
 	if err != nil {
@@ -136,6 +134,10 @@ func (g Git) Fetch(ctx context.Context, src Source, composeDir string, out io.Wr
 		return Ref{}, err
 	}
 	if err := step("clean", "-ffdx", "-e", MarkerName); err != nil {
+		return Ref{}, err
+	}
+	// The repository is untrusted and may track something named like the marker.
+	if err := ensureMarker(srcDir); err != nil {
 		return Ref{}, err
 	}
 	if src.Submodules {
@@ -184,4 +186,26 @@ func (g Git) ListBranches(ctx context.Context, src Source, composeDir string) ([
 		}
 	}
 	return branches, nil
+}
+
+// ensureMarker makes srcDir/.relist-source a regular file without ever opening
+// it through a link: anything else there is removed and recreated exclusively.
+func ensureMarker(srcDir string) error {
+	path := filepath.Join(srcDir, MarkerName)
+	info, err := os.Lstat(path)
+	switch {
+	case err == nil && info.Mode().IsRegular():
+		return nil
+	case err == nil:
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("mark src: %w", err)
+		}
+	case !errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("mark src: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("mark src: %w", err)
+	}
+	return f.Close()
 }
