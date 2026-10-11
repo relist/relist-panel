@@ -448,7 +448,7 @@ func TestSourceTestAndUploadAnswerWhileADeployHoldsTheProjectGate(t *testing.T) 
 	url, _ := bareRepo(t)
 	f.saveGitRow(t, url, "main")
 
-	f.post(t, map[string]any{"mode": "deploy"})
+	f.post(t, map[string]any{"mode": "skip-build"})
 	waitSignal(t, runner.upStarted, "the deploy to reach Up")
 	released := false
 	release := func() {
