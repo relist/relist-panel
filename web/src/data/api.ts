@@ -159,11 +159,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const { message, field } = errorBody(response.status, await response.text().catch(() => ''));
     throw new ApiError(response.status, message, field);
   }
-  // Deletes (and logout) answer 204 with no body to parse.
+  // Deletes, logout and an accepted cancel (202) answer with no body to parse.
   if (response.status === 204) {
     return undefined as T;
   }
-  return (await response.json()) as T;
+  const text = await response.text();
+  if (text === '') {
+    return undefined as T;
+  }
+  return JSON.parse(text) as T;
 }
 
 /**

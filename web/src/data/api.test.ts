@@ -226,6 +226,14 @@ describe('deployments, sources and orphan volumes', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ mode: 'deploy', freshVolumes: true, confirmName: 'web' });
   });
 
+  it('accepts a cancel answered 202 with an empty body', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(null, { status: 202 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.cancelDeployment(location, 4)).resolves.toBeUndefined();
+    expect(fetch.mock.calls[0][0]).toBe('/api/projects/1/environments/2/composes/3/deployments/4/cancel');
+  });
+
   it('uploads a zip as multipart FormData under the file field', async () => {
     const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{"kind":"zip"}', { status: 200 }));
     vi.stubGlobal('fetch', fetch);
