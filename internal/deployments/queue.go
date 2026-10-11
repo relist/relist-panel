@@ -187,7 +187,7 @@ func (q *Queue) Cancel(ctx context.Context, composeID int64, number int) error {
 		return err
 	}
 	if d.Status == StatusQueued {
-		if ok, err := q.d.Store.CancelQueued(ctx, composeID, q.d.Now()); err != nil || ok {
+		if ok, err := q.d.Store.CancelQueuedNumber(ctx, composeID, number, q.d.Now()); err != nil || ok {
 			return err
 		}
 	}
@@ -320,22 +320,13 @@ func (q *Queue) process(ctx context.Context, d Deployment) error {
 	}
 
 	j := &job{q: q, ctx: ctx, bg: bg, d: d, target: target, steps: []string{stepDeploy}}
-	if d.Mode != ModeDeploy {
-		src, err := q.d.Sources.Get(bg, d.ComposeID)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
+	if d.Mode == ModeSkipBuild {
+		// Only its existence matters; a build Deployment reads the Source
+		// under the source lock, once it is the one running.
+		if _, err := q.d.Sources.Get(bg, d.ComposeID); errors.Is(err, sql.ErrNoRows) {
 			j.pre = &outcome{status: StatusFailed, reason: reasonNoSource}
-		case err != nil:
+		} else if err != nil {
 			return q.settleUnstarted(bg, d, failed("", firstLine(err.Error())))
-		default:
-			j.src = &src
-		}
-	}
-	if j.src != nil && d.Mode == ModeBuild && j.src.Kind == sources.KindGit {
-		j.steps = []string{stepFetch, stepDeploy}
-		if j.src.Branch == "" {
-			o := failed(stepFetch, reasonNoBranch)
-			j.pre = &o
 		}
 	}
 	return j.execute()
@@ -487,6 +478,26 @@ func (j *job) fetchAndBuild() (outcome, bool) {
 	}
 	defer unlock()
 
+	// The Source is read under its lock, so an edit that held the lock while
+	// this Deployment waited is the one built.
+	src, err := q.d.Sources.Get(j.bg, j.d.ComposeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return failed("", reasonNoSource), false
+	}
+	if err != nil {
+		return failed("", firstLine(err.Error())), false
+	}
+	j.src = &src
+	if src.Kind == sources.KindGit {
+		if err := q.d.Store.SetSteps(j.bg, j.d.ID, []string{stepFetch, stepDeploy}); err != nil {
+			logf("set steps: %v", err)
+		}
+		if src.Branch == "" {
+			j.step = stepFetch
+			return failed(stepFetch, reasonNoBranch), false
+		}
+	}
+
 	j.setPhase(phaseFetching)
 	if o, ok := j.interrupted(); ok {
 		return o, false
@@ -549,10 +560,13 @@ func (j *job) deploy() outcome {
 	q := j.q
 	j.begin(stepDeploy)
 	j.setPhase(phaseWaitingGate)
-	release, err := q.d.Gate.Acquire(j.tctx, j.target.ProjectID)
+	rel, err := q.d.Gate.Acquire(j.tctx, j.target.ProjectID)
 	if err != nil {
 		return j.stepFailed(err)
 	}
+	var once sync.Once
+	release := func() { once.Do(rel) }
+	defer release() // a panic in RunDeploy must not leak the gate
 
 	// A Delete may have held the gate first; running now would recreate the
 	// Compose's directory and start containers for a Compose with no row.

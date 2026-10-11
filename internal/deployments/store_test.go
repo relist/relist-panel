@@ -351,3 +351,21 @@ func TestSetStepsReplacesPlannedSteps(t *testing.T) {
 		t.Fatalf("steps = %v, want %v", got.Steps, want)
 	}
 }
+
+func TestCancelQueuedNumberLeavesOtherNumbers(t *testing.T) {
+	db, a, _ := newDB(t)
+	s := NewStore(db)
+	ctx := context.Background()
+	first := enqueue(t, s, a, t0)
+	run(t, s, first, StatusSucceeded, t0)
+	second := enqueue(t, s, a, t0)
+	if ok, err := s.CancelQueuedNumber(ctx, a, first.Number, t0); err != nil || ok {
+		t.Fatalf("cancel of settled #%d = %v %v, want false", first.Number, ok, err)
+	}
+	if got, _ := s.Get(ctx, a, second.Number); got.Status != StatusQueued {
+		t.Fatalf("#%d = %s, want queued", second.Number, got.Status)
+	}
+	if ok, err := s.CancelQueuedNumber(ctx, a, second.Number, t0); err != nil || !ok {
+		t.Fatalf("cancel of queued = %v %v", ok, err)
+	}
+}

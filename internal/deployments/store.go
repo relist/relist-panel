@@ -266,6 +266,19 @@ UPDATE deployments SET status = 'canceled', finished_at = ? WHERE compose_id = ?
 	return n > 0, err
 }
 
+// CancelQueuedNumber cancels the Compose's queued Deployment only when it has
+// that number, so a Deployment queued after the caller looked is left alone.
+func (s *Store) CancelQueuedNumber(ctx context.Context, composeID int64, number int, now time.Time) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
+UPDATE deployments SET status = 'canceled', finished_at = ? WHERE compose_id = ? AND number = ? AND status = 'queued'`,
+		now.Unix(), composeID, number)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // Get returns one Deployment by its per-Compose number, or sql.ErrNoRows.
 func (s *Store) Get(ctx context.Context, composeID int64, number int) (Deployment, error) {
 	return scan(s.db.QueryRowContext(ctx,

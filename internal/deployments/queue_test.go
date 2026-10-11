@@ -936,3 +936,47 @@ func TestPrunesAfterFinish(t *testing.T) {
 		t.Fatalf("logs = %v, want %v", names, want)
 	}
 }
+
+func TestCancelOfOldNumberLeavesNewerQueued(t *testing.T) {
+	h := newHarness(t)
+	h.newQueue()
+	ctx := context.Background()
+	old := enqueue(t, h.store, h.a, t0)
+	run(t, h.store, old, StatusSucceeded, t0)
+	newer := h.enqueue(h.a, ModeDeploy)
+	if err := h.q.Cancel(ctx, h.a, old.Number); !errors.Is(err, ErrNotCancelable) {
+		t.Fatalf("Cancel(old) = %v, want ErrNotCancelable", err)
+	}
+	if got := h.get(h.a, newer.Number).Status; got != StatusQueued {
+		t.Fatalf("newer = %s, want queued", got)
+	}
+}
+
+func TestSourceIsReadUnderItsLock(t *testing.T) {
+	h := newHarness(t)
+	h.gitSource(h.a)
+	h.newQueue()
+	unlock, ok := h.q.TryLockSource(h.a)
+	if !ok {
+		t.Fatal("lock refused")
+	}
+	var seen string
+	h.fetch.onFetch = func(_ context.Context, src sources.Source, _ string, _ io.Writer) (sources.Ref, error) {
+		seen = src.Branch
+		return sources.Ref{SHA: "x"}, nil
+	}
+	d := h.enqueue(h.a, ModeBuild)
+	h.start()
+	eventually(t, "deployment to start", func() bool { return h.get(h.a, d.Number).Status == StatusRunning })
+	err := h.srcs.Save(context.Background(), sources.Source{ComposeID: h.a, Kind: sources.KindGit, RepoURL: "git@example.com:a/b.git", Branch: "release"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	if got := h.waitSettled(h.a, d.Number); got.Status != StatusSucceeded {
+		t.Fatalf("status = %s %q", got.Status, got.Reason)
+	}
+	if seen != "release" {
+		t.Fatalf("fetched branch %q, want release", seen)
+	}
+}
