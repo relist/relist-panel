@@ -35,10 +35,10 @@ func TestUpArgs(t *testing.T) {
 }
 
 func TestBuildArgs(t *testing.T) {
-	if got, want := buildArgs("api", false), []string{"build", "--progress", "plain", "api"}; !reflect.DeepEqual(got, want) {
+	if got, want := buildArgs("api", false), []string{"--progress", "plain", "build", "api"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("buildArgs(api, false) = %v, want %v", got, want)
 	}
-	if got, want := buildArgs("api", true), []string{"build", "--progress", "plain", "--no-cache", "api"}; !reflect.DeepEqual(got, want) {
+	if got, want := buildArgs("api", true), []string{"--progress", "plain", "build", "--no-cache", "api"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("buildArgs(api, true) = %v, want %v", got, want)
 	}
 }

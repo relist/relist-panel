@@ -43,8 +43,9 @@ func upArgs(build bool) []string {
 }
 
 // buildArgs is the argv for building one Service with plain progress output.
+// --progress is a global compose flag; Compose v5 rejects it after build.
 func buildArgs(service string, noCache bool) []string {
-	args := []string{"build", "--progress", "plain"}
+	args := []string{"--progress", "plain", "build"}
 	if noCache {
 		args = append(args, "--no-cache")
 	}
