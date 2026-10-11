@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"relist-panel/internal/composes"
-	"relist-panel/internal/httpapi"
 	"relist-panel/internal/volumes"
 	"strconv"
 	"sync"
@@ -22,11 +21,7 @@ func deployFixture(t *testing.T, server *testServer, projectID, environmentID in
 	defer response.Body.Close()
 	var c composeResponse
 	decodeLifecycleResponse(t, response, &c)
-	response = server.request(t, http.MethodPost, composeDeployPath(projectID, environmentID, c.ID), nil)
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("deploy: %d", response.StatusCode)
-	}
+	server.deployOK(t, composePath(projectID, environmentID, c.ID), nil)
 	return c
 }
 
@@ -41,19 +36,19 @@ func TestComposeIdentitiesDoNotCollideAcrossNamesAndRenames(t *testing.T) {
 	var e environmentResponse
 	decodeLifecycleResponse(t, er, &e)
 	deployFixture(t, server, first.ID, e.ID, "web")
-	one := server.runner.calls[len(server.runner.calls)-2].request
+	one := server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-1].request
 	second := createProject(t, server, "a", "")
 	er2 := postJSON(t, server, projectEnvironmentsPath(second.ID), map[string]string{"name": "b-c"})
 	defer er2.Body.Close()
 	var e2 environmentResponse
 	decodeLifecycleResponse(t, er2, &e2)
 	deployFixture(t, server, second.ID, e2.ID, "web")
-	two := server.runner.calls[len(server.runner.calls)-2].request
+	two := server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-1].request
 	if one.ProjectName == two.ProjectName {
 		t.Fatal("distinct Composes share Docker identity")
 	}
 	deployFixture(t, server, first.ID, firstEnv.ID, "app")
-	old := server.runner.calls[len(server.runner.calls)-2].request
+	old := server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-1].request
 	rr := server.request(t, http.MethodPut, "/api/projects/"+lifecycleID(first.ID), map[string]string{"name": "renamed"})
 	rr.Body.Close()
 	if rr.StatusCode != http.StatusOK {
@@ -62,7 +57,7 @@ func TestComposeIdentitiesDoNotCollideAcrossNamesAndRenames(t *testing.T) {
 	replacement := createProject(t, server, "a-b", "")
 	replacementEnv := productionEnvironment(t, server, replacement)
 	deployFixture(t, server, replacement.ID, replacementEnv.ID, "app")
-	fresh := server.runner.calls[len(server.runner.calls)-2].request
+	fresh := server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-1].request
 	if old.ProjectName == fresh.ProjectName || old.ComposeFilePath == fresh.ComposeFilePath {
 		t.Fatal("reused display name shares old deployment")
 	}
@@ -76,7 +71,7 @@ func TestParentDeletionTearsDownDeployedComposes(t *testing.T) {
 			p := createProject(t, server, "Delete Parent", "")
 			e := productionEnvironment(t, server, p)
 			deployFixture(t, server, p.ID, e.ID, "web")
-			dir := filepath.Dir(server.runner.calls[0].request.ComposeFilePath)
+			dir := filepath.Dir(server.runner.snapshotCalls()[0].request.ComposeFilePath)
 			path := environmentPath(p.ID, e.ID)
 			if kind == "project" {
 				path = "/api/projects/" + lifecycleID(p.ID)
@@ -87,7 +82,7 @@ func TestParentDeletionTearsDownDeployedComposes(t *testing.T) {
 				t.Fatalf("delete: %d", response.StatusCode)
 			}
 			found := false
-			for _, call := range server.runner.calls {
+			for _, call := range server.runner.snapshotCalls() {
 				if call.method == "down-with-volumes" {
 					found = true
 				}
@@ -121,9 +116,11 @@ func TestLifecycleRequestsWaitForInFlightDeploy(t *testing.T) {
 	save := server.request(t, http.MethodPut, composePath(p.ID, e.ID, c.ID), map[string]string{"yamlContent": "services:\n  web:\n    image: nginx\n"})
 	save.Body.Close()
 	runner := &blockingLifecycleRunner{fakeComposeRunner: newFakeComposeRunner(), started: make(chan struct{}), release: make(chan struct{}), stopped: make(chan struct{})}
-	server.handler = httpapi.NewHandler(server.db, runner, server.dataDir, nil, nil, server.volumeRunner, volumes.NewResolver(server.volumeCLI, server.dataDir), nil, nil)
-	deployDone := make(chan *http.Response, 1)
-	go func() { deployDone <- server.request(t, http.MethodPost, composeDeployPath(p.ID, e.ID, c.ID), nil) }()
+	server.useRunner(t, runner)
+	status, number := server.enqueue(t, composePath(p.ID, e.ID, c.ID), map[string]any{"mode": "deploy"})
+	if status != http.StatusAccepted {
+		t.Fatalf("enqueue status = %d, want %d", status, http.StatusAccepted)
+	}
 	select {
 	case <-runner.started:
 	case <-time.After(time.Second):
@@ -138,17 +135,10 @@ func TestLifecycleRequestsWaitForInFlightDeploy(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 	close(runner.release)
-	for _, ch := range []chan *http.Response{deployDone, stopDone} {
-		select {
-		case r := <-ch:
-			r.Body.Close()
-			if r.StatusCode != http.StatusOK {
-				t.Fatalf("lifecycle status: %d", r.StatusCode)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("lifecycle request did not complete")
-		}
+	if d := server.waitDeployment(t, composePath(p.ID, e.ID, c.ID), number); d.Status != "succeeded" {
+		t.Fatalf("deployment = %s (%s), want succeeded", d.Status, d.Reason)
 	}
+	awaitStatus(t, stopDone, http.StatusOK, "stop")
 }
 
 type blockingLifecycleRunner struct {
@@ -253,25 +243,59 @@ func newCoordinationFixture(t *testing.T) coordinationFixture {
 	e := productionEnvironment(t, server, p)
 	c := deployFixture(t, server, p.ID, e.ID, "web")
 	runner := newEventRunner()
-	server.handler = httpapi.NewHandler(server.db, runner, server.dataDir, nil, nil, server.volumeRunner, volumes.NewResolver(server.volumeCLI, server.dataDir), nil, nil)
+	server.useRunner(t, runner)
 	return coordinationFixture{server: server, runner: runner, project: p, env: e, compose: c}
 }
 
-// holdDeploy starts a deploy that blocks inside Up and returns once it is
-// running there.
-func (f coordinationFixture) holdDeploy(t *testing.T) chan *http.Response {
+func (f coordinationFixture) path() string {
+	return composePath(f.project.ID, f.env.ID, f.compose.ID)
+}
+
+// holdDeploy queues a deploy that blocks inside Up and returns its number once
+// it is running there, holding the Project gate.
+func (f coordinationFixture) holdDeploy(t *testing.T) int {
 	t.Helper()
 	f.runner.blockNextUp()
-	done := make(chan *http.Response, 1)
-	go func() {
-		done <- f.server.request(t, http.MethodPost, composeDeployPath(f.project.ID, f.env.ID, f.compose.ID), nil)
-	}()
+	status, number := f.server.enqueue(t, f.path(), map[string]any{"mode": "deploy"})
+	if status != http.StatusAccepted {
+		t.Fatalf("enqueue status = %d, want %d", status, http.StatusAccepted)
+	}
 	select {
 	case <-f.runner.started:
 	case <-time.After(time.Second):
 		t.Fatal("deploy did not start")
 	}
-	return done
+	return number
+}
+
+// awaitSucceeded waits for a queued Deployment to settle and requires success.
+func (f coordinationFixture) awaitSucceeded(t *testing.T, number int) {
+	t.Helper()
+	if d := f.server.waitDeployment(t, f.path(), number); d.Status != "succeeded" {
+		t.Fatalf("deployment %d = %s (%s), want succeeded", number, d.Status, d.Reason)
+	}
+}
+
+// awaitAccepted waits for a POST /deployments to answer 202 and returns the number.
+func awaitAccepted(t *testing.T, done chan *http.Response, what string) int {
+	t.Helper()
+	select {
+	case r := <-done:
+		defer r.Body.Close()
+		if r.StatusCode != http.StatusAccepted {
+			t.Fatalf("%s status = %d, want %d", what, r.StatusCode, http.StatusAccepted)
+		}
+		var out struct {
+			Number int `json:"number"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&out); err != nil {
+			t.Fatalf("%s: decode: %v", what, err)
+		}
+		return out.Number
+	case <-time.After(2 * time.Second):
+		t.Fatalf("%s did not complete", what)
+	}
+	return 0
 }
 
 func (f coordinationFixture) async(t *testing.T, method, path string, body any) chan *http.Response {
@@ -305,17 +329,18 @@ func awaitStatus(t *testing.T, done chan *http.Response, want int, what string) 
 	}
 }
 
-// deploy-fresh is destructive (down -v); it must queue behind a deploy of
-// the same Project, whichever browser it came from.
+// A fresh-volumes deploy is destructive (down -v); queuing one takes the
+// Project gate, so it waits behind a deploy of the same Project, whichever
+// browser it came from.
 func TestDeployFreshWaitsForInFlightDeploy(t *testing.T) {
 	f := newCoordinationFixture(t)
-	deployDone := f.holdDeploy(t)
-	freshDone := f.async(t, http.MethodPost, composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), map[string]string{"confirmName": "web"})
+	deployNumber := f.holdDeploy(t)
+	freshDone := f.async(t, http.MethodPost, f.path()+"/deployments", freshBody("web"))
 	f.assertWaits(t, "deploy-fresh", "up-blocked")
 
 	close(f.runner.release)
-	awaitStatus(t, deployDone, http.StatusOK, "deploy")
-	awaitStatus(t, freshDone, http.StatusOK, "deploy-fresh")
+	f.awaitSucceeded(t, deployNumber)
+	f.awaitSucceeded(t, awaitAccepted(t, freshDone, "deploy-fresh"))
 	want := []string{"up-blocked", "up-released", "down-with-volumes", "up"}
 	if got := f.runner.snapshot(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("events = %v, want %v", got, want)
@@ -327,7 +352,8 @@ func TestDeployFreshWaitsForInFlightDeploy(t *testing.T) {
 func TestStopWaitsForInFlightDeployFresh(t *testing.T) {
 	f := newCoordinationFixture(t)
 	f.runner.blockNextUp()
-	freshDone := f.async(t, http.MethodPost, composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), map[string]string{"confirmName": "web"})
+	freshDone := f.async(t, http.MethodPost, f.path()+"/deployments", freshBody("web"))
+	freshNumber := awaitAccepted(t, freshDone, "deploy-fresh")
 	select {
 	case <-f.runner.started:
 	case <-time.After(time.Second):
@@ -337,7 +363,7 @@ func TestStopWaitsForInFlightDeployFresh(t *testing.T) {
 	f.assertWaits(t, "stop", "down-with-volumes", "up-blocked")
 
 	close(f.runner.release)
-	awaitStatus(t, freshDone, http.StatusOK, "deploy-fresh")
+	f.awaitSucceeded(t, freshNumber)
 	awaitStatus(t, stopDone, http.StatusOK, "stop")
 	want := []string{"down-with-volumes", "up-blocked", "up-released", "down"}
 	if got := f.runner.snapshot(); !reflect.DeepEqual(got, want) {
@@ -353,12 +379,12 @@ func TestOrphanDeleteWaitsForInFlightDeploy(t *testing.T) {
 	f.server.volumeCLI.ComposeConfigOutput = orphanConfig(project)
 	f.server.volumeCLI.ProjectVolumes = []volumes.ProjectVolume{listedVolume(project, "data"), listedVolume(project, "old")}
 	f.server.volumeCLI.OnRemoveVolume = func(name string) { f.runner.record("remove-volume:" + name) }
-	deployDone := f.holdDeploy(t)
+	deployNumber := f.holdDeploy(t)
 	deleteDone := f.async(t, http.MethodDelete, composeVolumesPath(f.project.ID, f.env.ID, f.compose.ID)+"/orphans/"+project+"_old", nil)
 	f.assertWaits(t, "orphan delete", "up-blocked")
 
 	close(f.runner.release)
-	awaitStatus(t, deployDone, http.StatusOK, "deploy")
+	f.awaitSucceeded(t, deployNumber)
 	awaitStatus(t, deleteDone, http.StatusNoContent, "orphan delete")
 	want := []string{"up-blocked", "up-released", "remove-volume:" + project + "_old"}
 	if got := f.runner.snapshot(); !reflect.DeepEqual(got, want) {

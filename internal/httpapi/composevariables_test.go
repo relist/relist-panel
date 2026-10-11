@@ -84,13 +84,9 @@ func (f composeVariablesFixture) variablesChangedAt(t *testing.T) *string {
 // deployEnvFile deploys the Compose and returns the .env the runner was handed.
 func (f composeVariablesFixture) deployEnvFile(t *testing.T) (envFile, composeFile, projectName string) {
 	t.Helper()
-	f.server.runner.calls = nil
-	response := f.server.request(t, http.MethodPost, composeDeployPath(f.projectID, f.environmentID, f.composeID), nil)
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("deploy status = %d", response.StatusCode)
-	}
-	for _, call := range f.server.runner.calls {
+	f.server.runner.resetCalls()
+	f.server.deployOK(t, composePath(f.projectID, f.environmentID, f.composeID), map[string]any{"mode": "deploy"})
+	for _, call := range f.server.runner.snapshotCalls() {
 		if call.method == "up" {
 			content, err := os.ReadFile(call.request.EnvFilePath)
 			if err != nil {
@@ -344,7 +340,7 @@ func TestComposeVariableIsInterpolatedByCompose(t *testing.T) {
 
 	f.deployEnvFile(t)
 	var composeFile, envFile, projectName string
-	for _, call := range server.runner.calls {
+	for _, call := range server.runner.snapshotCalls() {
 		if call.method == "up" {
 			composeFile, envFile, projectName = call.request.ComposeFilePath, call.request.EnvFilePath, call.request.ProjectName
 		}

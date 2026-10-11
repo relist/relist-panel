@@ -29,7 +29,7 @@ func (c *coordinator) middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		release, err := c.acquire(r.Context(), projectID)
+		release, err := c.Acquire(r.Context(), projectID)
 		if err != nil {
 			return
 		}
@@ -52,13 +52,24 @@ func coordinatedProject(r *http.Request) int64 {
 	if r.Method == http.MethodPost && len(parts) == 8 && parts[5] == "composes" && parts[7] == "preview" {
 		return 0
 	}
+	// Canceling a Deployment must work while a Deploy holds the gate, and
+	// testing or uploading a Source never touches what a Deploy uses (the
+	// upload gates its own swap).
+	if r.Method == http.MethodPost && len(parts) == 10 && parts[5] == "composes" && parts[7] == "deployments" && parts[9] == "cancel" {
+		return 0
+	}
+	if r.Method == http.MethodPost && len(parts) == 9 && parts[5] == "composes" && parts[7] == "source" && (parts[8] == "test" || parts[8] == "upload") {
+		return 0
+	}
 	id, _ := strconv.ParseInt(parts[2], 10, 64)
 	if id < 1 {
 		return 0
 	}
 	return id
 }
-func (c *coordinator) acquire(ctx context.Context, id int64) (func(), error) {
+
+// Acquire takes the Project gate, returning promptly when ctx is done.
+func (c *coordinator) Acquire(ctx context.Context, id int64) (func(), error) {
 	c.mu.Lock()
 	gate := c.gates[id]
 	if gate == nil {

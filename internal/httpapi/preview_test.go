@@ -9,9 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"relist-panel/internal/httpapi"
-	"relist-panel/internal/volumes"
 )
 
 type previewBody struct {
@@ -62,8 +59,8 @@ func TestPreviewResolvesTheDraftWithoutDeploying(t *testing.T) {
 	if strings.Contains(string(raw), secret) {
 		t.Fatalf("preview leaked a variable value: %s", raw)
 	}
-	if len(f.server.runner.calls) != 0 {
-		t.Fatalf("runner calls = %v, want none", f.server.runner.calls)
+	if len(f.server.runner.snapshotCalls()) != 0 {
+		t.Fatalf("runner calls = %v, want none", f.server.runner.snapshotCalls())
 	}
 	if _, err := os.Stat(filepath.Dir(envFile)); !os.IsNotExist(err) {
 		t.Fatalf("compose dir stat err = %v, want it absent", err)
@@ -121,9 +118,11 @@ func TestPreviewDoesNotWaitForInFlightDeploy(t *testing.T) {
 	f := newDeployDomainsFixture(t)
 	server := f.server
 	runner := &blockingLifecycleRunner{fakeComposeRunner: newFakeComposeRunner(), started: make(chan struct{}), release: make(chan struct{}), stopped: make(chan struct{})}
-	server.handler = httpapi.NewHandler(server.db, runner, server.dataDir, nil, nil, server.volumeRunner, volumes.NewResolver(server.volumeCLI, server.dataDir), nil, nil)
-	deployDone := make(chan *http.Response, 1)
-	go func() { deployDone <- server.request(t, http.MethodPost, f.base+"/deploy", nil) }()
+	server.useRunner(t, runner)
+	status, number := server.enqueue(t, f.base, map[string]any{"mode": "deploy"})
+	if status != http.StatusAccepted {
+		t.Fatalf("enqueue status = %d, want %d", status, http.StatusAccepted)
+	}
 	select {
 	case <-runner.started:
 	case <-time.After(time.Second):
@@ -131,11 +130,8 @@ func TestPreviewDoesNotWaitForInFlightDeploy(t *testing.T) {
 	}
 	defer func() {
 		close(runner.release)
-		select {
-		case r := <-deployDone:
-			r.Body.Close()
-		case <-time.After(time.Second):
-			t.Fatal("deploy did not complete")
+		if d := server.waitDeployment(t, f.base, number); d.Status != "succeeded" {
+			t.Errorf("deployment = %s (%s), want succeeded", d.Status, d.Reason)
 		}
 	}()
 

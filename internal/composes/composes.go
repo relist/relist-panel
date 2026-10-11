@@ -136,10 +136,6 @@ type composeCreateInput struct {
 	YAMLContent *string `json:"yamlContent"`
 }
 
-type deployFreshInput struct {
-	ConfirmName string `json:"confirmName"`
-}
-
 type composeUpdateInput struct {
 	YAMLContent *string `json:"yamlContent"`
 }
@@ -157,8 +153,6 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes", s.create)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.get)
 	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.update)
-	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/deploy", s.deploy)
-	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/deploy-fresh", s.deployFresh)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/preview", s.preview)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/stop", s.stop)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/restart", s.restart)
@@ -342,86 +336,6 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.withStatus(r.Context(), compose))
 }
 
-func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
-	target, ok := s.loadDeployable(w, r)
-	if !ok {
-		return
-	}
-	warnings, err := s.RunDeploy(r.Context(), target, DeployOptions{Build: true})
-	if err != nil {
-		writeDeployFailure(w, err)
-		return
-	}
-	s.respondDeployed(w, r, target, warnings)
-}
-
-// deployFresh deploys after deleting the Compose's named volumes. The order
-// is the safety property: nothing is removed or written until the Compose has
-// loaded, its identity is unambiguous and confirmName matches, and RunDeploy
-// runs the down step against the files already on disk — the ones the Volumes
-// payload listed — before the new files replace them (volume-lifecycle spec, B).
-func (s *Service) deployFresh(w http.ResponseWriter, r *http.Request) {
-	target, ok := s.loadDeployable(w, r)
-	if !ok {
-		return
-	}
-
-	var input deployFreshInput
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.ConfirmName != target.Compose.Name {
-		writeError(w, http.StatusBadRequest, "confirmName must match the compose name")
-		return
-	}
-
-	warnings, err := s.RunDeploy(r.Context(), target, DeployOptions{FreshVolumes: true, Build: true})
-	if err != nil {
-		writeDeployFailure(w, err)
-		return
-	}
-	s.respondDeployed(w, r, target, warnings)
-}
-
-// loadDeployable resolves the route, loads the Compose and runs the checks
-// every deploy shares. It writes nothing to disk; on !ok it has already
-// written the error response.
-func (s *Service) loadDeployable(w http.ResponseWriter, r *http.Request) (DeployTarget, bool) {
-	if !s.available() {
-		writeError(w, http.StatusInternalServerError, "composes are temporarily unavailable")
-		return DeployTarget{}, false
-	}
-
-	projectID, environmentID, err := routeIDs(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return DeployTarget{}, false
-	}
-	id, err := composeID(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
-		return DeployTarget{}, false
-	}
-	if err := s.requireEnvironment(r.Context(), projectID, environmentID); err != nil {
-		writeParentError(w, err)
-		return DeployTarget{}, false
-	}
-
-	target, err := s.Target(r.Context(), id)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && target.Compose.EnvironmentID != environmentID) {
-		writeError(w, http.StatusNotFound, "compose not found")
-		return DeployTarget{}, false
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return DeployTarget{}, false
-	}
-	if err := s.CheckDeployable(r.Context(), target); errors.Is(err, ErrBlankYAML) {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return DeployTarget{}, false
-	} else if err != nil {
-		writeError(w, http.StatusConflict, err.Error())
-		return DeployTarget{}, false
-	}
-	return target, true
-}
-
 // previewResponse is the file a deploy would write and the warnings it
 // would return.
 type previewResponse struct {
@@ -553,27 +467,6 @@ func removeStaleSetFiles(dir, envFilePath string, keep map[int64]string) error {
 		return os.Remove(dir)
 	}
 	return nil
-}
-
-// deployResponse is the Compose plus what the deploy has to tell the
-// operator. Only deploy and deploy-fresh answer with it.
-type deployResponse struct {
-	Compose
-	Warnings []string `json:"warnings"`
-}
-
-// respondDeployed answers with the refreshed Compose and the deploy's
-// warnings once RunDeploy has recorded the deploy time.
-func (s *Service) respondDeployed(w http.ResponseWriter, r *http.Request, target DeployTarget, warnings []string) {
-	compose, err := s.repository.findByID(r.Context(), target.Compose.EnvironmentID, target.Compose.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return
-	}
-	if warnings == nil {
-		warnings = []string{}
-	}
-	writeJSON(w, http.StatusOK, deployResponse{Compose: s.withRefreshedStatus(r.Context(), target.Request, compose), Warnings: warnings})
 }
 
 func (s *Service) stop(w http.ResponseWriter, r *http.Request) {

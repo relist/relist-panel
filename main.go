@@ -85,12 +85,10 @@ func main() {
 	volumeResolver := volumes.NewResolver(dockerexec.NewVolumeResolver(), cfg.DataDir)
 	terminalExec := dockerexec.NewTerminalExec(dockerexec.DefaultSocketPath, hostmetrics.DefaultProcRoot)
 
-	server := &http.Server{
-		Addr: cfg.Address(),
-		Handler: httpapi.NewHandler(db, dockerexec.New(), cfg.DataDir, sampler, collector, volumeRunner, volumeResolver, &terminal.Options{
-			Exec: terminalExec,
-		}, dockerexec.NewImages(dockerexec.DefaultSocketPath)),
-	}
+	handler, waitDeployments := httpapi.NewHandler(ctx, db, dockerexec.New(), cfg.DataDir, sampler, collector, volumeRunner, volumeResolver, &terminal.Options{
+		Exec: terminalExec,
+	}, dockerexec.NewImages(dockerexec.DefaultSocketPath))
+	server := &http.Server{Addr: cfg.Address(), Handler: handler}
 
 	log.Printf("relist-panel listening on %s", cfg.Address())
 	serveErr := make(chan error, 1)
@@ -124,6 +122,7 @@ func main() {
 		// sampler's context and drain its loop before reporting.
 		stop()
 		sampler.Wait()
+		waitDeployments()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}
@@ -140,6 +139,18 @@ func main() {
 		}
 		stop()
 		sampler.Wait()
+		// An in-progress Deploy step finishes before the panel exits, within
+		// the shutdown deadline.
+		deploymentsDone := make(chan struct{})
+		go func() {
+			waitDeployments()
+			close(deploymentsDone)
+		}()
+		select {
+		case <-deploymentsDone:
+		case <-shutdownCtx.Done():
+			log.Printf("shutdown: a deployment was still running at the deadline")
+		}
 	}
 }
 

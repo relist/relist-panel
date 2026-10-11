@@ -75,7 +75,7 @@ func TestTerminalServicesListsRunningContainersAndShells(t *testing.T) {
 	projectName := "relist-c" + strconv.FormatInt(compose.ID, 10)
 
 	writeDeployedComposeFile(t, server, compose.ID)
-	server.runner.statuses[projectName] = composes.ComposeStatus{Services: []string{"app", "worker"}}
+	server.runner.setStatus(projectName, composes.ComposeStatus{Services: []string{"app", "worker"}})
 	server.terminal.Containers = map[string][]terminal.Container{
 		projectName + "/app": {{ID: "c1", Name: "relist-c3-app-1", Number: 1}},
 	}

@@ -2,20 +2,25 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
+	"sync"
+	"time"
 
 	"relist-panel/internal/auth"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/composevariables"
+	"relist-panel/internal/deployments"
 	"relist-panel/internal/domains"
 	"relist-panel/internal/environments"
 	"relist-panel/internal/environmentvariables"
 	"relist-panel/internal/images"
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/projects"
+	"relist-panel/internal/sources"
 	"relist-panel/internal/terminal"
 	"relist-panel/internal/variablesets"
 	"relist-panel/internal/volumeapi"
@@ -34,7 +39,10 @@ import (
 // and its read side (ADR-0010). terminalOptions, when non-nil, is the terminal
 // seam and settings; nil leaves the terminal routes unregistered. imageStore
 // is the Images page's Docker seam; nil leaves the image routes unregistered.
-func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts, volumeRunner volumes.Runner, volumeResolver *volumes.Resolver, terminalOptions *terminal.Options, imageStore images.Images) http.Handler {
+//
+// The Deployment worker runs until ctx is done. The returned wait blocks until
+// it has returned, which is after a Deploy step in progress has finished.
+func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts, volumeRunner volumes.Runner, volumeResolver *volumes.Resolver, terminalOptions *terminal.Options, imageStore images.Images) (http.Handler, func()) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
 	authService := auth.New(db)
@@ -47,6 +55,25 @@ func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, histo
 	environmentVariablesService := environmentvariables.New(db)
 	environmentVariablesService.RegisterRoutes(mux)
 	composesService.RegisterRoutes(mux)
+	gate := newCoordinator()
+	queue := deployments.NewQueue(deployments.Deps{
+		Store:    deployments.NewStore(db),
+		Sources:  sources.NewStore(db),
+		Composes: composesService,
+		Fetcher:  sources.Git{},
+		Builder:  runner,
+		Gate:     gate,
+		Timeout:  60 * time.Minute,
+		Keep:     20,
+	})
+	composesService.SetDeploymentCanceler(queue)
+	deployments.NewAPI(queue, composesService).RegisterRoutes(mux)
+	var worker sync.WaitGroup
+	worker.Add(1)
+	go func() {
+		defer worker.Done()
+		queue.Run(ctx)
+	}()
 	domains.New(db).RegisterRoutes(mux)
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
@@ -62,7 +89,7 @@ func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, histo
 		metricsService.RegisterRoutes(mux)
 	}
 	mux.Handle("/", webassets.Handler())
-	return authService.Middleware(newCoordinator().middleware(mux))
+	return authService.Middleware(gate.middleware(mux)), worker.Wait
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {

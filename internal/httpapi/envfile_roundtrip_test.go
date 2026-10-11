@@ -52,13 +52,9 @@ func TestDeployEnvironmentValuesRoundTripThroughCompose(t *testing.T) {
 	if created.StatusCode != http.StatusCreated {
 		t.Fatalf("create compose status = %d", created.StatusCode)
 	}
-	response := server.request(t, http.MethodPost, composeDeployPath(project.ID, environment.ID, compose.ID), nil)
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("deploy status = %d", response.StatusCode)
-	}
+	server.deployOK(t, composePath(project.ID, environment.ID, compose.ID), map[string]any{"mode": "deploy"})
 	var composeFile, envFile, projectName string
-	for _, call := range server.runner.calls {
+	for _, call := range server.runner.snapshotCalls() {
 		if call.method == "up" {
 			composeFile, envFile, projectName = call.request.ComposeFilePath, call.request.EnvFilePath, call.request.ProjectName
 		}

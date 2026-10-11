@@ -3,8 +3,10 @@ package deployments
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"unicode/utf8"
 )
 
 const (
@@ -33,4 +35,31 @@ func removeLogs(composeDir string, numbers []int) {
 			logf("remove deployment log %d: %v", n, err)
 		}
 	}
+}
+
+// ReadLog returns up to max bytes of the log from offset, cut back to the
+// last whole rune so the text never ends in half a character, and the offset
+// to continue from. A log shorter than offset reads as empty at offset.
+func ReadLog(path string, offset int64, max int) (text string, next int64, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", offset, err
+	}
+	defer f.Close()
+	buf := make([]byte, max)
+	n, err := f.ReadAt(buf, offset)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", offset, err
+	}
+	buf = buf[:n]
+	// A multi-byte rune may be cut by max, or still be half written.
+	for back := 1; back < utf8.UTFMax && back <= len(buf); back++ {
+		if utf8.RuneStart(buf[len(buf)-back]) {
+			if !utf8.FullRune(buf[len(buf)-back:]) {
+				buf = buf[:len(buf)-back]
+			}
+			break
+		}
+	}
+	return string(buf), offset + int64(len(buf)), nil
 }

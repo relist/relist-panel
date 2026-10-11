@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -297,15 +298,21 @@ func (f domainsFixture) saveYAML(t *testing.T, yaml string) {
 	}
 }
 
-func (f domainsFixture) deploy(t *testing.T, suffix string, body any) (int, []byte) {
+// deploy queues a Deployment with body (nil is a plain deploy) and returns it settled.
+func (f domainsFixture) deploy(t *testing.T, body any) deploymentResponse {
 	t.Helper()
-	response, raw := f.send(t, http.MethodPost, suffix, body)
-	return response.StatusCode, raw
+	return f.server.deployAndWait(t, f.base, body)
+}
+
+// deployOK is deploy for a Deployment that must succeed.
+func (f domainsFixture) deployOK(t *testing.T, body any) deploymentResponse {
+	t.Helper()
+	return f.server.deployOK(t, f.base, body)
 }
 
 func (f domainsFixture) upCalls() int {
 	n := 0
-	for _, call := range f.server.runner.calls {
+	for _, call := range f.server.runner.snapshotCalls() {
 		if call.method == "up" {
 			n++
 		}
@@ -315,7 +322,7 @@ func (f domainsFixture) upCalls() int {
 
 func (f domainsFixture) resolvedFile(t *testing.T) string {
 	t.Helper()
-	for _, call := range f.server.runner.calls {
+	for _, call := range f.server.runner.snapshotCalls() {
 		if call.method == "up" {
 			raw, err := os.ReadFile(call.request.ComposeFilePath)
 			if err != nil {
@@ -339,20 +346,11 @@ func TestDeployInjectsDomainLabels(t *testing.T) {
 	f := newDeployDomainsFixture(t)
 	domain := f.createDomain(t, "api.example.com", "/")
 
-	status, raw := f.deploy(t, "/deploy", nil)
-	if status != http.StatusOK {
-		t.Fatalf("deploy status = %d, body %s", status, raw)
+	finished := f.deployOK(t, nil)
+	if finished.Warnings == nil || len(finished.Warnings) != 0 {
+		t.Fatalf("warnings = %v, want []", finished.Warnings)
 	}
-	var body struct {
-		Warnings *[]string `json:"warnings"`
-	}
-	if err := json.Unmarshal(raw, &body); err != nil {
-		t.Fatal(err)
-	}
-	if body.Warnings == nil || len(*body.Warnings) != 0 {
-		t.Fatalf("warnings = %v in %s, want []", body.Warnings, raw)
-	}
-	if !strings.Contains(string(raw), `"warnings":[]`) {
+	if _, raw := f.send(t, http.MethodGet, "/deployments/"+strconv.Itoa(finished.Number), nil); !strings.Contains(string(raw), `"warnings":[]`) {
 		t.Fatalf("body = %s, want warnings:[]", raw)
 	}
 
@@ -366,26 +364,17 @@ func TestDeployInjectsDomainLabels(t *testing.T) {
 }
 
 func TestDeployReturnsWarnings(t *testing.T) {
-	for _, suffix := range []string{"/deploy", "/deploy-fresh"} {
-		t.Run(suffix, func(t *testing.T) {
+	for _, fresh := range []bool{false, true} {
+		t.Run(fmt.Sprintf("freshVolumes=%v", fresh), func(t *testing.T) {
 			f := newDeployDomainsFixture(t)
 			f.saveYAML(t, "services:\n  web:\n    image: nginx\n    labels:\n      - traefik.enable=false\n")
 			f.createDomain(t, "api.example.com", "/")
 
-			var body any
-			if suffix == "/deploy-fresh" {
-				body = map[string]string{"confirmName": "web"}
+			body := map[string]any{"mode": "deploy"}
+			if fresh {
+				body = freshBody("web")
 			}
-			status, raw := f.deploy(t, suffix, body)
-			if status != http.StatusOK {
-				t.Fatalf("status = %d, body %s", status, raw)
-			}
-			var got struct {
-				Warnings []string `json:"warnings"`
-			}
-			if err := json.Unmarshal(raw, &got); err != nil {
-				t.Fatal(err)
-			}
+			got := f.deployOK(t, body)
 			if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "traefik.enable=false was overridden") {
 				t.Fatalf("warnings = %v, want the enable warning", got.Warnings)
 			}
@@ -396,22 +385,14 @@ func TestDeployReturnsWarnings(t *testing.T) {
 func TestDeployRefusedWhenDomainServiceRemoved(t *testing.T) {
 	f := newDeployDomainsFixture(t)
 	f.createDomain(t, "api.example.com", "/")
-	if status, raw := f.deploy(t, "/deploy", nil); status != http.StatusOK {
-		t.Fatalf("first deploy status = %d, body %s", status, raw)
-	}
+	f.deployOK(t, nil)
 	first := f.resolvedFile(t)
 
 	f.saveYAML(t, "services: {db: {image: postgres:16}}")
-	status, raw := f.deploy(t, "/deploy", nil)
-	if status != http.StatusBadRequest {
-		t.Fatalf("status = %d, body %s", status, raw)
-	}
+	refused := f.deploy(t, nil)
 	want := `domain api.example.com/ points at service "web", which is not in the compose file`
-	var refusal struct {
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(raw, &refusal); err != nil || refusal.Error != want {
-		t.Fatalf("body = %s, want exactly the refusal copy %q", raw, want)
+	if refused.Status != "failed" || refused.Reason != want {
+		t.Fatalf("deployment = %s with reason %q, want failed with exactly the refusal copy %q", refused.Status, refused.Reason, want)
 	}
 	if n := f.upCalls(); n != 1 {
 		t.Fatalf("up calls = %d, want 1", n)
@@ -424,24 +405,16 @@ func TestDeployRefusedWhenDomainServiceRemoved(t *testing.T) {
 func TestDeployFreshRefusedWhenDomainServiceRemoved(t *testing.T) {
 	f := newDeployDomainsFixture(t)
 	f.createDomain(t, "api.example.com", "/")
-	if status, raw := f.deploy(t, "/deploy", nil); status != http.StatusOK {
-		t.Fatalf("first deploy status = %d, body %s", status, raw)
-	}
+	f.deployOK(t, nil)
 	first := f.resolvedFile(t)
 
 	f.saveYAML(t, "services: {db: {image: postgres:16}}")
-	status, raw := f.deploy(t, "/deploy-fresh", map[string]string{"confirmName": "web"})
-	if status != http.StatusBadRequest {
-		t.Fatalf("status = %d, body %s", status, raw)
-	}
+	refused := f.deploy(t, freshBody("web"))
 	want := `domain api.example.com/ points at service "web", which is not in the compose file`
-	var refusal struct {
-		Error string `json:"error"`
+	if refused.Status != "failed" || refused.Reason != want {
+		t.Fatalf("deployment = %s with reason %q, want failed with exactly the refusal copy %q", refused.Status, refused.Reason, want)
 	}
-	if err := json.Unmarshal(raw, &refusal); err != nil || refusal.Error != want {
-		t.Fatalf("body = %s, want exactly the refusal copy %q", raw, want)
-	}
-	for _, call := range f.server.runner.calls {
+	for _, call := range f.server.runner.snapshotCalls() {
 		if call.method == "down-with-volumes" {
 			t.Fatal("deploy-fresh removed volumes although the deploy was refused")
 		}
@@ -469,16 +442,13 @@ func TestDeployNamesLegacyComposeRoutersFromDatabaseIDs(t *testing.T) {
 	}
 	domain := f.createDomain(t, "legacy.example.com", "/")
 
-	status, raw := f.deploy(t, "/deploy", nil)
-	if status != http.StatusOK {
-		t.Fatalf("deploy status = %d, body %s", status, raw)
-	}
+	f.deployOK(t, nil)
 
-	if len(server.runner.calls) == 0 {
+	if len(server.runner.snapshotCalls()) == 0 {
 		t.Fatal("deploy reached no runner call")
 	}
 	ups := 0
-	for _, call := range server.runner.calls {
+	for _, call := range server.runner.snapshotCalls() {
 		if call.method != "up" {
 			continue
 		}
