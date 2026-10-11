@@ -202,6 +202,19 @@ func (s *Store) Start(ctx context.Context, id int64, steps []string, now time.Ti
 	return nil
 }
 
+// SetSteps replaces the planned steps once the build Services are known.
+func (s *Store) SetSteps(ctx context.Context, id int64, steps []string) error {
+	if steps == nil {
+		steps = []string{}
+	}
+	raw, err := json.Marshal(steps)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE deployments SET steps = ? WHERE id = ?`, string(raw), id)
+	return err
+}
+
 func (s *Store) SetStep(ctx context.Context, id int64, step string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE deployments SET step = ? WHERE id = ?`, step, id)
 	return err

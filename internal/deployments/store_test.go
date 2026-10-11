@@ -333,3 +333,21 @@ func TestFinishLeavesSettledRowAlone(t *testing.T) {
 		t.Fatalf("status = %s, want canceled", got.Status)
 	}
 }
+
+func TestSetStepsReplacesPlannedSteps(t *testing.T) {
+	db, a, _ := newDB(t)
+	s := NewStore(db)
+	ctx := context.Background()
+	d := enqueue(t, s, a, t0)
+	if err := s.Start(ctx, d.ID, []string{"fetch", "deploy"}, t0); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"fetch", "build:web", "deploy"}
+	if err := s.SetSteps(ctx, d.ID, want); err != nil {
+		t.Fatalf("SetSteps: %v", err)
+	}
+	got, _ := s.Get(ctx, a, d.Number)
+	if len(got.Steps) != 3 || got.Steps[1] != "build:web" {
+		t.Fatalf("steps = %v, want %v", got.Steps, want)
+	}
+}
