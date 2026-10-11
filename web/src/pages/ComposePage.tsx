@@ -71,7 +71,7 @@ import type { ComposeSource, ComposeVariable, ComposeVolumes, DeploymentRequest,
 import { composeState, findComposeLocation } from '../data/types';
 import { effectiveVariableCount } from '../components/variables-view';
 import { activeComposeTab, composeDeployIdentity, internalHostnamePattern, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
-import { useLatestDeployment } from './useLatestDeployment';
+import { useDeploymentHistory } from './useDeploymentHistory';
 
 const { Text, Paragraph, Title } = Typography;
 
@@ -170,14 +170,19 @@ export function ComposePage() {
   useEffect(() => {
     setSelectedDeployment(undefined);
   }, [composeId]);
+  // The one poll of this Compose's Deployments: the header button and the tab
+  // both read it, and it runs the post-deploy refresh when one finishes. The
+  // callback is read at fire time, so it may close over later declarations.
   const {
+    history: deploymentHistory,
     latest: latestDeployment,
     refresh: refreshLatestDeployment,
     running: runningDeployment,
-  } = useLatestDeployment(
+  } = useDeploymentHistory(
     sourceProjectId !== undefined && sourceEnvironmentId !== undefined
       ? { composeId, environmentId: sourceEnvironmentId, projectId: sourceProjectId }
       : undefined,
+    () => onDeploymentFinished(),
   );
 
   // The Volumes tab's resolution is fetched once here: the tab is hidden when
@@ -458,7 +463,6 @@ export function ComposePage() {
   // time may all have changed.
   const onDeploymentFinished = () => {
     refreshAfterDeploy();
-    refreshLatestDeployment();
     refreshStatus(compose.id).catch(fail);
   };
 
@@ -928,9 +932,10 @@ export function ComposePage() {
             children: (
               <ComposeDeploymentsTab
                 compose={compose}
+                history={deploymentHistory}
                 location={{ composeId: compose.id, environmentId: environment.id, projectId: project.id }}
-                onFinished={onDeploymentFinished}
                 onSelect={setSelectedDeployment}
+                running={runningDeployment}
                 selected={selectedDeployment}
               />
             ),

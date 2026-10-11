@@ -19,7 +19,7 @@ import { RelativeTime } from './primitives';
 
 const { Text } = Typography;
 
-/** How often the history and the log are read while a Deployment is active. */
+/** How often the log is read while the shown Deployment is active. */
 const POLL_MS = 1000;
 
 const STATUS_ICON: Record<DeploymentStatus, React.ReactNode> = {
@@ -55,21 +55,23 @@ function stepsView(d: Deployment): { current: number; status: 'process' | 'finis
 
 /**
  * The Deployments tab: the Compose's last 20 Deployments on the left; on the
- * right the selected one's steps, warnings, failure reason and live log. It
- * polls while the selected Deployment is active and tells the page once when
- * it stops being so.
+ * right the selected one's steps, warnings, failure reason and live log. The
+ * page owns the history poll; this tab only follows the shown log.
  */
 export function ComposeDeploymentsTab({
   compose,
+  history,
   location,
-  onFinished,
   onSelect,
+  running,
   selected,
 }: {
   compose: Compose;
+  /** The Compose's Deployments, newest first; the page polls them. */
+  history?: Deployment[];
   location: ComposePath;
-  /** Fires once when the shown Deployment leaves queued/running. */
-  onFinished: () => void;
+  /** What holds the queue, for the "Waiting — N ahead" line. */
+  running?: ActiveDeployment;
   onSelect: (number: number) => void;
   /** The Deployment to show; the newest when unset. */
   selected?: number;
@@ -77,65 +79,12 @@ export function ComposeDeploymentsTab({
   const { message } = App.useApp();
   const { token } = theme.useToken();
 
-  const [history, setHistory] = useState<Deployment[]>();
-  const [running, setRunning] = useState<ActiveDeployment>();
   const [log, setLog] = useState('');
   const [canceling, setCanceling] = useState(false);
 
-  const onFinishedRef = useRef(onFinished);
-  onFinishedRef.current = onFinished;
-  // The last seen (number, active) of the shown Deployment: `onFinished` fires
-  // on the active → not active edge only.
-  const seen = useRef<{ number: number; active: boolean }>(undefined);
-
-  // The history: read once, and again every second while anything in it is
-  // active. A new `selected` (a Deployment was just queued) reads it afresh.
   const composeId = compose.id;
-  useEffect(() => {
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const load = async () => {
-      let again = false;
-      try {
-        const list = await api.listDeployments(location);
-        if (stopped) return;
-        setHistory(list);
-        again = list.some(isActive);
-        if (list.some((d) => d.status === 'queued')) {
-          const queue = await api.deploymentQueue().catch(() => []);
-          if (stopped) return;
-          const head = queue.find((q) => q.status === 'running');
-          setRunning(head ? { composeName: head.composeName, number: head.number, step: head.step } : undefined);
-        }
-      } catch {
-        // A failed read is retried while something is active; the last list stays.
-        again = true;
-      }
-      if (!stopped && again) {
-        timer = setTimeout(() => void load(), POLL_MS);
-      }
-    };
-    void load();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
-  }, [composeId, location.environmentId, location.projectId, selected]);
-
   const shownNumber = selected ?? history?.[0]?.number;
   const shown = history?.find((d) => d.number === shownNumber);
-
-  useEffect(() => {
-    if (!shown) {
-      return;
-    }
-    const active = isActive(shown);
-    const before = seen.current;
-    seen.current = { active, number: shown.number };
-    if (before && before.number === shown.number && before.active && !active) {
-      onFinishedRef.current();
-    }
-  }, [shown]);
 
   // The log of the shown Deployment: chunks appended in order until `done`.
   useEffect(() => {

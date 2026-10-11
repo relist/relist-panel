@@ -42,6 +42,7 @@ import { composeState, projectComposes, summarize } from '../data/types';
 import { activeTab, selectEnvironment } from './project-view';
 import { composeDeployIdentity } from './compose-view';
 import { ProjectSettingsTab } from './ProjectSettingsTab';
+import { deployFromList } from './project-deploy';
 
 const { Text, Paragraph } = Typography;
 
@@ -185,7 +186,7 @@ export function ProjectPage() {
   const lifecycle = async (compose: Compose, action: 'deploy' | 'restart' | 'stop') => {
     try {
       if (action === 'deploy') {
-        const number = await deployCompose(compose.id, { mode: 'deploy' });
+        const number = await deployFromList(compose, project.id, deployCompose);
         message.info(`Deployment #${number} queued`);
         return;
       }
