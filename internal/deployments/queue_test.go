@@ -980,3 +980,44 @@ func TestSourceIsReadUnderItsLock(t *testing.T) {
 		t.Fatalf("fetched branch %q, want release", seen)
 	}
 }
+
+func TestDeployModeWithSourceNeverBuilds(t *testing.T) {
+	h := newHarness(t)
+	h.gitSource(h.a)
+	d := h.enqueue(h.a, ModeDeploy)
+	h.start()
+	got := h.waitSettled(h.a, d.Number)
+	if got.Status != StatusSucceeded || h.comp.deployed[0].Build {
+		t.Fatalf("got %+v deploys %+v", got, h.comp.deployed)
+	}
+	text, _, err := ReadLog(LogPath(h.comp.dirs[h.a], d.Number), 0, 1<<20)
+	if err != nil || !strings.Contains(text, "compose has a source; deploying without building") {
+		t.Fatalf("log = %q, %v", text, err)
+	}
+}
+
+func TestPanicInDeploySettlesFailedAndWorkerContinues(t *testing.T) {
+	h := newHarness(t)
+	h.comp.onDeploy = func(_ context.Context, id int64, _ composes.DeployOptions) ([]string, error) {
+		if id == h.a {
+			panic("boom")
+		}
+		return nil, nil
+	}
+	da := h.enqueue(h.a, ModeDeploy)
+	db := h.enqueue(h.b, ModeDeploy)
+	h.start()
+	got := h.waitSettled(h.a, da.Number)
+	if got.Status != StatusFailed || got.Reason != "internal error" {
+		t.Fatalf("got %s %q", got.Status, got.Reason)
+	}
+	if next := h.waitSettled(h.b, db.Number); next.Status != StatusSucceeded {
+		t.Fatalf("next = %s %q", next.Status, next.Reason)
+	}
+	if h.rec.count("gate+") != h.rec.count("gate-") {
+		t.Fatalf("gate leaked: %v", h.rec.all())
+	}
+	if h.q.IsRunning(h.a) {
+		t.Fatal("run state not cleared")
+	}
+}

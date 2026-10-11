@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +63,7 @@ const (
 	reasonComposeDeleted = "compose deleted"
 	reasonNoSource       = "compose has no source"
 	reasonNoBranch       = "no branch configured"
+	reasonInternal       = "internal error"
 
 	stepFetch  = "fetch"
 	stepDeploy = "deploy"
@@ -142,7 +144,7 @@ func (q *Queue) Run(ctx context.Context) {
 			}
 			continue
 		}
-		if err := q.process(ctx, d); err != nil {
+		if err := q.processSafely(ctx, d); err != nil {
 			logf("deployment %d of compose %d: %v", d.Number, d.ComposeID, err)
 			sleep(ctx, retryDelay)
 		}
@@ -304,6 +306,18 @@ func failed(step, reason string) outcome {
 	return outcome{status: StatusFailed, failedStep: step, reason: reason}
 }
 
+// processSafely is process with a panic outside the steps (loading the
+// Compose, say) settled as a failed Deployment, so it is not retried forever.
+func (q *Queue) processSafely(ctx context.Context, d Deployment) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			logf("deployment %d of compose %d panicked: %v\n%s", d.Number, d.ComposeID, r, debug.Stack())
+			err = q.settleUnstarted(context.WithoutCancel(ctx), d, failed("", reasonInternal))
+		}
+	}()
+	return q.process(ctx, d)
+}
+
 // process runs one queued Deployment to the end. It returns an error only
 // when the row could not be settled, so Run backs off instead of spinning.
 func (q *Queue) process(ctx context.Context, d Deployment) error {
@@ -401,7 +415,7 @@ func (j *job) execute() error {
 	} else {
 		defer logFile.Close()
 		j.out = logFile
-		o = j.runSteps()
+		o = j.runStepsSafely()
 	}
 	if o.status == StatusFailed || o.status == StatusCanceled {
 		fmt.Fprintf(j.out, "%s: %s\n", o.status, o.reason)
@@ -414,6 +428,20 @@ func (j *job) execute() error {
 	}
 	removeLogs(dir, removed)
 	return finishErr
+}
+
+// runStepsSafely settles a panic in a step as a failed Deployment, so the
+// worker goes on to the next one instead of taking the panel down. The Project
+// gate is released by deploy's own deferred release.
+func (j *job) runStepsSafely() (o outcome) {
+	defer func() {
+		if r := recover(); r != nil {
+			logf("deployment %d of compose %d panicked: %v\n%s", j.d.Number, j.d.ComposeID, r, debug.Stack())
+			fmt.Fprintf(j.out, "internal error: %v\n", r)
+			o = failed(j.step, reasonInternal)
+		}
+	}()
+	return j.runSteps()
 }
 
 // runSteps runs the Deployment's steps and returns how it ended.
@@ -593,9 +621,21 @@ func (j *job) deploy() outcome {
 		dctx, cancel = context.WithDeadline(dctx, deadline)
 		defer cancel()
 	}
+	// A deploy-mode Deployment never builds from a Source: its src/ may be
+	// unfetched, and the build would run without the source lock.
+	build := j.d.Mode == ModeDeploy
+	if build {
+		if _, err := q.d.Sources.Get(j.bg, j.d.ComposeID); err == nil {
+			build = false
+			fmt.Fprintln(j.out, "compose has a source; deploying without building")
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			release()
+			return failed(stepDeploy, firstLine(err.Error()))
+		}
+	}
 	warnings, err := q.d.Composes.RunDeploy(dctx, j.target, composes.DeployOptions{
 		FreshVolumes: j.d.FreshVolumes,
-		Build:        j.d.Mode == ModeDeploy,
+		Build:        build,
 		Out:          j.out,
 	})
 	release()

@@ -341,6 +341,15 @@ func TestQueuedDeploymentHasAheadAndAnEmptyLog(t *testing.T) {
 	if d.Status != "queued" || d.Ahead == nil || *d.Ahead != 1 {
 		t.Fatalf("deployment = %+v ahead %v, want queued with 1 ahead", d, d.Ahead)
 	}
+	listResponse := server.request(t, http.MethodGet, queued.path()+"/deployments", nil)
+	defer listResponse.Body.Close()
+	var list []deploymentResponse
+	if err := json.NewDecoder(listResponse.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Ahead == nil || *list[0].Ahead != 1 {
+		t.Fatalf("list = %+v, want the queued row with 1 ahead", list)
+	}
 	if log := queued.log(t, 1, 0); log.Text != "" || log.Offset != 0 || log.Done {
 		t.Fatalf("log of a queued deployment = %+v, want empty, offset 0, not done", log)
 	}
@@ -525,5 +534,18 @@ func TestBuildOnAGitSourceWithoutABranchIs400ButSkipBuildQueues(t *testing.T) {
 	}
 	if status, body := f.post(t, map[string]any{"mode": "skip-build"}); status != http.StatusAccepted {
 		t.Fatalf("skip-build without a branch = %d %v, want 202", status, body)
+	}
+}
+
+func TestDeploymentPostDeployModeWithASourceIs400(t *testing.T) {
+	server := newDeploymentsServer(t)
+	f := newDeploymentsFixture(t, server, "WithSource", "web", plainYAML)
+	f.addZipSource(t)
+	status, body := f.post(t, map[string]any{"mode": "deploy"})
+	if status != http.StatusBadRequest || body["error"] != "this compose has a source; use build or skip-build" {
+		t.Fatalf("POST = %d %v", status, body)
+	}
+	if calls := server.runner.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("runner calls = %+v, want none", calls)
 	}
 }

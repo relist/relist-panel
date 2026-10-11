@@ -126,19 +126,22 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	if in.Mode != ModeDeploy {
-		src, err := a.q.d.Sources.Get(r.Context(), composeID)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			writeError(w, http.StatusBadRequest, "compose has no source")
-			return
-		case err != nil:
-			writeError(w, http.StatusInternalServerError, "could not load source")
-			return
-		case in.Mode == ModeBuild && src.Kind == sources.KindGit && src.Branch == "":
-			writeError(w, http.StatusBadRequest, reasonNoBranch)
-			return
-		}
+	src, err := a.q.d.Sources.Get(r.Context(), composeID)
+	hasSource := err == nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "could not load source")
+		return
+	}
+	switch {
+	case in.Mode == ModeDeploy && hasSource:
+		writeError(w, http.StatusBadRequest, "this compose has a source; use build or skip-build")
+		return
+	case in.Mode != ModeDeploy && !hasSource:
+		writeError(w, http.StatusBadRequest, "compose has no source")
+		return
+	case in.Mode == ModeBuild && src.Kind == sources.KindGit && src.Branch == "":
+		writeError(w, http.StatusBadRequest, reasonNoBranch)
+		return
 	}
 	d, created, err := a.q.Enqueue(r.Context(), composeID, Request{Mode: in.Mode, NoCache: in.NoCache, FreshVolumes: in.FreshVolumes})
 	if err != nil {
@@ -164,7 +167,17 @@ func (a *API) list(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]deploymentJSON, 0, len(ds))
 	for _, d := range ds {
-		out = append(out, toJSON(d))
+		j := toJSON(d)
+		// At most one Deployment per Compose is queued, so this is one query.
+		if d.Status == StatusQueued {
+			ahead, err := a.q.d.Store.Ahead(r.Context(), d)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "could not list deployments")
+				return
+			}
+			j.Ahead = &ahead
+		}
+		out = append(out, j)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
