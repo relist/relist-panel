@@ -19,7 +19,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"relist-panel/internal/dockernet"
 	"relist-panel/internal/domains"
 	"relist-panel/internal/slug"
 )
@@ -90,6 +89,7 @@ type Service struct {
 	runner     ComposeRunner
 	dataDir    string
 	domains    *domains.Store
+	canceler   DeploymentCanceler
 	now        func() time.Time
 }
 
@@ -343,180 +343,83 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
-	compose, req, ok := s.loadDeployable(w, r)
+	target, ok := s.loadDeployable(w, r)
 	if !ok {
 		return
 	}
-	files, ok := s.prepareDeployFiles(w, r, compose, req)
-	if !ok {
+	warnings, err := s.RunDeploy(r.Context(), target, DeployOptions{Build: true})
+	if err != nil {
+		writeDeployFailure(w, err)
 		return
 	}
-	if !s.writeDeployFiles(w, req, files) {
-		return
-	}
-
-	if err := s.runner.Up(r.Context(), req, UpOptions{Build: true}); err != nil {
-		writeError(w, http.StatusBadGateway, "deploy failed: "+err.Error())
-		return
-	}
-
-	s.completeDeploy(w, r, compose, req, files.warnings)
+	s.respondDeployed(w, r, target, warnings)
 }
 
 // deployFresh deploys after deleting the Compose's named volumes. The order
 // is the safety property: nothing is removed or written until the Compose has
-// loaded, its identity is unambiguous and confirmName matches, and the down
-// step runs against the files already on disk — the ones the Volumes payload
-// listed — before the new files replace them (volume-lifecycle spec, B).
+// loaded, its identity is unambiguous and confirmName matches, and RunDeploy
+// runs the down step against the files already on disk — the ones the Volumes
+// payload listed — before the new files replace them (volume-lifecycle spec, B).
 func (s *Service) deployFresh(w http.ResponseWriter, r *http.Request) {
-	compose, req, ok := s.loadDeployable(w, r)
+	target, ok := s.loadDeployable(w, r)
 	if !ok {
 		return
 	}
 
 	var input deployFreshInput
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.ConfirmName != compose.Name {
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.ConfirmName != target.Compose.Name {
 		writeError(w, http.StatusBadRequest, "confirmName must match the compose name")
 		return
 	}
 
-	// Everything that can be checked without touching Docker or the disk is
-	// checked before the volumes go.
-	files, ok := s.prepareDeployFiles(w, r, compose, req)
-	if !ok {
+	warnings, err := s.RunDeploy(r.Context(), target, DeployOptions{FreshVolumes: true, Build: true})
+	if err != nil {
+		writeDeployFailure(w, err)
 		return
 	}
-
-	if _, err := os.Stat(req.ComposeFilePath); err == nil {
-		if err := s.runner.DownWithVolumes(r.Context(), req); err != nil {
-			writeError(w, http.StatusBadGateway, "delete volumes failed: "+err.Error())
-			return
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		writeError(w, http.StatusInternalServerError, "could not inspect compose files")
-		return
-	}
-
-	// The volumes are gone from here on: a later failure must say so.
-	if message, err := writeFiles(req, files); err != nil {
-		writeError(w, http.StatusBadGateway, message+" after volumes were removed: "+err.Error()+". "+volumesRemovedAdvice)
-		return
-	}
-	if err := s.runner.Up(r.Context(), req, UpOptions{Build: true}); err != nil {
-		writeError(w, http.StatusBadGateway, "deploy failed after volumes were removed: "+err.Error()+". "+volumesRemovedAdvice)
-		return
-	}
-
-	s.completeDeploy(w, r, compose, req, files.warnings)
+	s.respondDeployed(w, r, target, warnings)
 }
-
-const volumesRemovedAdvice = "The Compose is stopped; fix the cause and deploy again."
 
 // loadDeployable resolves the route, loads the Compose and runs the checks
 // every deploy shares. It writes nothing to disk; on !ok it has already
 // written the error response.
-func (s *Service) loadDeployable(w http.ResponseWriter, r *http.Request) (Compose, RunRequest, bool) {
+func (s *Service) loadDeployable(w http.ResponseWriter, r *http.Request) (DeployTarget, bool) {
 	if !s.available() {
 		writeError(w, http.StatusInternalServerError, "composes are temporarily unavailable")
-		return Compose{}, RunRequest{}, false
+		return DeployTarget{}, false
 	}
 
 	projectID, environmentID, err := routeIDs(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return Compose{}, RunRequest{}, false
+		return DeployTarget{}, false
 	}
 	id, err := composeID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "compose id must be a positive integer")
-		return Compose{}, RunRequest{}, false
+		return DeployTarget{}, false
 	}
 	if err := s.requireEnvironment(r.Context(), projectID, environmentID); err != nil {
 		writeParentError(w, err)
-		return Compose{}, RunRequest{}, false
+		return DeployTarget{}, false
 	}
 
-	compose, err := s.repository.findByID(r.Context(), environmentID, id)
-	if errors.Is(err, sql.ErrNoRows) {
+	target, err := s.Target(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && target.Compose.EnvironmentID != environmentID) {
 		writeError(w, http.StatusNotFound, "compose not found")
-		return Compose{}, RunRequest{}, false
+		return DeployTarget{}, false
 	} else if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return Compose{}, RunRequest{}, false
+		return DeployTarget{}, false
 	}
-	if strings.TrimSpace(compose.YAMLContent) == "" {
-		writeError(w, http.StatusBadRequest, "compose has no YAML content to deploy")
-		return Compose{}, RunRequest{}, false
-	}
-
-	if err := s.requireUniqueIdentity(r.Context(), compose); err != nil {
+	if err := s.CheckDeployable(r.Context(), target); errors.Is(err, ErrBlankYAML) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return DeployTarget{}, false
+	} else if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
-		return Compose{}, RunRequest{}, false
+		return DeployTarget{}, false
 	}
-	return compose, runRequestFor(s.dataDir, compose), true
-}
-
-// deployFiles is the content a deploy writes, computed before anything is
-// removed or written.
-type deployFiles struct {
-	composeYAML string
-	envFile     string
-	// setFiles is the content of each sets/<id>.env the resolved YAML points at.
-	setFiles map[int64]string
-	warnings []string
-}
-
-// prepareDeployFiles resolves the YAML and loads the environment variables.
-// It touches no files. On false it has already written the error response.
-func (s *Service) prepareDeployFiles(w http.ResponseWriter, r *http.Request, compose Compose, req RunRequest) (deployFiles, bool) {
-	vars, err := s.repository.loadDeployVariables(r.Context(), compose, true)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load variables")
-		return deployFiles{}, false
-	}
-	resolvedYAML, usedSets, warnings, ok := s.resolveForDeploy(w, r, compose, compose.YAMLContent, req.EnvFilePath, vars)
-	if !ok {
-		return deployFiles{}, false
-	}
-	return deployFiles{
-		composeYAML: resolvedYAML,
-		envFile:     renderEnvFile(mergeVariables(vars.Environment, vars.Compose, nil).Interpolated),
-		setFiles:    vars.setFiles(usedSets),
-		warnings:    warnings,
-	}, true
-}
-
-// resolveForDeploy loads the Compose's domains and resolves yamlContent the
-// way a deploy writes it, returning the IDs of the sets it points at. vars
-// only has to carry keys, so preview can share it without reading values. On
-// false it has already written the error response.
-func (s *Service) resolveForDeploy(w http.ResponseWriter, r *http.Request, compose Compose, yamlContent, envFilePath string, vars deployVariables) (string, []int64, []string, bool) {
-	composeDomains, err := s.domains.ListForCompose(r.Context(), compose.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load domains")
-		return "", nil, nil, false
-	}
-	// The route was validated before the Compose loaded.
-	projectID, _, _ := routeIDs(r)
-	projectName, environmentName, err := s.repository.parentNames(r.Context(), projectID, compose.EnvironmentID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load compose")
-		return "", nil, nil, false
-	}
-	id := networkIdentity{DeployName: compose.DeployProjectName(), Compose: compose.Name, Environment: environmentName, Project: projectName}
-	resolvedYAML, usedSets, warnings, err := resolveCompose(yamlContent, dockernet.NetworkName, envFilePath, compose.ID, composeDomains, id, vars)
-	var target *domains.TargetError
-	if errors.As(err, &target) {
-		writeError(w, http.StatusBadRequest, target.Error())
-		return "", nil, nil, false
-	} else if err != nil {
-		writeError(w, http.StatusBadRequest, "compose yaml is invalid: "+err.Error())
-		return "", nil, nil, false
-	}
-	if warnings == nil {
-		warnings = []string{}
-	}
-	return resolvedYAML, usedSets, warnings, true
+	return target, true
 }
 
 // previewResponse is the file a deploy would write and the warnings it
@@ -580,21 +483,12 @@ func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load variables")
 		return
 	}
-	resolvedYAML, _, warnings, ok := s.resolveForDeploy(w, r, compose, *input.YAMLContent, req.EnvFilePath, vars)
-	if !ok {
+	resolvedYAML, _, warnings, err := s.resolveForDeploy(r.Context(), projectID, compose, *input.YAMLContent, req.EnvFilePath, vars)
+	if err != nil {
+		writeDeployFailure(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, previewResponse{YAML: resolvedYAML, Warnings: warnings})
-}
-
-// writeDeployFiles writes the prepared compose and environment files. On
-// false it has already written the error response.
-func (s *Service) writeDeployFiles(w http.ResponseWriter, req RunRequest, files deployFiles) bool {
-	if message, err := writeFiles(req, files); err != nil {
-		writeError(w, http.StatusInternalServerError, message)
-		return false
-	}
-	return true
 }
 
 // writeFiles creates the Compose directory and writes the files, returning
@@ -668,27 +562,18 @@ type deployResponse struct {
 	Warnings []string `json:"warnings"`
 }
 
-// completeDeploy records the deploy time and answers with the refreshed
-// Compose and the deploy's warnings.
-func (s *Service) completeDeploy(w http.ResponseWriter, r *http.Request, compose Compose, req RunRequest, warnings []string) {
-	// The deploy timestamp records success only (deploy-timestamps spec): it
-	// lands after the runner returns without error, and no other action ever
-	// writes it — "has deployed" and "is running" stay two different facts.
-	deployedAt := s.now().UTC().Truncate(time.Second)
-	if err := s.repository.markDeployed(r.Context(), compose.EnvironmentID, compose.ID, deployedAt); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not record deploy time")
-		return
-	}
-	compose, err := s.repository.findByID(r.Context(), compose.EnvironmentID, compose.ID)
+// respondDeployed answers with the refreshed Compose and the deploy's
+// warnings once RunDeploy has recorded the deploy time.
+func (s *Service) respondDeployed(w http.ResponseWriter, r *http.Request, target DeployTarget, warnings []string) {
+	compose, err := s.repository.findByID(r.Context(), target.Compose.EnvironmentID, target.Compose.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load compose")
 		return
 	}
-
 	if warnings == nil {
 		warnings = []string{}
 	}
-	writeJSON(w, http.StatusOK, deployResponse{Compose: s.withRefreshedStatus(r.Context(), req, compose), Warnings: warnings})
+	writeJSON(w, http.StatusOK, deployResponse{Compose: s.withRefreshedStatus(r.Context(), target.Request, compose), Warnings: warnings})
 }
 
 func (s *Service) stop(w http.ResponseWriter, r *http.Request) {
@@ -785,6 +670,7 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.cancelDeployments(r.Context(), id)
 	if _, err := os.Stat(req.ComposeFilePath); err == nil {
 		if err := s.runner.DownWithVolumes(r.Context(), req); err != nil {
 			writeError(w, http.StatusBadGateway, "delete failed: "+err.Error())
