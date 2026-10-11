@@ -55,13 +55,29 @@ type ComposeStatus struct {
 	Services []string `json:"-"`
 }
 
+// UpOptions tunes a deploy. Build passes --build, else --no-build. Out, when
+// set, receives the command's stdout and stderr as they arrive.
+type UpOptions struct {
+	Build bool
+	Out   io.Writer
+}
+
+// BuildOptions tunes building one Service. Out, when set, receives the
+// command's stdout and stderr as they arrive.
+type BuildOptions struct {
+	Service string
+	NoCache bool
+	Out     io.Writer
+}
+
 // ComposeRunner is the one port in the system (ADR-0003): everything needed
 // to drive a Compose's containers via the real `docker compose` CLI. Down
 // preserves volumes for Stop, while DownWithVolumes performs the destructive
 // teardown used by Delete. It is declared here, in the consumer, and
 // implemented for real in the leaf package `dockerexec`; tests use a fake.
 type ComposeRunner interface {
-	Up(ctx context.Context, req RunRequest) error
+	Up(ctx context.Context, req RunRequest, opts UpOptions) error
+	Build(ctx context.Context, req RunRequest, opts BuildOptions) error
 	Down(ctx context.Context, req RunRequest) error
 	DownWithVolumes(ctx context.Context, req RunRequest) error
 	Restart(ctx context.Context, req RunRequest) error
@@ -339,7 +355,7 @@ func (s *Service) deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.runner.Up(r.Context(), req); err != nil {
+	if err := s.runner.Up(r.Context(), req, UpOptions{Build: true}); err != nil {
 		writeError(w, http.StatusBadGateway, "deploy failed: "+err.Error())
 		return
 	}
@@ -386,7 +402,7 @@ func (s *Service) deployFresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, message+" after volumes were removed: "+err.Error()+". "+volumesRemovedAdvice)
 		return
 	}
-	if err := s.runner.Up(r.Context(), req); err != nil {
+	if err := s.runner.Up(r.Context(), req, UpOptions{Build: true}); err != nil {
 		writeError(w, http.StatusBadGateway, "deploy failed after volumes were removed: "+err.Error()+". "+volumesRemovedAdvice)
 		return
 	}

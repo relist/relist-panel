@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2545,6 +2546,10 @@ func newTestServer(t *testing.T) *testServer {
 // Testing Decisions: it records what it was asked to do instead of touching
 // a real Docker daemon.
 type fakeComposeRunner struct {
+	// mu guards calls and statuses: the deployment worker calls the runner
+	// from its own goroutine.
+	mu                 sync.Mutex
+	buildErr           map[string]error
 	calls              []fakeComposeRun
 	statuses           map[string]composes.ComposeStatus
 	upErr              error
@@ -2561,18 +2566,30 @@ type fakeComposeRunner struct {
 type fakeComposeRun struct {
 	method  string
 	request composes.RunRequest
+	build   bool // UpOptions.Build of an "up" call
 }
 
 func newFakeComposeRunner() *fakeComposeRunner {
 	return &fakeComposeRunner{statuses: make(map[string]composes.ComposeStatus)}
 }
 
-func (f *fakeComposeRunner) Up(_ context.Context, req composes.RunRequest) error {
-	f.calls = append(f.calls, fakeComposeRun{method: "up", request: req})
+func (f *fakeComposeRunner) Up(_ context.Context, req composes.RunRequest, opts composes.UpOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fakeComposeRun{method: "up", request: req, build: opts.Build})
 	return f.upErr
 }
 
+func (f *fakeComposeRunner) Build(_ context.Context, req composes.RunRequest, opts composes.BuildOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fakeComposeRun{method: "build:" + opts.Service, request: req})
+	return f.buildErr[opts.Service]
+}
+
 func (f *fakeComposeRunner) Down(_ context.Context, req composes.RunRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeComposeRun{method: "down", request: req})
 	if f.downErr != nil {
 		return f.downErr
@@ -2585,6 +2602,8 @@ func (f *fakeComposeRunner) DownWithVolumes(_ context.Context, req composes.RunR
 	if f.onDownWithVolumes != nil {
 		f.onDownWithVolumes(req)
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeComposeRun{method: "down-with-volumes", request: req})
 	if f.downWithVolumesErr != nil {
 		return f.downWithVolumesErr
@@ -2594,11 +2613,15 @@ func (f *fakeComposeRunner) DownWithVolumes(_ context.Context, req composes.RunR
 }
 
 func (f *fakeComposeRunner) Restart(_ context.Context, req composes.RunRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeComposeRun{method: "restart", request: req})
 	return f.restartErr
 }
 
 func (f *fakeComposeRunner) Status(_ context.Context, req composes.RunRequest) (composes.ComposeStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeComposeRun{method: "status", request: req})
 	if status, ok := f.statuses[req.ProjectName]; ok {
 		return status, nil
@@ -2607,6 +2630,8 @@ func (f *fakeComposeRunner) Status(_ context.Context, req composes.RunRequest) (
 }
 
 func (f *fakeComposeRunner) Logs(_ context.Context, req composes.RunRequest) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeComposeRun{method: "logs", request: req})
 	if f.logsErr != nil {
 		return "", f.logsErr

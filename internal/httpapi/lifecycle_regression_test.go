@@ -156,7 +156,7 @@ type blockingLifecycleRunner struct {
 	started, release, stopped chan struct{}
 }
 
-func (r *blockingLifecycleRunner) Up(ctx context.Context, req composes.RunRequest) error {
+func (r *blockingLifecycleRunner) Up(ctx context.Context, req composes.RunRequest, _ composes.UpOptions) error {
 	close(r.started)
 	select {
 	case <-r.release:
@@ -205,7 +205,7 @@ func (r *eventRunner) blockNextUp() {
 	r.mu.Unlock()
 }
 
-func (r *eventRunner) Up(ctx context.Context, _ composes.RunRequest) error {
+func (r *eventRunner) Up(ctx context.Context, _ composes.RunRequest, _ composes.UpOptions) error {
 	r.mu.Lock()
 	block := r.blocking
 	r.blocking = false
