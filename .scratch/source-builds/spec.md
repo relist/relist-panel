@@ -94,6 +94,14 @@ Both kinds of Source put the code in `<compose dir>/src/`, next to the resolved
 the panel writes itself (the resolved YAML, `.env`, `sets/`). This holds for legacy name-derived
 Compose directories (ADR-0002) and ID-based ones (ADR-0011) alike.
 
+`./src` is wiped by every fetch (`git clean -ffdx`) and every zip upload, so the panel must own it.
+The panel creates `src/` itself with a marker file, `src/.relist-source`, which `git clean` keeps
+through `-e .relist-source`. Creating a Source on a Compose whose directory already holds a `src`
+without that marker is refused with `409`, "src/ already exists in this Compose's directory, move it
+first", because an existing Compose may bind-mount `./src` for its own data. The panel's other new
+paths are dotted, like `.traefik` and `.composes`: logs in `.deployments/`, staging files
+`.build-compose.yml` and `.build.env`, and `.ssh/`.
+
 ### Git over SSH with a per-Compose deploy key
 
 - The panel generates an ed25519 key pair in Go (`golang.org/x/crypto/ssh`) when a Git Source is
@@ -130,16 +138,21 @@ belongs to the panel. Nothing else writes there.
 
 - Uploads stream to a temp file, with a cap of 500 MiB compressed. Extraction uses `archive/zip` and
   follows the safety rules of `internal/volfs/extract.go`:
-  - It refuses absolute names, names that climb out, symlinks and any entry type other than a file
-    or directory.
+  - It refuses absolute names, names that climb out, and any entry type other than a file,
+    directory or symlink (see below).
   - It caps the archive at 10,000 entries and 4 GiB uncompressed.
 - When every entry sits under one top-level directory (GitHub's "Download ZIP" makes `shop-main/`),
   that directory is stripped.
-- Extraction writes into `src.new/`. Only after it succeeds is `src/` replaced by a rename, so a
+- Executable bits are kept from each entry's external attributes, so `RUN ./gradlew` and entrypoint
+  scripts still run.
+- Symlinks are allowed only when they are relative and resolve inside `src/`. Others are refused.
+  Git Sources check out whatever the repository holds, and BuildKit never follows a link out of the
+  build context anyway, so the rule only keeps an upload from writing outside `src/`.
+- Extraction writes into `.src.new/`. Only after it succeeds is `src/` replaced by a rename, so a
   failed upload leaves the previous code in place. An upload replaces the code, it never merges.
 - An upload does not deploy. The card then shows "Uploaded, not built yet".
-- The upload holds the Project gate, because it replaces `./src` while a queued Deployment could
-  read it (see Concurrency).
+- The upload streams and extracts outside the Project gate, because holding it for a 500 MiB upload
+  would block every Compose in the Project. See Concurrency for how it avoids a running Deployment.
 
 ### One host-wide queue, concurrency 1
 
@@ -159,9 +172,19 @@ belongs to the panel. Nothing else writes there.
 
   `noCache` adds `--no-cache` to each build. `freshVolumes` runs `down -v` before `up`, as
   "Deploy with fresh volumes" does today.
-- **Build one Service at a time.** The worker runs `docker compose build <service>` for each Service
-  with `build:`, in YAML order, through the same `run()` (`internal/dockerexec/dockerexec.go`), so
-  `-p`, `-f` and `--env-file` match `up`. It stops at the first failure. Compose's default build runs
+- **Build from staging files, one Service at a time.** The resolved `docker-compose.yml` and `.env` are
+  written only by the Deploy step (`writeFiles` in `internal/composes/composes.go`). Before that step,
+  they still hold the last deploy. On a new Compose they do not exist at all. So the Build step first
+  writes two staging files into the Compose directory:
+  - `.build-compose.yml`: the stored YAML, unresolved.
+  - `.build.env`: the merged Environment and Compose Variables, mode 0600, rendered as the Deploy step
+    renders `.env`.
+
+  They sit in the same directory so that `./src/...` resolves the same way. The worker then runs
+  `docker compose -p <project> -f .build-compose.yml --env-file .build.env build <service>` for each
+  Service with `build:`, in YAML order. The project name matches `up`'s, so the image names match.
+  The files that stop, restart, logs and the terminal use are not touched until Deploy. The staging
+  files are deleted when the Deployment ends. It stops at the first failure. Compose's default build runs
   every Service in parallel, which this design avoids. Two Services with identical `build:` are both
   built, and the second comes almost entirely from BuildKit's cache.
 - **`up --no-build` after a build step.** Today `upArgs()` passes `--build`, which would rebuild every
@@ -172,6 +195,10 @@ belongs to the panel. Nothing else writes there.
   today. It holds the Project gate for this step only. Fetch and build do not take the gate: they
   touch only `./src` and images.
 - On success the Deployment stamps `composes.deployed_at`, as the old deploy did.
+- **A Deployment uses the state at the moment it starts running**, not when it was enqueued: the
+  stored YAML, Variables, Domains, bindings and Source settings. Save & Deploy saves before it
+  enqueues, so pressing it always deploys what is on screen, even after a wait in the queue. An edit
+  saved while a Deployment waits is included. An edit saved after it starts waits for the next one.
 
 ### Cancel, failure, timeout and restart
 
@@ -184,10 +211,27 @@ belongs to the panel. Nothing else writes there.
   out Deployment is `failed` with reason `timeout`.
 - At startup, any `running` Deployment becomes `failed` with reason `panel restarted`, and the worker
   then resumes the `queued` ones in order.
-- Deleting a Compose cancels its queued Deployment and waits for a running one to finish. Deleting
-  its Environment or Project does the same for each Compose.
+- Deleting a Compose, its Environment or its Project cancels each affected Deployment that is queued,
+  or running in fetch or build, and waits for the process to exit. Deletion holds the Project gate, so
+  it must never wait on a Deployment that needs the gate. A Deployment already in its Deploy step
+  holds the gate itself, so the delete request simply queues behind it at the gate, and no extra wait
+  is added.
 - Restart and Stop do not enqueue. They are quick, and the Project gate already keeps them from
   overlapping the Deploy step.
+
+### Concurrency
+
+- The worker is not an HTTP request. It calls the coordinator (`internal/httpapi/coordination.go`)
+  directly to acquire the Project gate for the Deploy step.
+- Gate exemptions, added to `coordinatedProject` next to the preview one: `POST /source/test`,
+  `POST /deployments/{n}/cancel`, `GET /source/dockerfiles`, and the upload's streaming phase.
+  Enqueue (`POST /deployments`) and the Source writes take the gate only for their short database
+  work.
+- **`./src` is never replaced under a running Deployment.** `PUT /source`, `DELETE /source`,
+  `POST /source/upload` and Regenerate key return `409`, "A deployment is running", while the Compose
+  has a running Deployment. The upload checks before it streams, and again before the rename that
+  swaps `src/`. A queued Deployment does not block them, because it reads the Source only when it
+  starts.
 
 ### Warnings
 
@@ -290,7 +334,7 @@ CREATE INDEX deployments_status_idx ON deployments(status, queued_at);
 CREATE UNIQUE INDEX deployments_one_queued ON deployments(compose_id) WHERE status = 'queued';
 ```
 
-- Logs are files at `<compose dir>/deployments/<number>.log`. After each Deployment finishes, rows
+- Logs are files at `<compose dir>/.deployments/<number>.log`. After each Deployment finishes, rows
   and logs beyond the newest 20 for that Compose are deleted.
 - `number` is `MAX(number) + 1` for the Compose, assigned in the enqueue transaction.
 - Removing a Source deletes the row and `./src`. Images and Deployment history stay.
@@ -387,6 +431,9 @@ like the header does.
 | A Dockerfile path or context wrong in YAML | `failed` at `build:<svc>` with Docker's error. Containers untouched. |
 | A Source exists but no Service has `build:` | `build` mode runs Fetch, then Deploy, and logs "no Service has build:". |
 | Zip unsafe or over the limits | `400` naming the entry or limit. The old `./src` is kept. |
+| `skip-build` before any image was built | `failed` at deploy: `up --no-build` reports the missing image. |
+| Source created where `src/` exists without the marker | `409`; nothing is written. |
+| Source changed or zip uploaded during a running Deployment | `409`, "A deployment is running". |
 | Panel restarts mid-run | `failed`, reason `panel restarted`. Queue resumes. |
 
 ## Testing
@@ -407,6 +454,7 @@ Go unit tests:
 - Zip extraction:
   - It refuses zip-slip, absolute names, symlinks, and archives over the entry or byte caps.
   - It strips a single top-level directory.
+  - It keeps executable bits, and allows only relative symlinks that stay inside `src/`.
   - A failed extraction leaves `src/` unchanged.
 - Dockerfile detection: names, contexts, de-duplication, skipped directories and the depth cap.
 - The queue, with a fake runner:
@@ -427,6 +475,11 @@ Go integration (`internal/httpapi`, fake runner):
 - Cancel `409` during Deploy.
 - Delete Compose with a queued Deployment.
 - Existing lifecycle tests move to "enqueue, wait for the queue to drain, assert".
+- The first Build & Deploy on a brand-new Compose, with `build:` saved just before, builds from the
+  staging files.
+- Delete Compose while its Deployment is building cancels it and does not deadlock. Delete while it
+  is in Deploy waits at the gate and then succeeds.
+- Upload and PUT `/source` return `409` while a Deployment runs.
 
 Real git: the fetch path runs against a local bare repository over `file://` (no ssh) and covers the
 first clone, a re-fetch after a force-push, a branch switch, and submodules.
@@ -444,6 +497,13 @@ Manual, on the live install:
 - A GitHub "Download ZIP" upload.
 - A failing build leaves the old containers running.
 - Two Composes deploying at once queue one behind the other.
+
+## Docs to update with the implementation
+
+- `docs/sa.md`: the deploy sequence diagram (`POST /composes/{id}/deploy`) and the use-case table
+  become the enqueue, worker and Deployment flow.
+- README: a "Building from a Source" section, covering deploy keys, `./src` contexts, build args and
+  secrets, and pruning dangling images.
 
 ## Follow-ups
 
