@@ -894,16 +894,6 @@ export function ComposePage() {
                       </Flex>
                     </Card>
 
-                    <SourceCard
-                      draft={draft}
-                      lastBuilt={lastBuilt}
-                      onConfigure={() => setSourceModal({})}
-                      onShowSnippets={() => setSnippetsOpen(true)}
-                      onUploadNew={() => setSourceModal({ mode: 'zip' })}
-                      onViewDeployments={() => navigate(paths.compose(project.id, environment.id, compose.id, 'deployments'))}
-                      source={currentSource}
-                    />
-
                     <Card
                       extra={
                         <Button
@@ -944,6 +934,16 @@ export function ComposePage() {
                         size="small"
                       />
                     </Card>
+
+                    <SourceCard
+                      draft={draft}
+                      lastBuilt={lastBuilt}
+                      onConfigure={() => setSourceModal({})}
+                      onShowSnippets={() => setSnippetsOpen(true)}
+                      onUploadNew={() => setSourceModal({ mode: 'zip' })}
+                      onViewDeployments={() => navigate(paths.compose(project.id, environment.id, compose.id, 'deployments'))}
+                      source={currentSource}
+                    />
                   </Flex>
                 </Col>
               </Row>
@@ -1158,6 +1158,7 @@ export function ComposePage() {
         initialMode={sourceModal?.mode}
         location={sourcePath}
         onClose={() => setSourceModal(undefined)}
+        onChanged={refreshSource}
         onRemoved={refreshSource}
         onSaved={(_saved, firstTime) => {
           refreshSource();

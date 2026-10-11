@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ComposeSource, Deployment } from './types';
-import { buildServices, sourceCardState } from './source-view';
+import { buildServices, repoName, sourceCardState } from './source-view';
 
 function git(overrides: Partial<ComposeSource> = {}): ComposeSource {
   return {
@@ -74,7 +74,7 @@ describe('sourceCardState', () => {
   it('titles the card by kind and describes the last build', () => {
     const state = sourceCardState(git({ headSha: 'aaaaaaa' }), build({ sourceRef: 'aaaaaaa', sourceSubject: 'Fix cart' }));
     expect(state.kind).toBe('git');
-    expect(state.title).toBe('git@github.com:acme/shop.git · main');
+    expect(state.title).toBe('acme/shop · main');
     expect(state.builtLine).toBe('Built aaaaaaa — Fix cart');
     expect(sourceCardState(git(), undefined).builtLine).toBe('Not built yet');
     expect(sourceCardState(zip('2026-01-01T00:20:00Z'), undefined).title).toBe('code.zip');
@@ -89,5 +89,16 @@ describe('buildServices', () => {
 
   it('is empty for broken YAML', () => {
     expect(buildServices('services: [')).toEqual([]);
+  });
+});
+
+describe('repoName', () => {
+  it('reads owner/repo from scp-style and ssh:// URLs', () => {
+    expect(repoName('git@github.com:acme/shop.git')).toBe('acme/shop');
+    expect(repoName('ssh://git@host.io:2222/team/sub/shop.git')).toBe('sub/shop');
+  });
+
+  it('falls back to the URL', () => {
+    expect(repoName('git@host:shop.git')).toBe('git@host:shop.git');
   });
 });

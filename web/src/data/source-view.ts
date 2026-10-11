@@ -30,7 +30,7 @@ export function sourceCardState(src: ComposeSource | null, lastBuilt: Deployment
   const newCommits = src.headSha !== '' && built !== undefined && src.headSha !== built.sourceRef;
   return {
     kind: 'git',
-    title: `${src.repoUrl} · ${src.branch}`,
+    title: `${repoName(src.repoUrl)} · ${src.branch}`,
     builtLine,
     newCommits,
     notBuilt: !built,
@@ -50,3 +50,10 @@ export function yamlServices(yaml: string, onlyBuilt = false): string[] {
 }
 
 export const buildServices = (yaml: string): string[] => yamlServices(yaml, true);
+
+/** `owner/repo` from `git@host:owner/repo.git` or `ssh://git@host:port/owner/repo.git`; the URL itself when it has no two path segments. */
+export function repoName(url: string): string {
+  const path = url.startsWith('ssh://') ? url.replace(/^ssh:\/\/[^/]*\//, '') : url.replace(/^[^:]*:/, '');
+  const parts = path.replace(/\.git$/, '').split('/').filter(Boolean);
+  return parts.length >= 2 && path !== url ? parts.slice(-2).join('/') : url;
+}

@@ -28,6 +28,7 @@ const SAVE_URL_DELAY_MS = 600;
 export function SourceModal({
   initialMode,
   location,
+  onChanged,
   onClose,
   onRemoved,
   onSaved,
@@ -36,6 +37,8 @@ export function SourceModal({
 }: {
   initialMode?: Mode;
   location: ComposePath;
+  /** The Source changed server side (key regenerated, connection tested): re-read it. */
+  onChanged: () => void;
   onClose: () => void;
   onRemoved: () => void;
   onSaved: (source: ComposeSource, firstTime: boolean) => void;
@@ -129,6 +132,7 @@ export function SourceModal({
   const test = () =>
     run('test', async () => {
       const result = await api.testSource(location);
+      onChanged();
       setTestOk(result.ok);
       setTestError(result.ok ? '' : result.error || 'Connection failed');
       if (result.ok) {
@@ -158,6 +162,7 @@ export function SourceModal({
       const result = await api.regenerateKey(location);
       setPublicKey(result.publicKey);
       setTestOk(false);
+      onChanged();
     });
 
   const resetHost = () =>

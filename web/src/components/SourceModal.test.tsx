@@ -37,8 +37,8 @@ const saved: ComposeSource = {
   zip: null,
 };
 
-function renderModal(source: ComposeSource | null = null, onSaved = vi.fn()) {
-  render(<SourceModal location={location} onClose={() => undefined} onRemoved={() => undefined} onSaved={onSaved} open source={source} />);
+function renderModal(source: ComposeSource | null = null, onSaved = vi.fn(), onChanged = vi.fn()) {
+  render(<SourceModal location={location} onChanged={onChanged} onClose={() => undefined} onRemoved={() => undefined} onSaved={onSaved} open source={source} />);
   return onSaved;
 }
 
@@ -132,5 +132,29 @@ describe('SourceModal', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('A deployment is running');
     expect(alert.closest('.ant-modal')).not.toBeNull();
+  });
+
+  it('refreshes the page after a test, pass or fail', async () => {
+    api.testSource.mockResolvedValue({ branches: [], error: 'Permission denied (publickey)', ok: false });
+    const onChanged = vi.fn();
+    const user = userEvent.setup();
+    renderModal(saved, vi.fn(), onChanged);
+
+    await user.click(screen.getByRole('button', { name: 'Test connection' }));
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  });
+
+  it('refreshes the page after regenerating the key and shows the new one', async () => {
+    api.regenerateKey.mockResolvedValue({ publicKey: 'ssh-ed25519 NEW' });
+    const onChanged = vi.fn();
+    const user = userEvent.setup();
+    renderModal(saved, vi.fn(), onChanged);
+
+    await user.click(screen.getByRole('button', { name: 'Regenerate key' }));
+    await user.click(await screen.findByRole('button', { name: 'Regenerate' }));
+
+    expect(await screen.findByText('ssh-ed25519 NEW')).toBeTruthy();
+    expect(onChanged).toHaveBeenCalledTimes(1);
   });
 });
