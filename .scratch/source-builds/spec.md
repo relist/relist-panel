@@ -302,6 +302,7 @@ CREATE TABLE compose_sources (
     ssh_public_key TEXT NOT NULL DEFAULT '',
     last_test_at INTEGER,
     last_test_ok INTEGER,
+    head_sha TEXT NOT NULL DEFAULT '',      -- branch head from the last test
     zip_name TEXT NOT NULL DEFAULT '',
     zip_size INTEGER NOT NULL DEFAULT 0,
     zip_files INTEGER NOT NULL DEFAULT 0,
@@ -386,7 +387,7 @@ pages it links for each component before building it (AGENTS.md).
 
 - When there is none: one line of help, "Services use images named in the YAML", and **+ Add source**.
 - Git: `acme/shop · main`, the connection state from the last test, "Built `a1b2c3d` · subject ·
-  1d ago", a "2 new" tag when the branch head (from the last test or fetch) differs, the build
+  1d ago", a "New commits" tag when the branch head from the last test (`head_sha`) differs from the built SHA, the build
   targets found in the YAML, a **Configure** link and **View deployments →**.
 - Zip: file name, size, file count, upload time, "Built from this upload" or "Not built yet",
   **Upload new zip**, **Configure** and **View deployments →**.
