@@ -177,7 +177,7 @@ type putInput struct {
 	Submodules bool   `json:"submodules"`
 }
 
-func keyComment(name string) string { return "relist-panel:" + name }
+func keyComment(composeID int64) string { return fmt.Sprintf("relist-c%d", composeID) }
 
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	t, ok := s.resolve(w, r)
@@ -222,6 +222,14 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next := Source{ComposeID: t.id, Kind: KindGit, RepoURL: repoURL, Branch: branch, Submodules: in.Submodules}
+	if err == nil && existing.Kind == KindZip {
+		// An uploaded tree may carry its own .git/config; git init must never
+		// run inside it. EnsureOwnedSrc above already vouched that src/ is ours.
+		if err := os.RemoveAll(filepath.Join(t.dir, "src")); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not remove the uploaded code")
+			return
+		}
+	}
 	if err == nil && existing.Kind == KindGit {
 		next.PrivateKey, next.PublicKey, next.CreatedAt = existing.PrivateKey, existing.PublicKey, existing.CreatedAt
 		// A test and its commit describe the repository and branch they ran against.
@@ -233,7 +241,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if next.PrivateKey == "" {
-		next.PrivateKey, next.PublicKey, err = GenerateKey(keyComment(t.name))
+		next.PrivateKey, next.PublicKey, err = GenerateKey(keyComment(t.id))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "could not generate deploy key")
 			return
@@ -309,7 +317,7 @@ func (s *Service) regenerateKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "only a git source has a deploy key")
 		return
 	}
-	src.PrivateKey, src.PublicKey, err = GenerateKey(keyComment(t.name))
+	src.PrivateKey, src.PublicKey, err = GenerateKey(keyComment(t.id))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not generate deploy key")
 		return
@@ -483,12 +491,18 @@ func (s *Service) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var tmpZip, staging string
+	composeGone := false
 	defer func() {
 		if tmpZip != "" {
 			_ = os.Remove(tmpZip)
 		}
 		if staging != "" {
 			_ = os.RemoveAll(staging)
+		}
+		if composeGone {
+			// The MkdirAll above may have recreated a deleted Compose's
+			// directory; Remove only succeeds on an empty one.
+			_ = os.Remove(t.dir)
 		}
 	}()
 
@@ -537,6 +551,16 @@ func (s *Service) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer unlock()
+	// A Delete may have run while the bytes streamed; installing now would
+	// recreate its directory and then fail to save a row for it.
+	if _, err := s.composes.Target(r.Context(), t.id); errors.Is(err, sql.ErrNoRows) {
+		composeGone = true
+		writeError(w, http.StatusNotFound, "compose not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load compose")
+		return
+	}
 	if err := EnsureOwnedSrc(t.dir); errors.Is(err, ErrForeignSrc) {
 		writeError(w, http.StatusConflict, err.Error())
 		return

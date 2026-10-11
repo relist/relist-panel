@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"relist-panel/internal/composes"
 )
@@ -92,6 +93,10 @@ var command = func(ctx context.Context, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, "docker", args...)
 }
 
+// waitDelay bounds how long Wait lingers for output pipes after the CLI exits
+// or is killed.
+var waitDelay = 5 * time.Second
+
 // stderrTailSize is how much of stderr an error message keeps when output is
 // streamed to out.
 const stderrTailSize = 4 << 10
@@ -131,6 +136,9 @@ func run(ctx context.Context, req composes.RunRequest, out io.Writer, args ...st
 	}, args...)
 
 	cmd := command(ctx, fullArgs...)
+	// A killed docker CLI can leave a grandchild holding the output pipes;
+	// without a WaitDelay, Wait would block on them and hang Cancel and Delete.
+	cmd.WaitDelay = waitDelay
 	var stdout, stderr bytes.Buffer
 	tail := &tailWriter{}
 	if out != nil {

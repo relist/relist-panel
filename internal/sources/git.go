@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Ref is the commit a Fetch left checked out in src/.
@@ -84,6 +85,9 @@ func (g Git) run(ctx context.Context, dir string, env []string, stdout, stderr i
 	cmd.Env = env
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	// A killed git can leave a grandchild (ssh, a hook) holding the pipes;
+	// without a WaitDelay, Run would block on them and hang Cancel and Delete.
+	cmd.WaitDelay = 5 * time.Second
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git %s: %w", args[0], err)
 	}

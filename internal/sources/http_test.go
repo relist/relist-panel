@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -197,3 +198,60 @@ func TestUploadRechecksTheLockBeforeTheSwapAndCleansUp(t *testing.T) {
 func exists(p string) bool { _, err := os.Lstat(p); return err == nil }
 
 func hasGlob(pattern string) bool { m, _ := filepath.Glob(pattern); return len(m) > 0 }
+
+// deletingGate removes the Compose row while the upload waits for the gate,
+// which is a Delete landing between the stream and the swap.
+type deletingGate struct {
+	db      *sql.DB
+	compose int64
+}
+
+func (g deletingGate) Acquire(context.Context, int64) (func(), error) {
+	_, err := g.db.Exec(`DELETE FROM composes WHERE id = ?`, g.compose)
+	return func() {}, err
+}
+
+func TestUploadToADeletedComposeIs404AndLeavesNothing(t *testing.T) {
+	f := newHTTPFixture(t)
+	f.svc.gate = deletingGate{db: f.db, compose: f.compose}
+	rec := f.upload(t, map[string]string{"Dockerfile": "x"})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("upload = %d %s, want 404", rec.Code, rec.Body)
+	}
+	if exists(f.dir) {
+		t.Fatalf("directory left behind: %s", f.dirListing(t))
+	}
+}
+
+func TestPutGitOverZipRemovesTheUploadedTree(t *testing.T) {
+	f := newHTTPFixture(t)
+	if rec := f.upload(t, map[string]string{"Dockerfile": "x", ".git/config": "[core]"}); rec.Code != http.StatusOK {
+		t.Fatalf("setup upload = %d %s", rec.Code, rec.Body)
+	}
+	put := `{"kind":"git","repoUrl":"git@github.com:a/b.git","branch":"main","submodules":false}`
+	rec := f.serve(httptest.NewRequest(http.MethodPut, f.base, strings.NewReader(put)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+	if exists(filepath.Join(f.dir, "src")) {
+		t.Fatalf("uploaded src/ survived the switch to git: %s", f.dirListing(t))
+	}
+}
+
+func TestPutGeneratesAKeyCommentedWithTheComposeID(t *testing.T) {
+	f := newHTTPFixture(t)
+	put := `{"kind":"git","repoUrl":"git@github.com:a/b.git","branch":"main","submodules":false}`
+	rec := f.serve(httptest.NewRequest(http.MethodPut, f.base, strings.NewReader(put)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		PublicKey string `json:"publicKey"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf(" relist-c%d", f.compose); !strings.HasSuffix(body.PublicKey, want) {
+		t.Fatalf("public key %q does not end in %q", body.PublicKey, want)
+	}
+}

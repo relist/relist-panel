@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"relist-panel/internal/composes"
 )
@@ -77,5 +78,32 @@ func TestParseStatusCollectsServiceNames(t *testing.T) {
 	}
 	if want := []string{"app", "worker"}; !reflect.DeepEqual(status.Services, want) {
 		t.Fatalf("Services = %v, want %v", status.Services, want)
+	}
+}
+
+// A killed CLI whose grandchild keeps the output pipes open must not hang the
+// caller: WaitDelay lets Wait give up on the pipes.
+func TestRunReturnsWhenAGrandchildHoldsThePipes(t *testing.T) {
+	oldCommand, oldDelay := command, waitDelay
+	command = func(ctx context.Context, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "sleep 30 & wait")
+	}
+	waitDelay = 100 * time.Millisecond
+	t.Cleanup(func() { command, waitDelay = oldCommand, oldDelay })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := run(ctx, composes.RunRequest{}, &bytes.Buffer{}, "up")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("run succeeded, want an error")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run hung on the grandchild's pipes")
 	}
 }
