@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Deployment } from './types';
-import { deploymentHeadline, isActive, stepLabel } from './deployments-view';
+import { deploymentButtonLabel, deploymentHeadline, isActive, stepLabel } from './deployments-view';
 
 function deployment(overrides: Partial<Deployment> = {}): Deployment {
   return {
@@ -70,5 +70,16 @@ describe('isActive', () => {
     expect(isActive(deployment({ status: 'failed' }))).toBe(false);
     expect(isActive(deployment({ status: 'succeeded' }))).toBe(false);
     expect(isActive(deployment({ status: 'canceled' }))).toBe(false);
+  });
+});
+
+describe('deploymentButtonLabel', () => {
+  it('shows the count from list data while queued', () => {
+    expect(deploymentButtonLabel(deployment({ status: 'queued', ahead: 2 }))).toBe('Queued · 2 ahead');
+    expect(deploymentButtonLabel(deployment({ status: 'queued' }))).toBe('Queued');
+  });
+
+  it('is the headline otherwise', () => {
+    expect(deploymentButtonLabel(deployment({ status: 'running', step: 'build:api' }))).toBe('Building api');
   });
 });

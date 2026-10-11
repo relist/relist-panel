@@ -22,8 +22,10 @@ export function sourceCardState(src: ComposeSource | null, lastBuilt: Deployment
 
   if (src.kind === 'zip') {
     const uploadedAt = src.zip ? Date.parse(src.zip.uploadedAt) : NaN;
-    const finishedAt = built?.finishedAt ? Date.parse(built.finishedAt) : NaN;
-    const notBuilt = !built || !built.finishedAt || (Number.isFinite(uploadedAt) && uploadedAt > finishedAt);
+    // Compared to when the build started: an upload during its Deploy step is
+    // not what that build used, and the upload is not blocked then.
+    const startedAt = built ? Date.parse(built.startedAt ?? built.queuedAt) : NaN;
+    const notBuilt = !built || (Number.isFinite(uploadedAt) && uploadedAt > startedAt);
     return { kind: 'zip', title: src.zip?.name ?? 'Uploaded zip', builtLine, newCommits: false, notBuilt };
   }
 
@@ -56,4 +58,25 @@ export function repoName(url: string): string {
   const path = url.startsWith('ssh://') ? url.replace(/^ssh:\/\/[^/]*\//, '') : url.replace(/^[^:]*:/, '');
   const parts = path.replace(/\.git$/, '').split('/').filter(Boolean);
   return parts.length >= 2 && path !== url ? parts.slice(-2).join('/') : url;
+}
+
+export type SourceLoadState = 'loading' | 'none' | 'present' | 'failed';
+
+/**
+ * Whether the page knows its Compose's Source. Deploy actions pick a mode from
+ * it, so they wait for 'none' or 'present': 'loading' and 'failed' must never
+ * read as "no Source".
+ */
+export function sourceLoadState(
+  loaded: { composeId: number; value: ComposeSource | null } | undefined,
+  failedComposeId: number | undefined,
+  composeId: number,
+): SourceLoadState {
+  if (failedComposeId === composeId) {
+    return 'failed';
+  }
+  if (!loaded || loaded.composeId !== composeId) {
+    return 'loading';
+  }
+  return loaded.value === null ? 'none' : 'present';
 }

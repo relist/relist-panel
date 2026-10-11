@@ -107,10 +107,17 @@ describe('ComposeDeploymentsTab', () => {
     expect(api.deploymentLog).toHaveBeenCalledTimes(2);
   });
 
-  it('disables Cancel once the Deployment reaches deploy', async () => {
+  it('keeps Cancel enabled at deploy and shows the API message on a 409', async () => {
+    api.cancelDeployment.mockRejectedValue(Object.assign(new Error('deployment can no longer be canceled'), { status: 409 }));
     renderTab([deployment({ step: 'deploy' })]);
     await tick(0);
-    expect((screen.getByRole('button', { name: /cancel/i }) as HTMLButtonElement).disabled).toBe(true);
+    const button = screen.getByRole('button', { name: /cancel/i }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(api.cancelDeployment).toHaveBeenCalledWith(location, 3);
+    expect(screen.getByText('deployment can no longer be canceled').closest('.ant-message-info')).toBeTruthy();
   });
 
   it('cancels a queued Deployment', async () => {

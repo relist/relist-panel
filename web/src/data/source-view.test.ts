@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ComposeSource, Deployment } from './types';
-import { buildServices, repoName, sourceCardState } from './source-view';
+import { buildServices, repoName, sourceCardState, sourceLoadState } from './source-view';
 
 function git(overrides: Partial<ComposeSource> = {}): ComposeSource {
   return {
@@ -65,9 +65,11 @@ describe('sourceCardState', () => {
     expect(sourceCardState(git({ headSha: 'bbbbbbb' }), build({ status: 'failed' })).newCommits).toBe(false);
   });
 
-  it('marks a zip not built when uploaded after the last build finished', () => {
+  it('marks a zip not built when uploaded after the last build started', () => {
     expect(sourceCardState(zip('2026-01-01T00:20:00Z'), build()).notBuilt).toBe(true);
-    expect(sourceCardState(zip('2026-01-01T00:05:00Z'), build()).notBuilt).toBe(false);
+    // Uploaded during the build (started 00:00:01, finished 00:10:00).
+    expect(sourceCardState(zip('2026-01-01T00:05:00Z'), build()).notBuilt).toBe(true);
+    expect(sourceCardState(zip('2026-01-01T00:00:00Z'), build()).notBuilt).toBe(false);
     expect(sourceCardState(zip('2026-01-01T00:20:00Z'), undefined).notBuilt).toBe(true);
   });
 
@@ -100,5 +102,22 @@ describe('repoName', () => {
 
   it('falls back to the URL', () => {
     expect(repoName('git@host:shop.git')).toBe('git@host:shop.git');
+  });
+});
+
+describe('sourceLoadState', () => {
+  it('is loading until this Compose answered, and for another Compose\'s answer', () => {
+    expect(sourceLoadState(undefined, undefined, 1)).toBe('loading');
+    expect(sourceLoadState({ composeId: 2, value: null }, undefined, 1)).toBe('loading');
+  });
+
+  it('tells none from present once loaded', () => {
+    expect(sourceLoadState({ composeId: 1, value: null }, undefined, 1)).toBe('none');
+    expect(sourceLoadState({ composeId: 1, value: git() }, undefined, 1)).toBe('present');
+  });
+
+  it('is failed after a failed load, even over an older answer, but only for that Compose', () => {
+    expect(sourceLoadState({ composeId: 1, value: null }, 1, 1)).toBe('failed');
+    expect(sourceLoadState(undefined, 1, 2)).toBe('loading');
   });
 });

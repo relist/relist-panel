@@ -4,6 +4,7 @@ import '../test/dom-setup';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Deployment } from '../data/types';
+import { deploymentButtonLabel, deploymentHeadline } from '../data/deployments-view';
 import { useDeploymentHistory } from './useDeploymentHistory';
 
 const api = vi.hoisted(() => ({ deploymentQueue: vi.fn(), listDeployments: vi.fn() }));
@@ -64,6 +65,15 @@ describe('useDeploymentHistory', () => {
     await tick(10000);
     expect(onFinished).toHaveBeenCalledTimes(1);
     expect(api.listDeployments).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows the queue position from the list data in the headline and the button', async () => {
+    api.listDeployments.mockResolvedValue([deployment({ ahead: 2, status: 'queued', step: '' })]);
+    const { result } = renderHook(() => useDeploymentHistory(path, vi.fn()));
+    await tick(0);
+    const latest = result.current.latest;
+    expect(latest && deploymentHeadline(latest)).toBe('Waiting — 2 ahead');
+    expect(latest && deploymentButtonLabel(latest)).toBe('Queued · 2 ahead');
   });
 
   it('does not poll when nothing is active', async () => {

@@ -35,6 +35,14 @@ export function deploymentHeadline(d: Deployment, active?: ActiveDeployment): st
   }
 }
 
+/** The header button's label: "Queued · 2 ahead" while waiting, else the headline. */
+export function deploymentButtonLabel(d: Deployment, active?: ActiveDeployment): string {
+  if (d.status === 'queued') {
+    return d.ahead === undefined ? 'Queued' : `Queued · ${d.ahead} ahead`;
+  }
+  return deploymentHeadline(d, active);
+}
+
 /** True while the Deployment still holds a place in the queue. */
 export function isActive(d: Deployment): boolean {
   return d.status === 'queued' || d.status === 'running';

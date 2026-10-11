@@ -134,7 +134,14 @@ export function ComposeDeploymentsTab({
     try {
       await api.cancelDeployment(location, shown.number);
     } catch (reason: unknown) {
-      message.error(reason instanceof Error ? reason.message : 'Could not cancel');
+      const text = reason instanceof Error ? reason.message : 'Could not cancel';
+      // 409: the run reached the Deploy step meanwhile and can no longer be
+      // canceled. That is news, not a failure.
+      if ((reason as { status?: number } | null)?.status === 409) {
+        message.info(text);
+      } else {
+        message.error(text);
+      }
     } finally {
       setCanceling(false);
     }
@@ -192,7 +199,6 @@ export function ComposeDeploymentsTab({
               isActive(shown) && (
                 <Button
                   danger
-                  disabled={shown.status === 'running' && shown.step === 'deploy'}
                   loading={canceling}
                   onClick={() => void cancel()}
                   size="small"

@@ -70,8 +70,8 @@ import { SourceModal } from '../components/SourceModal';
 import { YamlEditor } from '../components/YamlEditor';
 import { ApiError, api } from '../data/api';
 import { insertBuildBlocks } from '../data/build-insert';
-import { yamlServices } from '../data/source-view';
-import { deploymentHeadline, isActive } from '../data/deployments-view';
+import { sourceLoadState, yamlServices } from '../data/source-view';
+import { deploymentButtonLabel, isActive } from '../data/deployments-view';
 import { usePanel } from '../data/store';
 import type { BuildTarget, ComposeSource, ComposeVariable, DetectedDockerfile, ComposeVolumes, DeploymentRequest, OrphanVolume } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
@@ -151,9 +151,13 @@ export function ComposePage() {
     setActionError(reason instanceof Error ? reason.message : 'Something went wrong');
 
   // The Source decides what the header button does (Build & Deploy or Deploy).
-  // `null` is "none"; `undefined` is "not loaded yet", which reads as none.
+  // Loading and failed are not "none": deploying then would pick the wrong mode,
+  // so the deploy actions wait for a successful load.
   const [source, setSource] = useState<{ composeId: number; value: ComposeSource | null }>();
-  const hasSource = source?.composeId === composeId && source.value !== null;
+  const [sourceFailed, setSourceFailed] = useState<{ composeId: number; message: string }>();
+  const sourceState = sourceLoadState(source, sourceFailed?.composeId, composeId);
+  const sourceReady = sourceState === 'none' || sourceState === 'present';
+  const hasSource = sourceState === 'present';
   const sourceProjectId = project?.id;
   const sourceEnvironmentId = environment?.id;
   // Called on load and after any change to the Source (the Source card and its
@@ -164,9 +168,16 @@ export function ComposePage() {
     }
     api
       .getSource({ composeId, environmentId: sourceEnvironmentId, projectId: sourceProjectId })
-      .then((value) => setSource({ composeId, value }))
-      .catch(() => undefined);
-  }, [composeId, sourceEnvironmentId, sourceProjectId]);
+      .then((value) => {
+        setSource({ composeId, value });
+        setSourceFailed(undefined);
+      })
+      .catch((reason: unknown) => {
+        const text = reason instanceof Error ? reason.message : 'Something went wrong';
+        setSourceFailed({ composeId, message: text });
+        message.error(`Could not load the Source: ${text}`);
+      });
+  }, [composeId, message, sourceEnvironmentId, sourceProjectId]);
   useEffect(() => {
     refreshSource();
   }, [refreshSource]);
@@ -462,6 +473,12 @@ export function ComposePage() {
   // unsaved YAML is what gets deployed. With a Source the default is a build.
   const runDeploy = async (options: { fresh?: boolean; mode?: DeploymentRequest['mode']; noCache?: boolean } = {}) => {
     const { fresh = false, noCache } = options;
+    if (!sourceReady) {
+      message.warning(
+        sourceState === 'failed' ? 'The Source could not be loaded — retry loading it first' : 'Still loading the Source — try again in a moment',
+      );
+      return;
+    }
     const mode = options.mode ?? (hasSource ? 'build' : 'deploy');
     if (fresh) {
       if (freshRunningRef.current) {
@@ -642,11 +659,12 @@ export function ComposePage() {
                   onClick={() => navigate(paths.compose(project.id, environment.id, compose.id, 'deployments'))}
                   type="primary"
                 >
-                  {deploymentHeadline(latestDeployment, runningDeployment)}
+                  {deploymentButtonLabel(latestDeployment, runningDeployment)}
                 </Button>
               ) : (
                 <Button
                   icon={<RocketOutlined />}
+                  disabled={!sourceReady}
                   loading={isPending(`deploy:${compose.id}`)}
                   onClick={() => void deploy()}
                   type="primary"
@@ -655,7 +673,7 @@ export function ComposePage() {
                 </Button>
               )}
               <Dropdown menu={{ items: deployMenu }} placement="bottomRight" trigger={['click']}>
-                <Button aria-label="More deploy options" icon={<DownOutlined />} type="primary" />
+                <Button aria-label="More deploy options" disabled={!sourceReady} icon={<DownOutlined />} type="primary" />
               </Dropdown>
             </Space.Compact>
           </>
@@ -680,6 +698,20 @@ export function ComposePage() {
           showIcon
           style={{ marginBottom: LAYOUT.gutterSmall }}
           type="error"
+        />
+      )}
+
+      {sourceState === 'failed' && (
+        <Alert
+          action={
+            <Button onClick={refreshSource} size="small">
+              Retry
+            </Button>
+          }
+          title={`The Source could not be loaded: ${sourceFailed?.message ?? ''}. Deploying is disabled until it loads.`}
+          showIcon
+          style={{ marginBottom: LAYOUT.gutterSmall }}
+          type="warning"
         />
       )}
 
@@ -833,6 +865,7 @@ export function ComposePage() {
                           styles={{ image: { height: 40 } }}
                         >
                           <Button
+                            disabled={!sourceReady}
                             icon={<RocketOutlined />}
                             loading={isPending(`deploy:${compose.id}`)}
                             onClick={() => void deploy()}
