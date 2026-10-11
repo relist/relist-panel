@@ -190,8 +190,6 @@ export type Compose = {
   domainsChangedAt?: string | null;
   /** When a Compose Variable of this Compose last changed, or `null` when none ever has. Set by the API on every write. */
   variablesChangedAt?: string | null;
-  /** Deploy-time notes from the API (overwritten Traefik labels, router hints); present on deploy responses only. */
-  warnings?: string[];
 };
 
 export type CertProvider = 'none' | 'letsencrypt' | 'custom';
@@ -525,3 +523,90 @@ export type TerminalServices = {
 
 /** One image on the host's Docker engine, from `GET /api/images`. */
 export type HostImage = { id: string; tags: string[]; size: number; created: string; inUse: boolean };
+
+export type DeploymentMode = 'deploy' | 'build' | 'skip-build';
+export type DeploymentStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
+
+/** One queued, running or finished run of a Compose's deploy. */
+export interface Deployment {
+  number: number;
+  mode: DeploymentMode;
+  noCache: boolean;
+  freshVolumes: boolean;
+  status: DeploymentStatus;
+  step: string;
+  steps: string[];
+  failedStep: string;
+  reason: string;
+  sourceRef: string;
+  sourceSubject: string;
+  warnings: string[];
+  queuedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  /** How many Deployments are queued before this one; present while queued. */
+  ahead?: number;
+}
+
+/** A chunk of a Deployment's log: `offset` is where to read next, `done` once the log is complete. */
+export interface DeploymentLog {
+  text: string;
+  offset: number;
+  done: boolean;
+}
+
+export interface DeploymentRequest {
+  mode: DeploymentMode;
+  noCache?: boolean;
+  freshVolumes?: boolean;
+  confirmName?: string;
+}
+
+/** A Deployment the host is working on or has waiting, across every Compose. */
+export interface QueuedDeployment {
+  composeId: number;
+  composeName: string;
+  number: number;
+  status: DeploymentStatus;
+  step: string;
+}
+
+export interface ComposeSource {
+  kind: 'git' | 'zip';
+  repoUrl: string;
+  branch: string;
+  submodules: boolean;
+  publicKey: string;
+  headSha: string;
+  lastTest: { at: string; ok: boolean } | null;
+  zip: { name: string; size: number; files: number; uploadedAt: string } | null;
+}
+
+export interface SourceInput {
+  kind: 'git';
+  repoUrl: string;
+  branch: string;
+  submodules: boolean;
+}
+
+export interface SourceTestResult {
+  ok: boolean;
+  branches: string[];
+  error: string;
+}
+
+export interface DetectedDockerfile {
+  path: string;
+  service: string;
+  context: string;
+  /** The Dockerfile's file name, derived on the client from `path`. */
+  dockerfile: string;
+}
+
+export interface BuildTarget {
+  service: string;
+  context: string;
+  dockerfile: string;
+  target?: string;
+  replaceImage: boolean;
+}

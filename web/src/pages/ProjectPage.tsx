@@ -184,7 +184,7 @@ export function ProjectPage() {
 
   const lifecycle = async (compose: Compose, action: 'deploy' | 'restart' | 'stop') => {
     try {
-      if (action === 'deploy') await deployCompose(compose.id);
+      if (action === 'deploy') await deployCompose(compose.id, { mode: 'deploy' });
       if (action === 'restart') await restartCompose(compose.id);
       if (action === 'stop') await stopCompose(compose.id);
       message.success(`${action === 'deploy' ? 'Deployed' : action === 'restart' ? 'Restarted' : 'Stopped'} ${compose.name}`);
