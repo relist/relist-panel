@@ -74,6 +74,7 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 		defer worker.Done()
 		queue.Run(ctx)
 	}()
+	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
 	domains.New(db).RegisterRoutes(mux)
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
