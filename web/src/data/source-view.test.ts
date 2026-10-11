@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ComposeSource, Deployment } from './types';
-import { sourceCardState } from './source-view';
+import { buildServices, sourceCardState } from './source-view';
 
 function git(overrides: Partial<ComposeSource> = {}): ComposeSource {
   return {
@@ -78,5 +78,16 @@ describe('sourceCardState', () => {
     expect(state.builtLine).toBe('Built aaaaaaa — Fix cart');
     expect(sourceCardState(git(), undefined).builtLine).toBe('Not built yet');
     expect(sourceCardState(zip('2026-01-01T00:20:00Z'), undefined).title).toBe('code.zip');
+  });
+});
+
+describe('buildServices', () => {
+  it('lists Services with build:, keeping YAML order', () => {
+    const yaml = 'services:\n  db:\n    image: postgres\n  api:\n    build: ./src/api\n  web:\n    build:\n      context: ./src/web\n';
+    expect(buildServices(yaml)).toEqual(['api', 'web']);
+  });
+
+  it('is empty for broken YAML', () => {
+    expect(buildServices('services: [')).toEqual([]);
   });
 });

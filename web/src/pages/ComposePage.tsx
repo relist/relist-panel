@@ -48,10 +48,12 @@ import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { ComposeDeploymentsTab } from '../components/ComposeDeploymentsTab';
 import { ComposeDomainsTab } from '../components/ComposeDomainsTab';
 import { ComposePreviewModal } from '../components/ComposePreviewModal';
+import { BuildSnippetsModal, snippetComment } from '../components/BuildSnippetsModal';
 import { ComposeTerminalTab } from '../components/ComposeTerminalTab';
 import { ComposeVariablesTab } from '../components/ComposeVariablesTab';
 import { ComposeVolumesTab } from '../components/ComposeVolumesTab';
 import { DangerModal } from '../components/DangerModal';
+import { DetectDockerfilesModal } from '../components/DetectDockerfilesModal';
 import { FullscreenEditor } from '../components/FullscreenEditor';
 import {
   CodeValue,
@@ -63,11 +65,15 @@ import {
   ServiceStateTag,
 } from '../components/primitives';
 import { ServiceMonitor } from '../components/ServiceMonitor';
+import { SourceCard } from '../components/SourceCard';
+import { SourceModal } from '../components/SourceModal';
 import { YamlEditor } from '../components/YamlEditor';
 import { ApiError, api } from '../data/api';
+import { insertBuildBlocks } from '../data/build-insert';
+import { yamlServices } from '../data/source-view';
 import { deploymentHeadline, isActive } from '../data/deployments-view';
 import { usePanel } from '../data/store';
-import type { ComposeSource, ComposeVariable, ComposeVolumes, DeploymentRequest, OrphanVolume } from '../data/types';
+import type { BuildTarget, ComposeSource, ComposeVariable, DetectedDockerfile, ComposeVolumes, DeploymentRequest, OrphanVolume } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
 import { effectiveVariableCount } from '../components/variables-view';
 import { activeComposeTab, composeDeployIdentity, internalHostnamePattern, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
@@ -164,6 +170,16 @@ export function ComposePage() {
   useEffect(() => {
     refreshSource();
   }, [refreshSource]);
+
+  const currentSource = source?.composeId === composeId ? source.value : null;
+  const [sourceModal, setSourceModal] = useState<{ mode?: 'git' | 'zip' }>();
+  const [detected, setDetected] = useState<DetectedDockerfile[]>();
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
+  useEffect(() => {
+    setSourceModal(undefined);
+    setDetected(undefined);
+    setSnippetsOpen(false);
+  }, [composeId]);
 
   // The Deployments tab shows `selectedDeployment`, or the newest when unset.
   const [selectedDeployment, setSelectedDeployment] = useState<number>();
@@ -398,6 +414,30 @@ export function ComposePage() {
   const state = composeState(compose.status, compose.lastDeployedAt);
   const deployIdentity = composeDeployIdentity(compose);
   const checked = checkedAt[compose.id];
+
+  const sourcePath = { composeId: compose.id, environmentId: environment.id, projectId: project.id };
+  const lastBuilt = deploymentHistory?.find((d) => d.status === 'succeeded' && d.sourceRef !== '');
+
+  const openDetect = () => {
+    api
+      .detectDockerfiles(sourcePath)
+      .then(setDetected)
+      .catch(fail);
+  };
+
+  const insertTargets = (targets: BuildTarget[]) => {
+    try {
+      setDraft(insertBuildBlocks(draft, targets));
+      setDetected(undefined);
+    } catch {
+      message.error('Fix the YAML in the editor before inserting build blocks');
+    }
+  };
+
+  const insertSnippet = (snippet: 'args' | 'secrets') => {
+    setDraft(`${draft.trimEnd()}\n\n${snippetComment(snippet)}\n`);
+    setSnippetsOpen(false);
+  };
 
   const save = async () => {
     try {
@@ -854,6 +894,16 @@ export function ComposePage() {
                       </Flex>
                     </Card>
 
+                    <SourceCard
+                      draft={draft}
+                      lastBuilt={lastBuilt}
+                      onConfigure={() => setSourceModal({})}
+                      onShowSnippets={() => setSnippetsOpen(true)}
+                      onUploadNew={() => setSourceModal({ mode: 'zip' })}
+                      onViewDeployments={() => navigate(paths.compose(project.id, environment.id, compose.id, 'deployments'))}
+                      source={currentSource}
+                    />
+
                     <Card
                       extra={
                         <Button
@@ -1103,6 +1153,30 @@ export function ComposePage() {
           navigate(paths.compose(project.id, environment.id, compose.id, key === 'editor' ? undefined : key))
         }
       />
+
+      <SourceModal
+        initialMode={sourceModal?.mode}
+        location={sourcePath}
+        onClose={() => setSourceModal(undefined)}
+        onRemoved={refreshSource}
+        onSaved={(_saved, firstTime) => {
+          refreshSource();
+          if (firstTime) {
+            openDetect();
+          }
+        }}
+        open={sourceModal !== undefined}
+        source={currentSource}
+      />
+      <DetectDockerfilesModal
+        existingServices={yamlServices(draft)}
+        items={detected ?? []}
+        onClose={() => setDetected(undefined)}
+        onInsert={insertTargets}
+        onShowSnippets={() => setSnippetsOpen(true)}
+        open={detected !== undefined}
+      />
+      <BuildSnippetsModal onClose={() => setSnippetsOpen(false)} onInsert={insertSnippet} open={snippetsOpen} />
 
       <ComposePreviewModal
         composeId={compose.id}

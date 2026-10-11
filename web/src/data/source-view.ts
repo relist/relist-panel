@@ -1,3 +1,5 @@
+import { isMap, parseDocument } from 'yaml';
+
 import type { ComposeSource, Deployment } from './types';
 
 export type SourceCardState = {
@@ -34,3 +36,17 @@ export function sourceCardState(src: ComposeSource | null, lastBuilt: Deployment
     notBuilt: !built,
   };
 }
+
+/** Names of the Services in a Compose YAML, optionally only those with `build:`; empty when the YAML does not parse. */
+export function yamlServices(yaml: string, onlyBuilt = false): string[] {
+  const doc = parseDocument(yaml);
+  const services = doc.get('services');
+  if (doc.errors.length > 0 || !isMap(services)) {
+    return [];
+  }
+  return services.items
+    .map((item) => String(item.key))
+    .filter((name) => !onlyBuilt || doc.hasIn(['services', name, 'build']));
+}
+
+export const buildServices = (yaml: string): string[] => yamlServices(yaml, true);
