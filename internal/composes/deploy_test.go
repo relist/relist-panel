@@ -7,12 +7,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"relist-panel/internal/database"
+	"relist-panel/internal/dockernet"
 )
 
 // recordingRunner records the calls RunDeploy makes and what was on disk when
@@ -226,7 +230,7 @@ func TestPrepareBuildWritesUnresolvedStaging(t *testing.T) {
 	if plan.Request.ComposeFilePath != filepath.Join(dir, ".build-compose.yml") || plan.Request.EnvFilePath != filepath.Join(dir, ".build.env") || plan.Request.ProjectName != target.Request.ProjectName {
 		t.Errorf("request = %+v", plan.Request)
 	}
-	if b, _ := os.ReadFile(plan.Request.ComposeFilePath); string(b) != buildYAML {
+	if b, _ := os.ReadFile(plan.Request.ComposeFilePath); !strings.Contains(string(b), "context: ./api") || !strings.Contains(string(b), dockernet.NetworkName+":") {
 		t.Errorf("build compose = %q", b)
 	}
 	env, _ := os.ReadFile(plan.Request.EnvFilePath)
@@ -302,5 +306,72 @@ func TestTeardownCallsCanceler(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.calls, []string{"down-volumes"}) {
 		t.Errorf("calls = %v", runner.calls)
+	}
+}
+
+func TestPrepareBuildDeclaresSharedNetwork(t *testing.T) {
+	const y = "services:\n  api:\n    build: .\n    networks: [" + dockernet.NetworkName + "]\n"
+	svc, _, target, _ := newDeployService(t, y)
+	plan, err := svc.PrepareBuild(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plan.Cleanup()
+	b, _ := os.ReadFile(plan.Request.ComposeFilePath)
+	var doc struct {
+		Networks map[string]map[string]any `yaml:"networks"`
+	}
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Networks[dockernet.NetworkName]["external"] != true {
+		t.Errorf("network not declared external: %s", b)
+	}
+}
+
+func TestDeclareSharedNetworkLeavesExistingDeclaration(t *testing.T) {
+	declared := "services:\n  api:\n    build: .\nnetworks:\n  " + dockernet.NetworkName + ":\n    external: true\n    name: custom\n"
+	out, err := declareSharedNetwork(declared, dockernet.NetworkName)
+	if err != nil || out != declared {
+		t.Errorf("declared network changed: %q, %v", out, err)
+	}
+	other, err := declareSharedNetwork("services: {}\nnetworks:\n  back: {}\n", dockernet.NetworkName)
+	if err != nil || !strings.Contains(other, "back") || !strings.Contains(other, dockernet.NetworkName) {
+		t.Errorf("other networks lost: %q, %v", other, err)
+	}
+}
+
+func TestPrepareBuildOutputPassesComposeConfig(t *testing.T) {
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skip("docker not on PATH")
+	}
+	svc, _, target, _ := newDeployService(t, "services:\n  api:\n    build: .\n    networks: ["+dockernet.NetworkName+"]\n")
+	plan, err := svc.PrepareBuild(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plan.Cleanup()
+	out, err := exec.Command(docker, "compose", "-f", plan.Request.ComposeFilePath, "--env-file", plan.Request.EnvFilePath, "config", "-q").CombinedOutput()
+	if err != nil {
+		t.Skipf("docker compose unavailable or failed: %v: %s", err, out)
+	}
+}
+
+func TestBuildServicesThroughAnchors(t *testing.T) {
+	cases := map[string]struct {
+		yaml string
+		want []string
+	}{
+		"plain":      {buildYAML, []string{"web", "api"}},
+		"merge key":  {"x-app: &app\n  build: .\nservices:\n  db:\n    image: pg\n  web:\n    <<: *app\n  api:\n    <<: *app\n    command: x\n", []string{"web", "api"}},
+		"alias body": {"x-app: &app\n  build: .\nservices:\n  web: *app\n  db:\n    image: pg\n", []string{"web"}},
+		"none":       {"services:\n  db:\n    image: pg\n", nil},
+	}
+	for name, c := range cases {
+		got, err := buildServices(c.yaml)
+		if err != nil || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: got %v, %v want %v", name, got, err, c.want)
+		}
 	}
 }

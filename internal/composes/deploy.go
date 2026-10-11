@@ -248,7 +248,8 @@ type BuildPlan struct {
 	Cleanup  func()     // removes both staging files
 }
 
-// PrepareBuild writes the stored YAML, unresolved, and the merged Environment
+// PrepareBuild writes the stored YAML, unresolved apart from declaring the
+// shared network external, and the merged Environment
 // and Compose Variables next to the Compose's files, so a build can run before
 // the first deploy has written the resolved ones.
 func (s *Service) PrepareBuild(ctx context.Context, t DeployTarget) (BuildPlan, error) {
@@ -281,42 +282,107 @@ func (s *Service) PrepareBuild(ctx context.Context, t DeployTarget) (BuildPlan, 
 		plan.Cleanup()
 		return BuildPlan{}, fmt.Errorf("could not write build environment file: %w", err)
 	}
-	if err := os.WriteFile(plan.Request.ComposeFilePath, []byte(t.Compose.YAMLContent), composeFilePerm); err != nil {
+	staged, err := declareSharedNetwork(t.Compose.YAMLContent, dockernet.NetworkName)
+	if err != nil {
+		plan.Cleanup()
+		return BuildPlan{}, fmt.Errorf("compose yaml is invalid: %w", err)
+	}
+	if err := os.WriteFile(plan.Request.ComposeFilePath, []byte(staged), composeFilePerm); err != nil {
 		plan.Cleanup()
 		return BuildPlan{}, fmt.Errorf("could not write build compose file: %w", err)
 	}
 	return plan, nil
 }
 
-// buildServices lists the Services that declare build:, in YAML order. It
-// decodes a yaml.Node because a map loses the order.
+// buildServices lists the Services that declare build:, in YAML order. The
+// set comes from a map decode, which resolves merge keys (<<: *app) and alias
+// bodies (worker: *app); the order comes from the node walk, which a map loses.
 func buildServices(yamlContent string) ([]string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(yamlContent), &doc); err != nil {
 		return nil, err
 	}
-	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || resolveAlias(doc.Content[0]).Kind != yaml.MappingNode {
 		return nil, nil
 	}
+	var decoded struct {
+		Services map[string]any `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(yamlContent), &decoded); err != nil {
+		return nil, err
+	}
+	hasBuild := map[string]bool{}
+	for name, body := range decoded.Services {
+		if m, ok := body.(map[string]any); ok {
+			if _, ok := m["build"]; ok {
+				hasBuild[name] = true
+			}
+		}
+	}
 	var names []string
-	root := doc.Content[0].Content
+	root := resolveAlias(doc.Content[0]).Content
 	for i := 0; i+1 < len(root); i += 2 {
-		if root[i].Value != "services" || root[i+1].Kind != yaml.MappingNode {
+		services := resolveAlias(root[i+1])
+		if root[i].Value != "services" || services.Kind != yaml.MappingNode {
 			continue
 		}
-		services := root[i+1].Content
-		for j := 0; j+1 < len(services); j += 2 {
-			body := services[j+1]
-			if body.Kind != yaml.MappingNode {
-				continue
-			}
-			for k := 0; k+1 < len(body.Content); k += 2 {
-				if body.Content[k].Value == "build" {
-					names = append(names, services[j].Value)
-					break
-				}
+		for j := 0; j+1 < len(services.Content); j += 2 {
+			if name := services.Content[j].Value; hasBuild[name] {
+				names = append(names, name)
 			}
 		}
 	}
 	return names, nil
+}
+
+func resolveAlias(n *yaml.Node) *yaml.Node {
+	for n != nil && n.Kind == yaml.AliasNode && n.Alias != nil {
+		n = n.Alias
+	}
+	return n
+}
+
+// declareSharedNetwork adds networks.<name>: {external: true} to the stored
+// YAML when it is not declared, so a Service that lists the shared network
+// (the documented pattern) passes docker compose's validation during a build.
+// A YAML that already declares it is returned unchanged.
+func declareSharedNetwork(yamlContent, name string) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(yamlContent), &doc); err != nil {
+		return "", err
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return yamlContent, nil
+	}
+	root := doc.Content[0]
+	declaration := &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Value: "external"},
+		{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"},
+	}}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "networks" {
+			continue
+		}
+		networks := resolveAlias(root.Content[i+1])
+		switch networks.Kind {
+		case yaml.MappingNode:
+			for j := 0; j+1 < len(networks.Content); j += 2 {
+				if networks.Content[j].Value == name {
+					return yamlContent, nil
+				}
+			}
+			networks.Content = append(networks.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: name}, declaration)
+		case yaml.ScalarNode: // `networks:` with a null value
+			root.Content[i+1] = &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{{Kind: yaml.ScalarNode, Value: name}, declaration}}
+		default:
+			return yamlContent, nil
+		}
+		out, err := yaml.Marshal(&doc)
+		return string(out), err
+	}
+	root.Content = append(root.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "networks"},
+		&yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{{Kind: yaml.ScalarNode, Value: name}, declaration}})
+	out, err := yaml.Marshal(&doc)
+	return string(out), err
 }
