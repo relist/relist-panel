@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -296,5 +297,39 @@ func TestActiveListsQueuedAndRunningWithComposeName(t *testing.T) {
 	}
 	if got[1].ComposeName != "alpha" || got[1].Status != StatusQueued || got[1].Number != queuedA.Number {
 		t.Fatalf("got[1] = %+v", got[1])
+	}
+}
+
+func TestStartRefusesCanceledDeployment(t *testing.T) {
+	db, a, _ := newDB(t)
+	s := NewStore(db)
+	ctx := context.Background()
+	d := enqueue(t, s, a, t0)
+	if ok, err := s.CancelQueued(ctx, a, t0); err != nil || !ok {
+		t.Fatalf("cancel = %v %v", ok, err)
+	}
+	if err := s.Start(ctx, d.ID, []string{"deploy"}, t0); !errors.Is(err, ErrNotQueued) {
+		t.Fatalf("Start err = %v, want ErrNotQueued", err)
+	}
+	got, _ := s.Get(ctx, a, d.Number)
+	if got.Status != StatusCanceled || got.StartedAt != nil {
+		t.Fatalf("row = %+v, want canceled", got)
+	}
+}
+
+func TestFinishLeavesSettledRowAlone(t *testing.T) {
+	db, a, _ := newDB(t)
+	s := NewStore(db)
+	ctx := context.Background()
+	d := enqueue(t, s, a, t0)
+	if _, err := s.CancelQueued(ctx, a, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finish(ctx, d.ID, StatusSucceeded, "", "", nil, t0); err != nil {
+		t.Fatalf("Finish err = %v, want nil", err)
+	}
+	got, _ := s.Get(ctx, a, d.Number)
+	if got.Status != StatusCanceled {
+		t.Fatalf("status = %s, want canceled", got.Status)
 	}
 }

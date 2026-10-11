@@ -52,6 +52,10 @@ type Active struct {
 	Step        string
 }
 
+// ErrNotQueued is returned by Start when the Deployment was canceled or already
+// started between NextQueued and Start.
+var ErrNotQueued = errors.New("deployment is no longer queued")
+
 type Store struct {
 	db *sql.DB
 }
@@ -135,7 +139,8 @@ VALUES (?, ?, ?, ?, ?, 'queued', ?)`,
 		composeID, number, string(mode), boolInt(noCache), boolInt(fresh), now.Unix())
 	if err != nil {
 		if isUniqueConstraint(err) {
-			// Lost a race with another enqueue: hand back the winner.
+			// Defensive: the single connection serialises transactions, so this
+			// should not happen. If it does, hand back the winner.
 			tx.Rollback()
 			winner, rerr := queuedFor(ctx, s.db, composeID)
 			if rerr != nil {
@@ -181,9 +186,20 @@ func (s *Store) Start(ctx context.Context, id int64, steps []string, now time.Ti
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE deployments SET status = 'running', steps = ?, started_at = ? WHERE id = ?`, string(raw), now.Unix(), id)
-	return err
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE deployments SET status = 'running', steps = ?, started_at = ? WHERE id = ? AND status = 'queued'`,
+		string(raw), now.Unix(), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotQueued
+	}
+	return nil
 }
 
 func (s *Store) SetStep(ctx context.Context, id int64, step string) error {
@@ -197,6 +213,8 @@ func (s *Store) SetSource(ctx context.Context, id int64, ref, subject string) er
 	return err
 }
 
+// Finish settles a running Deployment. A row already settled by FailRunning or
+// CancelQueued, or removed by a Compose delete, is left alone and returns nil.
 func (s *Store) Finish(ctx context.Context, id int64, status Status, failedStep, reason string, warnings []string, now time.Time) error {
 	if warnings == nil {
 		warnings = []string{}
@@ -206,7 +224,7 @@ func (s *Store) Finish(ctx context.Context, id int64, status Status, failedStep,
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `
-UPDATE deployments SET status = ?, failed_step = ?, reason = ?, warnings = ?, finished_at = ? WHERE id = ?`,
+UPDATE deployments SET status = ?, failed_step = ?, reason = ?, warnings = ?, finished_at = ? WHERE id = ? AND status = 'running'`,
 		string(status), failedStep, reason, string(raw), now.Unix(), id)
 	return err
 }
