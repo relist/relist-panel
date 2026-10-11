@@ -1,6 +1,6 @@
 # Relist Panel
 
-A minimal self-hosted web UI for managing Docker Compose deployments on a single Docker host, using Traefik as the reverse-proxy gateway. Scoped to raw Compose files only — no git-based app builds, no database-as-a-service, no multi-host support.
+A minimal self-hosted web UI for managing Docker Compose deployments on a single Docker host, using Traefik as the reverse-proxy gateway. Scoped to Compose files — a Compose may build its images from a Source (ADR-0016), but there is no separate Application type, no database-as-a-service and no multi-host support.
 
 ## Language
 
@@ -33,8 +33,20 @@ One running instance of a Service, created by a deploy. Its identity is not stab
 _Avoid_: Instance
 
 **Image**:
-A Docker image present on the host, listed and loaded from the Images page. A Compose references one by name in its file; the panel never builds or pulls one itself.
+A Docker image present on the host, listed and loaded from the Images page. A Compose references one by name in its file, or builds one from its Source; the panel builds images only from a Source and never pulls one itself.
 _Avoid_: Build, Artifact
+
+**Source**:
+The source code of one Compose, from a Git repository or an uploaded zip, kept in `<compose dir>/src/`. A Compose has at most one. What to build from it is the Compose file's own `build:` (ADR-0016).
+_Avoid_: Repo (a zip Source has none), App, Application
+
+**Deploy key**:
+The SSH key pair the panel generates for one Compose's Git Source; the operator adds its public half to the repository as a read-only deploy key. One per Compose, because Git hosts refuse the same deploy key on two repositories.
+_Avoid_: SSH key (as the entity name), Credential
+
+**Deployment**:
+One queued run that brings a Compose's Containers up to date: fetch the Source, build each Service that has `build:` one at a time, then `up`. Numbered per Compose, with status, steps and a log. All Deployments on the host share one queue and run one at a time.
+_Avoid_: Build (the build is one step of a Deployment), Job, Release
 
 **Terminal Session**:
 One interactive shell in one Container of a Service, opened from the Compose page's Terminal tab and living only as long as that page. _Avoid_: Console, SSH.
