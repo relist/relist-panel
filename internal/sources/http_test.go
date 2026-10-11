@@ -186,7 +186,7 @@ func TestUploadRechecksTheLockBeforeTheSwapAndCleansUp(t *testing.T) {
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "A deployment is running") {
 		t.Fatalf("upload = %d %s, want 409", rec.Code, rec.Body)
 	}
-	if exists(filepath.Join(f.dir, ".src.new")) || exists(filepath.Join(f.dir, "src")) {
+	if hasGlob(filepath.Join(f.dir, ".src.new-*")) || exists(filepath.Join(f.dir, "src")) {
 		t.Fatalf("directory not clean: %s", f.dirListing(t))
 	}
 	if m, _ := filepath.Glob(filepath.Join(f.dir, ".upload-*.zip")); len(m) != 0 {
@@ -195,3 +195,5 @@ func TestUploadRechecksTheLockBeforeTheSwapAndCleansUp(t *testing.T) {
 }
 
 func exists(p string) bool { _, err := os.Lstat(p); return err == nil }
+
+func hasGlob(pattern string) bool { m, _ := filepath.Glob(pattern); return len(m) > 0 }

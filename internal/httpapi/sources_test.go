@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -208,11 +209,10 @@ func TestSourceUploadCreatesAZipSource(t *testing.T) {
 	if mustRead(t, filepath.Join(dir, "src", "Dockerfile")) != "FROM scratch\n" {
 		t.Fatal("src/Dockerfile missing")
 	}
-	for _, leftover := range []string{".src.new", ".src.old"} {
-		if exists(filepath.Join(dir, leftover)) {
-			t.Fatalf("%s left behind", leftover)
-		}
+	if exists(filepath.Join(dir, ".src.old")) {
+		t.Fatal(".src.old left behind")
 	}
+	noStagingLeft(t, dir)
 	if m, _ := filepath.Glob(filepath.Join(dir, ".upload-*.zip")); len(m) != 0 {
 		t.Fatalf("temp upload left behind: %v", m)
 	}
@@ -229,9 +229,7 @@ func TestSourceUploadWithUnsafeEntryKeepsTheOldSrc(t *testing.T) {
 	if mustRead(t, filepath.Join(dir, "src", "Dockerfile")) != "FROM scratch\n" {
 		t.Fatal("old src changed")
 	}
-	if exists(filepath.Join(dir, ".src.new")) {
-		t.Fatal(".src.new left behind")
-	}
+	noStagingLeft(t, dir)
 	if m, _ := filepath.Glob(filepath.Join(dir, ".upload-*.zip")); len(m) != 0 {
 		t.Fatalf("temp upload left behind: %v", m)
 	}
@@ -257,9 +255,7 @@ func TestSourceUploadRefusesAForeignSrc(t *testing.T) {
 	if status != http.StatusConflict || body["error"] != foreignSrcMessage {
 		t.Fatalf("upload = %d %v, want 409", status, body)
 	}
-	if exists(filepath.Join(f.dir(t), ".src.new")) {
-		t.Fatal(".src.new left behind")
-	}
+	noStagingLeft(t, f.dir(t))
 }
 
 func TestSourceUploadSwitchesAGitSourceToZipAndBack(t *testing.T) {
@@ -480,9 +476,9 @@ func TestSourceTestAndUploadAnswerWhileADeployHoldsTheProjectGate(t *testing.T) 
 		status, body := f.upload(t, "a.zip", zipBytes(t, map[string]string{"Dockerfile": "x"}))
 		done <- result{status, body}
 	}()
-	staged := filepath.Join(f.dir(t), ".src.new", "Dockerfile")
+	staged := filepath.Join(f.dir(t), ".src.new-*", "Dockerfile")
 	deadline := time.Now().Add(5 * time.Second)
-	for !exists(staged) {
+	for m, _ := filepath.Glob(staged); len(m) == 0; m, _ = filepath.Glob(staged) {
 		if time.Now().After(deadline) {
 			t.Fatal("upload did not extract while the Deploy held the gate")
 		}
@@ -501,5 +497,60 @@ func TestSourceTestAndUploadAnswerWhileADeployHoldsTheProjectGate(t *testing.T) 
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("upload did not finish after the gate was released")
+	}
+}
+
+func noStagingLeft(t *testing.T, dir string) {
+	t.Helper()
+	for _, pattern := range []string{".src.new-*", ".upload-*.zip"} {
+		if m, _ := filepath.Glob(filepath.Join(dir, pattern)); len(m) != 0 {
+			t.Fatalf("%s left behind: %v", pattern, m)
+		}
+	}
+}
+
+func TestSourceConcurrentUploadsNeverMixTrees(t *testing.T) {
+	f := newSourceFixture(t)
+	zips := []map[string]string{
+		{"Dockerfile": "FROM a\n", "a-only": "a"},
+		{"Dockerfile": "FROM b\n", "b-only": "b"},
+	}
+	codes := make([]int, len(zips))
+	var wg sync.WaitGroup
+	for i := range zips {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes[i], _ = f.upload(t, "z.zip", zipBytes(t, zips[i]))
+		}()
+	}
+	wg.Wait()
+	wins := 0
+	for _, c := range codes {
+		if c != http.StatusOK && c != http.StatusConflict {
+			t.Fatalf("codes = %v, want 200 or 409", codes)
+		}
+		if c == http.StatusOK {
+			wins++
+		}
+	}
+	if wins == 0 {
+		t.Fatalf("codes = %v, want at least one 200", codes)
+	}
+	src := filepath.Join(f.dir(t), "src")
+	_, hasA := os.Stat(filepath.Join(src, "a-only"))
+	_, hasB := os.Stat(filepath.Join(src, "b-only"))
+	if (hasA == nil) == (hasB == nil) {
+		t.Fatalf("src/ holds a mix or nothing (a=%v b=%v)", hasA, hasB)
+	}
+	noStagingLeft(t, f.dir(t))
+}
+
+func TestSourceUploadWithoutAFileNameDefaultsIt(t *testing.T) {
+	f := newSourceFixture(t)
+	status, body := f.upload(t, "", zipBytes(t, map[string]string{"Dockerfile": "x"}))
+	z, _ := body["zip"].(map[string]any)
+	if status != http.StatusOK || z["name"] != "upload.zip" {
+		t.Fatalf("upload = %d %v, want name upload.zip", status, body)
 	}
 }

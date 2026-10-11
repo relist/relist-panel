@@ -458,7 +458,11 @@ func (s *Service) stageUpload(w http.ResponseWriter, r *http.Request, dir string
 			_ = os.Remove(tmp.Name())
 			return "", "", 0, copyErr
 		}
-		return tmp.Name(), filepath.Base(part.FileName()), n, nil
+		name := filepath.Base(part.FileName())
+		if name == "." || name == "/" || name == "" {
+			name = "upload.zip"
+		}
+		return tmp.Name(), name, n, nil
 	}
 }
 
@@ -478,13 +482,14 @@ func (s *Service) upload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create the compose directory")
 		return
 	}
-	staging := filepath.Join(t.dir, ".src.new")
-	var tmpZip string
+	var tmpZip, staging string
 	defer func() {
 		if tmpZip != "" {
 			_ = os.Remove(tmpZip)
 		}
-		_ = os.RemoveAll(staging)
+		if staging != "" {
+			_ = os.RemoveAll(staging)
+		}
 	}()
 
 	tmpZip, name, size, err := s.stageUpload(w, r, t.dir)
@@ -501,8 +506,13 @@ func (s *Service) upload(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if err := os.RemoveAll(staging); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not clear the staging directory")
+	// Each request stages in its own directory, so two uploads never mix trees.
+	staging, err = os.MkdirTemp(t.dir, ".src.new-*")
+	if err == nil {
+		err = os.Chmod(staging, 0o755)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not create the staging directory")
 		return
 	}
 	files, err := ExtractZip(tmpZip, staging, volfs.DefaultExtractLimits())
@@ -518,6 +528,7 @@ func (s *Service) upload(w http.ResponseWriter, r *http.Request) {
 	// The gate first, then the lock, so the lock is never held while waiting.
 	releaseGate, err := s.gate.Acquire(r.Context(), t.projectID)
 	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "could not acquire the project lock")
 		return
 	}
 	defer releaseGate()
