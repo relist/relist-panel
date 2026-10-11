@@ -103,6 +103,16 @@ func ExtractZip(zipPath, destDir string, limits volfs.ExtractLimits) (files int,
 		}
 		files++
 	}
+	// The lexical check cannot see links that route through other links, so
+	// resolve each one the way the kernel will. A link that escapes refuses the
+	// whole archive; one that dangles inside the tree is fine.
+	for _, e := range symlinks {
+		if _, err := root.Stat(e.name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			root.Close()
+			os.RemoveAll(destDir)
+			return 0, fmt.Errorf("%w: symlink %q does not resolve inside the tree: %v", ErrUnsafeZip, e.name, err)
+		}
+	}
 	return files, nil
 }
 
@@ -218,6 +228,17 @@ func readSymlinkTarget(f *zip.File) (string, error) {
 func checkSymlink(name, target string) error {
 	if target == "" || path.IsAbs(target) || strings.ContainsRune(target, '\\') {
 		return fmt.Errorf("%w: symlink %q has target %q", ErrUnsafeZip, name, target)
+	}
+	// A `..` after a real segment can only be honoured by walking through
+	// whatever that segment is on disk, which may be another link.
+	seenReal := false
+	for _, seg := range strings.Split(target, "/") {
+		if seg == ".." && seenReal {
+			return fmt.Errorf("%w: symlink %q has target %q with a `..` after a name", ErrUnsafeZip, name, target)
+		}
+		if seg != ".." && seg != "." && seg != "" {
+			seenReal = true
+		}
 	}
 	resolved := path.Join(path.Dir(name), target)
 	if resolved == ".." || strings.HasPrefix(resolved, "../") {

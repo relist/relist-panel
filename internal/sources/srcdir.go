@@ -45,7 +45,17 @@ func ReplaceSrc(composeDir, newDir string) error {
 	src := filepath.Join(composeDir, "src")
 	old := filepath.Join(composeDir, ".src.old")
 
-	if err := os.WriteFile(filepath.Join(newDir, MarkerName), nil, 0o644); err != nil {
+	// The new tree is untrusted: a link named like the marker must not be
+	// followed, so drop whatever is there and create the marker exclusively.
+	marker := filepath.Join(newDir, MarkerName)
+	if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("mark new src: %w", err)
+	}
+	f, err := os.OpenFile(marker, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("mark new src: %w", err)
+	}
+	if err := f.Close(); err != nil {
 		return fmt.Errorf("mark new src: %w", err)
 	}
 	// A leftover from a crashed swap is the panel's own, safe to drop.

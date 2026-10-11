@@ -114,7 +114,11 @@ func TestExtractZip(t *testing.T) {
 		"symlink up":       {{name: "ok", body: "x"}, {name: "l", body: "../../etc", symlink: true}},
 		"symlink absolute": {{name: "ok", body: "x"}, {name: "l", body: "/etc", symlink: true}},
 		"symlink deep up":  {{name: "ok", body: "x"}, {name: "a/b/l", body: "../../../x", symlink: true}},
-		"device":           {{name: "dev", body: "", mode: fs.ModeDevice | 0o644}},
+		"chained symlinks": {
+			{name: "a/b", body: "..", symlink: true},
+			{name: "x", body: "a/b/../..", symlink: true},
+		},
+		"device": {{name: "dev", body: "", mode: fs.ModeDevice | 0o644}},
 	}
 	for name, ents := range unsafe {
 		t.Run("refuses "+name, func(t *testing.T) {

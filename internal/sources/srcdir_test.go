@@ -80,3 +80,24 @@ func TestReplaceSrcKeepsOldWhenNewDirIsMissing(t *testing.T) {
 		t.Errorf("old src lost: %v", err)
 	}
 }
+
+func TestReplaceSrcDoesNotWriteMarkerThroughLink(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "docker-compose.yml")
+	write(t, outside, "services: {}")
+	newDir := filepath.Join(dir, ".src.new")
+	write(t, filepath.Join(newDir, "a.txt"), "a")
+	if err := os.Symlink(outside, filepath.Join(newDir, MarkerName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReplaceSrc(dir, newDir); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "services: {}" {
+		t.Errorf("outside file changed: %q", b)
+	}
+	info, err := os.Lstat(filepath.Join(dir, "src", MarkerName))
+	if err != nil || !info.Mode().IsRegular() {
+		t.Errorf("marker = %v, %v", info, err)
+	}
+}
