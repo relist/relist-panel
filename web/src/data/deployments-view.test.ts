@@ -40,6 +40,10 @@ describe('deploymentHeadline', () => {
     );
   });
 
+  it('omits the count when the API sends none', () => {
+    expect(deploymentHeadline(deployment({ status: 'queued' }))).toBe('Waiting');
+  });
+
   it('says only how many are ahead when the active one is unknown', () => {
     expect(deploymentHeadline(deployment({ status: 'queued', ahead: 1 }))).toBe('Waiting — 1 ahead');
   });

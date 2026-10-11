@@ -6,6 +6,7 @@ import {
   EyeOutlined,
   FileTextOutlined,
   FullscreenOutlined,
+  LoadingOutlined,
   MoreOutlined,
   ReloadOutlined,
   RedoOutlined,
@@ -44,6 +45,7 @@ import { useNavigate, useParams } from 'react-router';
 
 import { paths } from '../app/paths';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
+import { ComposeDeploymentsTab } from '../components/ComposeDeploymentsTab';
 import { ComposeDomainsTab } from '../components/ComposeDomainsTab';
 import { ComposePreviewModal } from '../components/ComposePreviewModal';
 import { ComposeTerminalTab } from '../components/ComposeTerminalTab';
@@ -62,12 +64,14 @@ import {
 } from '../components/primitives';
 import { ServiceMonitor } from '../components/ServiceMonitor';
 import { YamlEditor } from '../components/YamlEditor';
-import { ApiError } from '../data/api';
+import { ApiError, api } from '../data/api';
+import { deploymentHeadline, isActive } from '../data/deployments-view';
 import { usePanel } from '../data/store';
-import type { ComposeVariable, ComposeVolumes, OrphanVolume } from '../data/types';
+import type { ComposeSource, ComposeVariable, ComposeVolumes, DeploymentRequest, OrphanVolume } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
 import { effectiveVariableCount } from '../components/variables-view';
 import { activeComposeTab, composeDeployIdentity, internalHostnamePattern, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
+import { useLatestDeployment } from './useLatestDeployment';
 
 const { Text, Paragraph, Title } = Typography;
 
@@ -139,6 +143,42 @@ export function ComposePage() {
   const [actionError, setActionError] = useState<string>();
   const fail = (reason: unknown) =>
     setActionError(reason instanceof Error ? reason.message : 'Something went wrong');
+
+  // The Source decides what the header button does (Build & Deploy or Deploy).
+  // `null` is "none"; `undefined` is "not loaded yet", which reads as none.
+  const [source, setSource] = useState<{ composeId: number; value: ComposeSource | null }>();
+  const hasSource = source?.composeId === composeId && source.value !== null;
+  const sourceProjectId = project?.id;
+  const sourceEnvironmentId = environment?.id;
+  // Called on load and after any change to the Source (the Source card and its
+  // modals call it when they save, upload or remove).
+  const refreshSource = useCallback(() => {
+    if (sourceProjectId === undefined || sourceEnvironmentId === undefined) {
+      return;
+    }
+    api
+      .getSource({ composeId, environmentId: sourceEnvironmentId, projectId: sourceProjectId })
+      .then((value) => setSource({ composeId, value }))
+      .catch(() => undefined);
+  }, [composeId, sourceEnvironmentId, sourceProjectId]);
+  useEffect(() => {
+    refreshSource();
+  }, [refreshSource]);
+
+  // The Deployments tab shows `selectedDeployment`, or the newest when unset.
+  const [selectedDeployment, setSelectedDeployment] = useState<number>();
+  useEffect(() => {
+    setSelectedDeployment(undefined);
+  }, [composeId]);
+  const {
+    latest: latestDeployment,
+    refresh: refreshLatestDeployment,
+    running: runningDeployment,
+  } = useLatestDeployment(
+    sourceProjectId !== undefined && sourceEnvironmentId !== undefined
+      ? { composeId, environmentId: sourceEnvironmentId, projectId: sourceProjectId }
+      : undefined,
+  );
 
   // The Volumes tab's resolution is fetched once here: the tab is hidden when
   // the feature cannot run at all (`available: false`), and that is a
@@ -372,9 +412,12 @@ export function ComposePage() {
     void fetchOrphans();
   };
 
-  // `fresh` removes the Compose's named volumes before the same deploy; the
-  // save-first steps are identical, so unsaved YAML is what gets deployed.
-  const runDeploy = async (fresh: boolean) => {
+  // Queues a Deployment, then shows it on the Deployments tab. `fresh` removes
+  // the Compose's named volumes first; the save-first steps are identical, so
+  // unsaved YAML is what gets deployed. With a Source the default is a build.
+  const runDeploy = async (options: { fresh?: boolean; mode?: DeploymentRequest['mode']; noCache?: boolean } = {}) => {
+    const { fresh = false, noCache } = options;
+    const mode = options.mode ?? (hasSource ? 'build' : 'deploy');
     if (fresh) {
       if (freshRunningRef.current) {
         return;
@@ -386,21 +429,21 @@ export function ComposePage() {
       for (const step of deploySteps(dirty)) {
         if (step === 'save') {
           await saveCompose(compose.id, draft);
-        } else if (fresh) {
-          await deployCompose(compose.id, { mode: 'deploy', freshVolumes: true, confirmName: compose.name });
         } else {
-          await deployCompose(compose.id, { mode: 'deploy' });
+          const request: DeploymentRequest = fresh
+            ? { confirmName: compose.name, freshVolumes: true, mode }
+            : noCache
+              ? { mode, noCache: true }
+              : { mode };
+          const number = await deployCompose(compose.id, request);
+          message.info(`Deployment #${number} queued`);
+          setSelectedDeployment(number);
+          refreshLatestDeployment();
+          navigate(paths.compose(project.id, environment.id, compose.id, 'deployments'));
         }
       }
-      message.success(fresh ? `Deployed ${compose.name} with fresh volumes` : `Deployed ${compose.name}`);
-      refreshAfterDeploy();
     } catch (reason: unknown) {
       fail(reason);
-      // A fresh deploy that failed after the wipe has already removed the
-      // volumes (the API says so), so the page follows the host.
-      if (fresh) {
-        refreshAfterDeploy();
-      }
     } finally {
       if (fresh) {
         freshRunningRef.current = false;
@@ -409,7 +452,15 @@ export function ComposePage() {
       }
     }
   };
-  const deploy = () => runDeploy(false);
+  const deploy = () => runDeploy();
+
+  // The shown Deployment ended: the containers, the env file and the deploy
+  // time may all have changed.
+  const onDeploymentFinished = () => {
+    refreshAfterDeploy();
+    refreshLatestDeployment();
+    refreshStatus(compose.id).catch(fail);
+  };
 
   // Rejections go to the delete dialog, which shows the message itself (an
   // Alert behind the modal mask would be invisible). A 404 means the list was
@@ -457,6 +508,22 @@ export function ComposePage() {
   // and says why (GUIDELINES §9).
   const { volumes: freshVolumes, refusal: freshRefusal } = freshDeployView(volumesPayload, volumesError);
   const deployMenu: MenuProps['items'] = [
+    ...(hasSource
+      ? [
+          {
+            icon: <RocketOutlined />,
+            key: 'skip-build',
+            label: 'Deploy without building',
+            onClick: () => void runDeploy({ mode: 'skip-build' }),
+          },
+          {
+            icon: <RedoOutlined />,
+            key: 'no-cache',
+            label: 'Build without cache',
+            onClick: () => void runDeploy({ mode: 'build', noCache: true }),
+          },
+        ]
+      : []),
     {
       disabled: freshRefusal !== undefined,
       icon: <DeleteOutlined />,
@@ -525,14 +592,24 @@ export function ComposePage() {
               Save
             </Button>
             <Space.Compact>
-              <Button
-                icon={<RocketOutlined />}
-                loading={isPending(`deploy:${compose.id}`)}
-                onClick={() => void deploy()}
-                type="primary"
-              >
-                {dirty ? 'Save & Deploy' : 'Deploy'}
-              </Button>
+              {latestDeployment && isActive(latestDeployment) ? (
+                <Button
+                  icon={<LoadingOutlined />}
+                  onClick={() => navigate(paths.compose(project.id, environment.id, compose.id, 'deployments'))}
+                  type="primary"
+                >
+                  {deploymentHeadline(latestDeployment, runningDeployment)}
+                </Button>
+              ) : (
+                <Button
+                  icon={<RocketOutlined />}
+                  loading={isPending(`deploy:${compose.id}`)}
+                  onClick={() => void deploy()}
+                  type="primary"
+                >
+                  {hasSource ? 'Build & Deploy' : dirty ? 'Save & Deploy' : 'Deploy'}
+                </Button>
+              )}
               <Dropdown menu={{ items: deployMenu }} placement="bottomRight" trigger={['click']}>
                 <Button aria-label="More deploy options" icon={<DownOutlined />} type="primary" />
               </Dropdown>
@@ -849,6 +926,19 @@ export function ComposePage() {
           },
           {
             children: (
+              <ComposeDeploymentsTab
+                compose={compose}
+                location={{ composeId: compose.id, environmentId: environment.id, projectId: project.id }}
+                onFinished={onDeploymentFinished}
+                onSelect={setSelectedDeployment}
+                selected={selectedDeployment}
+              />
+            ),
+            key: 'deployments',
+            label: 'Deployments',
+          },
+          {
+            children: (
               <>
             <Flex align="center" gap={8} style={{ marginBottom: 12 }} wrap>
               <Select
@@ -1066,7 +1156,7 @@ export function ComposePage() {
         loading={freshRunning || isPending(`deploy:${compose.id}`)}
         okText="Deploy with fresh volumes"
         onCancel={() => setFreshOpen(false)}
-        onConfirm={() => void runDeploy(true)}
+        onConfirm={() => void runDeploy({ fresh: true })}
         open={freshOpen}
         title="Deploy with fresh volumes?"
       />

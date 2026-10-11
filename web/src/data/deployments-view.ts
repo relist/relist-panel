@@ -18,7 +18,7 @@ function activeStepWord(step: string): string {
 export function deploymentHeadline(d: Deployment, active?: ActiveDeployment): string {
   switch (d.status) {
     case 'queued': {
-      const ahead = `Waiting — ${d.ahead ?? 0} ahead`;
+      const ahead = d.ahead === undefined ? 'Waiting' : `Waiting — ${d.ahead} ahead`;
       return active ? `${ahead} (${active.composeName} #${active.number} ${activeStepWord(active.step)})` : ahead;
     }
     case 'running':
