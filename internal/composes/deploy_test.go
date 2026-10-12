@@ -341,6 +341,154 @@ func TestDeclareSharedNetworkLeavesExistingDeclaration(t *testing.T) {
 	}
 }
 
+const inheritedBuildNetworksYAML = "x-defaults: &defaults\n  networks:\n    backend:\n      name: custom-backend\n      internal: true\n<<: *defaults\nservices:\n  api:\n    build: .\n    networks: [backend, " + dockernet.NetworkName + "]\n"
+
+func TestDeclareSharedNetworkPreservesEffectiveNetworks(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		want map[string]any
+	}{
+		{
+			name: "root inherited networks",
+			yaml: inheritedBuildNetworksYAML,
+			want: map[string]any{"backend": map[string]any{"name": "custom-backend", "internal": true}},
+		},
+		{
+			name: "root merge sequence selects first networks mapping",
+			yaml: "x-first: &first\n  networks:\n    backend:\n      internal: true\nx-second: &second\n  networks:\n    ignored: {}\n<<: [*first, *second]\nservices: {}\n",
+			want: map[string]any{"backend": map[string]any{"internal": true}},
+		},
+		{
+			name: "explicit root networks overrides inherited mapping",
+			yaml: "x-defaults: &defaults\n  networks:\n    ignored: {}\n    " + dockernet.NetworkName + ":\n      name: ignored-shared\n<<: *defaults\nservices: {}\nnetworks:\n  backend:\n    name: local-backend\n",
+			want: map[string]any{"backend": map[string]any{"name": "local-backend"}},
+		},
+		{
+			name: "network mapping merge keeps declaration options",
+			yaml: "x-networks: &networks\n  backend:\n    name: custom-backend\n    labels:\n      owner: operator\nservices: {}\nnetworks:\n  <<: *networks\n  local:\n    internal: true\n",
+			want: map[string]any{"backend": map[string]any{"name": "custom-backend", "labels": map[string]any{"owner": "operator"}}, "local": map[string]any{"internal": true}},
+		},
+		{
+			name: "network alias does not change its source",
+			yaml: "x-networks: &networks\n  backend:\n    name: custom-backend\nservices: {}\nnetworks: *networks\nx-copy: *networks\n",
+			want: map[string]any{"backend": map[string]any{"name": "custom-backend"}},
+		},
+		{
+			name: "anchored explicit mapping does not change other aliases",
+			yaml: "services: {}\nnetworks: &networks\n  backend:\n    name: custom-backend\nx-copy: *networks\n",
+			want: map[string]any{"backend": map[string]any{"name": "custom-backend"}},
+		},
+		{
+			name: "inherited anchored network value keeps a single definition",
+			yaml: "x-defaults: &defaults\n  networks:\n    backend: &backend\n      name: custom-backend\n      internal: true\n<<: *defaults\nservices: {}\nx-copy: *backend\n",
+			want: map[string]any{"backend": map[string]any{"name": "custom-backend", "internal": true}},
+		},
+		{
+			name: "generated anchor avoids existing names",
+			yaml: "x-anchor: &relist-build-networks {}\nx-defaults: &defaults\n  networks:\n    backend: {}\n<<: *defaults\nservices: {}\n",
+			want: map[string]any{"backend": map[string]any{}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var before map[string]any
+			if err := yaml.Unmarshal([]byte(c.yaml), &before); err != nil {
+				t.Fatal(err)
+			}
+			out, err := declareSharedNetwork(c.yaml, dockernet.NetworkName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var after map[string]any
+			if err := yaml.Unmarshal([]byte(out), &after); err != nil {
+				t.Fatal(err)
+			}
+			c.want[dockernet.NetworkName] = map[string]any{"external": true}
+			if !reflect.DeepEqual(after["networks"], c.want) {
+				t.Fatalf("networks = %#v, want %#v", after["networks"], c.want)
+			}
+			delete(before, "networks")
+			delete(after, "networks")
+			if !reflect.DeepEqual(after, before) {
+				t.Fatalf("adding the network changed other YAML values:\nbefore: %#v\nafter: %#v", before, after)
+			}
+			var doc yaml.Node
+			if err := yaml.Unmarshal([]byte(out), &doc); err != nil {
+				t.Fatal(err)
+			}
+			anchors := map[string]bool{}
+			var checkAnchors func(*yaml.Node)
+			checkAnchors = func(n *yaml.Node) {
+				if n.Anchor != "" {
+					if anchors[n.Anchor] {
+						t.Fatalf("duplicate anchor %q in staging YAML", n.Anchor)
+					}
+					anchors[n.Anchor] = true
+				}
+				for _, child := range n.Content {
+					checkAnchors(child)
+				}
+			}
+			checkAnchors(&doc)
+		})
+	}
+}
+
+func TestDeclareSharedNetworkLeavesInheritedDeclaration(t *testing.T) {
+	cases := map[string]string{
+		"root inherited": "x-defaults: &defaults\n  networks:\n    " + dockernet.NetworkName + ":\n      external: true\n      name: custom-shared\n<<: *defaults\nservices: {}\n",
+		"mapping merged": "x-networks: &networks\n  " + dockernet.NetworkName + ":\n    external: true\n    name: custom-shared\nservices: {}\nnetworks:\n  <<: *networks\n",
+		"merge sequence": "x-first: &first\n  " + dockernet.NetworkName + ":\n    external: true\n    name: first-shared\nx-second: &second\n  " + dockernet.NetworkName + ":\n    external: true\n    name: ignored-shared\nservices: {}\nnetworks:\n  <<: [*first, *second]\n",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			out, err := declareSharedNetwork(content, dockernet.NetworkName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out != content {
+				t.Fatalf("existing effective declaration changed:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestDeclareSharedNetworkRejectsInvalidMerges(t *testing.T) {
+	for name, content := range map[string]string{
+		"root scalar merge":    "<<: invalid\nservices: {}\n",
+		"network scalar merge": "services: {}\nnetworks:\n  <<: invalid\n",
+		"recursive merge":      "services: {}\nnetworks: &networks\n  <<: *networks\n",
+		"duplicate network":    "services: {}\nnetworks:\n  backend: {}\n  backend: {}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if out, err := declareSharedNetwork(content, dockernet.NetworkName); err == nil {
+				t.Fatalf("expected invalid YAML error, got %s", out)
+			}
+		})
+	}
+}
+
+func TestPrepareBuildInheritedNetworksPassComposeConfig(t *testing.T) {
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skip("docker not on PATH")
+	}
+	if out, err := exec.Command(docker, "compose", "version").CombinedOutput(); err != nil {
+		t.Skipf("docker compose unavailable: %v: %s", err, out)
+	}
+	svc, _, target, _ := newDeployService(t, inheritedBuildNetworksYAML)
+	plan, err := svc.PrepareBuild(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plan.Cleanup()
+	out, err := exec.Command(docker, "compose", "-f", plan.Request.ComposeFilePath, "--env-file", plan.Request.EnvFilePath, "config", "-q").CombinedOutput()
+	if err != nil {
+		t.Fatalf("staged YAML rejected by docker compose: %v: %s", err, out)
+	}
+}
+
 func TestPrepareBuildOutputPassesComposeConfig(t *testing.T) {
 	docker, err := exec.LookPath("docker")
 	if err != nil {

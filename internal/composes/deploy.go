@@ -424,35 +424,91 @@ func declareSharedNetwork(yamlContent, name string) (string, error) {
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return yamlContent, nil
 	}
+	var decoded map[string]any
+	if err := doc.Decode(&decoded); err != nil {
+		return "", err
+	}
 	root := doc.Content[0]
+	entries, err := orderedMappingEntries(root)
+	if err != nil {
+		return "", err
+	}
+	var existing *yaml.Node
+	for _, entry := range entries {
+		if resolveAlias(entry.key).Value == "networks" {
+			existing = entry.value
+			break
+		}
+	}
+	if existing != nil {
+		switch resolveAlias(existing).Kind {
+		case yaml.MappingNode:
+			networks, err := orderedMappingEntries(existing)
+			if err != nil {
+				return "", err
+			}
+			for _, entry := range networks {
+				if resolveAlias(entry.key).Value == name {
+					return yamlContent, nil
+				}
+			}
+		case yaml.ScalarNode: // `networks:` with a null value
+			existing = nil
+		default:
+			return yamlContent, nil
+		}
+	}
+	explicitIndex := -1
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if resolveAlias(root.Content[i]).Value == "networks" {
+			explicitIndex = i + 1
+			break
+		}
+	}
 	declaration := &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{
 		{Kind: yaml.ScalarNode, Value: "external"},
 		{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"},
 	}}
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value != "networks" {
-			continue
+	networks := &yaml.Node{Kind: yaml.MappingNode}
+	if existing != nil {
+		// Move explicit declarations intact. For an inherited declaration, refer
+		// to its original node so anchors stay unique and other aliases keep
+		// their original values instead of acquiring the added shared network.
+		if explicitIndex == -1 && existing.Kind != yaml.AliasNode {
+			existing = networkMappingAlias(&doc, existing)
 		}
-		networks := resolveAlias(root.Content[i+1])
-		switch networks.Kind {
-		case yaml.MappingNode:
-			for j := 0; j+1 < len(networks.Content); j += 2 {
-				if networks.Content[j].Value == name {
-					return yamlContent, nil
-				}
-			}
-			networks.Content = append(networks.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: name}, declaration)
-		case yaml.ScalarNode: // `networks:` with a null value
-			root.Content[i+1] = &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{{Kind: yaml.ScalarNode, Value: name}, declaration}}
-		default:
-			return yamlContent, nil
-		}
-		out, err := yaml.Marshal(&doc)
-		return string(out), err
+		networks.Content = append(networks.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!merge", Value: "<<"}, existing)
 	}
-	root.Content = append(root.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Value: "networks"},
-		&yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{{Kind: yaml.ScalarNode, Value: name}, declaration}})
+	networks.Content = append(networks.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: name}, declaration)
+	if explicitIndex != -1 {
+		root.Content[explicitIndex] = networks
+	} else {
+		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "networks"}, networks)
+	}
 	out, err := yaml.Marshal(&doc)
 	return string(out), err
+}
+
+// networkMappingAlias gives an inherited mapping a reference without copying
+// its subtree, which could duplicate anchors defined on network options.
+func networkMappingAlias(doc, networks *yaml.Node) *yaml.Node {
+	if networks.Anchor == "" {
+		anchors := map[string]bool{}
+		var collect func(*yaml.Node)
+		collect = func(node *yaml.Node) {
+			if node.Anchor != "" {
+				anchors[node.Anchor] = true
+			}
+			for _, child := range node.Content {
+				collect(child)
+			}
+		}
+		collect(doc)
+		anchor := "relist-build-networks"
+		for suffix := 2; anchors[anchor]; suffix++ {
+			anchor = fmt.Sprintf("relist-build-networks-%d", suffix)
+		}
+		networks.Anchor = anchor
+	}
+	return &yaml.Node{Kind: yaml.AliasNode, Value: networks.Anchor, Alias: networks}
 }
