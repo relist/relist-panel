@@ -70,13 +70,14 @@ import { SourceModal } from '../components/SourceModal';
 import { YamlEditor } from '../components/YamlEditor';
 import { ApiError, api } from '../data/api';
 import { insertBuildBlocks } from '../data/build-insert';
-import { sourceLoadState, yamlServices } from '../data/source-view';
+import { yamlServices } from '../data/source-view';
 import { deploymentButtonLabel, isActive } from '../data/deployments-view';
 import { usePanel } from '../data/store';
-import type { BuildTarget, ComposeSource, ComposeVariable, DetectedDockerfile, ComposeVolumes, DeploymentRequest, OrphanVolume } from '../data/types';
+import type { BuildTarget, ComposeVariable, DetectedDockerfile, ComposeVolumes, DeploymentRequest, OrphanVolume } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
 import { effectiveVariableCount } from '../components/variables-view';
 import { activeComposeTab, composeDeployIdentity, internalHostnamePattern, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
+import { useComposeSource } from './useComposeSource';
 import { useDeploymentHistory } from './useDeploymentHistory';
 
 const { Text, Paragraph, Title } = Typography;
@@ -153,36 +154,16 @@ export function ComposePage() {
   // The Source decides what the header button does (Build & Deploy or Deploy).
   // Loading and failed are not "none": deploying then would pick the wrong mode,
   // so the deploy actions wait for a successful load.
-  const [source, setSource] = useState<{ composeId: number; value: ComposeSource | null }>();
-  const [sourceFailed, setSourceFailed] = useState<{ composeId: number; message: string }>();
-  const sourceState = sourceLoadState(source, sourceFailed?.composeId, composeId);
-  const sourceReady = sourceState === 'none' || sourceState === 'present';
-  const hasSource = sourceState === 'present';
   const sourceProjectId = project?.id;
   const sourceEnvironmentId = environment?.id;
-  // Called on load and after any change to the Source (the Source card and its
-  // modals call it when they save, upload or remove).
-  const refreshSource = useCallback(() => {
-    if (sourceProjectId === undefined || sourceEnvironmentId === undefined) {
-      return;
-    }
-    api
-      .getSource({ composeId, environmentId: sourceEnvironmentId, projectId: sourceProjectId })
-      .then((value) => {
-        setSource({ composeId, value });
-        setSourceFailed(undefined);
-      })
-      .catch((reason: unknown) => {
-        const text = reason instanceof Error ? reason.message : 'Something went wrong';
-        setSourceFailed({ composeId, message: text });
-        message.error(`Could not load the Source: ${text}`);
-      });
-  }, [composeId, message, sourceEnvironmentId, sourceProjectId]);
-  useEffect(() => {
-    refreshSource();
-  }, [refreshSource]);
-
-  const currentSource = source?.composeId === composeId ? source.value : null;
+  const { source: currentSource, state: sourceState, error: sourceError, refresh: refreshSource } = useComposeSource(
+    sourceProjectId !== undefined && sourceEnvironmentId !== undefined
+      ? { composeId, environmentId: sourceEnvironmentId, projectId: sourceProjectId }
+      : undefined,
+    (text) => { void message.error(`Could not load the Source: ${text}`); },
+  );
+  const sourceReady = sourceState === 'none' || sourceState === 'present';
+  const hasSource = sourceState === 'present';
   const [sourceModal, setSourceModal] = useState<{ mode?: 'git' | 'zip' }>();
   const [detected, setDetected] = useState<DetectedDockerfile[]>();
   const [snippetsOpen, setSnippetsOpen] = useState(false);
@@ -708,7 +689,7 @@ export function ComposePage() {
               Retry
             </Button>
           }
-          title={`The Source could not be loaded: ${sourceFailed?.message ?? ''}. Deploying is disabled until it loads.`}
+          title={`The Source could not be loaded: ${sourceError ?? ''}. Deploying is disabled until it loads.`}
           showIcon
           style={{ marginBottom: LAYOUT.gutterSmall }}
           type="warning"
