@@ -494,6 +494,9 @@ func TestPrepareBuildOutputPassesComposeConfig(t *testing.T) {
 	if err != nil {
 		t.Skip("docker not on PATH")
 	}
+	if out, err := exec.Command(docker, "compose", "version").CombinedOutput(); err != nil {
+		t.Skipf("docker compose unavailable: %v: %s", err, out)
+	}
 	svc, _, target, _ := newDeployService(t, "services:\n  api:\n    build: .\n    networks: ["+dockernet.NetworkName+"]\n")
 	plan, err := svc.PrepareBuild(context.Background(), target)
 	if err != nil {
@@ -502,7 +505,7 @@ func TestPrepareBuildOutputPassesComposeConfig(t *testing.T) {
 	defer plan.Cleanup()
 	out, err := exec.Command(docker, "compose", "-f", plan.Request.ComposeFilePath, "--env-file", plan.Request.EnvFilePath, "config", "-q").CombinedOutput()
 	if err != nil {
-		t.Skipf("docker compose unavailable or failed: %v: %s", err, out)
+		t.Fatalf("build staging compose is invalid: %v: %s", err, out)
 	}
 }
 
