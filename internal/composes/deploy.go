@@ -471,11 +471,15 @@ func declareSharedNetwork(yamlContent, name string) (string, error) {
 	}}
 	networks := &yaml.Node{Kind: yaml.MappingNode}
 	if existing != nil {
-		// Move explicit declarations intact. For an inherited declaration, refer
-		// to its original node so anchors stay unique and other aliases keep
-		// their original values instead of acquiring the added shared network.
-		if explicitIndex == -1 && existing.Kind != yaml.AliasNode {
-			existing = networkMappingAlias(&doc, existing)
+		// Explicit declarations stay at their original position, preserving
+		// anchors used elsewhere. Inherited declarations need a resolved copy:
+		// moving an alias to the end could bind it to a later reused anchor name.
+		// Their original definitions remain intact in the inherited mapping.
+		if explicitIndex == -1 {
+			existing = &yaml.Node{}
+			if err := existing.Encode(decoded["networks"]); err != nil {
+				return "", err
+			}
 		}
 		networks.Content = append(networks.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!merge", Value: "<<"}, existing)
 	}
@@ -487,28 +491,4 @@ func declareSharedNetwork(yamlContent, name string) (string, error) {
 	}
 	out, err := yaml.Marshal(&doc)
 	return string(out), err
-}
-
-// networkMappingAlias gives an inherited mapping a reference without copying
-// its subtree, which could duplicate anchors defined on network options.
-func networkMappingAlias(doc, networks *yaml.Node) *yaml.Node {
-	if networks.Anchor == "" {
-		anchors := map[string]bool{}
-		var collect func(*yaml.Node)
-		collect = func(node *yaml.Node) {
-			if node.Anchor != "" {
-				anchors[node.Anchor] = true
-			}
-			for _, child := range node.Content {
-				collect(child)
-			}
-		}
-		collect(doc)
-		anchor := "relist-build-networks"
-		for suffix := 2; anchors[anchor]; suffix++ {
-			anchor = fmt.Sprintf("relist-build-networks-%d", suffix)
-		}
-		networks.Anchor = anchor
-	}
-	return &yaml.Node{Kind: yaml.AliasNode, Value: networks.Anchor, Alias: networks}
 }

@@ -21,6 +21,14 @@ func TestDeclareSharedNetworkResolvesMappingKeyAliases(t *testing.T) {
 			yaml: "x-key: &key networks\nx-defaults: &defaults\n  *key:\n    backend:\n      name: custom-backend\n<<: *defaults\nservices:\n  api:\n    build: .\n    networks: [backend]\n",
 		},
 		{
+			name: "inherited mapping before an anchor name is reused",
+			yaml: "x-defaults: &defaults\n  networks: &network-map\n    backend:\n      name: custom-backend\n<<: *defaults\nx-later: &network-map\n  different: {}\nservices:\n  api:\n    build: .\n    networks: [backend]\n",
+		},
+		{
+			name: "inherited alias before an anchor name is reused",
+			yaml: "x-networks: &network-map\n  backend:\n    name: custom-backend\nx-defaults: &defaults\n  networks: *network-map\n<<: *defaults\nx-later: &network-map\n  different: {}\nservices:\n  api:\n    build: .\n    networks: [backend]\n",
+		},
+		{
 			name:      "existing shared network key alias",
 			yaml:      "x-key: &key relist-network\nnetworks:\n  *key:\n    external: true\n    name: custom-shared\nservices:\n  api:\n    build: .\n",
 			unchanged: true,
