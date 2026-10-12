@@ -295,8 +295,8 @@ func (s *Service) PrepareBuild(ctx context.Context, t DeployTarget) (BuildPlan, 
 }
 
 // buildServices lists the Services that declare build:, in YAML order. The
-// set comes from a map decode, which resolves merge keys (<<: *app) and alias
-// bodies (worker: *app); the order comes from the node walk, which a map loses.
+// set comes from a map decode, which resolves merge keys and aliases; the order
+// comes from expanding the effective root and Services mappings as YAML nodes.
 func buildServices(yamlContent string) ([]string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(yamlContent), &doc); err != nil {
@@ -320,19 +320,89 @@ func buildServices(yamlContent string) ([]string, error) {
 		}
 	}
 	var names []string
-	root := resolveAlias(doc.Content[0]).Content
-	for i := 0; i+1 < len(root); i += 2 {
-		services := resolveAlias(root[i+1])
-		if root[i].Value != "services" || services.Kind != yaml.MappingNode {
+	root, err := orderedMappingEntries(doc.Content[0])
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range root {
+		if resolveAlias(entry.key).Value != "services" {
 			continue
 		}
-		for j := 0; j+1 < len(services.Content); j += 2 {
-			if name := services.Content[j].Value; hasBuild[name] {
+		services, err := orderedMappingEntries(entry.value)
+		if err != nil {
+			return nil, err
+		}
+		for _, service := range services {
+			if name := resolveAlias(service.key).Value; hasBuild[name] {
 				names = append(names, name)
 			}
 		}
 	}
 	return names, nil
+}
+
+type yamlMappingEntry struct {
+	key, value *yaml.Node
+}
+
+// orderedMappingEntries expands merges in place while keeping explicit keys at
+// their own positions. Explicit keys override every merged map; earlier maps in
+// a merge sequence override later ones. Callers validate through yaml.Decode
+// first so that invalid merge values and duplicate keys keep YAML's own errors.
+func orderedMappingEntries(node *yaml.Node) ([]yamlMappingEntry, error) {
+	active := map[*yaml.Node]bool{}
+	var expand func(*yaml.Node) ([]yamlMappingEntry, error)
+	expand = func(node *yaml.Node) ([]yamlMappingEntry, error) {
+		node = resolveAlias(node)
+		if node == nil || node.Kind != yaml.MappingNode {
+			return nil, nil
+		}
+		if active[node] {
+			return nil, fmt.Errorf("yaml: recursive mapping merge")
+		}
+		active[node] = true
+		defer delete(active, node)
+
+		explicit := map[string]bool{}
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if key := node.Content[i]; !isYAMLMergeKey(key) {
+				explicit[resolveAlias(key).Value] = true
+			}
+		}
+		var entries []yamlMappingEntry
+		merged := map[string]bool{}
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key, value := node.Content[i], node.Content[i+1]
+			if !isYAMLMergeKey(key) {
+				entries = append(entries, yamlMappingEntry{key, value})
+				continue
+			}
+			sources := []*yaml.Node{value}
+			if value.Kind == yaml.SequenceNode {
+				sources = value.Content
+			}
+			for _, source := range sources {
+				inherited, err := expand(source)
+				if err != nil {
+					return nil, err
+				}
+				for _, entry := range inherited {
+					name := resolveAlias(entry.key).Value
+					if !explicit[name] && !merged[name] {
+						entries = append(entries, entry)
+						merged[name] = true
+					}
+				}
+			}
+		}
+		return entries, nil
+	}
+	return expand(node)
+}
+
+// isYAMLMergeKey follows yaml.v3: aliases of "<<" are ordinary mapping keys.
+func isYAMLMergeKey(key *yaml.Node) bool {
+	return key.Kind == yaml.ScalarNode && key.Value == "<<" && key.ShortTag() == "!!merge"
 }
 
 func resolveAlias(n *yaml.Node) *yaml.Node {

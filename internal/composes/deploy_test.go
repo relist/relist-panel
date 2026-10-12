@@ -375,3 +375,86 @@ func TestBuildServicesThroughAnchors(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildServicesThroughMappingMerges(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		want []string
+	}{
+		{
+			name: "services merge preserves surrounding order",
+			yaml: "x-services: &services\n  api:\n    build: .\n  worker:\n    build: .\nservices:\n  before:\n    build: .\n  <<: *services\n  after:\n    build: .\n",
+			want: []string{"before", "api", "worker", "after"},
+		},
+		{
+			name: "root merge supplies services",
+			yaml: "x-defaults: &defaults\n  services:\n    api:\n      build: .\n    worker:\n      build: .\n<<: *defaults\n",
+			want: []string{"api", "worker"},
+		},
+		{
+			name: "services alias supplies mapping",
+			yaml: "x-services: &services\n  api:\n    build: .\n  worker:\n    build: .\nservices: *services\n",
+			want: []string{"api", "worker"},
+		},
+		{
+			name: "merge sequence uses first map and explicit overrides",
+			yaml: "x-first: &first\n  api:\n    build: .\n  image-only:\n    image: busybox\n  overridden:\n    build: .\nx-second: &second\n  api:\n    build: ./other\n  image-only:\n    build: .\n  worker:\n    build: .\nservices:\n  before:\n    build: .\n  <<: [*first, *second]\n  overridden:\n    image: busybox\n  after:\n    build: .\n",
+			want: []string{"before", "api", "worker", "after"},
+		},
+		{
+			name: "explicit service uses its own order before or after merge",
+			yaml: "x-services: &services\n  earlier:\n    image: busybox\n  inherited:\n    build: .\n  later:\n    image: busybox\nservices:\n  earlier:\n    build: .\n  <<: *services\n  later:\n    build: .\n",
+			want: []string{"earlier", "inherited", "later"},
+		},
+		{
+			name: "root merge sequence uses first services mapping",
+			yaml: "x-first: &first\n  services:\n    api:\n      build: .\nx-second: &second\n  services:\n    ignored:\n      build: .\n<<: [*first, *second]\n",
+			want: []string{"api"},
+		},
+		{
+			name: "explicit root services replaces inherited mapping",
+			yaml: "x-defaults: &defaults\n  services:\n    ignored:\n      build: .\n<<: *defaults\nservices:\n  api:\n    build: .\n",
+			want: []string{"api"},
+		},
+		{
+			name: "nested mapping merges",
+			yaml: "x-base: &base\n  api:\n    build: .\nx-services: &services\n  <<: *base\n  worker:\n    build: .\nx-defaults: &defaults\n  services:\n    <<: *services\n<<: *defaults\n",
+			want: []string{"api", "worker"},
+		},
+		{
+			name: "quoted merge-looking key is an ordinary service",
+			yaml: "services:\n  '<<':\n    build: .\n  api:\n    build: .\n",
+			want: []string{"<<", "api"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := buildServices(c.yaml)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("build services = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestBuildServicesRejectsInvalidMerges(t *testing.T) {
+	cases := map[string]string{
+		"root scalar merge":     "<<: invalid\nservices:\n  api:\n    build: .\n",
+		"service scalar merge":  "services:\n  <<: invalid\n",
+		"service sequence item": "services:\n  <<: [{api: {build: .}}, invalid]\n",
+		"recursive merge":       "services: &services\n  <<: *services\n",
+		"recursive service":     "x-app: &app\n  <<: *app\nservices:\n  api: *app\n",
+		"duplicate service":     "services:\n  api:\n    build: .\n  api:\n    build: ./other\n",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			if services, err := buildServices(content); err == nil {
+				t.Fatalf("expected invalid YAML error, got services %v", services)
+			}
+		})
+	}
+}
