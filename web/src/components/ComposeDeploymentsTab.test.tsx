@@ -3,6 +3,7 @@ import '../test/dom-setup';
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { App } from 'antd';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Deployment } from '../data/types';
 import { ComposeDeploymentsTab } from './ComposeDeploymentsTab';
@@ -41,17 +42,11 @@ function deployment(over: Partial<Deployment> = {}): Deployment {
 const compose = { id: 7 } as never;
 
 function renderTab(history: Deployment[], props: { selected?: number } = {}) {
-  render(
-    <App>
-      <ComposeDeploymentsTab
-        compose={compose}
-        location={location}
-        history={history}
-        onSelect={vi.fn()}
-        selected={props.selected}
-      />
-    </App>,
-  );
+  function Tab() {
+    const [selected, setSelected] = useState(props.selected);
+    return <ComposeDeploymentsTab compose={compose} location={location} history={history} onSelect={setSelected} selected={selected} />;
+  }
+  return render(<App><Tab /></App>);
 }
 
 /** Lets pending promises settle, then moves the poll clock on. */
@@ -69,10 +64,64 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.clearAllMocks();
+  vi.resetAllMocks();
 });
 
 describe('ComposeDeploymentsTab', () => {
+  it('opens logs on demand and stops polling when the drawer closes', async () => {
+    api.deploymentLog.mockResolvedValue({ done: false, offset: 6, text: 'first\n' });
+    renderTab([deployment()]);
+    await tick(3000);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.deploymentLog).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'View logs for deployment #3' }));
+    await tick(0);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.getByTestId('deployment-log').textContent).toBe('first\n');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await tick(5000);
+    expect(api.deploymentLog).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'View logs for deployment #3' }));
+    await tick(0);
+    expect(api.deploymentLog).toHaveBeenLastCalledWith(location, 3, 0);
+  });
+
+  it('closes and stops polling when its tab becomes inactive without reopening on return', async () => {
+    api.deploymentLog.mockResolvedValue({ done: false, offset: 6, text: 'first\n' });
+    const tab = (active: boolean, selected = 3) => <App><ComposeDeploymentsTab compose={compose} location={location} history={[deployment(), deployment({ number: 4 })]} onSelect={vi.fn()} selected={selected} active={active} /></App>;
+    const result = render(tab(true));
+    await tick(0);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    result.rerender(tab(false));
+    await tick(5000);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.deploymentLog).toHaveBeenCalledTimes(1);
+    result.rerender(tab(true));
+    await tick(0);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    result.rerender(tab(true, 4));
+    await tick(0);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(api.deploymentLog).toHaveBeenLastCalledWith(location, 4, 0);
+  });
+
+  it('discards a late log response when another deployment is selected', async () => {
+    let resolveOld!: (chunk: { done: boolean; offset: number; text: string }) => void;
+    api.deploymentLog.mockImplementation((_location, number) => number === 3
+      ? new Promise((resolve) => { resolveOld = resolve; })
+      : Promise.resolve({ done: true, offset: 4, text: 'new\n' }));
+    renderTab([deployment({ number: 4 }), deployment()]);
+    fireEvent.click(screen.getByRole('button', { name: 'View logs for deployment #3' }));
+    await tick(0);
+    // The parent may select a new Deployment immediately after enqueueing it.
+    fireEvent.click(screen.getByRole('button', { name: 'View logs for deployment #4' }));
+    await tick(0);
+    await act(async () => { resolveOld({ done: true, offset: 4, text: 'old\n' }); });
+    expect(screen.getByTestId('deployment-log').textContent).toBe('new\n');
+    expect(api.deploymentLog).toHaveBeenLastCalledWith(location, 4, 0);
+  });
+
   it('lists the history with number and status', async () => {
     renderTab([
       deployment({ number: 4, status: 'queued', step: '', ahead: 1 }),
@@ -86,7 +135,7 @@ describe('ComposeDeploymentsTab', () => {
   });
 
   it('marks the running step as the current one', async () => {
-    renderTab([deployment()]);
+    renderTab([deployment()], { selected: 3 });
     await tick(0);
     const current = screen.getByText('Build api').closest('.ant-steps-item');
     expect(current?.className).toContain('ant-steps-item-active');
@@ -97,7 +146,7 @@ describe('ComposeDeploymentsTab', () => {
     api.deploymentLog
       .mockResolvedValueOnce({ done: false, offset: 6, text: 'first\n' })
       .mockResolvedValueOnce({ done: true, offset: 13, text: 'second\n' });
-    renderTab([deployment()]);
+    renderTab([deployment()], { selected: 3 });
     await tick(0);
     expect(screen.getByTestId('deployment-log').textContent).toBe('first\n');
     await tick();
@@ -109,7 +158,7 @@ describe('ComposeDeploymentsTab', () => {
 
   it('keeps Cancel enabled at deploy and shows the API message on a 409', async () => {
     api.cancelDeployment.mockRejectedValue(Object.assign(new Error('deployment can no longer be canceled'), { status: 409 }));
-    renderTab([deployment({ step: 'deploy' })]);
+    renderTab([deployment({ step: 'deploy' })], { selected: 3 });
     await tick(0);
     const button = screen.getByRole('button', { name: /cancel/i }) as HTMLButtonElement;
     expect(button.disabled).toBe(false);
@@ -122,7 +171,7 @@ describe('ComposeDeploymentsTab', () => {
 
   it('cancels a queued Deployment', async () => {
     api.cancelDeployment.mockResolvedValue(undefined);
-    renderTab([deployment({ status: 'queued', step: '', ahead: 2 })]);
+    renderTab([deployment({ status: 'queued', step: '', ahead: 2 })], { selected: 3 });
     await tick(0);
     expect(screen.getByText(/Waiting — 2 ahead/)).toBeTruthy();
     await act(async () => {
@@ -132,7 +181,7 @@ describe('ComposeDeploymentsTab', () => {
   });
 
   it('shows warnings in an Alert', async () => {
-    renderTab([deployment({ status: 'succeeded', warnings: ['port 80 is taken'] })]);
+    renderTab([deployment({ status: 'succeeded', warnings: ['port 80 is taken'] })], { selected: 3 });
     await tick(0);
     const alert = screen.getByText('port 80 is taken').closest('.ant-alert');
     expect(alert).toBeTruthy();
@@ -141,7 +190,7 @@ describe('ComposeDeploymentsTab', () => {
   it('shows the failure reason', async () => {
     renderTab([
       deployment({ status: 'failed', failedStep: 'build:api', reason: 'timeout' }),
-    ]);
+    ], { selected: 3 });
     await tick(0);
     expect(screen.getByText('timeout')).toBeTruthy();
     expect(screen.getByText(/Failed at Build api/)).toBeTruthy();

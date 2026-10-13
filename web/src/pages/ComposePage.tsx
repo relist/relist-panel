@@ -995,6 +995,7 @@ export function ComposePage() {
           {
             children: (
               <ComposeDeploymentsTab
+                active={activeTab === 'deployments'}
                 compose={compose}
                 history={deploymentHistory}
                 location={{ composeId: compose.id, environmentId: environment.id, projectId: project.id }}
