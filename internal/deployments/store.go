@@ -119,6 +119,18 @@ func queuedFor(ctx context.Context, q queryer, composeID int64) (Deployment, err
 // Enqueue queues a Deployment for the Compose. When one is already queued it is
 // returned with created == false and its options are left as they were.
 func (s *Store) Enqueue(ctx context.Context, composeID int64, mode Mode, noCache, fresh bool, now time.Time) (Deployment, bool, error) {
+	return s.enqueue(ctx, composeID, mode, noCache, fresh, now, nil)
+}
+
+func (s *Store) enqueue(ctx context.Context, composeID int64, mode Mode, noCache, fresh bool, now time.Time, snapshot *executionSnapshot) (Deployment, bool, error) {
+	var raw []byte
+	var err error
+	if snapshot != nil {
+		raw, err = json.Marshal(snapshot)
+		if err != nil {
+			return Deployment{}, false, err
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Deployment{}, false, err
@@ -158,6 +170,11 @@ VALUES (?, ?, ?, ?, ?, 'queued', ?)`,
 	id, err := res.LastInsertId()
 	if err != nil {
 		return Deployment{}, false, err
+	}
+	if snapshot != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO deployment_snapshots (deployment_id, snapshot) VALUES (?, ?)`, id, string(raw)); err != nil {
+			return Deployment{}, false, err
+		}
 	}
 	d, err := scan(tx.QueryRowContext(ctx, `SELECT `+columns+` FROM deployments WHERE id = ?`, id))
 	if err != nil {

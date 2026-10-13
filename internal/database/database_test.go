@@ -24,13 +24,69 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 16 {
-		t.Fatalf("migration version = %d, want 16", version)
+	if version != 17 {
+		t.Fatalf("migration version = %d, want 17", version)
 	}
 
 	var one int
 	if err := db.QueryRow("SELECT 1").Scan(&one); err != nil {
 		t.Fatalf("query migrated database: %v", err)
+	}
+}
+
+func TestSnapshotMigrationPreservesLegacyQueueAndCascadesPrivateInputs(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatal(err)
+	}
+	goose.SetBaseFS(migrations.FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(db, ".", 16); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, description, created_at, updated_at) VALUES (1, 'p', '', 1, 1);
+		INSERT INTO environments (id, project_id, name, created_at) VALUES (1, 1, 'production', 1);
+		INSERT INTO composes (id, environment_id, name, yaml_content, created_at, updated_at) VALUES (1, 1, 'web', 'services: {}', 1, 1);
+		INSERT INTO deployments (id, compose_id, number, mode, no_cache, fresh_volumes, status, queued_at) VALUES (1, 1, 7, 'build', 1, 1, 'queued', 42);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	var retained int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM deployments WHERE id = 1 AND number = 7 AND mode = 'build' AND no_cache = 1 AND fresh_volumes = 1 AND status = 'queued' AND queued_at = 42`).Scan(&retained); err != nil || retained != 1 {
+		t.Fatalf("legacy queued row preserved = %d, error = %v", retained, err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM deployment_snapshots`).Scan(&retained); err != nil || retained != 0 {
+		t.Fatalf("migration invented old queue inputs: count = %d, error = %v", retained, err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO deployment_snapshots (deployment_id, snapshot) VALUES (1, '{"Version":1}');
+		INSERT INTO compose_source_materializations (compose_id, source_dir) VALUES (1, '/private/source/src');
+		DELETE FROM deployments WHERE id = 1;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM deployment_snapshots`).Scan(&retained); err != nil || retained != 0 {
+		t.Fatalf("private input remained after history deletion: count = %d, error = %v", retained, err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM compose_source_materializations`).Scan(&retained); err != nil || retained != 1 {
+		t.Fatalf("history pruning removed the last-built Source pointer: count = %d, error = %v", retained, err)
+	}
+	if _, err := db.Exec(`DELETE FROM composes WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM compose_source_materializations`).Scan(&retained); err != nil || retained != 0 {
+		t.Fatalf("private pointer remained after Compose deletion: count = %d, error = %v", retained, err)
 	}
 }
 

@@ -414,7 +414,21 @@ func (s *Service) dockerfiles(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	found, err := DetectDockerfiles(filepath.Join(t.dir, "src"), t.name)
+	release, err := s.gate.Acquire(r.Context(), t.projectID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "could not acquire the project lock")
+		return
+	}
+	defer release()
+	if _, err := s.composes.Target(r.Context(), t.id); err != nil {
+		writeError(w, http.StatusNotFound, "compose not found")
+		return
+	}
+	dir := filepath.Join(t.dir, "src")
+	if src, err := s.store.Get(r.Context(), t.id); err == nil && src.Kind == KindGit && src.TreeDirectory != "" {
+		dir = src.TreeDirectory
+	}
+	found, err := DetectDockerfiles(dir, t.name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not scan src")
 		return

@@ -97,7 +97,7 @@ func (g Git) run(ctx context.Context, dir string, env []string, stdout, stderr i
 // Fetch makes the Compose's src/ a clean shallow checkout of the Source's
 // branch and returns the commit it holds. Progress is written to out.
 func (g Git) Fetch(ctx context.Context, src Source, composeDir string, out io.Writer) (Ref, error) {
-	if src.Branch == "" {
+	if src.Branch == "" && src.PinnedSHA == "" {
 		return Ref{}, errors.New("the Source has no branch")
 	}
 	if err := EnsureOwnedSrc(composeDir); err != nil {
@@ -131,7 +131,11 @@ func (g Git) Fetch(ctx context.Context, src Source, composeDir string, out io.Wr
 	if err != nil {
 		return Ref{}, err
 	}
-	if err := step("fetch", "--depth", "1", "origin", src.Branch); err != nil {
+	revision := src.Branch
+	if src.PinnedSHA != "" {
+		revision = src.PinnedSHA
+	}
+	if err := step("fetch", "--depth", "1", "origin", revision); err != nil {
 		return Ref{}, err
 	}
 	if err := step("checkout", "--force", "FETCH_HEAD"); err != nil {
@@ -160,7 +164,43 @@ func (g Git) Fetch(ctx context.Context, src Source, composeDir string, out io.Wr
 		return Ref{}, err
 	}
 	sha, subject, _ := strings.Cut(strings.TrimRight(logOut.String(), "\n"), "\n")
+	if src.PinnedSHA != "" && sha != src.PinnedSHA {
+		return Ref{}, errors.New("fetched commit differs from the queued revision")
+	}
 	return Ref{SHA: sha, Subject: subject}, nil
+}
+
+// ResolveRevision reads only the configured remote branch, with a bounded
+// context. No working tree or database transaction is required.
+func (g Git) ResolveRevision(ctx context.Context, src Source, composeDir string) (string, error) {
+	if src.Branch == "" {
+		return "", errors.New("the Source has no branch")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	env, cleanup, err := sshEnv(src, composeDir)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	var out bytes.Buffer
+	if err := g.run(ctx, composeDir, env, &out, io.Discard, "ls-remote", "--heads", "--", src.RepoURL, "refs/heads/"+src.Branch); err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(out.String(), "\n") {
+		sha, ref, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if ok && ref == "refs/heads/"+src.Branch && validSHA(sha) {
+			return sha, nil
+		}
+	}
+	return "", errors.New("the configured Source branch was not found")
+}
+
+func validSHA(sha string) bool {
+	if len(sha) != 40 && len(sha) != 64 {
+		return false
+	}
+	return strings.Trim(sha, "0123456789abcdef") == ""
 }
 
 // ListBranches lists the remote's branch heads. It needs no working tree.

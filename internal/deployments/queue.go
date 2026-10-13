@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -23,12 +24,14 @@ type Gate interface {
 
 type Composes interface {
 	Target(ctx context.Context, composeID int64) (composes.DeployTarget, error)
+	Capture(ctx context.Context, t composes.DeployTarget) (composes.DeployTarget, error)
 	CheckDeployable(ctx context.Context, t composes.DeployTarget) error
 	PrepareBuild(ctx context.Context, t composes.DeployTarget) (composes.BuildPlan, error)
 	RunDeploy(ctx context.Context, t composes.DeployTarget, opts composes.DeployOptions) ([]string, error)
 }
 
 type Fetcher interface {
+	ResolveRevision(ctx context.Context, src sources.Source, composeDir string) (string, error)
 	Fetch(ctx context.Context, src sources.Source, composeDir string, out io.Writer) (sources.Ref, error)
 }
 
@@ -167,7 +170,24 @@ func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deploy
 	default:
 		return Deployment{}, false, fmt.Errorf("unknown deployment mode %q", r.Mode)
 	}
-	d, created, err := q.d.Store.Enqueue(ctx, composeID, r.Mode, r.NoCache, r.FreshVolumes, q.d.Now())
+	if existing, err := queuedFor(ctx, q.d.Store.db, composeID); err == nil {
+		return existing, false, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return Deployment{}, false, err
+	}
+	snapshot, err := q.capture(ctx, composeID, r.Mode, true)
+	if err != nil {
+		var existing *alreadyQueued
+		if errors.As(err, &existing) {
+			return existing.deployment, false, nil
+		}
+		return Deployment{}, false, err
+	}
+	defer snapshot.release()
+	d, created, err := q.d.Store.enqueue(ctx, composeID, r.Mode, r.NoCache, r.FreshVolumes, q.d.Now(), snapshot)
+	if err != nil || !created {
+		discardCaptured(snapshot)
+	}
 	if err != nil {
 		return Deployment{}, false, err
 	}
@@ -190,6 +210,11 @@ func (q *Queue) Cancel(ctx context.Context, composeID int64, number int) error {
 	}
 	if d.Status == StatusQueued {
 		if ok, err := q.d.Store.CancelQueuedNumber(ctx, composeID, number, q.d.Now()); err != nil || ok {
+			if ok && err == nil {
+				if snapshot, err := q.d.Store.snapshot(ctx, d.ID); err == nil {
+					discardCaptured(snapshot)
+				}
+			}
 			return err
 		}
 	}
@@ -230,8 +255,20 @@ func (q *Queue) cancelRunning(ctx context.Context, composeID int64, number int) 
 // to finish.
 func (q *Queue) CancelForComposes(ctx context.Context, composeIDs []int64) {
 	for _, id := range composeIDs {
-		if _, err := q.d.Store.CancelQueued(ctx, id, q.d.Now()); err != nil {
+		queued, loadErr := queuedFor(ctx, q.d.Store.db, id)
+		if errors.Is(loadErr, sql.ErrNoRows) {
+			continue
+		}
+		if loadErr != nil {
+			logf("load queued for compose %d: %v", id, loadErr)
+			continue
+		}
+		if canceled, err := q.d.Store.CancelQueuedNumber(ctx, id, queued.Number, q.d.Now()); err != nil {
 			logf("cancel queued for compose %d: %v", id, err)
+		} else if canceled {
+			if snapshot, err := q.d.Store.snapshot(ctx, queued.ID); err == nil {
+				discardCaptured(snapshot)
+			}
 		}
 	}
 	var waits []chan struct{}
@@ -329,19 +366,33 @@ func (q *Queue) process(ctx context.Context, d Deployment) error {
 	if err != nil {
 		return q.settleUnstarted(ctx, d, failed("", firstLine(err.Error())))
 	}
+	snapshot, err := q.d.Store.snapshot(bg, d.ID)
+	if err != nil {
+		return q.settleUnstarted(ctx, d, failed("", "could not load deployment snapshot"))
+	}
+	if snapshot == nil {
+		// Older queued rows have no historical inputs to recover. Capture the
+		// current configuration once, persist it, and disclose that fallback.
+		snapshot, err = q.capture(ctx, d.ComposeID, d.Mode, false)
+		if err != nil {
+			return q.settleUnstarted(ctx, d, failed("", firstLine(err.Error())))
+		}
+		snapshot.Legacy = true
+		if err := q.d.Store.saveLegacySnapshot(bg, d.ID, snapshot); err != nil {
+			snapshot.release()
+			discardCaptured(snapshot)
+			return q.settleUnstarted(ctx, d, failed("", "could not save legacy deployment snapshot"))
+		}
+		snapshot.release()
+	}
+	target = snapshot.Target
 	if err := q.d.Composes.CheckDeployable(bg, target); err != nil {
 		return q.settleUnstarted(ctx, d, failed("", firstLine(err.Error())))
 	}
 
-	j := &job{q: q, ctx: ctx, bg: bg, d: d, target: target, steps: []string{stepDeploy}}
-	if d.Mode == ModeSkipBuild {
-		// Only its existence matters; a build Deployment reads the Source
-		// under the source lock, once it is the one running.
-		if _, err := q.d.Sources.Get(bg, d.ComposeID); errors.Is(err, sql.ErrNoRows) {
-			j.pre = &outcome{status: StatusFailed, reason: reasonNoSource}
-		} else if err != nil {
-			return q.settleUnstarted(ctx, d, failed("", firstLine(err.Error())))
-		}
+	j := &job{q: q, ctx: ctx, bg: bg, d: d, target: target, snapshot: snapshot, steps: []string{stepDeploy}}
+	if d.Mode == ModeSkipBuild && snapshot.Source == nil {
+		j.pre = &outcome{status: StatusFailed, reason: reasonNoSource}
 	}
 	return j.execute()
 }
@@ -368,18 +419,19 @@ func firstLine(s string) string {
 
 // job is one Deployment being run by the worker.
 type job struct {
-	q      *Queue
-	ctx    context.Context // Run's context: shutdown cuts fetch and build
-	bg     context.Context // never canceled: settles the row
-	tctx   context.Context // ctx plus Cancel plus the timeout
-	d      Deployment
-	target composes.DeployTarget
-	src    *sources.Source
-	steps  []string
-	pre    *outcome // a failure found while resolving the mode, reported after Start
-	rs     *activeRun
-	out    io.Writer
-	step   string
+	q        *Queue
+	ctx      context.Context // Run's context: shutdown cuts fetch and build
+	bg       context.Context // never canceled: settles the row
+	tctx     context.Context // ctx plus Cancel plus the timeout
+	d        Deployment
+	target   composes.DeployTarget
+	snapshot *executionSnapshot
+	src      *sources.Source
+	steps    []string
+	pre      *outcome // a failure found while resolving the mode, reported after Start
+	rs       *activeRun
+	out      io.Writer
+	step     string
 }
 
 func (j *job) execute() error {
@@ -399,6 +451,9 @@ func (j *job) execute() error {
 
 	if err := q.d.Store.Start(j.bg, j.d.ID, j.steps, q.d.Now()); err != nil {
 		if errors.Is(err, ErrNotQueued) {
+			if current, err := q.d.Store.Get(j.bg, j.d.ComposeID, j.d.Number); err == nil && current.Status == StatusCanceled {
+				discardCaptured(j.snapshot)
+			}
 			return nil
 		}
 		return err
@@ -415,11 +470,21 @@ func (j *job) execute() error {
 		o = failed("", "could not open the deployment log: "+firstLine(err.Error()))
 	} else {
 		defer logFile.Close()
-		j.out = logFile
+		j.out = newRedactingWriter(logFile, j.snapshot)
 		o = j.runStepsSafely()
 	}
 	if o.status == StatusFailed || o.status == StatusCanceled {
 		fmt.Fprintf(j.out, "%s: %s\n", o.status, o.reason)
+	}
+	if j.snapshot != nil && j.snapshot.Legacy {
+		o.warnings = append(o.warnings, legacySnapshotWarning)
+	}
+	if redact, ok := j.out.(*redactingWriter); ok {
+		o.reason = redact.redact(o.reason)
+		for i, value := range o.warnings {
+			o.warnings[i] = redact.redact(value)
+		}
+		_ = redact.flush()
 	}
 
 	finishErr := finishWithRetry(j.ctx, q.d.Store, j.d.ID, o, q.d.Now())
@@ -512,7 +577,15 @@ func (j *job) fetchAndBuild() (outcome, bool) {
 
 	// The Source is read under its lock, so an edit that held the lock while
 	// this Deployment waited is the one built.
-	src, err := q.d.Sources.Get(j.bg, j.d.ComposeID)
+	var src sources.Source
+	if j.snapshot != nil {
+		if j.snapshot.Source == nil {
+			return failed("", reasonNoSource), false
+		}
+		src = *j.snapshot.Source
+	} else {
+		src, err = q.d.Sources.Get(j.bg, j.d.ComposeID)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return failed("", reasonNoSource), false
 	}
@@ -536,9 +609,16 @@ func (j *job) fetchAndBuild() (outcome, bool) {
 	}
 	if j.src.Kind == sources.KindGit {
 		j.begin(stepFetch)
-		ref, err := q.d.Fetcher.Fetch(j.tctx, *j.src, composes.ComposeDir(j.target.Request), j.out)
+		sourceDir := composes.ComposeDir(j.target.Request)
+		if j.snapshot != nil {
+			sourceDir = j.snapshot.SourceDir
+		}
+		ref, err := q.d.Fetcher.Fetch(j.tctx, *j.src, sourceDir, j.out)
 		if err != nil {
 			return j.stepFailed(err), false
+		}
+		if redact, ok := j.out.(*redactingWriter); ok {
+			ref.Subject = redact.redact(ref.Subject)
 		}
 		if err := q.d.Store.SetSource(j.bg, j.d.ID, ref.SHA, ref.Subject); err != nil {
 			logf("set source: %v", err)
@@ -557,6 +637,9 @@ func (j *job) fetchAndBuild() (outcome, bool) {
 	}
 	if len(plan.Services) == 0 {
 		fmt.Fprintln(j.out, "no Service has build:")
+		if err := j.recordMaterialization(src); err != nil {
+			return j.stepFailed(err), false
+		}
 		return outcome{}, true
 	}
 	var steps []string
@@ -582,7 +665,19 @@ func (j *job) fetchAndBuild() (outcome, bool) {
 			return j.stepFailed(err), false
 		}
 	}
+	if err := j.recordMaterialization(src); err != nil {
+		return j.stepFailed(err), false
+	}
 	return outcome{}, true
+}
+
+func (j *job) recordMaterialization(src sources.Source) error {
+	if j.snapshot != nil && src.Kind == sources.KindGit {
+		if err := j.q.d.Sources.RecordMaterialization(j.bg, src, filepath.Join(j.snapshot.SourceDir, "src")); err != nil {
+			return errors.New("could not record built Source files")
+		}
+	}
+	return nil
 }
 
 // deploy waits for the Project gate, then runs the Deploy step. It holds
@@ -629,10 +724,16 @@ func (j *job) deploy() outcome {
 	// unfetched, and the build would run without the source lock.
 	build := j.d.Mode == ModeDeploy
 	if build {
-		if _, err := q.d.Sources.Get(j.bg, j.d.ComposeID); err == nil {
+		hasSource := j.snapshot != nil && j.snapshot.Source != nil
+		var err error
+		if j.snapshot == nil {
+			_, err = q.d.Sources.Get(j.bg, j.d.ComposeID)
+			hasSource = err == nil
+		}
+		if hasSource {
 			build = false
 			fmt.Fprintln(j.out, "compose has a source; deploying without building")
-		} else if !errors.Is(err, sql.ErrNoRows) {
+		} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			release()
 			return failed(stepDeploy, firstLine(err.Error()))
 		}
@@ -644,13 +745,23 @@ func (j *job) deploy() outcome {
 	})
 	release()
 	if err != nil {
+		o := failed(stepDeploy, firstLine(err.Error()))
 		if errors.Is(dctx.Err(), context.DeadlineExceeded) {
-			return failed(stepDeploy, reasonTimeout)
+			o.reason = reasonTimeout
 		}
-		return failed(stepDeploy, firstLine(err.Error()))
+		var failure *composes.DeployFailure
+		if errors.As(err, &failure) && failure.VolumesRemoved {
+			o.warnings = append(o.warnings, volumesRemovedWarning)
+			fmt.Fprintf(j.out, "warning: %s\n", volumesRemovedWarning)
+		}
+		return o
 	}
 	return outcome{status: StatusSucceeded, warnings: warnings}
 }
+
+const volumesRemovedWarning = "Named volumes were removed before deployment failed. Their data will not be restored automatically. Restore a backup if you need the previous data."
+
+const legacySnapshotWarning = "This deployment was queued before execution snapshots were available. Its configuration and Source were captured when the worker resumed it."
 
 var (
 	_ composes.DeploymentCanceler = (*Queue)(nil)

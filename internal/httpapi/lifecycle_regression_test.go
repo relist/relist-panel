@@ -225,6 +225,10 @@ func (r *eventRunner) DownWithVolumes(context.Context, composes.RunRequest) erro
 	return nil
 }
 
+func (r *eventRunner) DownWithVolumesTracked(ctx context.Context, req composes.RunRequest) (bool, error) {
+	return false, r.DownWithVolumes(ctx, req)
+}
+
 // coordinationFixture is a Compose already deployed once with the plain fake
 // runner, then served by an eventRunner so the next Up can be held open.
 type coordinationFixture struct {

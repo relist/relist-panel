@@ -108,6 +108,13 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "mode must be deploy, build or skip-build")
 		return
 	}
+	if existing, err := queuedFor(r.Context(), a.q.d.Store.db, composeID); err == nil {
+		writeJSON(w, http.StatusOK, map[string]int{"number": existing.Number})
+		return
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "could not load queued deployment")
+		return
+	}
 	target, err := a.composes.Target(r.Context(), composeID)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "compose not found")
@@ -146,6 +153,11 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 	}
 	d, created, err := a.q.Enqueue(r.Context(), composeID, Request{Mode: in.Mode, NoCache: in.NoCache, FreshVolumes: in.FreshVolumes})
 	if err != nil {
+		var f *composes.DeployFailure
+		if errors.As(err, &f) && f.Kind == composes.FailureInvalid {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "could not queue the deployment")
 		return
 	}

@@ -1250,7 +1250,7 @@ func TestComposeDeployValidatesInputAndPropagatesRunnerErrors(t *testing.T) {
 		t.Fatalf("decode broken compose: %v", err)
 	}
 
-	wantFailed(t, server.deployAndWait(t, composePath(project.ID, production.ID, broken.ID), nil), "compose yaml is invalid")
+	wantCaptureRejected(t, server, composePath(project.ID, production.ID, broken.ID), nil, "compose yaml is invalid")
 
 	if len(server.runner.snapshotCalls()) != 0 {
 		t.Fatalf("runner should not have been called for invalid deploys, got %+v", server.runner.snapshotCalls())
@@ -2524,6 +2524,7 @@ type fakeComposeRunner struct {
 	upErr              error
 	downErr            error
 	downWithVolumesErr error
+	volumesRemoved     bool
 	restartErr         error
 	logsOutput         string
 	logsErr            error
@@ -2626,6 +2627,19 @@ func (f *fakeComposeRunner) DownWithVolumes(_ context.Context, req composes.RunR
 	}
 	f.statuses[req.ProjectName] = composes.ComposeStatus{}
 	return nil
+}
+
+func (f *fakeComposeRunner) DownWithVolumesTracked(ctx context.Context, req composes.RunRequest) (bool, error) {
+	err := f.DownWithVolumes(ctx, req)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.volumesRemoved, err
+}
+
+func (f *fakeComposeRunner) setVolumesRemoved(removed bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumesRemoved = removed
 }
 
 func (f *fakeComposeRunner) Restart(_ context.Context, req composes.RunRequest) error {
@@ -3210,7 +3224,12 @@ func TestComposeDeployFreshReportsRemovedVolumesWhenUpFails(t *testing.T) {
 	first := f.deploy(t)
 
 	f.server.runner.setUpErr(errors.New("port already allocated"))
-	wantFailed(t, f.deployFresh(t, "Web"), "volumes were removed", "stopped", "port already allocated")
+	f.server.runner.setVolumesRemoved(true)
+	failed := f.deployFresh(t, "Web")
+	wantFailed(t, failed, "volumes were removed", "stopped", "port already allocated")
+	if len(failed.Warnings) != 1 || !strings.Contains(failed.Warnings[0], "will not be restored automatically") {
+		t.Fatalf("removal warning not retained: %+v", failed)
+	}
 	f.assertLastDeployedAt(t, first.LastDeployedAt)
 }
 
@@ -3218,6 +3237,7 @@ func TestComposeDeployFreshReportsRemovedVolumesWhenWritingFilesFails(t *testing
 	f := newFreshDeployFixture(t)
 	first := f.deploy(t)
 	f.saveYAML(t, freshNewYAML)
+	f.server.runner.setVolumesRemoved(true)
 
 	// Replacing the env file with a directory makes the write fail whoever
 	// runs the tests; chmod would not stop root.
@@ -3245,11 +3265,43 @@ func TestComposeDeployFreshRefusesUnresolvableYAMLBeforeDown(t *testing.T) {
 	composeBefore := readFileString(t, req.ComposeFilePath)
 	before := len(f.server.runner.snapshotCalls())
 
-	wantFailed(t, f.deployFresh(t, "Web"))
+	wantCaptureRejected(t, f.server, f.path(), freshBody("Web"), "compose yaml is invalid")
 	if got := f.methodsAfter(before); len(got) != 0 {
 		t.Fatalf("calls = %v, want none: volumes must survive an unresolvable YAML", got)
 	}
 	if got := readFileString(t, req.ComposeFilePath); got != composeBefore {
 		t.Fatalf("compose file changed: %q", got)
+	}
+}
+
+func wantCaptureRejected(t *testing.T, server *testServer, path string, body any, fragments ...string) {
+	t.Helper()
+	if body == nil {
+		body = map[string]any{"mode": "deploy"}
+	}
+	var before int
+	if err := server.db.QueryRow(`SELECT count(*) FROM deployments`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	response := server.request(t, http.MethodPost, path+"/deployments", body)
+	defer response.Body.Close()
+	var failure map[string]string
+	if err := json.NewDecoder(response.Body).Decode(&failure); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("capture status=%d body=%v, want400", response.StatusCode, failure)
+	}
+	for _, fragment := range fragments {
+		if !strings.Contains(failure["error"], fragment) {
+			t.Fatalf("capture error=%q, want %q", failure["error"], fragment)
+		}
+	}
+	var after int
+	if err := server.db.QueryRow(`SELECT count(*) FROM deployments`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("capture failure created deployment: rows%d ->%d", before, after)
 	}
 }

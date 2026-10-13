@@ -26,6 +26,12 @@ type recordingRunner struct {
 	ups            []UpOptions
 	composeAtDown  string
 	downErr, upErr error
+	removed        bool
+}
+
+func (r *recordingRunner) DownWithVolumesTracked(ctx context.Context, req RunRequest) (bool, error) {
+	err := r.DownWithVolumes(ctx, req)
+	return r.removed, err
 }
 
 func (r *recordingRunner) Up(_ context.Context, _ RunRequest, opts UpOptions) error {
@@ -188,6 +194,42 @@ func TestRunDeployFreshDownsBeforeWrite(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(target.Request.ComposeFilePath); string(b) == "old: yaml\n" {
 		t.Errorf("compose file was not replaced")
+	}
+}
+
+func TestFreshVolumesFailureReportsOnlyConfirmedRemoval(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		previous bool
+		removed  bool
+		downErr  error
+		want     bool
+	}{
+		{"removed before up failed", true, true, nil, true},
+		{"no named volumes", true, false, nil, false},
+		{"first deploy", false, true, nil, false},
+		{"down failed", true, false, errors.New("down refused"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, runner, target, _ := newDeployService(t, "services:\n  web: {image: nginx}\n")
+			runner.removed, runner.downErr, runner.upErr = tc.removed, tc.downErr, errors.New("up failed")
+			if tc.previous {
+				if err := os.MkdirAll(ComposeDir(target.Request), 0o750); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(target.Request.ComposeFilePath, []byte("services: {}\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := svc.RunDeploy(context.Background(), target, DeployOptions{FreshVolumes: true})
+			var failure *DeployFailure
+			if !errors.As(err, &failure) || failure.VolumesRemoved != tc.want {
+				t.Fatalf("removal metadata = %+v, want %v", failure, tc.want)
+			}
+			if !tc.want && strings.Contains(err.Error(), "after volumes were removed") {
+				t.Fatalf("unperformed removal claimed: %v", err)
+			}
+		})
 	}
 }
 

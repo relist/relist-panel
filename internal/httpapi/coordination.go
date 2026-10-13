@@ -58,6 +58,11 @@ func coordinatedProject(r *http.Request) int64 {
 	if r.Method == http.MethodPost && len(parts) == 10 && parts[5] == "composes" && parts[7] == "deployments" && parts[9] == "cancel" {
 		return 0
 	}
+	// Enqueue captures configuration under the same gate itself. Network and
+	// filesystem capture must finish before opening its SQLite transaction.
+	if r.Method == http.MethodPost && len(parts) == 8 && parts[5] == "composes" && parts[7] == "deployments" {
+		return 0
+	}
 	if r.Method == http.MethodPost && len(parts) == 9 && parts[5] == "composes" && parts[7] == "source" && (parts[8] == "test" || parts[8] == "upload") {
 		return 0
 	}

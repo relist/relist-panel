@@ -31,6 +31,7 @@ type DeployTarget struct {
 	ProjectID int64
 	Compose   Compose
 	Request   RunRequest
+	Snapshot  *ExecutionSnapshot `json:"-"`
 }
 
 // DeployOptions tunes RunDeploy. FreshVolumes deletes the Compose's named
@@ -57,9 +58,10 @@ const (
 // DeployFailure is the error RunDeploy and the preview return. Error() is the
 // user-facing message.
 type DeployFailure struct {
-	Kind    FailureKind
-	Message string
-	Err     error
+	Kind           FailureKind
+	Message        string
+	Err            error
+	VolumesRemoved bool
 }
 
 func (e *DeployFailure) Error() string { return e.Message }
@@ -132,13 +134,18 @@ type deployFiles struct {
 	composeYAML string
 	envFile     string
 	// setFiles is the content of each sets/<id>.env the resolved YAML points at.
-	setFiles map[int64]string
-	warnings []string
+	setFiles      map[int64]string
+	warnings      []string
+	secrets       []string
+	pathVariables map[string]string
 }
 
 // prepareDeployFiles resolves the YAML and loads the environment variables.
 // It touches no files.
 func (s *Service) prepareDeployFiles(ctx context.Context, t DeployTarget) (deployFiles, error) {
+	if t.Snapshot != nil {
+		return t.Snapshot.files(), nil
+	}
 	vars, err := s.repository.loadDeployVariables(ctx, t.Compose, true)
 	if err != nil {
 		return deployFiles{}, failure(FailureInternal, "could not load variables", err)
@@ -148,10 +155,12 @@ func (s *Service) prepareDeployFiles(ctx context.Context, t DeployTarget) (deplo
 		return deployFiles{}, err
 	}
 	return deployFiles{
-		composeYAML: resolvedYAML,
-		envFile:     renderEnvFile(mergeVariables(vars.Environment, vars.Compose, nil).Interpolated),
-		setFiles:    vars.setFiles(usedSets),
-		warnings:    warnings,
+		composeYAML:   resolvedYAML,
+		envFile:       renderEnvFile(mergeVariables(vars.Environment, vars.Compose, nil).Interpolated),
+		setFiles:      vars.setFiles(usedSets),
+		warnings:      warnings,
+		secrets:       vars.secretValues(),
+		pathVariables: vars.interpolationValues(),
 	}, nil
 }
 
@@ -187,7 +196,7 @@ func (s *Service) resolveForDeploy(ctx context.Context, projectID int64, compose
 // can be checked without touching Docker or the disk, and the down step runs
 // against the files already on disk before the new ones replace them. It
 // returns a *DeployFailure for every failure it names.
-func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOptions) ([]string, error) {
+func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOptions) (warnings []string, deployErr error) {
 	req := t.Request
 	files, err := s.prepareDeployFiles(ctx, t)
 	if err != nil {
@@ -196,19 +205,36 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 
 	// After the volumes are gone a failure must say so.
 	suffix := ""
+	removed := false
+	defer func() {
+		var f *DeployFailure
+		if removed && errors.As(deployErr, &f) {
+			f.VolumesRemoved = true
+		}
+	}()
 	if opts.FreshVolumes {
 		if _, err := os.Stat(req.ComposeFilePath); err == nil {
-			if err := s.runner.DownWithVolumes(ctx, req); err != nil {
+			var err error
+			if tracked, ok := s.runner.(interface {
+				DownWithVolumesTracked(context.Context, RunRequest) (bool, error)
+			}); ok {
+				removed, err = tracked.DownWithVolumesTracked(ctx, req)
+			} else {
+				err = s.runner.DownWithVolumes(ctx, req)
+			}
+			if err != nil {
 				return nil, failure(FailureRunner, "delete volumes failed: "+err.Error(), err)
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return nil, failure(FailureInternal, "could not inspect compose files", err)
 		}
-		suffix = " after volumes were removed"
+		if removed {
+			suffix = " after volumes were removed"
+		}
 	}
 
 	if message, err := writeFiles(req, files); err != nil {
-		if opts.FreshVolumes {
+		if removed {
 			return nil, failure(FailureRunner, message+suffix+": "+err.Error()+". "+volumesRemovedAdvice, err)
 		}
 		return nil, failure(FailureInternal, message, err)
@@ -219,7 +245,7 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 		}
 	}
 	if err := s.runner.Up(ctx, req, UpOptions{Build: opts.Build, Out: opts.Out}); err != nil {
-		return nil, failure(FailureRunner, "deploy failed"+suffix+": "+err.Error()+volumesAdvice(opts.FreshVolumes), err)
+		return nil, failure(FailureRunner, "deploy failed"+suffix+": "+err.Error()+volumesAdvice(removed), err)
 	}
 
 	// The deploy timestamp records success only (deploy-timestamps spec): it
@@ -253,6 +279,9 @@ type BuildPlan struct {
 // and Compose Variables next to the Compose's files, so a build can run before
 // the first deploy has written the resolved ones.
 func (s *Service) PrepareBuild(ctx context.Context, t DeployTarget) (BuildPlan, error) {
+	if t.Snapshot != nil {
+		return prepareSnapshotBuild(t)
+	}
 	services, err := buildServices(t.Compose.YAMLContent)
 	if err != nil {
 		return BuildPlan{}, fmt.Errorf("compose yaml is invalid: %w", err)

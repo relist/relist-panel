@@ -45,7 +45,7 @@ The SSH key pair the panel generates for one Compose's Git Source; the operator 
 _Avoid_: SSH key (as the entity name), Credential
 
 **Deployment**:
-One queued run that brings a Compose's Containers up to date: fetch the Source, build each Service that has `build:` one at a time, then `up`. Numbered per Compose, with status, steps and a log. All Deployments on the host share one queue and run one at a time.
+One queued run that brings a Compose's Containers up to date: fetch the Source, build each Service that has `build:` one at a time, then `up`. A newly queued Deployment keeps the configuration selected when it was queued, independently of later edits. Numbered per Compose, with status, steps and a log. All Deployments on the host share one queue and run one at a time.
 _Avoid_: Build (the build is one step of a Deployment), Job, Release
 
 **Terminal Session**:

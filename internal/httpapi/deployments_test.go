@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -110,6 +112,9 @@ const buildYAML = "services:\n  web:\n    build: ./src\n"
 
 func (f deploymentsFixture) addZipSource(t *testing.T) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Join(f.dir(t), "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	err := sources.NewStore(f.server.db).Save(context.Background(), sources.Source{ComposeID: f.compose.ID, Kind: sources.KindZip, ZipName: "site.zip"})
 	if err != nil {
 		t.Fatalf("save source: %v", err)

@@ -47,16 +47,17 @@ func (r *recorder) count(prefix string) int {
 }
 
 type fakeComposes struct {
-	rec      *recorder
-	mu       sync.Mutex
-	dirs     map[int64]string
-	yaml     map[int64]string
-	gone     map[int64]bool
-	services []string
-	deployed []composes.DeployOptions
-	prepared []string // YAML PrepareBuild saw
-	cleanups int
-	onDeploy func(ctx context.Context, id int64, opts composes.DeployOptions) ([]string, error)
+	rec             *recorder
+	mu              sync.Mutex
+	dirs            map[int64]string
+	yaml            map[int64]string
+	gone            map[int64]bool
+	services        []string
+	deployed        []composes.DeployOptions
+	prepared        []string // YAML PrepareBuild saw
+	snapshotSecrets []string
+	cleanups        int
+	onDeploy        func(ctx context.Context, id int64, opts composes.DeployOptions) ([]string, error)
 }
 
 func (f *fakeComposes) Target(_ context.Context, id int64) (composes.DeployTarget, error) {
@@ -74,6 +75,13 @@ func (f *fakeComposes) Target(_ context.Context, id int64) (composes.DeployTarge
 }
 
 func (f *fakeComposes) CheckDeployable(context.Context, composes.DeployTarget) error { return nil }
+
+func (f *fakeComposes) Capture(_ context.Context, t composes.DeployTarget) (composes.DeployTarget, error) {
+	if len(f.snapshotSecrets) > 0 {
+		t.Snapshot = &composes.ExecutionSnapshot{Secrets: f.snapshotSecrets}
+	}
+	return t, nil
+}
 
 func (f *fakeComposes) PrepareBuild(_ context.Context, t composes.DeployTarget) (composes.BuildPlan, error) {
 	f.mu.Lock()
@@ -107,8 +115,16 @@ func (f *fakeComposes) RunDeploy(ctx context.Context, t composes.DeployTarget, o
 }
 
 type fakeFetcher struct {
-	rec     *recorder
-	onFetch func(ctx context.Context, src sources.Source, dir string, out io.Writer) (sources.Ref, error)
+	rec       *recorder
+	onFetch   func(ctx context.Context, src sources.Source, dir string, out io.Writer) (sources.Ref, error)
+	onResolve func(context.Context, sources.Source, string) (string, error)
+}
+
+func (f *fakeFetcher) ResolveRevision(ctx context.Context, src sources.Source, dir string) (string, error) {
+	if f.onResolve != nil {
+		return f.onResolve(ctx, src, dir)
+	}
+	return "abc123", nil
 }
 
 func (f *fakeFetcher) Fetch(ctx context.Context, src sources.Source, dir string, out io.Writer) (sources.Ref, error) {
@@ -235,6 +251,9 @@ func (h *harness) gitSource(id int64) {
 
 func (h *harness) zipSource(id int64) {
 	h.t.Helper()
+	if err := os.MkdirAll(filepath.Join(h.comp.dirs[id], "src"), 0o755); err != nil {
+		h.t.Fatal(err)
+	}
 	err := h.srcs.Save(context.Background(), sources.Source{ComposeID: id, Kind: sources.KindZip, ZipName: "site.zip"})
 	if err != nil {
 		h.t.Fatal(err)
@@ -321,7 +340,7 @@ func TestRunsOneAtATimeFIFO(t *testing.T) {
 	if got := h.waitSettled(h.b, b.Number).Status; got != StatusSucceeded {
 		t.Fatalf("B = %s", got)
 	}
-	want := []string{"fetch", "build:web", "gate+", "deploy:1", "gate-", "fetch", "build:web", "gate+", "deploy:2", "gate-"}
+	want := []string{"gate+", "gate-", "gate+", "gate-", "fetch", "build:web", "gate+", "deploy:1", "gate-", "fetch", "build:web", "gate+", "deploy:2", "gate-"}
 	// Composes a and b have ids from the fixture; compare by shape.
 	got := h.rec.all()
 	for i := range got {
@@ -482,7 +501,7 @@ func TestStopsAtFirstFailedBuild(t *testing.T) {
 	if got.Status != StatusFailed || got.FailedStep != "build:web" || got.Reason != "web build failed" {
 		t.Fatalf("got %s %q %q", got.Status, got.FailedStep, got.Reason)
 	}
-	if len(h.build.opts) != 1 || len(h.comp.deployed) != 0 || h.rec.count("gate") != 0 {
+	if len(h.build.opts) != 1 || len(h.comp.deployed) != 0 || h.rec.count("gate") != 2 {
 		t.Fatalf("events = %v", h.rec.all())
 	}
 	if h.comp.cleanups != 1 {
@@ -531,7 +550,7 @@ func TestGateOnlyForDeployStep(t *testing.T) {
 	d := h.enqueue(h.a, ModeBuild)
 	h.start()
 	h.waitSettled(h.a, d.Number)
-	want := []string{"fetch", "build:web", "build:api", "gate+", "deploy:" + fmt.Sprint(h.a), "gate-"}
+	want := []string{"gate+", "gate-", "fetch", "build:web", "build:api", "gate+", "deploy:" + fmt.Sprint(h.a), "gate-"}
 	if got := h.rec.all(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("events = %v, want %v", got, want)
 	}
@@ -550,7 +569,7 @@ func TestQueueCancelQueued(t *testing.T) {
 	// A later Deployment proves the worker moved past the canceled one.
 	e := h.enqueue(h.b, ModeDeploy)
 	h.waitSettled(h.b, e.Number)
-	if got := h.rec.all(); !reflect.DeepEqual(got, []string{"gate+", "deploy:" + fmt.Sprint(h.b), "gate-"}) {
+	if got := h.rec.all(); !reflect.DeepEqual(got, []string{"gate+", "gate-", "gate+", "gate-", "gate+", "deploy:" + fmt.Sprint(h.b), "gate-"}) {
 		t.Fatalf("events = %v", got)
 	}
 }
@@ -575,7 +594,7 @@ func TestCancelWhileBuilding(t *testing.T) {
 	if got.Status != StatusCanceled {
 		t.Fatalf("status = %s %q, want canceled (Cancel waits for exit)", got.Status, got.Reason)
 	}
-	if h.rec.count("gate") != 0 || len(h.comp.deployed) != 0 {
+	if h.rec.count("gate") != 2 || len(h.comp.deployed) != 0 {
 		t.Fatalf("events = %v", h.rec.all())
 	}
 	eventually(t, "IsRunning to clear", func() bool { return !h.q.IsRunning(h.a) })
@@ -606,13 +625,13 @@ func TestCancelDuringDeployRefused(t *testing.T) {
 
 func TestCancelWhileWaitingForGate(t *testing.T) {
 	h := newHarness(t)
+	d := h.enqueue(h.a, ModeDeploy)
 	waiting := make(chan struct{})
 	h.gate.onAcquire = func(ctx context.Context) error {
 		close(waiting)
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	d := h.enqueue(h.a, ModeDeploy)
 	h.start()
 	recv(t, waiting, "worker to wait on the gate")
 	h.q.CancelForComposes(context.Background(), []int64{h.a})
@@ -627,13 +646,13 @@ func TestCancelWhileWaitingForGate(t *testing.T) {
 
 func TestComposeGoneAfterGate(t *testing.T) {
 	h := newHarness(t)
+	d := h.enqueue(h.a, ModeDeploy)
 	waiting, proceed := make(chan struct{}), make(chan struct{})
 	h.gate.onAcquire = func(ctx context.Context) error {
 		close(waiting)
 		<-proceed
 		return nil
 	}
-	d := h.enqueue(h.a, ModeDeploy)
 	h.start()
 	recv(t, waiting, "gate wait")
 	h.comp.mu.Lock()
@@ -647,7 +666,7 @@ func TestComposeGoneAfterGate(t *testing.T) {
 	if len(h.comp.deployed) != 0 {
 		t.Fatal("RunDeploy must not run")
 	}
-	if want := []string{"gate+", "gate-"}; !reflect.DeepEqual(h.rec.all(), want) {
+	if want := []string{"gate+", "gate-", "gate+", "gate-"}; !reflect.DeepEqual(h.rec.all(), want) {
 		t.Fatalf("events = %v, want gate released", h.rec.all())
 	}
 }
@@ -848,7 +867,7 @@ func TestRestartRecovery(t *testing.T) {
 	}
 }
 
-func TestSnapshotAtStart(t *testing.T) {
+func TestSnapshotAtEnqueue(t *testing.T) {
 	h := newHarness(t)
 	h.gitSource(h.a)
 	d := h.enqueue(h.a, ModeBuild)
@@ -857,7 +876,7 @@ func TestSnapshotAtStart(t *testing.T) {
 	h.comp.mu.Unlock()
 	h.start()
 	h.waitSettled(h.a, d.Number)
-	if !reflect.DeepEqual(h.comp.prepared, []string{"edited after enqueue"}) {
+	if !reflect.DeepEqual(h.comp.prepared, []string{"yaml-a"}) {
 		t.Fatalf("PrepareBuild saw %v", h.comp.prepared)
 	}
 }
@@ -952,7 +971,7 @@ func TestCancelOfOldNumberLeavesNewerQueued(t *testing.T) {
 	}
 }
 
-func TestSourceIsReadUnderItsLock(t *testing.T) {
+func TestSourceEditsAfterEnqueueDoNotChangeRun(t *testing.T) {
 	h := newHarness(t)
 	h.gitSource(h.a)
 	h.newQueue()
@@ -976,8 +995,8 @@ func TestSourceIsReadUnderItsLock(t *testing.T) {
 	if got := h.waitSettled(h.a, d.Number); got.Status != StatusSucceeded {
 		t.Fatalf("status = %s %q", got.Status, got.Reason)
 	}
-	if seen != "release" {
-		t.Fatalf("fetched branch %q, want release", seen)
+	if seen != "main" {
+		t.Fatalf("fetched branch %q, want captured main", seen)
 	}
 }
 

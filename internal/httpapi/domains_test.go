@@ -389,11 +389,8 @@ func TestDeployRefusedWhenDomainServiceRemoved(t *testing.T) {
 	first := f.resolvedFile(t)
 
 	f.saveYAML(t, "services: {db: {image: postgres:16}}")
-	refused := f.deploy(t, nil)
 	want := `domain api.example.com/ points at service "web", which is not in the compose file`
-	if refused.Status != "failed" || refused.Reason != want {
-		t.Fatalf("deployment = %s with reason %q, want failed with exactly the refusal copy %q", refused.Status, refused.Reason, want)
-	}
+	wantCaptureRejected(t, f.server, f.base, nil, want)
 	if n := f.upCalls(); n != 1 {
 		t.Fatalf("up calls = %d, want 1", n)
 	}
@@ -409,11 +406,8 @@ func TestDeployFreshRefusedWhenDomainServiceRemoved(t *testing.T) {
 	first := f.resolvedFile(t)
 
 	f.saveYAML(t, "services: {db: {image: postgres:16}}")
-	refused := f.deploy(t, freshBody("web"))
 	want := `domain api.example.com/ points at service "web", which is not in the compose file`
-	if refused.Status != "failed" || refused.Reason != want {
-		t.Fatalf("deployment = %s with reason %q, want failed with exactly the refusal copy %q", refused.Status, refused.Reason, want)
-	}
+	wantCaptureRejected(t, f.server, f.base, freshBody("web"), want)
 	for _, call := range f.server.runner.snapshotCalls() {
 		if call.method == "down-with-volumes" {
 			t.Fatal("deploy-fresh removed volumes although the deploy was refused")
