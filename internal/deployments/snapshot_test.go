@@ -244,3 +244,41 @@ func TestLegacySkipBuildCannotDeployAfterSourceRemoved(t *testing.T) {
 		t.Fatalf("legacy Source requirement lost:%+v", finished)
 	}
 }
+
+func TestSkipBuildRejectsMissingSavedMaterialization(t *testing.T) {
+	h := newHarness(t)
+	h.gitSource(h.a)
+	src, err := h.srcs.Get(context.Background(), h.a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srcs.RecordMaterialization(context.Background(), src, filepath.Join(h.comp.dirs[h.a], "retained", "src")); err != nil {
+		t.Fatal(err)
+	}
+	h.newQueue()
+	if _, _, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeSkipBuild}); err == nil {
+		t.Fatal("missing saved materialization accepted as an empty Source")
+	}
+	rows, err := h.store.List(context.Background(), h.a, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("failed capture queued%d Deployments", len(rows))
+	}
+	if _, err := os.Stat(filepath.Join(h.comp.dirs[h.a], sourceSnapshotsDir)); !os.IsNotExist(err) {
+		t.Fatalf("failed capture left private Source files:%v", err)
+	}
+}
+
+func TestMissingChildDuringSourceCopyIsNotAnUnfetchedRoot(t *testing.T) {
+	src := sources.Source{Kind: sources.KindGit}
+	childErr := &os.PathError{Op: "lstat", Path: "/canonical/src/file", Err: os.ErrNotExist}
+	if unfetchedCanonicalSource(src, "/canonical/src", childErr) {
+		t.Fatal("missing mid-copy file was accepted as an unfetched canonical root")
+	}
+	rootErr := &os.PathError{Op: "lstat", Path: "/canonical/src", Err: os.ErrNotExist}
+	if !unfetchedCanonicalSource(src, "/canonical/src", rootErr) {
+		t.Fatal("genuinely unfetched canonical Source was rejected")
+	}
+}

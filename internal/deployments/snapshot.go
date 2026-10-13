@@ -143,7 +143,7 @@ func (q *Queue) capture(ctx context.Context, composeID int64, mode Mode, dedupli
 		if src.Kind == sources.KindGit && src.TreeDirectory != "" {
 			origin = src.TreeDirectory
 		}
-		if err := copySourceWithBudget(copyCtx, origin, filepath.Join(private, "src"), budget); err != nil && !(src.Kind == sources.KindGit && errors.Is(err, os.ErrNotExist)) {
+		if err := copySourceWithBudget(copyCtx, origin, filepath.Join(private, "src"), budget); err != nil && !unfetchedCanonicalSource(src, origin, err) {
 			return nil, fmt.Errorf("could not snapshot Source files: %w", err)
 		}
 	}
@@ -155,6 +155,11 @@ func (q *Queue) capture(ctx context.Context, composeID int64, mode Mode, dedupli
 	ok = true
 	captured = true
 	return snapshot, nil
+}
+
+func unfetchedCanonicalSource(src sources.Source, origin string, err error) bool {
+	var pathErr *fs.PathError
+	return src.Kind == sources.KindGit && src.TreeDirectory == "" && errors.Is(err, os.ErrNotExist) && errors.As(err, &pathErr) && pathErr.Op == "lstat" && filepath.Clean(pathErr.Path) == filepath.Clean(origin)
 }
 
 // copySource copies bytes, never hardlinks. Safe relative links stay relative;
