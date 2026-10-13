@@ -43,13 +43,17 @@ type Deployment struct {
 	StartedAt, FinishedAt    *time.Time
 }
 
-// Active is a queued or running Deployment with its Compose's name.
+// Active is a queued or running Deployment with its Project, Environment and Compose.
 type Active struct {
-	ComposeID   int64
-	ComposeName string
-	Number      int
-	Status      Status
-	Step        string
+	ComposeID       int64
+	ComposeName     string
+	Number          int
+	Status          Status
+	Step            string
+	ProjectID       int64
+	ProjectName     string
+	EnvironmentID   int64
+	EnvironmentName string
 }
 
 // ErrNotQueued is returned by Start when the Deployment was canceled or already
@@ -69,7 +73,7 @@ const columns = `id, compose_id, number, mode, no_cache, fresh_volumes, status, 
 
 type scanner interface{ Scan(dest ...any) error }
 
-func scan(row scanner) (Deployment, error) {
+func scan(row scanner, extra ...any) (Deployment, error) {
 	var (
 		d                 Deployment
 		mode, status      string
@@ -78,8 +82,9 @@ func scan(row scanner) (Deployment, error) {
 		queued            int64
 		started, finished sql.NullInt64
 	)
-	if err := row.Scan(&d.ID, &d.ComposeID, &d.Number, &mode, &noCache, &fresh, &status, &d.Step, &steps,
-		&d.FailedStep, &d.Reason, &d.SourceRef, &d.SourceSubject, &warnings, &queued, &started, &finished); err != nil {
+	dest := []any{&d.ID, &d.ComposeID, &d.Number, &mode, &noCache, &fresh, &status, &d.Step, &steps,
+		&d.FailedStep, &d.Reason, &d.SourceRef, &d.SourceSubject, &warnings, &queued, &started, &finished}
+	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return Deployment{}, err
 	}
 	d.Mode, d.Status = Mode(mode), Status(status)
@@ -307,8 +312,12 @@ func (s *Store) List(ctx context.Context, composeID int64, limit int) ([]Deploym
 // Ahead counts the queued Deployments before d in the queue, plus one when a
 // Deployment is running.
 func (s *Store) Ahead(ctx context.Context, d Deployment) (int, error) {
+	return ahead(ctx, s.db, d)
+}
+
+func ahead(ctx context.Context, q queryer, d Deployment) (int, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `
+	err := q.QueryRowContext(ctx, `
 SELECT (SELECT COUNT(*) FROM deployments WHERE status = 'queued'
         AND (queued_at < ? OR (queued_at = ? AND id < ?)))
      + (SELECT COUNT(*) FROM (SELECT 1 FROM deployments WHERE status = 'running' LIMIT 1))`,
@@ -367,8 +376,10 @@ DELETE FROM deployments WHERE compose_id = ? AND number = ? AND status NOT IN ('
 // Active lists the queued and running Deployments, running first, then queue order.
 func (s *Store) Active(ctx context.Context) ([]Active, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT d.compose_id, c.name, d.number, d.status, d.step
+SELECT d.compose_id, c.name, d.number, d.status, d.step, p.id, p.name, e.id, e.name
 FROM deployments d JOIN composes c ON c.id = d.compose_id
+JOIN environments e ON e.id = c.environment_id
+JOIN projects p ON p.id = e.project_id
 WHERE d.status IN ('queued', 'running')
 ORDER BY CASE d.status WHEN 'running' THEN 0 ELSE 1 END, d.queued_at, d.id`)
 	if err != nil {
@@ -379,7 +390,8 @@ ORDER BY CASE d.status WHEN 'running' THEN 0 ELSE 1 END, d.queued_at, d.id`)
 	for rows.Next() {
 		var a Active
 		var status string
-		if err := rows.Scan(&a.ComposeID, &a.ComposeName, &a.Number, &status, &a.Step); err != nil {
+		if err := rows.Scan(&a.ComposeID, &a.ComposeName, &a.Number, &status, &a.Step,
+			&a.ProjectID, &a.ProjectName, &a.EnvironmentID, &a.EnvironmentName); err != nil {
 			return nil, err
 		}
 		a.Status = Status(status)

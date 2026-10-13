@@ -43,6 +43,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+composeBase+"/{number}", a.get)
 	mux.HandleFunc("GET "+composeBase+"/{number}/log", a.log)
 	mux.HandleFunc("POST "+composeBase+"/{number}/cancel", a.cancel)
+	mux.HandleFunc("GET /api/deployments", a.globalList)
 	mux.HandleFunc("GET /api/deployments/queue", a.queue)
 }
 
@@ -268,11 +269,15 @@ func (a *API) cancel(w http.ResponseWriter, r *http.Request) {
 }
 
 type activeJSON struct {
-	ComposeID   int64  `json:"composeId"`
-	ComposeName string `json:"composeName"`
-	Number      int    `json:"number"`
-	Status      Status `json:"status"`
-	Step        string `json:"step"`
+	ComposeID       int64  `json:"composeId"`
+	ComposeName     string `json:"composeName"`
+	Number          int    `json:"number"`
+	Status          Status `json:"status"`
+	Step            string `json:"step"`
+	ProjectID       int64  `json:"projectId"`
+	ProjectName     string `json:"projectName"`
+	EnvironmentID   int64  `json:"environmentId"`
+	EnvironmentName string `json:"environmentName"`
 }
 
 func (a *API) queue(w http.ResponseWriter, r *http.Request) {
