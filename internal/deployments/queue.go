@@ -312,7 +312,7 @@ func (q *Queue) processSafely(ctx context.Context, d Deployment) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			logf("deployment %d of compose %d panicked: %v\n%s", d.Number, d.ComposeID, r, debug.Stack())
-			err = q.settleUnstarted(context.WithoutCancel(ctx), d, failed("", reasonInternal))
+			err = q.settleUnstarted(ctx, d, failed("", reasonInternal))
 		}
 	}()
 	return q.process(ctx, d)
@@ -324,13 +324,13 @@ func (q *Queue) process(ctx context.Context, d Deployment) error {
 	bg := context.WithoutCancel(ctx)
 	target, err := q.d.Composes.Target(bg, d.ComposeID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return q.settleUnstarted(bg, d, outcome{status: StatusCanceled, reason: reasonComposeDeleted})
+		return q.settleUnstarted(ctx, d, outcome{status: StatusCanceled, reason: reasonComposeDeleted})
 	}
 	if err != nil {
-		return q.settleUnstarted(bg, d, failed("", firstLine(err.Error())))
+		return q.settleUnstarted(ctx, d, failed("", firstLine(err.Error())))
 	}
 	if err := q.d.Composes.CheckDeployable(bg, target); err != nil {
-		return q.settleUnstarted(bg, d, failed("", firstLine(err.Error())))
+		return q.settleUnstarted(ctx, d, failed("", firstLine(err.Error())))
 	}
 
 	j := &job{q: q, ctx: ctx, bg: bg, d: d, target: target, steps: []string{stepDeploy}}
@@ -340,21 +340,22 @@ func (q *Queue) process(ctx context.Context, d Deployment) error {
 		if _, err := q.d.Sources.Get(bg, d.ComposeID); errors.Is(err, sql.ErrNoRows) {
 			j.pre = &outcome{status: StatusFailed, reason: reasonNoSource}
 		} else if err != nil {
-			return q.settleUnstarted(bg, d, failed("", firstLine(err.Error())))
+			return q.settleUnstarted(ctx, d, failed("", firstLine(err.Error())))
 		}
 	}
 	return j.execute()
 }
 
 // settleUnstarted settles a Deployment that never got to run its steps.
-func (q *Queue) settleUnstarted(bg context.Context, d Deployment, o outcome) error {
+func (q *Queue) settleUnstarted(ctx context.Context, d Deployment, o outcome) error {
+	bg := context.WithoutCancel(ctx)
 	if err := q.d.Store.Start(bg, d.ID, []string{stepDeploy}, q.d.Now()); err != nil {
 		if errors.Is(err, ErrNotQueued) {
 			return nil
 		}
 		return err
 	}
-	return q.d.Store.Finish(bg, d.ID, o.status, o.failedStep, o.reason, nil, q.d.Now())
+	return finishWithRetry(ctx, q.d.Store, d.ID, o, q.d.Now())
 }
 
 func firstLine(s string) string {
@@ -421,7 +422,10 @@ func (j *job) execute() error {
 		fmt.Fprintf(j.out, "%s: %s\n", o.status, o.reason)
 	}
 
-	finishErr := q.d.Store.Finish(j.bg, j.d.ID, o.status, o.failedStep, o.reason, o.warnings, q.d.Now())
+	finishErr := finishWithRetry(j.ctx, q.d.Store, j.d.ID, o, q.d.Now())
+	if finishErr != nil {
+		return finishErr
+	}
 	removed, err := q.d.Store.Prune(j.bg, j.d.ComposeID, q.d.Keep)
 	if err != nil {
 		logf("prune compose %d: %v", j.d.ComposeID, err)
