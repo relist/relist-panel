@@ -212,6 +212,18 @@ describe('domain errors', () => {
 describe('deployments, sources and orphan volumes', () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it('requests paginated global history with encoded filters and omits unset values', async () => {
+    const page = { items: [], total: 0, page: 2, pageSize: 50 };
+    const fetch = vi.fn(async (_url: string) => new Response(JSON.stringify(page)));
+    vi.stubGlobal('fetch', fetch);
+    await expect(api.listGlobalDeployments({ page: 2, pageSize: 50, projectId: 5, status: 'failed', from: '2026-10-13T00:00:00+07:00' })).resolves.toEqual(page);
+    const url = new URL(fetch.mock.calls[0][0], 'http://panel.localhost');
+    expect(url.pathname).toBe('/api/deployments');
+    expect(Object.fromEntries(url.searchParams)).toEqual({ page: '2', pageSize: '50', projectId: '5', status: 'failed', from: '2026-10-13T00:00:00+07:00' });
+    await api.listGlobalDeployments({});
+    expect(fetch.mock.calls[1][0]).toBe('/api/deployments');
+  });
+
   it('POSTs the deployment request to deployments as JSON', async () => {
     const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{"number":4}', { status: 202 }));
     vi.stubGlobal('fetch', fetch);

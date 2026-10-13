@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, SyncOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, RocketOutlined, SyncOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 
+import { useGlobalDeploymentQueue } from '../data/useGlobalDeploymentQueue';
 import { usePanel } from '../data/store';
 import { composeState, projectComposes, summarize } from '../data/types';
 import { COMPOSE_STATE_META, LAYOUT } from './theme';
@@ -42,6 +43,8 @@ export function AppShell() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { auth, loadProjects, projects, refreshStatus, signOut } = usePanel();
+  const { data: deploymentQueue } = useGlobalDeploymentQueue(auth.authenticated);
+  const queuedCount = deploymentQueue?.filter((d) => d.status === 'queued').length ?? 0;
   const [loadError, setLoadError] = useState<string>();
   const [refreshing, setRefreshing] = useState(false);
 
@@ -72,6 +75,8 @@ export function AppShell() {
         ? 'projects'
         : resolved.pattern === 'monitoring'
           ? 'monitoring'
+          : resolved.pattern === 'deployments'
+            ? 'deployments'
           : resolved.pattern === 'images'
             ? 'images'
           : resolved.pattern === '/'
@@ -98,6 +103,10 @@ export function AppShell() {
   const menuItems: MenuProps['items'] = [
     { key: 'overview', icon: <AppstoreOutlined />, label: 'Overview' },
     { key: 'projects', icon: <FolderOutlined />, label: 'Projects' },
+    {
+      key: 'deployments', icon: <RocketOutlined />,
+      label: <Flex align="center" justify="space-between" gap={8}><span>Deployments</span><Badge count={queuedCount} color={token.colorPrimary} title={`${queuedCount} queued deployments`} /></Flex>,
+    },
     { key: 'monitoring', icon: <DashboardOutlined />, label: 'Monitoring' },
     { key: 'images', icon: <ContainerOutlined />, label: 'Images' },
     {
@@ -123,6 +132,7 @@ export function AppShell() {
     if (key === 'overview') return navigate(paths.overview);
     if (key === 'projects') return navigate(paths.projects);
     if (key === 'monitoring') return navigate(paths.monitoring);
+    if (key === 'deployments') return navigate(paths.deployments);
     if (key === 'images') return navigate(paths.images);
     const projectId = Number(String(key).replace('project-', ''));
     if (Number.isFinite(projectId)) void navigate(paths.project(projectId));
@@ -137,6 +147,8 @@ export function AppShell() {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Projects' });
       } else if (resolved?.pattern === 'monitoring') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Monitoring' });
+      } else if (resolved?.pattern === 'deployments') {
+        trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Deployments' });
       } else if (resolved?.pattern === 'images') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Images' });
       }

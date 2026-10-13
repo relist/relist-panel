@@ -14,6 +14,9 @@ import type {
   ComposeSource,
   ComposeVolumes,
   Deployment,
+  DeploymentHistoryQuery,
+  GlobalDeploymentPage,
+  GlobalQueuedDeployment,
   DeploymentLog,
   DeploymentRequest,
   DetectedDockerfile,
@@ -281,6 +284,15 @@ export const api = {
     request<{ number: number }>(`${composePath(location)}/deployments`, jsonInit('POST', req)),
   /** The Compose's Deployments, newest first. */
   listDeployments: (location: ComposePath) => request<Deployment[]>(`${composePath(location)}/deployments`),
+  listGlobalDeployments: (query: DeploymentHistoryQuery = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) params.set(key, String(value));
+    }
+    const search = params.toString();
+    return request<GlobalDeploymentPage>(`/api/deployments${search ? `?${search}` : ''}`);
+  },
+  globalDeploymentQueue: () => request<GlobalQueuedDeployment[]>('/api/deployments/queue'),
   getDeployment: (location: ComposePath, number: number) =>
     request<Deployment>(`${composePath(location)}/deployments/${number}`),
   deploymentLog: (location: ComposePath, number: number, offset: number) =>

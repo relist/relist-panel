@@ -98,3 +98,11 @@ describe('resolvePath', () => {
     expect(resolvePath('/projects/1/compose/3')).toBeUndefined();
   });
 });
+
+
+describe('global Deployments path', () => {
+  it('resolves the host page outside Project/Compose context', () => {
+    expect(paths.deployments).toBe('/deployments');
+    expect(resolvePath(paths.deployments)).toEqual({ params: {}, pattern: 'deployments' });
+  });
+});

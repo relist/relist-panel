@@ -571,6 +571,40 @@ export interface QueuedDeployment {
   step: string;
 }
 
+/** Context distinguishes per-Compose Deployment numbers in the host view. */
+export interface DeploymentContext {
+  projectId: number;
+  projectName: string;
+  environmentId: number;
+  environmentName: string;
+  composeId: number;
+  composeName: string;
+}
+
+export interface GlobalDeployment extends Deployment, DeploymentContext {
+  id: number;
+}
+
+export interface GlobalQueuedDeployment extends QueuedDeployment, DeploymentContext {}
+
+export type DeploymentHistoryQuery = {
+  page?: number;
+  pageSize?: number;
+  projectId?: number;
+  environmentId?: number;
+  composeId?: number;
+  status?: DeploymentStatus;
+  from?: string;
+  to?: string;
+};
+
+export type GlobalDeploymentPage = {
+  items: GlobalDeployment[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
 export interface ComposeSource {
   kind: 'git' | 'zip';
   repoUrl: string;

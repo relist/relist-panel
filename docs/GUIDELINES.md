@@ -404,6 +404,26 @@ client refuses a wrong extension or a file over 10 GiB before sending. The list 
 in a tooltip) and In use; a search box filters by tag, and the rows of the last load are highlighted.
 Uploads can run for up to one hour through Traefik; a longer one needs the direct-port fallback.
 
+### 4.12 Deployments (`/deployments`)
+
+Host-wide deployment activity, available below Projects in the side menu. Its badge
+counts queued Deployments; the running Deployment is shown in the page's Queue.
+
+- **Queue** remains unfiltered: running first, followed by all waiting Deployments
+  in FIFO order, with their Project / Environment / Compose and current step.
+- **History** queries all retained Deployments, newest queued time first, with
+  Project, Environment, Compose, status and date filters and server pagination.
+  Clearing a parent filter clears its dependent children and starts at page 1.
+- Numbers belong to a Compose, so every row includes its context; `#1` alone does
+  not identify a Deployment across the host.
+- **View logs** opens the same right Drawer as the Compose tab. It follows the
+  selected Deployment's steps, status and log, supports Cancel, and stops reading
+  when closed or when leaving the page. Text stays within the available width.
+- The page states the existing retention policy: the latest 20 Deployments per
+  Compose. Deleted Composes and pruned records are not presented as available.
+- Queue errors and History errors each offer Retry. Filters affect History only;
+  no queue items disappear when an operator narrows the History.
+
 ## 5. Status vocabulary
 
 One vocabulary, everywhere a Compose state appears. Derived entirely from the API's

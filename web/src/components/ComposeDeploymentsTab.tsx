@@ -5,22 +5,17 @@ import {
   LoadingOutlined,
   MinusCircleFilled,
 } from '@ant-design/icons';
-import { Alert, App, Button, Card, Drawer, Empty, Flex, Grid, Steps, Table, Tag, Typography, theme } from 'antd';
+import { Button, Card, Empty, Flex, Grid, Table, Tag, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { useEffect, useRef, useState } from 'react';
 
-import { LAYOUT } from '../app/theme';
-import { api } from '../data/api';
 import type { ComposePath } from '../data/api';
-import { deploymentHeadline, isActive, stepLabel } from '../data/deployments-view';
 import type { ActiveDeployment } from '../data/deployments-view';
 import type { Compose, Deployment, DeploymentStatus } from '../data/types';
 import { RelativeTime } from './primitives';
+import { DeploymentLogDrawer } from './DeploymentLogDrawer';
 
 const { Text } = Typography;
-
-/** How often the log is read while the shown Deployment is active. */
-const POLL_MS = 1000;
 
 const STATUS_ICON: Record<DeploymentStatus, React.ReactNode> = {
   canceled: <MinusCircleFilled />,
@@ -36,21 +31,6 @@ function duration(d: Deployment): string | undefined {
   }
   const seconds = Math.max(0, dayjs(d.finishedAt).diff(dayjs(d.startedAt), 'second'));
   return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
-}
-
-/** Steps for one Deployment: which one is current, and how a finished one ended. */
-function stepsView(d: Deployment): { current: number; status: 'process' | 'finish' | 'error' | 'wait' } {
-  if (d.status === 'succeeded') {
-    return { current: d.steps.length, status: 'finish' };
-  }
-  if (d.status === 'failed' || d.status === 'canceled') {
-    const failedAt = d.steps.indexOf(d.failedStep || d.step);
-    return { current: Math.max(failedAt, 0), status: 'error' };
-  }
-  if (d.status === 'queued') {
-    return { current: 0, status: 'wait' };
-  }
-  return { current: Math.max(d.steps.indexOf(d.step), 0), status: 'process' };
 }
 
 type DeploymentsProps = {
@@ -139,104 +119,11 @@ function DeploymentHistory({ active = true, history, location, onSelect, running
           ]}
         />
       </Card>
-      <Drawer
-        destroyOnHidden
+      <DeploymentLogDrawer
+        target={active && opened !== undefined && shown ? { location, number: opened, deployment: shown } : undefined}
         onClose={() => setOpened(undefined)}
-        open={active && opened !== undefined}
-        placement="right"
-        size="min(880px, 100vw)"
-        title={`Deployment #${opened ?? ''}`}
-        styles={{ body: { display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' } }}
-      >
-        {active && opened !== undefined && shown ? <DeploymentDetails key={shown.number} deployment={shown} location={location} running={running} /> : <Empty description="Loading deployment…" />}
-      </Drawer>
+        running={running}
+      />
     </>
-  );
-}
-
-/** Mounting a new selection resets its log and isolates late responses. */
-function DeploymentDetails({ deployment: shown, location, running }: {
-  deployment: Deployment;
-  location: ComposePath;
-  running?: ActiveDeployment;
-}) {
-  const { message } = App.useApp();
-  const { token } = theme.useToken();
-  const [log, setLog] = useState('');
-  const [logError, setLogError] = useState(false);
-  const [canceling, setCanceling] = useState(false);
-  const logRef = useRef<HTMLPreElement>(null);
-
-  useEffect(() => {
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let offset = 0;
-    const read = async () => {
-      let again = true;
-      try {
-        const chunk = await api.deploymentLog(location, shown.number, offset);
-        if (stopped) return;
-        offset = chunk.offset;
-        setLogError(false);
-        if (chunk.text) setLog((text) => text + chunk.text);
-        again = !chunk.done;
-      } catch {
-        if (!stopped) setLogError(true);
-      }
-      if (!stopped && again) timer = setTimeout(() => void read(), POLL_MS);
-    };
-    void read();
-    return () => { stopped = true; clearTimeout(timer); };
-  }, [location.composeId, location.environmentId, location.projectId, shown.number]);
-
-  useEffect(() => {
-    const el = logRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [log]);
-
-  const cancel = async () => {
-    setCanceling(true);
-    try {
-      await api.cancelDeployment(location, shown.number);
-    } catch (reason: unknown) {
-      const text = reason instanceof Error ? reason.message : 'Could not cancel';
-      if ((reason as { status?: number } | null)?.status === 409) message.info(text);
-      else message.error(text);
-    } finally {
-      setCanceling(false);
-    }
-  };
-  const view = stepsView(shown);
-
-  return (
-    <Flex gap={LAYOUT.gutterSmall} vertical style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-      <Flex gap={12} vertical style={{ maxHeight: '45%', flexShrink: 0, overflow: 'auto', overflowWrap: 'anywhere' }}>
-        <Flex align="start" gap={12} justify="space-between">
-          <Text strong style={{ minWidth: 0 }}>{deploymentHeadline(shown, running)}</Text>
-          {isActive(shown) && <Button danger loading={canceling} onClick={() => void cancel()} size="small">Cancel</Button>}
-        </Flex>
-        {(shown.sourceRef || shown.sourceSubject) && <Text type="secondary">{[shown.sourceRef, shown.sourceSubject].filter(Boolean).join(' · ')}</Text>}
-        <Steps current={view.current} items={shown.steps.map((id) => ({ title: stepLabel(id) }))} orientation="vertical" size="small" status={view.status} />
-        {shown.warnings.length > 0 && <Alert showIcon title={<Flex gap={4} vertical>{shown.warnings.map((warning) => <span key={warning}>{warning}</span>)}</Flex>} type="warning" />}
-        {shown.status === 'failed' && shown.reason && <Alert showIcon title={shown.reason} type="error" />}
-      </Flex>
-      {logError && <Alert showIcon title="Could not load logs. Retrying…" type="warning" />}
-      <pre
-        className="rp-logs"
-        data-testid="deployment-log"
-        ref={logRef}
-        style={{
-          background: token.colorFillQuaternary,
-          border: `1px solid ${token.colorBorderSecondary}`,
-          borderRadius: token.borderRadius,
-          flex: 1,
-          margin: 0,
-          minHeight: 0,
-          minWidth: 0,
-          overflow: 'auto',
-          overflowWrap: 'anywhere',
-        }}
-      >{log}</pre>
-    </Flex>
   );
 }
