@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '../test/dom-setup';
 
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from 'antd';
 import { useEffect } from 'react';
@@ -117,5 +117,24 @@ describe('Compose Source loading', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect((screen.getByRole('button', { name: /Deploy$/ }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+});
+
+describe('Fresh volumes confirmation', () => {
+  it('warns before submitting that deletion survives failure and requires a backup', async () => {
+    vi.spyOn(api, 'getSource').mockResolvedValue(null);
+    vi.mocked(api.listVolumes).mockResolvedValue({ available: true, services: [], volumes: [] });
+    const enqueue = vi.spyOn(api, 'enqueueDeployment');
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole('heading', { name: 'Compose 7' });
+    await user.click(screen.getByRole('button', { name: 'More deploy options' }));
+    await user.click(await screen.findByRole('menuitem', { name: /Deploy with fresh volumes/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Deploy with fresh volumes?' });
+    expect(within(dialog).getByText('Named volume data is permanently deleted before deployment.')).toBeTruthy();
+    expect(within(dialog).getByText(/If deployment fails, the deleted data is not restored/)).toBeTruthy();
+    expect(within(dialog).getByText(/Back up the volumes before continuing/)).toBeTruthy();
+    expect(enqueue).not.toHaveBeenCalled();
+    expect((within(dialog).getByRole('button', { name: 'Deploy with fresh volumes' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

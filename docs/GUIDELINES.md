@@ -260,6 +260,11 @@ has deployed before and `domainsChangedAt >= lastDeployedAt`. Above the tabs, a 
 - **Activity**: this Compose's recent actions.
 - **Logs tab** (read on open, not a drawer): service filter, line count, copy; `Follow` is visible but disabled, with a tooltip
   explaining that streaming is out of v1 scope.
+- **Deploy with fresh volumes**: the typed-name confirmation displays a warning
+  that named volume data is permanently deleted before deployment and is not
+  restored if deployment fails. It directs the operator to back up first. A
+  failed Deployment retains a warning in its log Drawer when the backend confirms
+  named volumes were actually removed; the option alone is not evidence of removal.
 
 #### Monitor tab (`…/compose/:composeId/monitor`)
 
@@ -445,6 +450,14 @@ One vocabulary, everywhere a Compose state appears. Derived entirely from the AP
 
 - Two bars: 56px header (`Layout.headerHeight`) and a 248px sider. Content is a 24px-padded,
   1280px-max column.
+- The sider stays at viewport height; navigation scrolls independently so its
+  Docker host footer remains visible. The footer warns at **80% or more** used on
+  the filesystem containing Panel/SQLite data, shows percentage and free space,
+  and links to Monitoring. It refreshes every 10 seconds while signed in. Missing
+  readings are unavailable; readings older than 30 seconds or from a failed
+  refresh are labelled stale, with the last reading identified explicitly.
+  Below the `lg` breakpoint navigation opens as an overlay, preserving the page
+  width; its trigger, backdrop or a navigation selection can close it.
 - The header's right cluster (search / refresh / theme / account) is pushed out by
   `marginInlineStart: 'auto'`, not by `justify="space-between"` alone. The breadcrumb is hidden on
   routes with a single crumb, and the cluster would then be that Flex's only child — which

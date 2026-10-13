@@ -155,9 +155,9 @@ function DeploymentDetails({ target, follow, running, onCanceled }: {
             <Text strong style={{ minWidth: 0 }}>{deploymentHeadline(shown, running)}</Text>
             {isActive(shown) && <Button danger loading={canceling} onClick={() => void cancel()} size="small">Cancel</Button>}
           </Flex>
+          {shown.warnings.length > 0 && <Alert showIcon title={<Flex gap={4} vertical>{shown.warnings.map((warning) => <span key={warning}>{warning}</span>)}</Flex>} type="warning" />}
           {(shown.sourceRef || shown.sourceSubject) && <Text type="secondary">{[shown.sourceRef, shown.sourceSubject].filter(Boolean).join(' · ')}</Text>}
           <Steps current={view.current} items={shown.steps.map((id) => ({ title: stepLabel(id) }))} orientation="vertical" size="small" status={view.status} />
-          {shown.warnings.length > 0 && <Alert showIcon title={<Flex gap={4} vertical>{shown.warnings.map((warning) => <span key={warning}>{warning}</span>)}</Flex>} type="warning" />}
           {shown.status === 'failed' && shown.reason && <Alert showIcon title={shown.reason} type="error" />}
         </Flex>
       )}

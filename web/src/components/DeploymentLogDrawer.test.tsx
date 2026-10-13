@@ -23,6 +23,27 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.resetAllMocks(); });
 
 describe('DeploymentLogDrawer', () => {
+  it('keeps confirmed volume-removal warnings visible when a failed deployment is reopened', async () => {
+    const warning = 'Named volumes were removed before deployment failed. Their data will not be restored automatically. Restore a backup if you need the previous data.';
+    const failed: Deployment = { ...d, status: 'failed', step: 'deploy', failedStep: 'deploy', freshVolumes: true, warnings: [warning], reason: 'image missing' };
+    const drawer = (open: boolean) => <App><DeploymentLogDrawer target={open ? { location, number: 1, deployment: failed } : undefined} onClose={vi.fn()} /></App>;
+    const result = render(drawer(true));
+    await tick();
+    expect(screen.getByText(warning)).toBeTruthy();
+    result.rerender(drawer(false));
+    await tick(1000);
+    result.rerender(drawer(true));
+    await tick();
+    expect(screen.getByText(warning)).toBeTruthy();
+  });
+
+  it('does not claim volume removal from the freshVolumes option when build failed', async () => {
+    render(<App><DeploymentLogDrawer target={{ location, number: 1, deployment: { ...d, status: 'failed', freshVolumes: true, reason: 'build refused' } }} onClose={vi.fn()} /></App>);
+    await tick();
+    expect(screen.getByText('build refused')).toBeTruthy();
+    expect(screen.queryByText(/Named volumes were removed/)).toBeNull();
+  });
+
   it('loads a queue selection and follows its status until it finishes', async () => {
     vi.mocked(api.getDeployment).mockResolvedValueOnce(d).mockResolvedValue({ ...d, status: 'succeeded' });
     render(<App><DeploymentLogDrawer target={{ location, number: 1 }} follow onClose={vi.fn()} /></App>);

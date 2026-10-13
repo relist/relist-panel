@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, RocketOutlined, SyncOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, MenuOutlined, RocketOutlined, SyncOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -20,6 +20,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 
+import { DiskPressureFooter } from '../components/DiskPressureFooter';
+import { useDiskPressure } from '../data/useDiskPressure';
 import { useGlobalDeploymentQueue } from '../data/useGlobalDeploymentQueue';
 import { usePanel } from '../data/store';
 import { composeState, projectComposes, summarize } from '../data/types';
@@ -34,8 +36,8 @@ const { Text } = Typography;
  * cluster pushed by `marginInlineStart: 'auto'`, and a 24px-padded,
  * 1280px-max content column. The prototype's chrome is not ported: the strip
  * and the latency switch are review scaffolding, the ⌘K palette and dark mode
- * are deliberate v1 omissions, and the sider menu flows with the document
- * instead of scrolling in its own container.
+ * are deliberate v1 omissions. The sider stays the viewport's height so its
+ * storage footer remains visible; navigation scrolls when space is limited.
  */
 export function AppShell() {
   const { token } = theme.useToken();
@@ -44,9 +46,13 @@ export function AppShell() {
   const { pathname } = useLocation();
   const { auth, loadProjects, projects, refreshStatus, signOut } = usePanel();
   const { data: deploymentQueue } = useGlobalDeploymentQueue(auth.authenticated);
+  const diskPressure = useDiskPressure(auth.authenticated);
   const queuedCount = deploymentQueue?.filter((d) => d.status === 'queued').length ?? 0;
   const [loadError, setLoadError] = useState<string>();
   const [refreshing, setRefreshing] = useState(false);
+  const [mobileSidebar, setMobileSidebar] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const closeMobileSidebar = () => { if (mobileSidebar) setSidebarCollapsed(true); };
 
   // The sider, the breadcrumb and the attention badge all read the Project
   // tree, so the shell loads it once per signed-in session; screens refresh it
@@ -129,6 +135,7 @@ export function AppShell() {
   ];
 
   const onMenuClick: MenuProps['onClick'] = ({ key }) => {
+    closeMobileSidebar();
     if (key === 'overview') return navigate(paths.overview);
     if (key === 'projects') return navigate(paths.projects);
     if (key === 'monitoring') return navigate(paths.monitoring);
@@ -205,17 +212,30 @@ export function AppShell() {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
+      {mobileSidebar && !sidebarCollapsed && (
+        <button
+          aria-label="Close navigation backdrop"
+          onClick={closeMobileSidebar}
+          style={{ position: 'fixed', inset: 0, zIndex: 19, border: 0, padding: 0, background: token.colorBgMask }}
+          type="button"
+        />
+      )}
       <Layout.Sider
         breakpoint="lg"
+        collapsed={sidebarCollapsed}
         collapsedWidth={0}
-        style={{ borderInlineEnd: `1px solid ${token.colorBorderSecondary}` }}
+        onBreakpoint={setMobileSidebar}
+        onCollapse={setSidebarCollapsed}
+        style={{ borderInlineEnd: `1px solid ${token.colorBorderSecondary}`, height: '100dvh', position: mobileSidebar ? 'fixed' : 'sticky', insetInlineStart: mobileSidebar ? 0 : undefined, top: 0, alignSelf: 'flex-start', zIndex: 20 }}
+        styles={{ body: { display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' } }}
         theme="light"
+        trigger={<Button aria-label={sidebarCollapsed ? 'Open navigation' : 'Close navigation'} icon={<MenuOutlined />} style={{ width: '100%', height: '100%' }} type="text" />}
         width={LAYOUT.siderWidth}
       >
         <Flex
           align="center"
           gap={10}
-          style={{ borderBottom: `1px solid ${token.colorBorderSecondary}`, height: LAYOUT.barHeight, padding: '0 16px' }}
+          style={{ borderBottom: `1px solid ${token.colorBorderSecondary}`, height: LAYOUT.barHeight, flexShrink: 0, padding: '0 16px' }}
         >
           <div
             style={{
@@ -235,7 +255,7 @@ export function AppShell() {
           </div>
           <Text strong>Relist Panel</Text>
         </Flex>
-        <div style={{ paddingBottom: 12 }}>
+        <nav aria-label="Main navigation" style={{ flex: 1, minHeight: 0, overflow: 'auto', paddingBottom: token.paddingXS }}>
           <Menu
             items={menuItems}
             mode="inline"
@@ -243,14 +263,8 @@ export function AppShell() {
             selectedKeys={selectedKey ? [selectedKey] : []}
             style={{ borderInlineEnd: 0, paddingTop: 8 }}
           />
-          <Divider style={{ margin: '8px 0 0' }} />
-          <Flex align="center" gap={8} style={{ padding: '8px 20px' }}>
-            <CloudServerOutlined style={{ color: token.colorTextTertiary }} />
-            <Text style={{ fontSize: 12 }} type="secondary">
-              Docker host
-            </Text>
-          </Flex>
-        </div>
+        </nav>
+        <DiskPressureFooter onNavigate={closeMobileSidebar} pressure={diskPressure} />
       </Layout.Sider>
 
       <Layout>

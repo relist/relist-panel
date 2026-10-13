@@ -1220,6 +1220,13 @@ export function ComposePage() {
         confirmWord={compose.name}
         consequences={
           <>
+            <Alert
+              showIcon
+              type="warning"
+              title="Named volume data is permanently deleted before deployment."
+              description="If deployment fails, the deleted data is not restored. Back up the volumes before continuing."
+              style={{ marginBottom: LAYOUT.gutterSmall }}
+            />
             {freshVolumes.length > 0 ? (
               <>
                 <Paragraph style={{ marginBottom: 8 }}>
