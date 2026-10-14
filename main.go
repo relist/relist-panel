@@ -87,7 +87,7 @@ func main() {
 
 	handler, waitDeployments := httpapi.NewHandler(ctx, db, dockerexec.New(), cfg.DataDir, sampler, collector, volumeRunner, volumeResolver, &terminal.Options{
 		Exec: terminalExec,
-	}, dockerexec.NewImages(dockerexec.DefaultSocketPath))
+	}, dockerexec.NewImages(dockerexec.DefaultSocketPath), dockerexec.NewDockerHost(dockerexec.DefaultSocketPath))
 	server := &http.Server{Addr: cfg.Address(), Handler: handler}
 
 	log.Printf("relist-panel listening on %s", cfg.Address())

@@ -14,6 +14,7 @@ import (
 	"relist-panel/internal/composes"
 	"relist-panel/internal/composevariables"
 	"relist-panel/internal/deployments"
+	"relist-panel/internal/dockerhost"
 	"relist-panel/internal/domains"
 	"relist-panel/internal/environments"
 	"relist-panel/internal/environmentvariables"
@@ -39,10 +40,12 @@ import (
 // and its read side (ADR-0010). terminalOptions, when non-nil, is the terminal
 // seam and settings; nil leaves the terminal routes unregistered. imageStore
 // is the Images page's Docker seam; nil leaves the image routes unregistered.
+// The optional dockerStores argument adds host reports and confirmed cleanup.
+// The first store is used; omission keeps those routes unregistered.
 //
 // The Deployment worker runs until ctx is done. The returned wait blocks until
 // it has returned, which is after a Deploy step in progress has finished.
-func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts, volumeRunner volumes.Runner, volumeResolver *volumes.Resolver, terminalOptions *terminal.Options, imageStore images.Images) (http.Handler, func()) {
+func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts, volumeRunner volumes.Runner, volumeResolver *volumes.Resolver, terminalOptions *terminal.Options, imageStore images.Images, dockerStores ...dockerhost.Engine) (http.Handler, func()) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
 	authService := auth.New(db)
@@ -56,15 +59,18 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 	environmentVariablesService.RegisterRoutes(mux)
 	composesService.RegisterRoutes(mux)
 	gate := newCoordinator()
+	hostGuard := dockerhost.NewGuard()
+	gate.host = hostGuard
 	queue := deployments.NewQueue(deployments.Deps{
-		Store:    deployments.NewStore(db),
-		Sources:  sources.NewStore(db),
-		Composes: composesService,
-		Fetcher:  sources.Git{},
-		Builder:  runner,
-		Gate:     gate,
-		Timeout:  60 * time.Minute,
-		Keep:     20,
+		Maintenance: hostGuard,
+		Store:       deployments.NewStore(db),
+		Sources:     sources.NewStore(db),
+		Composes:    composesService,
+		Fetcher:     sources.Git{},
+		Builder:     runner,
+		Gate:        gate,
+		Timeout:     60 * time.Minute,
+		Keep:        20,
 	})
 	composesService.SetDeploymentCanceler(queue)
 	deployments.NewAPI(queue, composesService).RegisterRoutes(mux)
@@ -84,6 +90,14 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 	}
 	if imageStore != nil {
 		images.New(imageStore).RegisterRoutes(mux)
+	}
+	if len(dockerStores) > 0 && dockerStores[0] != nil {
+		pending := func(ctx context.Context) (bool, error) {
+			var count int
+			err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM deployments WHERE status IN ('queued', 'running')").Scan(&count)
+			return count > 0, err
+		}
+		dockerhost.NewAPI(dockerStores[0], hostGuard, pending).RegisterRoutes(mux)
 	}
 	if history != nil && services != nil {
 		metricsService := metrics.New(metrics.NewStore(db), history, services)

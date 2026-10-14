@@ -39,16 +39,21 @@ type Builder interface {
 	Build(ctx context.Context, req composes.RunRequest, opts composes.BuildOptions) error
 }
 
+type MaintenanceGate interface {
+	Acquire(context.Context) (func(), error)
+}
+
 type Deps struct {
-	Store    *Store
-	Sources  *sources.Store
-	Composes Composes
-	Fetcher  Fetcher
-	Builder  Builder
-	Gate     Gate
-	Timeout  time.Duration // 60 * time.Minute in production
-	Keep     int           // 20
-	Now      func() time.Time
+	Maintenance MaintenanceGate
+	Store       *Store
+	Sources     *sources.Store
+	Composes    Composes
+	Fetcher     Fetcher
+	Builder     Builder
+	Gate        Gate
+	Timeout     time.Duration // 60 * time.Minute in production
+	Keep        int           // 20
+	Now         func() time.Time
 }
 
 type Request struct {
@@ -346,6 +351,13 @@ func failed(step, reason string) outcome {
 // processSafely is process with a panic outside the steps (loading the
 // Compose, say) settled as a failed Deployment, so it is not retried forever.
 func (q *Queue) processSafely(ctx context.Context, d Deployment) (err error) {
+	if q.d.Maintenance != nil {
+		release, acquireErr := q.d.Maintenance.Acquire(ctx)
+		if acquireErr != nil {
+			return acquireErr
+		}
+		defer release()
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			logf("deployment %d of compose %d panicked: %v\n%s", d.Number, d.ComposeID, r, debug.Stack())

@@ -2,10 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+
+	"relist-panel/internal/dockerhost"
 )
 
 // Project mutation gates cover lifecycle actions, parent teardown and child
@@ -17,6 +20,7 @@ type projectGate struct {
 	refs  int
 }
 type coordinator struct {
+	host  *dockerhost.Guard
 	mu    sync.Mutex
 	gates map[int64]*projectGate
 }
@@ -24,6 +28,15 @@ type coordinator struct {
 func newCoordinator() *coordinator { return &coordinator{gates: make(map[int64]*projectGate)} }
 func (c *coordinator) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Image loading uses the same daemon as pruning, outside a Project.
+		if c.host != nil && r.Method == http.MethodPut && r.URL.Path == "/api/images" {
+			release, err := c.host.Acquire(r.Context())
+			if err != nil {
+				coordinationError(w, err)
+				return
+			}
+			defer release()
+		}
 		projectID := coordinatedProject(r)
 		if projectID == 0 {
 			next.ServeHTTP(w, r)
@@ -31,6 +44,7 @@ func (c *coordinator) middleware(next http.Handler) http.Handler {
 		}
 		release, err := c.Acquire(r.Context(), projectID)
 		if err != nil {
+			coordinationError(w, err)
 			return
 		}
 		defer release()
@@ -75,6 +89,20 @@ func coordinatedProject(r *http.Request) int64 {
 
 // Acquire takes the Project gate, returning promptly when ctx is done.
 func (c *coordinator) Acquire(ctx context.Context, id int64) (func(), error) {
+	releaseHost := func() {}
+	if c.host != nil {
+		release, err := c.host.Acquire(ctx)
+		if err != nil {
+			return nil, err
+		}
+		releaseHost = release
+	}
+	acquired := false
+	defer func() {
+		if !acquired {
+			releaseHost()
+		}
+	}()
 	c.mu.Lock()
 	gate := c.gates[id]
 	if gate == nil {
@@ -102,6 +130,13 @@ func (c *coordinator) Acquire(ctx context.Context, id int64) (func(), error) {
 			unref()
 			return nil, err
 		}
-		return func() { gate.token <- struct{}{}; unref() }, nil
+		acquired = true
+		return func() { gate.token <- struct{}{}; unref(); releaseHost() }, nil
 	}
+}
+
+func coordinationError(w http.ResponseWriter, err error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 }
