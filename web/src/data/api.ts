@@ -7,6 +7,9 @@
  */
 
 import type {
+  DockerReport,
+  DockerPruneKind,
+  DockerPruneResult,
   Compose,
   ComposeDomains,
   ComposeVariable,
@@ -207,6 +210,9 @@ function jsonInit(method: string, body: unknown): RequestInit {
 }
 
 export const api = {
+  resumeDocker: (confirm: string) => request<{ resumed: boolean }>('/api/docker/recover', jsonInit('POST', { confirm })),
+  dockerReport: (refresh = false) => request<DockerReport>(`/api/docker${refresh ? '?refresh=1' : ''}`),
+  pruneDocker: (kind: DockerPruneKind, confirm: string) => request<DockerPruneResult>('/api/docker/prune', jsonInit('POST', { kind, confirm })),
   authStatus: () => request<AuthStatus>('/api/auth/status'),
   setup: (credentials: Credentials) => request<unknown>('/api/auth/setup', jsonInit('POST', credentials)),
   /**

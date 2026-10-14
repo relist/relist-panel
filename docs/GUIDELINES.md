@@ -429,6 +429,34 @@ counts queued Deployments; the running Deployment is shown in the page's Queue.
 - Queue errors and History errors each offer Retry. Filters affect History only;
   no queue items disappear when an operator narrows the History.
 
+### 4.13 Docker (`/docker`)
+
+Host-level Docker reports and explicit cleanup. Purpose: inspect Docker storage and
+remove eligible resources without opening a terminal.
+
+- Keep Images at `/images`; Docker links to it with **Manage images**.
+- Header offers **Refresh**; show Engine/API versions, host, storage driver/data directory,
+  running/paused/stopped counts and the report's checked time.
+- A storage table lists images, writable container layers, volumes, default-builder cache
+  and networks. Sizes may overlap; reclaimable values are estimates. An unknown size or
+  reference count is **Unavailable**, never zero. Volume estimates include named volumes.
+- Inventories use Containers / Volumes / Networks tabs with pagination and table-local
+  horizontal scrolling. Long names and paths wrap; they never expand the page.
+- Cleanup buttons identify their scope: dangling images, stopped containers, unused custom
+  networks, default-builder cache, anonymous volumes. **Advanced cleanup** contains all
+  unused images (including tags) and all unused volumes (including names).
+- Use `DangerModal` with `PRUNE`, or `DELETE VOLUMES` for volumes. State that cleanup affects
+  the whole host, including resources outside Relist. Volume confirmations say deletion is
+  permanent and a later failed deployment cannot restore data.
+- Pruning is disabled while queue work, a mutation, unavailable queue/report data, a report
+  refresh, or stale data is present. Backend independently excludes conflicting operations.
+- Keep mutation errors and actual reclaimed bytes on screen. Refresh after either outcome;
+  refresh failure keeps prior data labelled and disables further pruning. Never automatically
+  retry a destructive request.
+- Unknown prune completion pauses panel Docker work. Show **Resume Docker operations** with
+  a typed `RESUME DOCKER` confirmation requiring the operator to verify daemon deletion has
+  finished. This is an acknowledgement, not a cancellation or daemon completion probe.
+
 ## 5. Status vocabulary
 
 One vocabulary, everywhere a Compose state appears. Derived entirely from the API's

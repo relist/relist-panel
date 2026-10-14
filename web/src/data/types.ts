@@ -644,3 +644,16 @@ export interface BuildTarget {
   target?: string;
   replaceImage: boolean;
 }
+
+export type DockerPruneKind = 'images' | 'unused-images' | 'containers' | 'networks' | 'build-cache' | 'volumes' | 'all-volumes';
+export type DockerUsage = { kind: string; count: number; active: number; size: number | null; reclaimable: number | null };
+export type DockerContainer = { id: string; names: string[]; image: string; state: string; size: number | null };
+export type DockerVolume = { name: string; driver: string; size: number | null; references: number | null };
+export type DockerNetwork = { id: string; name: string; driver: string; scope: string; containers: number | null };
+export type DockerReport = {
+ maintenanceBlocked: boolean;
+ checkedAt: string; version: string; apiVersion: string; hostname: string; storageDriver: string; dockerRootDir: string;
+ containersRunning: number; containersPaused: number; containersStopped: number;
+ usage: DockerUsage[]; containers: DockerContainer[]; volumes: DockerVolume[]; networks: DockerNetwork[]; warnings: string[];
+};
+export type DockerPruneResult = { kind: DockerPruneKind; spaceReclaimed: number; deleted: string[] };

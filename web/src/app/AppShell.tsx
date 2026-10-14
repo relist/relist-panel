@@ -1,4 +1,4 @@
-import { AppstoreOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, MenuOutlined, RocketOutlined, SyncOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, MenuOutlined, RocketOutlined, SyncOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -83,6 +83,8 @@ export function AppShell() {
           ? 'monitoring'
           : resolved.pattern === 'deployments'
             ? 'deployments'
+          : resolved.pattern === 'docker'
+            ? 'docker'
           : resolved.pattern === 'images'
             ? 'images'
           : resolved.pattern === '/'
@@ -114,6 +116,7 @@ export function AppShell() {
       label: <Flex align="center" justify="space-between" gap={8}><span>Deployments</span><Badge count={queuedCount} color={token.colorPrimary} title={`${queuedCount} queued deployments`} /></Flex>,
     },
     { key: 'monitoring', icon: <DashboardOutlined />, label: 'Monitoring' },
+    { key: 'docker', icon: <CloudServerOutlined />, label: 'Docker' },
     { key: 'images', icon: <ContainerOutlined />, label: 'Images' },
     {
       type: 'group',
@@ -140,6 +143,7 @@ export function AppShell() {
     if (key === 'projects') return navigate(paths.projects);
     if (key === 'monitoring') return navigate(paths.monitoring);
     if (key === 'deployments') return navigate(paths.deployments);
+    if (key === 'docker') return navigate(paths.docker);
     if (key === 'images') return navigate(paths.images);
     const projectId = Number(String(key).replace('project-', ''));
     if (Number.isFinite(projectId)) void navigate(paths.project(projectId));
@@ -156,6 +160,8 @@ export function AppShell() {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Monitoring' });
       } else if (resolved?.pattern === 'deployments') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Deployments' });
+      } else if (resolved?.pattern === 'docker') {
+        trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Docker' });
       } else if (resolved?.pattern === 'images') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Images' });
       }
