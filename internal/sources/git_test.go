@@ -262,3 +262,59 @@ func TestFetchMarkerSymlinkNotFollowed(t *testing.T) {
 		}
 	}
 }
+
+func TestFetchRefusesEscapingSymlinks(t *testing.T) {
+	cases := map[string]struct {
+		links    map[string]string
+		escaping string
+	}{
+		"absolute":  {map[string]string{"host": "/"}, "host"},
+		"climbs":    {map[string]string{"up": "../.."}, "up"},
+		"one level": {map[string]string{"m": "../outside"}, "m"},
+		// Each link passes a lexical check; only the kernel's walk escapes.
+		"chained": {map[string]string{"d/e/sl": "../..", "d/e/s": "sl/../../.."}, "d/e/s"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := newRemoteRepo(t)
+			for link, target := range c.links {
+				p := filepath.Join(r.work, link)
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, p); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.commit("main", "a.txt", "a", "with links")
+			dir := t.TempDir()
+			_, err := (Git{}).Fetch(context.Background(), gitSource(r.url, "main"), dir, &bytes.Buffer{})
+			if !errors.Is(err, ErrUnsafeCheckout) {
+				t.Fatalf("Fetch error = %v, want ErrUnsafeCheckout", err)
+			}
+			if _, err := os.Lstat(filepath.Join(dir, "src", c.escaping)); !os.IsNotExist(err) {
+				t.Fatalf("escaping link %q left in src: %v", c.escaping, err)
+			}
+		})
+	}
+}
+
+func TestFetchKeepsSymlinksInsideTree(t *testing.T) {
+	r := newRemoteRepo(t)
+	if err := os.MkdirAll(filepath.Join(r.work, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for link, target := range map[string]string{"d/a": "../a.txt", "dangling": "missing.txt", "self": "."} {
+		if err := os.Symlink(target, filepath.Join(r.work, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.commit("main", "a.txt", "a", "with inside links")
+	dir := t.TempDir()
+	if _, err := (Git{}).Fetch(context.Background(), gitSource(r.url, "main"), dir, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "src", "d", "a")); err != nil || string(b) != "a" {
+		t.Fatalf("read through inside link = %q, %v", b, err)
+	}
+}

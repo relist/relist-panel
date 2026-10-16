@@ -6,12 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+// ErrUnsafeCheckout refuses a checkout that tracks a symlink resolving outside
+// src/. Compose paths under ./src are host paths for the Docker daemon, so such
+// a link would hand the repository's author files from the host.
+var ErrUnsafeCheckout = errors.New("unsafe symlink in checkout")
 
 // Ref is the commit a Fetch left checked out in src/.
 type Ref struct{ SHA, Subject string }
@@ -159,6 +165,10 @@ func (g Git) Fetch(ctx context.Context, src Source, composeDir string, out io.Wr
 		}
 	}
 
+	if err := checkSymlinks(srcDir); err != nil {
+		return Ref{}, err
+	}
+
 	var logOut bytes.Buffer
 	if err := g.run(ctx, srcDir, env, &logOut, out, "log", "-1", "--format=%H%n%s"); err != nil {
 		return Ref{}, err
@@ -168,6 +178,44 @@ func (g Git) Fetch(ctx context.Context, src Source, composeDir string, out io.Wr
 		return Ref{}, errors.New("fetched commit differs from the queued revision")
 	}
 	return Ref{SHA: sha, Subject: subject}, nil
+}
+
+// checkSymlinks resolves every symlink in the working tree the way the kernel
+// will, through os.Root so a link that leaves srcDir errors instead of being
+// followed. Escaping links are removed so they never outlive the refusal; one
+// that dangles inside the tree is fine.
+func checkSymlinks(srcDir string) error {
+	root, err := os.OpenRoot(srcDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	var escaping []string
+	err = fs.WalkDir(root.FS(), ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && d.Name() == ".git" {
+			return fs.SkipDir
+		}
+		if d.Type()&fs.ModeSymlink == 0 {
+			return nil
+		}
+		if _, err := root.Stat(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			escaping = append(escaping, name)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("check symlinks: %w", err)
+	}
+	if len(escaping) == 0 {
+		return nil
+	}
+	for _, name := range escaping {
+		root.Remove(name)
+	}
+	return fmt.Errorf("%w: %q does not resolve inside the repository", ErrUnsafeCheckout, escaping[0])
 }
 
 // ResolveRevision reads only the configured remote branch, with a bounded

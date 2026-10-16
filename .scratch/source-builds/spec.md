@@ -146,8 +146,9 @@ belongs to the panel. Nothing else writes there.
 - Executable bits are kept from each entry's external attributes, so `RUN ./gradlew` and entrypoint
   scripts still run.
 - Symlinks are allowed only when they are relative and resolve inside `src/`. Others are refused.
-  Git Sources check out whatever the repository holds, and BuildKit never follows a link out of the
-  build context anyway, so the rule only keeps an upload from writing outside `src/`.
+  Git Sources get the same rule after checkout and submodule update: a tracked link that resolves
+  outside `src/` is removed and the fetch fails. BuildKit never follows a link out of the build
+  context, but `./src/...` binds, `env_file` and `configs` are host paths the Docker daemon follows.
 - Extraction writes into `.src.new/`. Only after it succeeds is `src/` replaced by a rename, so a
   failed upload leaves the previous code in place. An upload replaces the code, it never merges.
 - An upload does not deploy. The card then shows "Uploaded, not built yet".
