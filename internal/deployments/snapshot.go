@@ -179,6 +179,14 @@ func copySourceWithBudget(ctx context.Context, source, target string, budget *so
 		mode fs.FileMode
 	}
 	var directories []directoryMode
+	// Opened at the first link, so a missing source still fails with
+	// WalkDir's lstat error.
+	var sourceRoot *os.Root
+	defer func() {
+		if sourceRoot != nil {
+			sourceRoot.Close()
+		}
+	}()
 	err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -223,8 +231,14 @@ func copySourceWithBudget(ctx context.Context, source, target string, budget *so
 			if err != nil {
 				return err
 			}
-			resolved := filepath.Clean(filepath.Join(filepath.Dir(relative), link))
-			if filepath.IsAbs(link) || resolved == ".." || strings.HasPrefix(resolved, ".."+string(os.PathSeparator)) {
+			if sourceRoot == nil {
+				if sourceRoot, err = os.OpenRoot(source); err != nil {
+					return err
+				}
+			}
+			// Resolve the way the kernel will, so links routed through other
+			// links are caught too. One that dangles inside the tree is fine.
+			if _, err := sourceRoot.Stat(relative); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return errors.New("Source contains a symlink outside its directory")
 			}
 			return os.Symlink(link, destination)

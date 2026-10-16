@@ -281,3 +281,29 @@ func TestCopyPreservesSourcePermissionsAndInternalLinks(t *testing.T) {
 		t.Fatalf("copy changed supported Source: file=%v root=%v content=%q err=%v", info.Mode(), root.Mode(), content, err)
 	}
 }
+
+func TestCopyRefusesSymlinksThatResolveOutside(t *testing.T) {
+	cases := map[string]map[string]string{
+		"absolute": {"host": "/etc/passwd"},
+		"climbs":   {"up": "../outside"},
+		// Each link passes a lexical check; only the kernel's walk escapes.
+		"chained": {"d/e/sl": "../..", "d/e/s": "sl/../../.."},
+	}
+	for name, links := range cases {
+		t.Run(name, func(t *testing.T) {
+			from, to := t.TempDir(), filepath.Join(t.TempDir(), "copy")
+			for link, target := range links {
+				p := filepath.Join(from, link)
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, p); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := copySource(context.Background(), from, to); err == nil {
+				t.Fatal("escaping symlink copied")
+			}
+		})
+	}
+}
