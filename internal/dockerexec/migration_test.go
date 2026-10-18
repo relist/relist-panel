@@ -114,3 +114,10 @@ func TestStopTraefikFindsTheInstallsTraefik(t *testing.T) {
 		t.Fatalf("last argv = %q", got)
 	}
 }
+
+func TestParseLoaded(t *testing.T) {
+	got := parseLoaded("Loaded image: relist-c7-api:latest\nLoaded image ID: sha256:abc\n")
+	if !reflect.DeepEqual(got, []string{"relist-c7-api:latest", "sha256:abc"}) {
+		t.Fatalf("parseLoaded() = %q", got)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"relist-panel/internal/volfs"
 )
@@ -143,7 +144,7 @@ func (r *restorer) RestoreImage(ctx context.Context, item Item, fetch func(conte
 	if err != nil {
 		return "", err
 	}
-	err = docker.LoadImages(ctx, body)
+	loaded, err := docker.LoadImages(ctx, body)
 	if _, drainErr := io.Copy(io.Discard, body); err == nil {
 		err = drainErr
 	}
@@ -153,9 +154,18 @@ func (r *restorer) RestoreImage(ctx context.Context, item Item, fetch func(conte
 	}
 	ref := img.ID
 	if len(img.Tags) == 0 {
-		if err := docker.TagImage(ctx, img.ID, migratedTag(img)); err != nil {
+		// Tag what docker load reports: another image store gives the
+		// same content another ID.
+		source := img.ID
+		for _, l := range loaded {
+			if strings.HasPrefix(l, "sha256:") {
+				source = l
+			}
+		}
+		if err := docker.TagImage(ctx, source, migratedTag(img)); err != nil {
 			return "", fmt.Errorf("tag image %s: %w", shortID(img.ID), err)
 		}
+		ref = migratedTag(img)
 	} else {
 		ref = img.Tags[0]
 	}

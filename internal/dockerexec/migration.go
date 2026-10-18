@@ -174,9 +174,27 @@ func (d *MigrationDocker) SaveImages(ctx context.Context, refs []string, w io.Wr
 	return err
 }
 
-func (d *MigrationDocker) LoadImages(ctx context.Context, r io.Reader) error {
-	_, err := d.docker(ctx, r, nil, "image", "load", "--quiet")
-	return err
+func (d *MigrationDocker) LoadImages(ctx context.Context, r io.Reader) ([]string, error) {
+	out, err := d.docker(ctx, r, nil, "image", "load", "--quiet")
+	if err != nil {
+		return nil, err
+	}
+	return parseLoaded(out), nil
+}
+
+// parseLoaded reads `docker load`'s "Loaded image: <tag>" and
+// "Loaded image ID: <id>" lines.
+func parseLoaded(out string) []string {
+	var loaded []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if ref, ok := strings.CutPrefix(line, "Loaded image ID: "); ok {
+			loaded = append(loaded, ref)
+		} else if ref, ok := strings.CutPrefix(line, "Loaded image: "); ok {
+			loaded = append(loaded, ref)
+		}
+	}
+	return loaded
 }
 
 func (d *MigrationDocker) RemoveImage(ctx context.Context, ref string) error {

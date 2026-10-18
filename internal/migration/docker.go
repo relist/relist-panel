@@ -39,7 +39,9 @@ type Docker interface {
 	PullImage(ctx context.Context, ref string) error
 	TagImage(ctx context.Context, source, target string) error
 	SaveImages(ctx context.Context, refs []string, w io.Writer) error
-	LoadImages(ctx context.Context, r io.Reader) error
+	// LoadImages returns what `docker load` reports it loaded: tags, or
+	// image IDs for an untagged Image.
+	LoadImages(ctx context.Context, r io.Reader) ([]string, error)
 	RemoveImage(ctx context.Context, ref string) error
 	// Helper runs out of the panel's image. mountSource is a volume name or
 	// an absolute host path, mounted at /data; Pack, Size and Free mount it

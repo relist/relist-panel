@@ -188,28 +188,34 @@ func (f *FakeDocker) SaveImages(_ context.Context, refs []string, w io.Writer) e
 	return err
 }
 
-func (f *FakeDocker) LoadImages(_ context.Context, r io.Reader) error {
+func (f *FakeDocker) LoadImages(_ context.Context, r io.Reader) ([]string, error) {
 	body, err := io.ReadAll(r)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.call("load"); err != nil {
-		return err
+		return nil, err
 	}
 	refs, ok := strings.CutPrefix(string(body), "images:")
 	if !ok {
-		return errors.New("load: not an image archive")
+		return nil, errors.New("load: not an image archive")
 	}
+	var loaded []string
 	for _, ref := range strings.Split(refs, ",") {
 		img, ok := f.Loadable[ref]
 		if !ok {
-			return fmt.Errorf("load: archive names unknown %s", ref)
+			return nil, fmt.Errorf("load: archive names unknown %s", ref)
 		}
 		f.addImage(img)
+		if strings.HasPrefix(ref, "sha256:") {
+			loaded = append(loaded, img.ID) // an untagged Image reports its ID on this host
+		} else {
+			loaded = append(loaded, ref)
+		}
 	}
-	return nil
+	return loaded, nil
 }
 
 func (f *FakeDocker) RemoveImage(_ context.Context, ref string) error {

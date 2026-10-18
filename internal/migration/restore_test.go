@@ -194,3 +194,19 @@ func TestCleanupAndDiscard(t *testing.T) {
 		t.Fatal("Discard left the image tag")
 	}
 }
+
+func TestUntaggedImageWithAnotherIDIsTaggedByTheLoadedID(t *testing.T) {
+	r, docker, _ := newTestRestorer(t)
+	img := ImageInfo{ID: "sha256:0123456789abcdef", Tags: []string{}, RepoDigests: []string{}}
+	docker.Loadable["sha256:0123456789abcdef"] = ImageInfo{ID: "sha256:fedcba9876543210"}
+	warning, err := r.RestoreImage(context.Background(), Item{Kind: KindImage, Image: &img}, savedBody(img.ID))
+	if err != nil {
+		t.Fatalf("RestoreImage() error = %v, want a warning", err)
+	}
+	if got := docker.Images["relist-migrated/0123456789ab"]; got.ID != "sha256:fedcba9876543210" {
+		t.Fatalf("migrated tag = %+v", got)
+	}
+	if !strings.Contains(warning, "different ID") {
+		t.Fatalf("warning = %q", warning)
+	}
+}
