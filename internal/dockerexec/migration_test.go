@@ -38,7 +38,7 @@ func TestPackArgvIsReadOnlyWithDacReadSearch(t *testing.T) {
 	if err := newTestMigrationDocker(r).Pack(context.Background(), "relist-c7_pgdata", ".", io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"docker", "run", "--rm", "-i", "--network", "none", "--user", "0:0", "--read-only", "--tmpfs", "/tmp",
+	want := []string{"docker", "run", "--rm", "-i", "--log-driver", "none", "--network", "none", "--user", "0:0", "--read-only", "--tmpfs", "/tmp",
 		"--cap-drop", "ALL", "--cap-add", "DAC_READ_SEARCH", "--security-opt", "no-new-privileges",
 		"-v", "relist-c7_pgdata:/data:ro", "--entrypoint", helperEntrypoint, testImage, "pack", "--", "."}
 	if !reflect.DeepEqual(r.calls[0], want) {
@@ -51,7 +51,7 @@ func TestUnpackArgvAddsChownCaps(t *testing.T) {
 	if err := newTestMigrationDocker(r).Unpack(context.Background(), "/srv", strings.NewReader("")); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"docker", "run", "--rm", "-i", "--network", "none", "--user", "0:0", "--read-only", "--tmpfs", "/tmp",
+	want := []string{"docker", "run", "--rm", "-i", "--log-driver", "none", "--network", "none", "--user", "0:0", "--read-only", "--tmpfs", "/tmp",
 		"--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER",
 		"--security-opt", "no-new-privileges", "-v", "/srv:/data", "--entrypoint", helperEntrypoint, testImage, "unpack", "--", "."}
 	if !reflect.DeepEqual(r.calls[0], want) {

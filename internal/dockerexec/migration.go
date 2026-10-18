@@ -196,7 +196,8 @@ func (d *MigrationDocker) helper(ctx context.Context, mountSource, op, name stri
 		return "", err
 	}
 	write := op == "unpack" || op == "delete"
-	args := []string{"run", "--rm", "-i", "--network", "none", "--user", "0:0", "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL"}
+	// --log-driver none: a 50 GB pack must not also land in the container log.
+	args := []string{"run", "--rm", "-i", "--log-driver", "none", "--network", "none", "--user", "0:0", "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL"}
 	mount := mountSource + ":/data"
 	if write {
 		args = append(args, "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER")
