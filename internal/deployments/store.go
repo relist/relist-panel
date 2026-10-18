@@ -276,6 +276,53 @@ WHERE status = 'running'`, reason, now.Unix())
 	return int(n), err
 }
 
+// CancelUnfinished cancels every queued and running Deployment with reason.
+// A Migration (ADR-0018) runs it on the copied database before the worker
+// starts, so the new host never resumes the old host's queue.
+func (s *Store) CancelUnfinished(ctx context.Context, reason string, now time.Time) (int, error) {
+	res, err := s.db.ExecContext(ctx, `
+UPDATE deployments SET status = 'canceled', reason = ?, finished_at = ? WHERE status IN ('queued', 'running')`, reason, now.Unix())
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// cancelAllQueued cancels every queued Deployment with reason and returns
+// their IDs.
+func (s *Store) cancelAllQueued(ctx context.Context, reason string, now time.Time) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id FROM deployments WHERE status = 'queued'")
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var canceled []int64
+	for _, id := range ids {
+		res, err := s.db.ExecContext(ctx, `
+UPDATE deployments SET status = 'canceled', reason = ?, finished_at = ? WHERE id = ? AND status = 'queued'`, reason, now.Unix(), id)
+		if err != nil {
+			return canceled, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			canceled = append(canceled, id)
+		}
+	}
+	return canceled, nil
+}
+
 // CancelQueued cancels the Compose's queued Deployment, if it has one.
 func (s *Store) CancelQueued(ctx context.Context, composeID int64, now time.Time) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `

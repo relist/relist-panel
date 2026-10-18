@@ -86,23 +86,34 @@ func prepareService(name string, labels *labelSet, generated, network string) []
 	return warnings
 }
 
+// Rule is the Traefik rule a domain's router matches.
+func Rule(d Domain) string {
+	rule := "Host(`" + d.Host + "`)"
+	if d.Path != "" && d.Path != "/" {
+		rule += " && PathPrefix(`" + d.Path + "`)"
+	}
+	return rule
+}
+
+// EntrypointFor is the entrypoint a domain's router listens on: its own, or
+// web for HTTP and websecure for HTTPS.
+func EntrypointFor(d Domain) string {
+	if d.Entrypoint != "" {
+		return d.Entrypoint
+	}
+	if d.HTTPS {
+		return "websecure"
+	}
+	return "web"
+}
+
 // addDomain writes the labels of one domain.
 func addDomain(labels *labelSet, composeID int64, d Domain) {
 	n := RouterName(composeID, d.ID)
 	router := routerPrefix + n
 
-	rule := "Host(`" + d.Host + "`)"
-	if d.Path != "" && d.Path != "/" {
-		rule += " && PathPrefix(`" + d.Path + "`)"
-	}
-
-	entrypoint := d.Entrypoint
-	if entrypoint == "" {
-		entrypoint = "web"
-		if d.HTTPS {
-			entrypoint = "websecure"
-		}
-	}
+	rule := Rule(d)
+	entrypoint := EntrypointFor(d)
 
 	var chain []string
 	if d.StripPath && d.Path != "" && d.Path != "/" {

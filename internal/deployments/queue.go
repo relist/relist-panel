@@ -295,6 +295,45 @@ func (q *Queue) CancelForComposes(ctx context.Context, composeIDs []int64) {
 	}
 }
 
+// CancelAllQueued cancels every queued Deployment of every Compose with
+// reason, for the Migration lock (ADR-0018). A running one is left to finish:
+// WaitIdle waits for it.
+func (q *Queue) CancelAllQueued(ctx context.Context, reason string) (int, error) {
+	ids, err := q.d.Store.cancelAllQueued(ctx, reason, q.d.Now())
+	for _, id := range ids {
+		if snapshot, err := q.d.Store.snapshot(ctx, id); err == nil {
+			discardCaptured(snapshot)
+		}
+	}
+	return len(ids), err
+}
+
+// WaitIdle returns once no Deployment is running, or when ctx ends.
+func (q *Queue) WaitIdle(ctx context.Context) error {
+	for {
+		if _, _, ok := q.Running(); !ok {
+			return nil
+		}
+		t := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			t.Stop()
+			return ctx.Err()
+		}
+	}
+}
+
+// Running reports the Deployment the worker is on, if any.
+func (q *Queue) Running() (composeID int64, number int, ok bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for id, rs := range q.running {
+		return id, rs.number, true
+	}
+	return 0, 0, false
+}
+
 // IsRunning reports whether a Deployment of the Compose has started and not
 // yet settled.
 func (q *Queue) IsRunning(composeID int64) bool {
