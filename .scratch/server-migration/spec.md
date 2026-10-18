@@ -116,17 +116,23 @@ In this order, recorded in the database before each step so a restart resumes it
 
 ### Finalizing on the new host
 
-1. Move the staged data directory into place and put the new `panel.db` beside it. Write the marker
-   `.migration/finalize`, then exit. The install's `restart: unless-stopped` brings the panel back.
-   If the panel runs without a restart policy, the screen says to restart it.
-2. On boot with the marker present:
-   - Run goose migrations.
+1. Stop the install stack's Traefik container. It is found by the panel container's
+   `com.docker.compose.project` label and service `traefik`. A running Traefik could write its own
+   in-memory certificate store over the copied `acme.json`.
+2. Move the staged data directory into place, except `panel.db`, which stays in
+   `.migration/staging/`. Write the marker `.migration/finalize`, then exit. The install's
+   `restart: unless-stopped` brings the panel back. If the panel runs without a restart policy, the
+   screen says to restart it. The database is never replaced while the panel holds it open.
+3. On boot with the marker present, **before** `database.OpenAndMigrate`:
+   - Delete the empty `panel.db` and any `panel.db-journal`, `-wal` or `-shm` beside it, then
+     rename the staged `panel.db` into place.
+   - Open it and run goose migrations.
    - Clear the Migration lock and tokens copied from the old database.
    - Mark queued and running Deployments `canceled` with the reason "server migration".
-3. Restart the install stack's Traefik container. It is found by the panel container's
-   `com.docker.compose.project` label and service `traefik`. Traefik reads `acme.json` only at start.
-4. Enqueue a `skip-build` Deployment (ADR-0016) for every Compose that the manifest lists as running.
-   They use the copied Images and materialized trees, so nothing is rebuilt and Git is not contacted.
+   - Start Traefik again. It reads `acme.json` only at start.
+4. Enqueue a Deployment for every Compose that the manifest lists as running: `skip-build` for a
+   Compose with a Source (ADR-0016), `deploy` for one without. They use the copied Images and
+   materialized trees, so nothing is rebuilt and Git is not contacted.
 5. Call `finish` on the old host, then delete `.migration/` except a summary file for the Done screen.
 
 ### After the Migration, on the old host
@@ -165,8 +171,10 @@ signed-in admin cookie. Admin endpoints stay reachable under the lock because th
 - A token is 32 random bytes, shown as base64url. The database stores its SHA-256, its expiry and
   whether it is spent. Lifetime: 1 hour, 24 hours or 7 days. Nothing longer is accepted.
 - `claim` spends the token and returns a 32-byte session key, also stored hashed. There is one
-  session per Migration. A second `claim` returns `409`. `claim` is rate limited per client IP like
-  sign-in. Wrong tokens never reveal whether a token exists.
+  session per Migration. A second `claim` returns `409`. `claim` is rate limited the way sign-in
+  locks an account (`internal/auth/lock.go`): five consecutive wrong tokens refuse every `claim` with
+  `429` for one minute. The count is global rather than per client IP, because there is one token.
+  Wrong tokens never reveal whether a token exists.
 - The session key ends with `finish`, `abort`, Resume or token revocation before `start`.
 - The new panel refuses `http://` sources. The CLI flag `--insecure-migration-source`, for tests
   and probes, allows them. The UI has no such option.
@@ -204,13 +212,15 @@ item has an `id`, a `kind`, a size estimate and kind-specific fields.
 | `database` | `panel.db` | A copy made with `VACUUM INTO` after the lock | `.migration/staging/panel.db` |
 | `volume` | Each named Volume that any Compose declares, resolved with every profile enabled, including `external: true` ones and Orphan Volumes | Helper run with the Volume mounted read-only, tar | Create the Volume with the same name, driver and labels, then a helper run extracts into it |
 | `host-path` | Each host path the operator ticked | Helper run with the path mounted read-only, tar | Helper run with the parent mounted, extract to the same path |
-| `image` | Each Image of a stopped Container, by Image ID, plus its tags | `docker save` of the ID, only when asked | See Images |
+| `image` | Each Image any Compose uses, running or not (see Images) | `docker save` of its tags, only when asked | See Images |
 
 - Tar streams keep numeric uid/gid, modes, symlinks and mtimes. A database Volume owned by uid 999
   must come back owned by uid 999. `volfs.Extract` strips setuid and has a 4 GiB cap, so the helper
   gains two subcommands, `relist-volhelper pack` and `relist-volhelper unpack`. They have no size
   cap, keep ownership, and keep the path rules: no absolute names, no `..`, no links that leave the
   target.
+- The panel's `http.Server` (`main.go`) sets no `WriteTimeout`, so a multi-hour item stream is not
+  cut off. Item routes must stay exempt if one is ever added.
 - Streams are plain tar without compression. The panel container has `cpus: 0.25`, and gzip at
   that budget would be the bottleneck. HTTPS is terminated by Traefik.
 - The old host computes the SHA-256 while it streams. The new host computes its own and compares
@@ -222,13 +232,30 @@ item has an `id`, a `kind`, a size estimate and kind-specific fields.
 
 ### Images
 
+The Image set is the union of:
+
+- the `image:` of every Service of every Compose, resolved with every profile enabled, whether the
+  Compose is running or not;
+- the built name of every Service with `build:` and no `image:` (`<docker compose project>-<service>`,
+  ADR-0016), so Images built from a Source move even when their Compose is down;
+- the Image of every Container of a Compose at lock time, so a tag that moved since the deploy still
+  brings the Image the Container runs.
+
+Each entry is keyed by Image ID and lists its tags and `RepoDigests`. A name that does not exist on
+the old host is a preflight warning: the Compose will pull or build it on its next deploy.
+
 For each Image in the manifest:
 
 1. If it has `RepoDigests`, the new host runs `docker pull <repo>@<digest>` and re-applies the
    original tags.
 2. If it has none, or the pull fails (a private registry the panel's Docker CLI cannot log in to,
-   a deleted tag, rate limits), the new host asks for the item stream and runs `docker load`.
-3. Either way, the new host then checks that the Image ID matches the manifest.
+   a deleted tag, rate limits), the new host asks for the item stream. The old host runs
+   `docker save` with every tag of the Image, so `docker load` restores the tags. An Image with no
+   tag (only referenced by a Container) is saved by ID and tagged after load with
+   `relist-migrated/<short id>`, and the Done screen lists it.
+3. The new host compares the Image ID with the manifest. A pulled Image whose ID differs falls back
+   to step 2. A loaded Image whose ID differs is a warning, not a failure: the classic and containerd
+   image stores can compute different IDs for the same content.
 
 This is the first time the panel pulls an Image. ADR-0018 records it as a Migration-only exception
 to ADR-0001.
@@ -280,7 +307,7 @@ before building them).
   System host paths are unticked.
 - Preflight: each blocking check, and an `http://` source refused.
 - Helper `pack` / `unpack`: ownership kept, no cap, unsafe names refused.
-- Finalize: the lock and tokens cleared, Deployments canceled, `skip-build` Deployments only for
+- Finalize: the staged database swapped in before open, with stale journal files removed, the lock and tokens cleared, Deployments canceled, `skip-build` Deployments only for
   Composes that were running, resume from `state.json`.
 
 ### Integration tests (both panels in one process)
