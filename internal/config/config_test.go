@@ -47,3 +47,19 @@ func TestLoadRejectsInvalidPort(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadInstallSettings(t *testing.T) {
+	t.Setenv("RELIST_DOMAIN", "panel.example.com")
+	t.Setenv("RELIST_ACME_EMAIL", "ops@example.com")
+	t.Setenv("TRAEFIK_HTTP_PORT", "8000")
+	t.Setenv("TRAEFIK_HTTPS_PORT", "8443")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := InstallSettings{Domain: "panel.example.com", ACMEEmail: "ops@example.com", HTTPPort: "8000", HTTPSPort: "8443"}
+	if cfg.Install != want {
+		t.Fatalf("Install = %+v, want %+v", cfg.Install, want)
+	}
+}

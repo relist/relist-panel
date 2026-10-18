@@ -17,6 +17,17 @@ const (
 type Config struct {
 	Port    int
 	DataDir string
+	Install InstallSettings
+}
+
+// InstallSettings are the install `.env` values a Migration cannot copy,
+// because they live outside the data directory (ADR-0018). The install
+// docker-compose.yml passes them to the panel; empty means unknown.
+type InstallSettings struct {
+	Domain    string `json:"domain"`
+	ACMEEmail string `json:"acmeEmail"`
+	HTTPPort  string `json:"httpPort"`
+	HTTPSPort string `json:"httpsPort"`
 }
 
 func Load() (Config, error) {
@@ -30,7 +41,13 @@ func Load() (Config, error) {
 		dataDir = defaultDataDir
 	}
 
-	return Config{Port: port, DataDir: dataDir}, nil
+	install := InstallSettings{
+		Domain:    os.Getenv("RELIST_DOMAIN"),
+		ACMEEmail: os.Getenv("RELIST_ACME_EMAIL"),
+		HTTPPort:  os.Getenv("TRAEFIK_HTTP_PORT"),
+		HTTPSPort: os.Getenv("TRAEFIK_HTTPS_PORT"),
+	}
+	return Config{Port: port, DataDir: dataDir, Install: install}, nil
 }
 
 func (c Config) Address() string {
