@@ -1,0 +1,71 @@
+package sources
+
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+)
+
+const (
+	maxRepoURLLen = 512
+	maxBranchLen  = 255
+)
+
+// Only SSH remotes are accepted, because a Deploy key only authenticates over
+// SSH: the scp-like `user@host:path` form and `ssh://user@host[:port]/path`.
+// Neither can begin with `-`, so the value is never read as an ssh or git
+// option, and neither can hold whitespace.
+var (
+	scpRepoURL = regexp.MustCompile(`^[A-Za-z0-9._][A-Za-z0-9._-]*@[A-Za-z0-9.-]+:[^\s:][^\s]*$`)
+	sshRepoURL = regexp.MustCompile(`^ssh://[A-Za-z0-9._][A-Za-z0-9._-]*@[A-Za-z0-9.-]+(:[0-9]{1,5})?/[^\s]+$`)
+)
+
+// ValidateRepoURL trims v and checks it is an SSH repository URL.
+func ValidateRepoURL(v string) (string, error) {
+	v = strings.TrimSpace(v)
+	switch {
+	case v == "":
+		return "", errors.New("repoUrl is required")
+	case len(v) > maxRepoURLLen:
+		return "", fmt.Errorf("repoUrl must be at most %d characters", maxRepoURLLen)
+	case !scpRepoURL.MatchString(v) && !sshRepoURL.MatchString(v):
+		return "", errors.New("repoUrl must be an SSH URL like git@host:owner/repo.git")
+	}
+	return v, nil
+}
+
+// ValidateBranch checks v against git's ref-name rules and refuses a leading
+// `-`, so it is safe as a git argument. An empty branch is allowed and means
+// the remote's default branch.
+func ValidateBranch(v string) (string, error) {
+	if v == "" {
+		return "", nil
+	}
+	bad := func(why string) (string, error) {
+		return "", fmt.Errorf("branch %q is not a valid branch name: %s", v, why)
+	}
+	switch {
+	case len(v) > maxBranchLen:
+		return "", fmt.Errorf("branch must be at most %d characters", maxBranchLen)
+	case v == "@":
+		return bad("it is `@`")
+	case strings.HasPrefix(v, "-"):
+		return bad("it starts with `-`")
+	case strings.HasSuffix(v, "/"), strings.HasSuffix(v, "."):
+		return bad("it ends with `/` or `.`")
+	case strings.Contains(v, ".."), strings.Contains(v, "//"), strings.Contains(v, "@{"):
+		return bad("it contains `..`, `//` or `@{`")
+	}
+	for _, r := range v {
+		if r < 0x20 || r == 0x7f || strings.ContainsRune(" ~^:?*[\\", r) {
+			return bad("it contains a forbidden character")
+		}
+	}
+	for _, part := range strings.Split(v, "/") {
+		if strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return bad("a path component starts with `.` or ends with `.lock`")
+		}
+	}
+	return v, nil
+}

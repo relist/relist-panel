@@ -13,6 +13,7 @@ export function DangerModal({
   confirmWord,
   consequences,
   description,
+  disabled,
   loading,
   okText,
   onCancel,
@@ -23,6 +24,7 @@ export function DangerModal({
   confirmWord: string;
   consequences?: ReactNode;
   description?: ReactNode;
+  disabled?: boolean;
   loading?: boolean;
   okText: string;
   onCancel: () => void;
@@ -42,7 +44,7 @@ export function DangerModal({
     <Modal
       confirmLoading={loading}
       destroyOnHidden
-      okButtonProps={{ danger: true, disabled: !matches }}
+      okButtonProps={{ danger: true, disabled: disabled || loading || !matches }}
       okText={okText}
       onCancel={onCancel}
       onOk={onConfirm}

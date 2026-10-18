@@ -77,6 +77,11 @@ func (s *Service) teardownChildren(ctx context.Context, projectID, environmentID
 			return err
 		}
 	}
+	ids := make([]int64, len(children))
+	for i, c := range children {
+		ids[i] = c.ID
+	}
+	s.cancelDeployments(ctx, ids...)
 	for _, c := range children {
 		if err := s.teardown(ctx, runRequestFor(s.dataDir, c)); err != nil {
 			return fmt.Errorf("compose %d: %w", c.ID, err)

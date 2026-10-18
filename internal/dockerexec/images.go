@@ -167,6 +167,11 @@ func (i *Images) getJSON(ctx context.Context, path string, out any) error {
 func (i *Images) do(ctx context.Context, path string, req *http.Request) (*http.Response, error) {
 	resp, err := i.client.Do(req)
 	if err != nil {
+		// Closing the archive and canceling its request can race in Transport.
+		// Preserve cancellation even when the body error is returned first.
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("docker api %s: %w", path, ctx.Err())
+		}
 		var opErr *net.OpError
 		if ctx.Err() == nil && errors.As(err, &opErr) && opErr.Op == "dial" {
 			return nil, fmt.Errorf("%w: %v", images.ErrUnavailable, err)

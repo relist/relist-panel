@@ -7,11 +7,25 @@
  */
 
 import type {
+  DockerReport,
+  DockerPruneKind,
+  DockerPruneResult,
   Compose,
   ComposeDomains,
   ComposeVariable,
   ComposePreview,
+  ComposeSource,
   ComposeVolumes,
+  Deployment,
+  DeploymentHistoryQuery,
+  GlobalDeploymentPage,
+  GlobalQueuedDeployment,
+  DeploymentLog,
+  DeploymentRequest,
+  DetectedDockerfile,
+  QueuedDeployment,
+  SourceInput,
+  SourceTestResult,
   Domain,
   DomainInput,
   Environment,
@@ -151,11 +165,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const { message, field } = errorBody(response.status, await response.text().catch(() => ''));
     throw new ApiError(response.status, message, field);
   }
-  // Deletes (and logout) answer 204 with no body to parse.
+  // Deletes, logout and an accepted cancel (202) answer with no body to parse.
   if (response.status === 204) {
     return undefined as T;
   }
-  return (await response.json()) as T;
+  const text = await response.text();
+  if (text === '') {
+    return undefined as T;
+  }
+  return JSON.parse(text) as T;
 }
 
 /**
@@ -192,6 +210,9 @@ function jsonInit(method: string, body: unknown): RequestInit {
 }
 
 export const api = {
+  resumeDocker: (confirm: string) => request<{ resumed: boolean }>('/api/docker/recover', jsonInit('POST', { confirm })),
+  dockerReport: (refresh = false) => request<DockerReport>(`/api/docker${refresh ? '?refresh=1' : ''}`),
+  pruneDocker: (kind: DockerPruneKind, confirm: string) => request<DockerPruneResult>('/api/docker/prune', jsonInit('POST', { kind, confirm })),
   authStatus: () => request<AuthStatus>('/api/auth/status'),
   setup: (credentials: Credentials) => request<unknown>('/api/auth/setup', jsonInit('POST', credentials)),
   /**
@@ -261,10 +282,65 @@ export const api = {
   updateCompose: (location: ComposePath, input: ComposeUpdateInput) =>
     request<Compose>(composePath(location), jsonInit('PUT', input)),
   deleteCompose: (location: ComposePath) => request<void>(composePath(location), { method: 'DELETE' }),
-  deployCompose: (location: ComposePath) => request<Compose>(`${composePath(location)}/deploy`, { method: 'POST' }),
-  /** Removes the Compose's volumes, then deploys; `confirmName` must equal the Compose's name exactly. */
-  deployComposeFresh: (location: ComposePath, confirmName: string) =>
-    request<Compose>(`${composePath(location)}/deploy-fresh`, jsonInit('POST', { confirmName })),
+  /**
+   * Queues a Deployment: 202 for a new one, 200 when the same request is already
+   * queued. No client timeout: the POST waits behind a same-Project deploy step.
+   */
+  enqueueDeployment: (location: ComposePath, req: DeploymentRequest) =>
+    request<{ number: number }>(`${composePath(location)}/deployments`, jsonInit('POST', req)),
+  /** The Compose's Deployments, newest first. */
+  listDeployments: (location: ComposePath) => request<Deployment[]>(`${composePath(location)}/deployments`),
+  listGlobalDeployments: (query: DeploymentHistoryQuery = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) params.set(key, String(value));
+    }
+    const search = params.toString();
+    return request<GlobalDeploymentPage>(`/api/deployments${search ? `?${search}` : ''}`);
+  },
+  globalDeploymentQueue: () => request<GlobalQueuedDeployment[]>('/api/deployments/queue'),
+  getDeployment: (location: ComposePath, number: number) =>
+    request<Deployment>(`${composePath(location)}/deployments/${number}`),
+  deploymentLog: (location: ComposePath, number: number, offset: number) =>
+    request<DeploymentLog>(`${composePath(location)}/deployments/${number}/log?offset=${offset}`),
+  /** 202 when the cancel is accepted; 409 once the Deployment is no longer cancelable. */
+  cancelDeployment: (location: ComposePath, number: number) =>
+    request<void>(`${composePath(location)}/deployments/${number}/cancel`, { method: 'POST' }),
+  /** The host-wide queue: the running Deployment and those waiting behind it. */
+  deploymentQueue: () => request<QueuedDeployment[]>('/api/deployments/queue'),
+
+  /** The Compose's Source, or `null` when it has none (the API answers 404). */
+  getSource: async (location: ComposePath): Promise<ComposeSource | null> => {
+    try {
+      return await request<ComposeSource>(`${composePath(location)}/source`);
+    } catch (reason: unknown) {
+      if (reason instanceof ApiError && reason.status === 404) {
+        return null;
+      }
+      throw reason;
+    }
+  },
+  saveSource: (location: ComposePath, input: SourceInput) =>
+    request<ComposeSource>(`${composePath(location)}/source`, jsonInit('PUT', input)),
+  deleteSource: (location: ComposePath) => request<void>(`${composePath(location)}/source`, { method: 'DELETE' }),
+  /** Replaces the Deploy key; answers only the new public key. */
+  regenerateKey: (location: ComposePath) =>
+    request<{ publicKey: string }>(`${composePath(location)}/source/key`, { method: 'POST' }),
+  /** Tries the repository (the saved one when `repoUrl` is omitted) and lists its branches. */
+  testSource: (location: ComposePath, repoUrl?: string) =>
+    request<SourceTestResult>(`${composePath(location)}/source/test`, jsonInit('POST', repoUrl ? { repoUrl } : {})),
+  resetKnownHosts: (location: ComposePath) =>
+    request<void>(`${composePath(location)}/source/known-hosts/reset`, { method: 'POST' }),
+  uploadSource: (location: ComposePath, file: File) => {
+    const body = new FormData();
+    body.append('file', file);
+    return request<ComposeSource>(`${composePath(location)}/source/upload`, { method: 'POST', body });
+  },
+  /** Dockerfiles found in the Source; the API sends no file name, so it is the path's last segment. */
+  detectDockerfiles: async (location: ComposePath): Promise<DetectedDockerfile[]> => {
+    const found = await request<Omit<DetectedDockerfile, 'dockerfile'>[]>(`${composePath(location)}/source/dockerfiles`);
+    return found.map((item) => ({ ...item, dockerfile: item.path.split('/').pop() ?? item.path }));
+  },
   /** Resolves a draft exactly as a deploy would; saves nothing and never calls Docker. */
   previewCompose: (location: ComposePath, yamlContent: string) =>
     request<ComposePreview>(`${composePath(location)}/preview`, jsonInit('POST', { yamlContent })),

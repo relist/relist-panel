@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { Credentials, LoginResult, ProjectInput } from './api';
-import type { Compose, ComposeDomains, ComposeVariable, ComposePreview, EffectiveVariable, ServiceBindings, VariableSet, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
+import type { Compose, ComposeDomains, DeploymentRequest, ComposeVariable, ComposePreview, EffectiveVariable, ServiceBindings, VariableSet, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
@@ -56,9 +56,8 @@ type PanelValue = {
   deleteCompose: (composeId: number) => Promise<void>;
   deleteEnvironment: (projectId: number, environmentId: number) => Promise<void>;
   deleteProject: (projectId: number) => Promise<void>;
-  deployCompose: (composeId: number) => Promise<void>;
-  /** Removes the Compose's volumes and redeploys; the confirmation name is the Compose's own. */
-  deployComposeFresh: (composeId: number) => Promise<void>;
+  /** Queues a Deployment and resolves to its number; progress is read from the Deployment, not this call. */
+  deployCompose: (composeId: number, req: DeploymentRequest) => Promise<number>;
   isPending: (key: string) => boolean;
   loadAuthStatus: () => Promise<void>;
   loadLogs: (composeId: number) => Promise<string>;
@@ -484,8 +483,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           { projectId: location.project.id, environmentId: location.environment.id, composeId },
           { yamlContent },
         );
-        // Saving returns no warnings; keep the last deploy's.
-        patchCompose(composeId, (current) => ({ ...updated, warnings: current.warnings }));
+        patchCompose(composeId, () => updated);
       });
     },
     [patchCompose, track],
@@ -518,27 +516,15 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   );
 
   const runComposeAction = useCallback(
-    (key: 'deploy' | 'deploy-fresh' | 'stop' | 'restart', composeId: number) =>
-      track(`${key === 'deploy-fresh' ? 'deploy' : key}:${composeId}`, async () => {
+    (key: 'stop' | 'restart', composeId: number) =>
+      track(`${key}:${composeId}`, async () => {
         const location = findComposeLocation(projectsRef.current, composeId);
         if (!location) {
           throw new Error('Compose not found');
         }
         const path = { projectId: location.project.id, environmentId: location.environment.id, composeId };
-        const updated =
-          key === 'deploy'
-            ? await api.deployCompose(path)
-            : key === 'deploy-fresh'
-              ? await api.deployComposeFresh(path, location.compose.name)
-              : key === 'stop'
-                ? await api.stopCompose(path)
-                : await api.restartCompose(path);
-        // Deploy and deploy-fresh replace the warnings with the new response's;
-        // stop and restart return none, so they keep the last deploy's.
-        const replacesWarnings = key === 'deploy' || key === 'deploy-fresh';
-        patchCompose(composeId, (current) =>
-          replacesWarnings ? updated : { ...updated, warnings: current.warnings },
-        );
+        const updated = key === 'stop' ? await api.stopCompose(path) : await api.restartCompose(path);
+        patchCompose(composeId, () => updated);
         // The API returns no read timestamp; the rail's "checked N minutes ago"
         // is stamped client-side, as the prototype does (GUIDELINES §11). The
         // deploy time needs no stamp: `updated` carries the API's
@@ -548,10 +534,21 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [patchCompose, stampChecked, track],
   );
 
-  const deployCompose = useCallback((composeId: number) => runComposeAction('deploy', composeId), [runComposeAction]);
-  const deployComposeFresh = useCallback(
-    (composeId: number) => runComposeAction('deploy-fresh', composeId),
-    [runComposeAction],
+  const deployCompose = useCallback(
+    async (composeId: number, req: DeploymentRequest) => {
+      return track(`deploy:${composeId}`, async () => {
+        const location = findComposeLocation(projectsRef.current, composeId);
+        if (!location) {
+          throw new Error('Compose not found');
+        }
+        const { number } = await api.enqueueDeployment(
+          { projectId: location.project.id, environmentId: location.environment.id, composeId },
+          req,
+        );
+        return number;
+      });
+    },
+    [track],
   );
   const stopCompose = useCallback((composeId: number) => runComposeAction('stop', composeId), [runComposeAction]);
   const restartCompose = useCallback((composeId: number) => runComposeAction('restart', composeId), [runComposeAction]);
@@ -568,8 +565,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           environmentId: location.environment.id,
           composeId,
         });
-        // Warnings come only from a deploy response; a status read must not drop them.
-        patchCompose(composeId, (current) => ({ ...fresh, warnings: current.warnings }));
+        patchCompose(composeId, () => fresh);
         stampChecked(composeId);
       });
     },
@@ -1049,7 +1045,6 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       previewCompose,
       updateDomain,
       deployCompose,
-      deployComposeFresh,
       isPending,
       loadAuthStatus,
       loadLogs,
@@ -1109,7 +1104,6 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       previewCompose,
       updateDomain,
       deployCompose,
-      deployComposeFresh,
       isPending,
       loadAuthStatus,
       loadLogs,

@@ -2,10 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+
+	"relist-panel/internal/dockerhost"
 )
 
 // Project mutation gates cover lifecycle actions, parent teardown and child
@@ -17,6 +20,7 @@ type projectGate struct {
 	refs  int
 }
 type coordinator struct {
+	host  *dockerhost.Guard
 	mu    sync.Mutex
 	gates map[int64]*projectGate
 }
@@ -24,13 +28,23 @@ type coordinator struct {
 func newCoordinator() *coordinator { return &coordinator{gates: make(map[int64]*projectGate)} }
 func (c *coordinator) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Image loading uses the same daemon as pruning, outside a Project.
+		if c.host != nil && r.Method == http.MethodPut && r.URL.Path == "/api/images" {
+			release, err := c.host.Acquire(r.Context())
+			if err != nil {
+				coordinationError(w, err)
+				return
+			}
+			defer release()
+		}
 		projectID := coordinatedProject(r)
 		if projectID == 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
-		release, err := c.acquire(r.Context(), projectID)
+		release, err := c.Acquire(r.Context(), projectID)
 		if err != nil {
+			coordinationError(w, err)
 			return
 		}
 		defer release()
@@ -52,13 +66,43 @@ func coordinatedProject(r *http.Request) int64 {
 	if r.Method == http.MethodPost && len(parts) == 8 && parts[5] == "composes" && parts[7] == "preview" {
 		return 0
 	}
+	// Canceling a Deployment must work while a Deploy holds the gate, and
+	// testing or uploading a Source never touches what a Deploy uses (the
+	// upload gates its own swap).
+	if r.Method == http.MethodPost && len(parts) == 10 && parts[5] == "composes" && parts[7] == "deployments" && parts[9] == "cancel" {
+		return 0
+	}
+	// Enqueue captures configuration under the same gate itself. Network and
+	// filesystem capture must finish before opening its SQLite transaction.
+	if r.Method == http.MethodPost && len(parts) == 8 && parts[5] == "composes" && parts[7] == "deployments" {
+		return 0
+	}
+	if r.Method == http.MethodPost && len(parts) == 9 && parts[5] == "composes" && parts[7] == "source" && (parts[8] == "test" || parts[8] == "upload") {
+		return 0
+	}
 	id, _ := strconv.ParseInt(parts[2], 10, 64)
 	if id < 1 {
 		return 0
 	}
 	return id
 }
-func (c *coordinator) acquire(ctx context.Context, id int64) (func(), error) {
+
+// Acquire takes the Project gate, returning promptly when ctx is done.
+func (c *coordinator) Acquire(ctx context.Context, id int64) (func(), error) {
+	releaseHost := func() {}
+	if c.host != nil {
+		release, err := c.host.Acquire(ctx)
+		if err != nil {
+			return nil, err
+		}
+		releaseHost = release
+	}
+	acquired := false
+	defer func() {
+		if !acquired {
+			releaseHost()
+		}
+	}()
 	c.mu.Lock()
 	gate := c.gates[id]
 	if gate == nil {
@@ -86,6 +130,13 @@ func (c *coordinator) acquire(ctx context.Context, id int64) (func(), error) {
 			unref()
 			return nil, err
 		}
-		return func() { gate.token <- struct{}{}; unref() }, nil
+		acquired = true
+		return func() { gate.token <- struct{}{}; unref(); releaseHost() }, nil
 	}
+}
+
+func coordinationError(w http.ResponseWriter, err error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 }

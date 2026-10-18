@@ -36,6 +36,7 @@ describe('activeComposeTab', () => {
 
   it('recognises the domains tab', () => {
     expect(activeComposeTab('domains')).toBe('domains');
+    expect(activeComposeTab('deployments')).toBe('deployments');
   });
 
   it('falls back to Editor for anything else, including an absent segment', () => {

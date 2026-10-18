@@ -4,6 +4,8 @@ import { createBrowserRouter } from 'react-router';
 import { SetupPage, SignInPage } from '../pages/AuthPages';
 import { AccountPage } from '../pages/AccountPage';
 import { ComposePage } from '../pages/ComposePage';
+import { DeploymentsPage } from '../pages/DeploymentsPage';
+import { DockerPage } from '../pages/DockerPage';
 import { ImagesPage } from '../pages/ImagesPage';
 import { MonitoringPage } from '../pages/MonitoringPage';
 import { NotFoundPage } from '../pages/NotFoundPage';
@@ -29,6 +31,8 @@ const elements: Record<string, ReactElement> = {
   '/': <OverviewPage />,
   'account': <AccountPage />,
   'images': <ImagesPage />,
+  'docker': <DockerPage />,
+  'deployments': <DeploymentsPage />,
   'monitoring': <MonitoringPage />,
   'projects': <ProjectsPage />,
   'projects/:projectId': <ProjectPage />,

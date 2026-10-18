@@ -42,6 +42,7 @@ import { composeState, projectComposes, summarize } from '../data/types';
 import { activeTab, selectEnvironment } from './project-view';
 import { composeDeployIdentity } from './compose-view';
 import { ProjectSettingsTab } from './ProjectSettingsTab';
+import { deployFromList } from './project-deploy';
 
 const { Text, Paragraph } = Typography;
 
@@ -184,10 +185,14 @@ export function ProjectPage() {
 
   const lifecycle = async (compose: Compose, action: 'deploy' | 'restart' | 'stop') => {
     try {
-      if (action === 'deploy') await deployCompose(compose.id);
+      if (action === 'deploy') {
+        const number = await deployFromList(compose, project.id, deployCompose);
+        message.info(`Deployment #${number} queued`);
+        return;
+      }
       if (action === 'restart') await restartCompose(compose.id);
       if (action === 'stop') await stopCompose(compose.id);
-      message.success(`${action === 'deploy' ? 'Deployed' : action === 'restart' ? 'Restarted' : 'Stopped'} ${compose.name}`);
+      message.success(`${action === 'restart' ? 'Restarted' : 'Stopped'} ${compose.name}`);
     } catch (reason: unknown) {
       fail(reason);
     }

@@ -47,6 +47,9 @@ importers:
       swr:
         specifier: 2.5.1
         version: 2.5.1(react@19.2.7)
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
     devDependencies:
       '@testing-library/dom':
         specifier: 10.4.2
