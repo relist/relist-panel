@@ -111,3 +111,13 @@ describe('MigrationPage', () => {
     expect(await screen.findByText('sign in from /migration')).toBeTruthy();
   });
 });
+
+describe('MigrationPage while locking', () => {
+  it('offers Retry when locking stopped on an error', async () => {
+    mocks.migrationProgress.mockResolvedValue({ ...connected, phase: 'locking', error: 'lock the source: invalid migration session' });
+    mocks.migrationRetry.mockResolvedValue({ ...connected, phase: 'locking' });
+    show();
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mocks.migrationRetry).toHaveBeenCalled());
+  });
+});

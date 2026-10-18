@@ -31,6 +31,7 @@ type fakeSourceServer struct {
 	cutOnce   map[string]bool // first stream of the id stops halfway
 	badDigest map[string]int  // how many times the id's digest is wrong
 	starts    int
+	failStart int // the first n start calls answer 502, like Traefik while the old panel restarts
 	aborted   bool
 	finished  string
 	served    []string
@@ -68,6 +69,12 @@ func newFakeSourceServer(t *testing.T, items ...Item) *fakeSourceServer {
 	}))
 	mux.HandleFunc("POST /api/migration/start", auth(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
+		if f.failStart > 0 {
+			f.failStart--
+			f.mu.Unlock()
+			writeJSONError(w, 502, "Bad Gateway")
+			return
+		}
 		f.starts++
 		n := f.starts
 		f.mu.Unlock()
@@ -467,4 +474,11 @@ func TestAbortAllowedWhileFinalizingBeforeTheMarker(t *testing.T) {
 	if !f.src.aborted {
 		t.Fatal("the source was not told to abort")
 	}
+}
+
+func TestLockingSurvivesTheSourceRestarting(t *testing.T) {
+	f := newTargetFixture(t)
+	f.src.failStart = 2
+	f.connectAndStart(t)
+	waitPhase(t, f.target, PhaseFinalizing)
 }

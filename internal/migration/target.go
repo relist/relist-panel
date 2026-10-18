@@ -320,9 +320,17 @@ func (t *Target) waitManifest(ctx context.Context) error {
 		t.mu.Unlock()
 		m, step, lastErr, err := c.start(ctx, selected)
 		if err != nil {
-			return fmt.Errorf("lock the source: %w", err)
+			var remote *remoteError
+			if errors.As(err, &remote) && remote.Status < 500 && remote.Status != http.StatusTooManyRequests {
+				return fmt.Errorf("lock the source: %w", err)
+			}
+			// The old panel may be restarting: keep asking, and say why.
+			lastErr = "Waiting for the source: " + err.Error()
 		}
 		t.mu.Lock()
+		if step == "" {
+			step = t.st.LockStep
+		}
 		t.st.LockStep, t.st.Error = step, lastErr
 		if m != nil {
 			t.st.Manifest, t.st.Phase = m, PhasePulling

@@ -172,6 +172,11 @@ export function MigrationPage() {
           <Button danger loading={pending === 'abort'} onClick={abort}>
             Abort
           </Button>
+          {progress.error && (
+            <Button loading={pending === 'retry'} onClick={() => void run('retry', api.migrationRetry)} type="primary">
+              Retry
+            </Button>
+          )}
         </Flex>
       </Flex>
     );
