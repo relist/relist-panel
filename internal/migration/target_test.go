@@ -139,11 +139,12 @@ func newFakeSourceServer(t *testing.T, items ...Item) *fakeSourceServer {
 
 // recordingRestorer keeps what it restored.
 type recordingRestorer struct {
-	mu        sync.Mutex
-	restored  map[string]string
-	cleaned   []string
-	discarded []string
-	failNext  map[string]int
+	discardErr error
+	mu         sync.Mutex
+	restored   map[string]string
+	cleaned    []string
+	discarded  []string
+	failNext   map[string]int
 }
 
 func newRecordingRestorer() *recordingRestorer {
@@ -179,7 +180,7 @@ func (r *recordingRestorer) Discard(_ context.Context, items []Item) error {
 	for _, it := range items {
 		r.discarded = append(r.discarded, it.ID)
 	}
-	return nil
+	return r.discardErr
 }
 
 type recordingFinalizer struct {
@@ -481,4 +482,21 @@ func TestLockingSurvivesTheSourceRestarting(t *testing.T) {
 	f.src.failStart = 2
 	f.connectAndStart(t)
 	waitPhase(t, f.target, PhaseFinalizing)
+}
+
+func TestAbortFinishesEvenWhenDiscardFails(t *testing.T) {
+	f := newTargetFixture(t)
+	f.restorer.failNext["volume-b"] = 3
+	f.restorer.discardErr = errors.New("image is being used by running container")
+	f.connectAndStart(t)
+	waitPhase(t, f.target, PhasePaused)
+	if err := f.target.Abort(context.Background()); err != nil {
+		t.Fatalf("Abort() = %v, want leftovers reported, not a stuck migration", err)
+	}
+	if p := f.target.Progress(); p.Phase != PhaseIdle || f.target.InProgress() {
+		t.Fatalf("after abort: phase %q, in progress %v", p.Phase, f.target.InProgress())
+	}
+	if _, err := os.Stat(filepath.Join(f.deps.StateDir, "state.json")); !os.IsNotExist(err) {
+		t.Fatal("state.json survived the abort")
+	}
 }

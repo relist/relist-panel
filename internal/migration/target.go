@@ -124,6 +124,7 @@ type Target struct {
 	done    map[string]*atomic.Int64 // bytes read per item, in memory only
 	running bool
 	cancel  context.CancelFunc
+	stopped chan struct{} // closed when the background goroutine returns
 	// restarted is set when the panel came back up after Begin: what is left
 	// is Complete, never Begin again.
 	restarted bool
@@ -264,8 +265,10 @@ func (t *Target) launch() {
 		return
 	}
 	ctx, cancel := context.WithCancel(t.d.Context)
-	t.running, t.cancel = true, cancel
+	stopped := make(chan struct{})
+	t.running, t.cancel, t.stopped = true, cancel, stopped
 	go func() {
+		defer close(stopped)
 		defer cancel()
 		err := t.run(ctx)
 		t.mu.Lock()
@@ -524,6 +527,7 @@ func (t *Target) Abort(ctx context.Context) error {
 	if t.cancel != nil {
 		t.cancel()
 	}
+	stopped := t.stopped
 	c, m, claimed := t.client(), t.st.Manifest, t.st.SessionKey != ""
 	var restored []Item
 	if m != nil {
@@ -534,6 +538,10 @@ func (t *Target) Abort(ctx context.Context) error {
 		}
 	}
 	t.mu.Unlock()
+	// Let a helper run in flight end before its target is removed.
+	if stopped != nil {
+		<-stopped
+	}
 
 	if claimed {
 		if err := c.abort(ctx); err != nil {
@@ -541,8 +549,10 @@ func (t *Target) Abort(ctx context.Context) error {
 		}
 	}
 	if len(restored) > 0 {
+		// Leftovers are logged, not fatal: the old host has resumed and the
+		// session is spent, so a stuck abort would leave no way forward.
 		if err := t.d.Restore.Discard(ctx, restored); err != nil {
-			return err
+			log.Printf("migration: abort left some copied data behind: %v", err)
 		}
 	}
 	if err := os.RemoveAll(t.d.StateDir); err != nil {
@@ -675,8 +685,10 @@ func (t *Target) completeAsync() {
 		return
 	}
 	ctx, cancel := context.WithCancel(t.d.Context)
-	t.running, t.cancel = true, cancel
+	stopped := make(chan struct{})
+	t.running, t.cancel, t.stopped = true, cancel, stopped
 	go func() {
+		defer close(stopped)
 		defer cancel()
 		err := t.complete(ctx)
 		t.mu.Lock()
