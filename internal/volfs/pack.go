@@ -66,12 +66,15 @@ func (p packer) entry(name string) error {
 	}
 	switch entry.Kind {
 	case KindDir:
-		if name != "." {
-			hdr.Name += "/"
-			hdr.Typeflag = tar.TypeDir
-			if err := p.tw.WriteHeader(hdr); err != nil {
-				return err
-			}
+		// The root gets its own "./" entry too, so a Volume's top directory
+		// keeps its owner and mode: a non-root service writes into it.
+		hdr.Name += "/"
+		if name == "." {
+			hdr.Name = "./"
+		}
+		hdr.Typeflag = tar.TypeDir
+		if err := p.tw.WriteHeader(hdr); err != nil {
+			return err
 		}
 		children, err := p.fs.List(name)
 		if err != nil {

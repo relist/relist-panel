@@ -228,3 +228,38 @@ func TestSizeSumsRegularFiles(t *testing.T) {
 		t.Fatalf("Size() = %d, %v; want 42", got, err)
 	}
 }
+
+func TestPackUnpackKeepsTheRootsModeAndOwner(t *testing.T) {
+	src := t.TempDir()
+	if err := os.Chmod(src, 0o700|fs.ModeSetgid); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(src, "PG_VERSION"), []byte("16"), 0o600)
+	mtime := time.Unix(1_600_000_000, 0)
+	if os.Geteuid() == 0 {
+		os.Lchown(src, 999, 999)
+	}
+	os.Chtimes(src, mtime, mtime)
+	var buf bytes.Buffer
+	if err := openRoot(t, src).Pack(".", &buf); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	os.Chmod(dst, 0o755)
+	if err := openRoot(t, dst).Unpack(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.Stat(dst)
+	want, _ := os.Stat(src)
+	if got.Mode() != want.Mode() {
+		t.Fatalf("root mode = %v, want %v", got.Mode(), want.Mode())
+	}
+	if !got.ModTime().Equal(mtime) {
+		t.Fatalf("root mtime = %v, want %v", got.ModTime(), mtime)
+	}
+	wu, wg := ownerOf(t, src)
+	gu, gg := ownerOf(t, dst)
+	if gu != wu || gg != wg {
+		t.Fatalf("root owner = %d:%d, want %d:%d", gu, gg, wu, wg)
+	}
+}
