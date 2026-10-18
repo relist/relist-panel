@@ -363,6 +363,11 @@ export function SetupPage() {
               Create admin account
             </Button>
           </Form>
+          <Flex justify="center" style={{ marginTop: 16 }}>
+            <Button onClick={() => navigate(paths.migration)} type="link">
+              Migrate from another panel
+            </Button>
+          </Flex>
         </>
       ) : (
         <Result

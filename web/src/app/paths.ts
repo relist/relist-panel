@@ -15,6 +15,7 @@ export const paths = {
     `/projects/${projectId}/env/${environmentId}/compose/${composeId}${tab ? `/${tab}` : ''}`,
   deployments: '/deployments',
   images: '/images',
+  migration: '/migration',
   docker: '/docker',
   environment: (projectId: number | string, environmentId: number | string, tab = 'composes') =>
     `/projects/${projectId}/env/${environmentId}/${tab}`,

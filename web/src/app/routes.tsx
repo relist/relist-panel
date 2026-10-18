@@ -7,6 +7,7 @@ import { ComposePage } from '../pages/ComposePage';
 import { DeploymentsPage } from '../pages/DeploymentsPage';
 import { DockerPage } from '../pages/DockerPage';
 import { ImagesPage } from '../pages/ImagesPage';
+import { MigrationPage } from '../pages/MigrationPage';
 import { MonitoringPage } from '../pages/MonitoringPage';
 import { NotFoundPage } from '../pages/NotFoundPage';
 import { OverviewPage } from '../pages/OverviewPage';
@@ -66,6 +67,8 @@ export const router = createBrowserRouter(
     },
     { path: 'signin', element: <SignInPage /> },
     { path: 'setup', element: <SetupPage /> },
+    // A server migration's new host runs before any admin exists (ADR-0018).
+    { path: 'migration', element: <MigrationPage /> },
   ],
   { basename },
 );

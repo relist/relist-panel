@@ -21,6 +21,7 @@ import { paths } from '../app/paths';
 import { DangerModal } from '../components/DangerModal';
 import { formatBytes } from '../components/MetricChart';
 import { PageHeader, RelativeTime } from '../components/primitives';
+import { ServerMigrationCard } from '../components/ServerMigrationCard';
 import { api } from '../data/api';
 import type {
   DockerContainer,
@@ -611,6 +612,7 @@ export function DockerPage() {
             </Card>
           </>
         )}
+        <ServerMigrationCard />
       </Flex>
       <DangerModal
         confirmWord={
