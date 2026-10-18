@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -268,5 +269,31 @@ func TestStatusAndFinishRoutes(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &st)
 	if st.Step != "migrated" || st.ClaimedBy != "https://new.example.com" || st.TargetURL != "https://new.example.com" {
 		t.Fatalf("status = %s", rec.Body)
+	}
+}
+
+func TestItemsWaitForTheLockToSettleAfterARestart(t *testing.T) {
+	s := newSourceServer(t)
+	key := s.claim(t)
+	s.startReady(t, key)
+	// The old host reboots: restart: always brings back a Compose that was
+	// stopped before the lock, so it is not in RunningComposeIDs.
+	s.docker.Running[fmt.Sprintf("relist-c%d", s.b)] = true
+	rebooted := NewSource(SourceDeps{Store: s.store, Builder: s.builder(), Queue: s.queue, Docker: s.docker,
+		Status: statusFromDocker{s.docker}, Composes: s.targets, Domains: fakeDomains{httpsDomain}, DB: s.db, DataDir: s.dataDir})
+	mux := http.NewServeMux()
+	rebooted.RegisterRoutes(mux)
+	s.mux = mux
+	if rec := s.do(t, "GET", "/api/migration/items/data-dir", key, nil); rec.Code != http.StatusConflict {
+		t.Fatalf("item before ResumeLock = %d, want 409", rec.Code)
+	}
+	if err := rebooted.ResumeLock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.docker.Running[fmt.Sprintf("relist-c%d", s.b)] {
+		t.Fatal("ResumeLock left a Compose running that was not recorded")
+	}
+	if rec := s.do(t, "GET", "/api/migration/items/data-dir", key, nil); rec.Code != http.StatusOK {
+		t.Fatalf("item after ResumeLock = %d", rec.Code)
 	}
 }

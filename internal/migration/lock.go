@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"relist-panel/internal/composes"
@@ -74,6 +75,11 @@ type Source struct {
 
 	// run serialises the lock sequence: Start, ResumeLock and Resume.
 	run sync.Mutex
+
+	// settled is set once this process has made the lock hold: Start ran,
+	// or ResumeLock re-stopped what a reboot brought back. Items stream only
+	// after it, so nothing is copied while a database runs.
+	settled atomic.Bool
 
 	// cancelStart cancels the Start in flight, so Resume never waits for a
 	// running Deployment. Guarded by mu.
@@ -207,6 +213,7 @@ func (s *Source) start(ctx context.Context, hostPaths []string) (Manifest, error
 	if st.Manifest == nil {
 		return Manifest{}, fmt.Errorf("migration lock at %q has no manifest", step)
 	}
+	s.settled.Store(true)
 	return *st.Manifest, nil
 }
 
@@ -284,6 +291,7 @@ func (s *Source) ResumeLock(ctx context.Context) error {
 	s.mu.Unlock()
 	switch step {
 	case StepNone:
+		s.settled.Store(true)
 		return nil
 	case StepLocked, StepStopping, StepMaintenance:
 		_, err := s.start(ctx, st.HostPaths)
@@ -292,17 +300,16 @@ func (s *Source) ResumeLock(ctx context.Context) error {
 	if err := s.ensureMaintenance(ctx, false); err != nil {
 		return err
 	}
-	for _, id := range st.RunningComposeIDs {
-		target, err := s.d.Composes.Target(ctx, id)
-		if err != nil {
-			return fmt.Errorf("compose %d: %w", id, err)
-		}
-		if status, err := s.d.Status.Status(ctx, target.Request); err == nil && status.Running > 0 {
-			if err := s.d.Docker.ComposeStop(ctx, target.Request); err != nil {
-				return fmt.Errorf("stop %s: %w", target.Compose.Name, err)
-			}
-		}
+	// A reboot brings back Containers with restart: always, including
+	// Composes that were already stopped before the lock: stop them all.
+	running, err := s.runningComposes(ctx)
+	if err != nil {
+		return err
 	}
+	if err := s.stopComposes(ctx, running); err != nil {
+		return err
+	}
+	s.settled.Store(true)
 	return nil
 }
 

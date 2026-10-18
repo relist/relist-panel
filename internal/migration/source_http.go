@@ -150,7 +150,7 @@ func (s *Source) item(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "migration state is temporarily unavailable")
 		return
 	}
-	if (step != StepReady && step != StepMigrated) || st.Manifest == nil {
+	if (step != StepReady && step != StepMigrated) || st.Manifest == nil || !s.settled.Load() {
 		writeJSONError(w, http.StatusConflict, ErrNotReady.Error())
 		return
 	}
