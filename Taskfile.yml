@@ -27,3 +27,8 @@ tasks:
     desc: Typecheck the web frontend
     cmds:
       - pnpm --dir web typecheck
+
+  probe:migration:
+    desc: Migrate between two docker:dind hosts with real Docker (manual, needs privileged containers and ~12 GB)
+    cmds:
+      - ./scripts/probe-migration.sh

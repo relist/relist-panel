@@ -1,7 +1,7 @@
 # Spec — Server migration (move a whole panel to a new host)
 
 Date: 2026-10-19.
-Status: needs-triage
+Status: ready-for-human
 
 ## Problem
 
@@ -342,3 +342,19 @@ untouched.
   appears among the operator's Composes. It runs with `--restart unless-stopped` and the label
   `relist.maintenance=1`, which is how the old panel finds it again after a restart.
 - The plan picks the Ant Design components for the progress list and the full-page lock state.
+
+## Probe record
+
+- **2026-10-19**, Docker 29.8.0 on the host, two `docker:27-dind` hosts, `task probe:migration`:
+  `probe: migration ok`. The old host ran Postgres 16 with 1,000 rows in a named Volume, a
+  locally built `probe/local:1` with no `RepoDigests`, and busybox serving `/srv/probe`, which
+  held a 1 MiB random file and a 5 GiB file. On the new host the rows, both files' SHA-256 and
+  `acme.json` matched, and all three Services were running. The old host answered `503` on
+  `/api/projects` and ran `relist-maintenance`.
+- Earlier runs that day reached Let's Encrypt production. With `RELIST_ACME_EMAIL` empty, the new
+  host's `acme.json` ended up holding a different account from the copied one, although the file
+  had been copied intact: same size, mode, owner and mtime. The likely cause is Traefik itself:
+  with an empty email it appears to discard a stored account and register a new one when it
+  starts, migration or not. This was not checked against Traefik's source. Certificates in the
+  file are kept. The probe now points Traefik's CA at an unreachable address, seeds a marker
+  `acme.json`, and never contacts Let's Encrypt.

@@ -146,6 +146,55 @@ Domain, no Traefik labels and no `relist-network` in its YAML leaves the shared
 network. If another Compose calls it, add `relist-network` to that Service's
 `networks:` and switch the caller to its alias.
 
+## Moving to a new server
+
+A **Migration** moves everything this panel manages to an empty panel on
+another host (ADR-0018): the database (admin account, Two-factor, Projects,
+Environments, Composes, Variables, Domains, Deploy keys and Deployment
+history), the whole data directory with Traefik's certificates, every named
+Volume, the host paths you pick and every Image the Composes need. The new
+panel pulls it over HTTPS, item by item; no SSH and no archive file are
+involved.
+
+1. On the new host, install the panel with the **same `RELIST_DATA_DIR`** as
+   the old one. Containers mount the data directory by absolute path, so the
+   migration refuses a different one. Copy the old install's `.env` too:
+   `RELIST_DOMAIN`, `RELIST_ACME_EMAIL` and the Traefik ports live there, not
+   in the data directory.
+2. On the old panel, open **Docker → Server migration** and create a migration
+   token (1 hour, 24 hours or 7 days). It is shown once.
+3. Open the new panel. On its setup screen choose **Migrate from another
+   panel**, and enter the old panel's `https://` URL and the token.
+4. Check the preview: sizes, which Images are pulled and which are copied,
+   the host paths to include (system paths such as `/etc/localtime` and the
+   Docker socket are unticked) and every warning. Start stays disabled while a
+   check blocks, such as a full disk or a Volume that already exists.
+5. **Start migration.** The old panel locks: queued Deployments are canceled,
+   a running one finishes, every Compose stops, and its panel-managed Domains
+   show a maintenance page. Apps are down from here until DNS moves.
+6. The new panel copies each item, retrying a failed one on its own, then
+   restarts itself, starts Traefik with the old certificates and deploys the
+   Composes that were running. Sign in with the old admin account.
+7. Point DNS at the new host, then turn the old one off.
+
+The old panel stays locked as **Migrated** and refuses every change, including
+after a restart. **Resume this server** (type `RESUME`) starts its Composes
+again, which is also how to cancel a migration or fall back to the old host.
+Data written on the new host after the migration is not on the old one.
+
+Not moved: the install's `.env`, Volumes with a driver other than `local` or
+with driver options, and host paths you leave unticked. Domains routed by
+hand-written Traefik labels get no maintenance page; they answer with
+Traefik's error until DNS moves.
+
+Traefik's certificates move with `acme.json`. If `RELIST_ACME_EMAIL` is empty, the
+probe saw Traefik on the new host register a new Let's Encrypt account even though the
+copied file arrived intact; the certificates still came across. Set the email so the
+account stays the same.
+
+`task probe:migration` runs a whole migration between two `docker:dind` hosts
+with real Docker. It needs privileged containers and about 12 GB of disk.
+
 ## Volume files
 
 Each Compose page has a **Volumes** tab listing the Volumes that Compose
