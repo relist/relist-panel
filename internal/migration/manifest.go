@@ -184,7 +184,10 @@ func (b Builder) HostPathCandidates(ctx context.Context) ([]HostPathCandidate, [
 		}
 		size, err := b.Docker.Size(ctx, filepath.Dir(s.hostPaths[i].Path), filepath.Base(s.hostPaths[i].Path))
 		if err != nil {
-			return nil, nil, fmt.Errorf("size %s: %w", s.hostPaths[i].Path, err)
+			// One unreadable path, such as a bind source deleted since the
+			// deploy, must not hide every other check.
+			s.warnings = append(s.warnings, fmt.Sprintf("Could not size %s: %v", s.hostPaths[i].Path, err))
+			continue
 		}
 		s.hostPaths[i].Size = size
 	}
@@ -306,14 +309,23 @@ func skipInDataDir(rel string) bool {
 }
 
 // IsSystemPath reports a host path that is unticked by default: system
-// directories, the data directory itself and sockets.
+// directories, sockets, and anything that is or holds the data directory or
+// Docker's own storage, which would carry the live database and Volumes.
 func IsSystemPath(p, dataDir string) bool {
+	if p == "/" || strings.HasSuffix(p, ".sock") {
+		return true
+	}
 	for _, root := range []string{"/etc", "/proc", "/sys", "/dev", "/run", "/var/run", "/var/lib/docker"} {
 		if p == root || strings.HasPrefix(p, root+"/") {
 			return true
 		}
 	}
-	return inside(dataDir, p) || strings.HasSuffix(p, ".sock")
+	for _, held := range []string{dataDir, "/var/lib/docker"} {
+		if held != "" && inside(p, held) {
+			return true
+		}
+	}
+	return inside(dataDir, p)
 }
 
 func inside(dir, p string) bool {

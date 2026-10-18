@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -283,5 +284,32 @@ func TestManifestWarnsAboutHandWrittenRouters(t *testing.T) {
 	}
 	if !hasWarning(m.Warnings, "legacy: hand-written Traefik routers get no maintenance page") {
 		t.Fatalf("warnings = %q", m.Warnings)
+	}
+}
+
+func TestHostPathCandidatesTreatRootAndAncestorsAsSystem(t *testing.T) {
+	f := newManifestFixture(t)
+	parent := filepath.Dir(f.dataDir)
+	f.compose("exporter", "services: {}", `{"services":{"x":{"image":"node-exporter","volumes":[
+		{"type":"bind","source":"/","target":"/host"},
+		{"type":"bind","source":"/var/lib","target":"/varlib"},
+		{"type":"bind","source":"`+parent+`","target":"/parent"},
+		{"type":"bind","source":"/srv/gone","target":"/gone"}]}}}`, true)
+	f.docker.Fail["size"] = errors.New("stat /data/gone: no such file or directory")
+	got, warnings, err := f.builder().HostPathCandidates(context.Background())
+	if err != nil {
+		t.Fatalf("HostPathCandidates() error = %v, want a warning instead", err)
+	}
+	system := map[string]bool{}
+	for _, c := range got {
+		system[c.Path] = c.System
+	}
+	for _, p := range []string{"/", "/var/lib", parent} {
+		if !system[p] {
+			t.Errorf("%s is not a system path", p)
+		}
+	}
+	if !hasWarning(warnings, "Could not size /srv/gone") {
+		t.Fatalf("warnings = %q", warnings)
 	}
 }
