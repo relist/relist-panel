@@ -33,6 +33,16 @@ var (
 type Service struct {
 	db  *sql.DB
 	now func() time.Time
+	// selfAuthenticated names further paths the cookie check skips because
+	// their handlers authenticate on their own.
+	selfAuthenticated func(path string) bool
+}
+
+// AllowSelfAuthenticated lets requests to the paths allow reports true for
+// past the cookie check: a server migration's session-key routes and its
+// pre-setup pull routes (ADR-0018). Their handlers authenticate themselves.
+func (s *Service) AllowSelfAuthenticated(allow func(path string) bool) {
+	s.selfAuthenticated = allow
 }
 
 type credentials struct {
@@ -75,7 +85,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 // and the frontend files needed to render the auth screens.
 func (s *Service) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if publicPath(r.URL.Path) {
+		if publicPath(r.URL.Path) || (s.selfAuthenticated != nil && s.selfAuthenticated(r.URL.Path)) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -489,6 +499,7 @@ func publicPath(path string) bool {
 	case "/healthz", "/api/auth/status", "/api/auth/setup", "/api/auth/login", "/api/auth/logout":
 		return true
 	}
+
 	// The HTML shell is public wherever it is served: the frontend routes with
 	// history URLs (`/projects/1/env/1/compose/1`), so the shell answers under
 	// any non-API path. The API namespace itself stays authenticated — `/api`

@@ -21,7 +21,12 @@ func newClock() *clock                   { return &clock{t: time.Unix(1_800_000_
 
 func openDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := database.OpenAndMigrate(filepath.Join(t.TempDir(), "panel.db"))
+	return openDBAt(t, filepath.Join(t.TempDir(), "panel.db"))
+}
+
+func openDBAt(t *testing.T, path string) *sql.DB {
+	t.Helper()
+	db, err := database.OpenAndMigrate(path)
 	if err != nil {
 		t.Fatal(err)
 	}

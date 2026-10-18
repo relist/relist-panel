@@ -2,6 +2,7 @@ package migration
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"relist-panel/internal/composes"
+	"relist-panel/internal/config"
 	"relist-panel/internal/domains"
 )
 
@@ -48,6 +50,15 @@ type SourceDeps struct {
 	Composes ComposeTargets
 	Domains  DomainLister
 	Now      func() time.Time
+
+	// DB is the panel database the database item copies; DataDir is the data
+	// directory the data-dir item packs. ReportedDataDir is the path preflight
+	// reports, DataDir when empty; only the in-process integration test sets
+	// it. Install is what preflight reports of the install's .env.
+	DB              *sql.DB
+	DataDir         string
+	ReportedDataDir string
+	Install         config.InstallSettings
 }
 
 // Source is the old host's side of a Migration.
@@ -56,6 +67,11 @@ type Source struct {
 
 	// run serialises the lock sequence: Start, ResumeLock and Resume.
 	run sync.Mutex
+
+	// startMu guards the background Start the start route launches.
+	startMu  sync.Mutex
+	starting bool
+	startErr error
 
 	// mu guards the cached lock, which the middleware reads on every request.
 	mu      sync.Mutex

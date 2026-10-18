@@ -20,6 +20,7 @@ import (
 	"relist-panel/internal/environmentvariables"
 	"relist-panel/internal/images"
 	"relist-panel/internal/metrics"
+	"relist-panel/internal/migration"
 	"relist-panel/internal/projects"
 	"relist-panel/internal/sources"
 	"relist-panel/internal/terminal"
@@ -40,12 +41,15 @@ import (
 // and its read side (ADR-0010). terminalOptions, when non-nil, is the terminal
 // seam and settings; nil leaves the terminal routes unregistered. imageStore
 // is the Images page's Docker seam; nil leaves the image routes unregistered.
+// migrationOptions, when non-nil, adds a server Migration's routes and its
+// lock middleware (ADR-0018) and resumes an interrupted lock in the
+// background.
 // The optional dockerStores argument adds host reports and confirmed cleanup.
 // The first store is used; omission keeps those routes unregistered.
 //
 // The Deployment worker runs until ctx is done. The returned wait blocks until
 // it has returned, which is after a Deploy step in progress has finished.
-func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts, volumeRunner volumes.Runner, volumeResolver *volumes.Resolver, terminalOptions *terminal.Options, imageStore images.Images, dockerStores ...dockerhost.Engine) (http.Handler, func()) {
+func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts, volumeRunner volumes.Runner, volumeResolver *volumes.Resolver, terminalOptions *terminal.Options, imageStore images.Images, migrationOptions *migration.Options, dockerStores ...dockerhost.Engine) (http.Handler, func()) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
 	authService := auth.New(db)
@@ -103,8 +107,34 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 		metricsService := metrics.New(metrics.NewStore(db), history, services)
 		metricsService.RegisterRoutes(mux)
 	}
+	var inner http.Handler = gate.middleware(mux)
+	if migrationOptions != nil {
+		source := migration.NewSource(migration.SourceDeps{
+			Store:           migration.NewStore(db, nil),
+			Builder:         migration.Builder{DB: db, Composes: composesService, Volumes: volumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir},
+			Queue:           queue,
+			Docker:          migrationOptions.Docker,
+			Status:          runner,
+			Composes:        composesService,
+			Domains:         domains.NewStore(db),
+			DB:              db,
+			DataDir:         dataDir,
+			ReportedDataDir: migrationOptions.ReportedDataDir,
+			Install:         migrationOptions.Install,
+		})
+		source.RegisterRoutes(mux)
+		authService.AllowSelfAuthenticated(migration.SessionPath)
+		inner = source.Middleware(inner)
+		worker.Add(1)
+		go func() {
+			defer worker.Done()
+			if err := source.ResumeLock(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("migration: resume the lock: %v", err)
+			}
+		}()
+	}
 	mux.Handle("/", webassets.Handler())
-	return authService.Middleware(gate.middleware(mux)), worker.Wait
+	return authService.Middleware(inner), worker.Wait
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {

@@ -27,7 +27,7 @@ func TestDockerHostRoutesRequireAuthAndConfirmations(t *testing.T) {
 	s.stopWorker()
 	engine := &hostEngine{}
 	ctx, cancel := context.WithCancel(context.Background())
-	handler, wait := httpapi.NewHandler(ctx, s.db, s.runner, s.dataDir, nil, nil, nil, nil, nil, s.images, engine)
+	handler, wait := httpapi.NewHandler(ctx, s.db, s.runner, s.dataDir, nil, nil, nil, nil, nil, s.images, nil, engine)
 	t.Cleanup(func() { cancel(); wait() })
 	s.handler = handler
 	for _, route := range []struct{ method, path string }{{"GET", "/api/docker"}, {"POST", "/api/docker/prune"}, {"POST", "/api/docker/recover"}} {
