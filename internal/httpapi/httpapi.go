@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -123,6 +124,28 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 			Install:         migrationOptions.Install,
 		})
 		source.RegisterRoutes(mux)
+		local := migration.LocalHost{DB: db, Docker: migrationOptions.Docker, DataDir: dataDir, Install: migrationOptions.Install}
+		stateDir := filepath.Join(dataDir, ".migration")
+		target := migration.NewTarget(migration.TargetDeps{
+			Local:    local,
+			HTTP:     migrationOptions.HTTP,
+			Insecure: migrationOptions.Insecure,
+			StateDir: stateDir,
+			Restore:  migration.NewRestorer(local, filepath.Join(stateDir, "staging")),
+			Finalizer: migration.NewFinalizer(migration.FinalizeDeps{
+				Local: local, Exit: migrationOptions.Exit, Queue: queue, Sources: sources.NewStore(db), Domains: domains.NewStore(db),
+			}),
+			Backoff: migrationOptions.Backoff,
+			Context: ctx,
+		})
+		target.RegisterRoutes(mux, func(r *http.Request) (bool, error) {
+			exists, err := authService.AdminExists(r)
+			if err != nil || !exists {
+				return !exists, err
+			}
+			return authService.Authenticated(r)
+		})
+		authService.SetSetupBlocker(target.InProgress)
 		authService.AllowSelfAuthenticated(migration.SessionPath)
 		inner = source.Middleware(inner)
 		worker.Add(1)
@@ -132,6 +155,9 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 				log.Printf("migration: resume the lock: %v", err)
 			}
 		}()
+		if err := target.ResumeIfPending(ctx); err != nil {
+			log.Printf("migration: resume the pull: %v", err)
+		}
 	}
 	mux.Handle("/", webassets.Handler())
 	return authService.Middleware(inner), worker.Wait

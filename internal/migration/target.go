@@ -589,7 +589,7 @@ func (t *Target) progress() Progress {
 func (t *Target) ResumeIfPending(ctx context.Context) error {
 	raw, err := os.ReadFile(t.statePath())
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return t.loadSummary()
 	}
 	if err != nil {
 		return err
@@ -615,6 +615,37 @@ func (t *Target) ResumeIfPending(ctx context.Context) error {
 	}
 	t.mu.Unlock()
 	return nil
+}
+
+// loadSummary restores PhaseDone from summary.json after a restart.
+func (t *Target) loadSummary() error {
+	raw, err := os.ReadFile(filepath.Join(t.d.StateDir, "summary.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var summary Summary
+	if err := json.Unmarshal(raw, &summary); err != nil {
+		return fmt.Errorf("read summary.json: %w", err)
+	}
+	t.mu.Lock()
+	t.st.Phase, t.summary = PhaseDone, &summary
+	t.mu.Unlock()
+	return nil
+}
+
+// InProgress reports a Migration past connecting and not yet done, during
+// which first-admin setup is refused.
+func (t *Target) InProgress() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	switch t.st.Phase {
+	case PhaseLocking, PhasePulling, PhasePaused, PhaseFinalizing:
+		return true
+	}
+	return false
 }
 
 // completeAsync runs complete in the background. The caller holds t.mu.

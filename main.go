@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -58,11 +59,25 @@ func main() {
 		log.Printf("warning: could not ensure docker network %q exists: %v", dockernet.NetworkName, err)
 	}
 
+	// A server migration that finished pulling restarted the panel to swap
+	// in the migrated database, which must happen before it is opened
+	// (ADR-0018); the old host's lock and queue are then cleared from it.
+	migrationPending, err := migration.PrepareFinalize(cfg.DataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	db, err := database.OpenAndMigrate(cfg.DatabasePath())
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
+
+	if migrationPending {
+		if err := migration.ClearCopiedState(ctx, db, time.Now()); err != nil {
+			log.Fatal(err)
+		}
+	}
 
 	// Rows created before identity was stored (ADR-0005) must be frozen to
 	// the identity their stacks run under before any action addresses them.
@@ -99,8 +114,9 @@ func main() {
 	handler, waitDeployments := httpapi.NewHandler(ctx, db, dockerexec.New(), cfg.DataDir, sampler, collector, volumeRunner, volumeResolver, &terminal.Options{
 		Exec: terminalExec,
 	}, dockerexec.NewImages(dockerexec.DefaultSocketPath), &migration.Options{
-		Docker:  dockerexec.NewMigrationDocker(),
-		Install: cfg.Install,
+		Docker:   dockerexec.NewMigrationDocker(),
+		Install:  cfg.Install,
+		Insecure: slices.Contains(os.Args[1:], "--insecure-migration-source"),
 	}, dockerexec.NewDockerHost(dockerexec.DefaultSocketPath))
 	server := &http.Server{Addr: cfg.Address(), Handler: handler}
 

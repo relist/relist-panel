@@ -36,7 +36,19 @@ type Service struct {
 	// selfAuthenticated names further paths the cookie check skips because
 	// their handlers authenticate on their own.
 	selfAuthenticated func(path string) bool
+	// setupBlocked refuses first-admin setup while a server migration is
+	// running into this panel, whose admin comes from the old host.
+	setupBlocked func() bool
 }
+
+// SetSetupBlocker makes setup answer 409 while blocked reports true.
+func (s *Service) SetSetupBlocker(blocked func() bool) { s.setupBlocked = blocked }
+
+// AdminExists reports whether the admin account has been set up.
+func (s *Service) AdminExists(r *http.Request) (bool, error) { return s.adminExists(r) }
+
+// Authenticated reports whether r carries a valid admin session.
+func (s *Service) Authenticated(r *http.Request) (bool, error) { return s.authenticated(r) }
 
 // AllowSelfAuthenticated lets requests to the paths allow reports true for
 // past the cookie check: a server migration's session-key routes and its
@@ -136,6 +148,10 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) setup(w http.ResponseWriter, r *http.Request) {
+	if s.setupBlocked != nil && s.setupBlocked() {
+		writeError(w, http.StatusConflict, "A migration is in progress")
+		return
+	}
 	if err := s.requireDatabase(); err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return

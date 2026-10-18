@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,12 +19,102 @@ import (
 func newMigrationServer(t *testing.T) *testServer {
 	t.Helper()
 	s := newTestServer(t)
+	s.restartWithMigration(t)
+	return s
+}
+
+// restartWithMigration rebuilds the handler with Migration options, as a
+// panel restart would: Migration state files are read again.
+func (s *testServer) restartWithMigration(t *testing.T) {
+	t.Helper()
 	s.stopWorker()
 	ctx, cancel := context.WithCancel(context.Background())
-	handler, wait := httpapi.NewHandler(ctx, s.db, s.runner, s.dataDir, nil, nil, s.volumeRunner, nil, nil, s.images, &migration.Options{})
-	t.Cleanup(func() { cancel(); wait() })
+	handler, wait := httpapi.NewHandler(ctx, s.db, s.runner, s.dataDir, nil, nil, s.volumeRunner, nil, nil, s.images,
+		&migration.Options{Exit: func() {}})
+	var once sync.Once
+	s.stopWorker = func() { once.Do(func() { cancel(); wait() }) }
+	t.Cleanup(s.stopWorker)
 	s.handler = handler
-	return s
+}
+
+func writeMigrationFile(t *testing.T, s *testServer, name, content string) {
+	t.Helper()
+	dir := filepath.Join(s.dataDir, ".migration")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPullRoutesOpenOnlyBeforeAdminExists(t *testing.T) {
+	s := newMigrationServer(t)
+	response := s.request(t, http.MethodGet, "/api/migration/pull/progress", nil)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("progress before setup = %d, want 200", response.StatusCode)
+	}
+	setupAndLogin(t, s)
+	response = s.request(t, http.MethodGet, "/api/migration/pull/progress", nil)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("progress signed in = %d, want 200", response.StatusCode)
+	}
+	s.cookies = map[string]*http.Cookie{}
+	response = s.request(t, http.MethodGet, "/api/migration/pull/progress", nil)
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("progress signed out after setup = %d, want 401", response.StatusCode)
+	}
+}
+
+func TestSetupBlockedDuringMigration(t *testing.T) {
+	s := newTestServer(t)
+	writeMigrationFile(t, s, "state.json", `{"phase":"paused","sourceUrl":"https://old","manifest":{"items":[]},"items":{}}`)
+	s.restartWithMigration(t)
+	response := postJSON(t, s, "/api/auth/setup", map[string]string{"email": "admin@example.com", "password": "correct horse battery staple"})
+	body := readBody(t, response)
+	if response.StatusCode != http.StatusConflict || !strings.Contains(body, "A migration is in progress") {
+		t.Fatalf("setup during a migration = %d %s", response.StatusCode, body)
+	}
+}
+
+func TestStartConflictCarriesBlockingMessage(t *testing.T) {
+	s := newMigrationServer(t)
+	response := s.request(t, http.MethodPost, "/api/migration/pull/start", map[string]any{"hostPaths": []string{}})
+	body := readBody(t, response)
+	if response.StatusCode != http.StatusConflict || !strings.Contains(body, "connect to a source first") {
+		t.Fatalf("start before connect = %d %s", response.StatusCode, body)
+	}
+	response = s.request(t, http.MethodPost, "/api/migration/pull/connect", map[string]string{"sourceUrl": "http://old.example.com", "token": "x"})
+	body = readBody(t, response)
+	if response.StatusCode != http.StatusBadRequest || !strings.Contains(body, "The source must use https://") {
+		t.Fatalf("connect over http = %d %s", response.StatusCode, body)
+	}
+}
+
+func TestProgressAfterRestartReadsSummary(t *testing.T) {
+	s := newMigrationServer(t)
+	setupAndLogin(t, s)
+	writeMigrationFile(t, s, "summary.json", `{"deployments":[{"composeId":1,"number":3}],"warnings":[],"dns":["shop.example.com"]}`)
+	s.restartWithMigration(t)
+	response := s.request(t, http.MethodGet, "/api/migration/pull/progress", nil)
+	var p struct {
+		Phase   string
+		Summary struct{ DNS []string }
+	}
+	json.NewDecoder(response.Body).Decode(&p)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || p.Phase != "done" || len(p.Summary.DNS) != 1 {
+		t.Fatalf("progress after restart = %d %+v", response.StatusCode, p)
+	}
+	s.cookies = map[string]*http.Cookie{}
+	response = s.request(t, http.MethodGet, "/api/migration/pull/progress", nil)
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("progress signed out = %d, want 401", response.StatusCode)
+	}
 }
 
 func TestMigrationRoutesAuthWiring(t *testing.T) {
