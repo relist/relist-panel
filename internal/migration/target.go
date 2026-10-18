@@ -699,7 +699,11 @@ func (t *Target) complete(ctx context.Context) error {
 	}
 	var finishErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if finishErr = c.finish(ctx, self); finishErr == nil {
+		finishErr = c.finish(ctx, self)
+		var remote *remoteError
+		if finishErr == nil || (attempt > 1 && errors.As(finishErr, &remote) && remote.Status == http.StatusUnauthorized) {
+			// A 401 on a repeat means an earlier finish landed and ended the session.
+			finishErr = nil
 			break
 		}
 		select {

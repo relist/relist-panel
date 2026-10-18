@@ -337,7 +337,12 @@ func (s *Source) Finish(ctx context.Context, targetURL string) error {
 	if st.MigratedAt == 0 {
 		st.MigratedAt = s.d.Now().UTC().Unix()
 	}
-	return s.setLock(ctx, StepMigrated, st)
+	if err := s.setLock(ctx, StepMigrated, st); err != nil {
+		return err
+	}
+	// The session ends here: nobody may stream this server's data or undo
+	// the Migration with the key any more. The lock keeps who claimed it.
+	return s.d.Store.RevokeSession(ctx)
 }
 
 // Middleware answers 503 for every route a locked panel must not serve. The

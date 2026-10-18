@@ -255,6 +255,12 @@ func TestStatusAndFinishRoutes(t *testing.T) {
 	if rec := s.do(t, "POST", "/api/migration/finish", key, map[string]string{"targetUrl": "https://new.example.com"}); rec.Code != http.StatusNoContent {
 		t.Fatalf("finish = %d %s", rec.Code, rec.Body)
 	}
+	if rec := s.do(t, "GET", "/api/migration/items/database", key, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("an item after finish = %d, want 401: the session ends with finish", rec.Code)
+	}
+	if rec := s.do(t, "POST", "/api/migration/abort", key, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("abort after finish = %d, want 401", rec.Code)
+	}
 	rec := s.do(t, "GET", "/api/migration/status", "", nil)
 	var st struct {
 		Step, ClaimedBy, TargetURL string

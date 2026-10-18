@@ -181,6 +181,13 @@ func (s *Store) Claim(ctx context.Context, token, claimedBy string) (string, err
 	return key, tx.Commit()
 }
 
+// RevokeSession deletes the token and its session, even after the
+// Migration started; Finish calls it.
+func (s *Store) RevokeSession(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM migration_token")
+	return err
+}
+
 // VerifySession checks a session key presented as a bearer token.
 func (s *Store) VerifySession(ctx context.Context, sessionKey string) error {
 	var sessionHash sql.NullString
