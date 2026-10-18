@@ -368,6 +368,7 @@ Rules, copied from the spec:
   - `ProjectContainerImages` for each Compose.
 
   Deduplicate by `ImageInfo.ID`. A name that `InspectImage` cannot find becomes the warning `Image <ref> is not on this host; its Compose will pull or build it on deploy`.
+- **Never-deployed Composes:** a Compose whose resolved compose file (`DeployTarget.Request.ComposeFilePath`) does not exist is skipped for volume, host path and image resolution, the same check `composes.ServiceNames` uses. It adds the warning `<compose> was never deployed; only its files and database rows move`. Any other resolution error fails `Build`. `Source.Info` (Task 8) runs the same resolution, so that error appears in preflight before anything is locked.
 - **Items are ordered** `database`, `data-dir`, volumes, host paths, then images.
 - **Hand-written routers**: a Compose whose stored YAML has `traefik.http.routers.` labels (`domains.HasTraefikLabels`) adds the warning `<compose>: hand-written Traefik routers get no maintenance page`.
 
@@ -381,6 +382,7 @@ The images' `docker compose config` output comes from the same `ComposeConfig` c
   - `TestManifestDedupesImagesByID`
   - `TestManifestItemOrder`
   - `TestManifestRefusesUnknownHostPath`
+  - `TestManifestSkipsNeverDeployedCompose`: no compose file on disk, so the Compose is skipped with the warning, and `Build` succeeds.
 - [ ] **Step 2: Run `go test ./internal/migration/ ./internal/volumes/`.** Expected: FAIL.
 - [ ] **Step 3: Implement.** List Compose IDs with `SELECT id FROM composes ORDER BY id`. Size the data dir by walking it in process, skipping `panel.db*` and `.migration`.
 - [ ] **Step 4: Run the tests.** Expected: PASS.
@@ -712,7 +714,7 @@ type Summary struct {
 
 Order, from the spec:
 1. `Begin`: `StopTraefik`. Then move each entry of `.migration/staging/data/` into `DataDir`, replacing it. Leave `staging/panel.db`. Write `.migration/finalize` with the manifest's `RunningComposeIDs` as JSON, then call `exit()` (`os.Exit(0)` in production).
-2. `PrepareFinalize`: when the marker exists, remove `panel.db`, `panel.db-journal`, `panel.db-wal` and `panel.db-shm`, then rename `staging/panel.db` to `panel.db`. If the staged file is already gone and `panel.db` exists, do nothing, so a crash after the rename is safe.
+2. `PrepareFinalize`: when the marker exists, remove `panel.db`, `panel.db-journal`, `panel.db-wal` and `panel.db-shm`, then rename `staging/panel.db` to `panel.db`. If the staged file is already gone and `panel.db` exists, skip the swap, so a crash after the rename is safe. `pending` is true whenever the marker exists, swap or no swap, so `ClearCopiedState` always runs before the copied `migration_lock` row could reach `source.ResumeLock`. `ClearCopiedState` is idempotent.
 3. `ClearCopiedState`: `DELETE FROM migration_lock`, `migration_token` and `migration_claim_failures`, then `CancelUnfinished(ctx, "server migration", now)`.
 4. `CompleteFinalize`: `StartTraefik`. For each running ID, enqueue `ModeSkipBuild` when `sources.Store.Get` finds a Source, otherwise `ModeDeploy`. Call `Finish` (`POST finish` with `SelfURL`, retried 3 times; a failure becomes a warning). Write `.migration/summary.json`, then remove the marker and the staging dir.
 
@@ -729,6 +731,7 @@ target.ResumeIfPending(ctx) // which calls CompleteFinalize at PhaseFinalizing
 - [ ] **Step 1: Write failing tests.**
   - `TestPrepareFinalizeRemovesJournalsBeforeSwap`: create an empty `panel.db`, a `panel.db-journal` and a staged database with one marker row. After `PrepareFinalize` and `OpenAndMigrate`, the marker row is present and no journal file remains.
   - `TestPrepareFinalizeIsIdempotent`
+  - `TestPrepareFinalizeAfterRenameStillPending`: marker present, staged file already renamed. `pending` is true, and after `ClearCopiedState` the `migration_lock` table is empty.
   - `TestClearCopiedStateClearsLockAndCancels`
   - `TestCompleteFinalizeEnqueuesModesPerSource`: Compose 1 has a Source (`skip-build`) and Compose 2 has none (`deploy`). A Compose not in the marker is not enqueued.
   - `TestBeginStopsTraefikBeforeMovingDataDir`: `fakeDocker` call order.
@@ -758,12 +761,28 @@ target.ResumeIfPending(ctx) // which calls CompleteFinalize at PhaseFinalizing
 | `POST /api/migration/pull/retry` | | `202 Progress` |
 | `POST /api/migration/pull/abort` | | `204` |
 
-  - `NewHandler` gains a trailing `migration.Options{Docker migration.Docker; Install config.InstallSettings; Insecure bool}` argument. It returns the `*migration.Target` too, so `main.go` can call `ResumeIfPending`. `--insecure-migration-source` is parsed in `main.go` from `os.Args`.
+  - `NewHandler` gains a trailing `migration.Options` argument:
+
+```go
+type Options struct {
+    Docker          Docker
+    Install         config.InstallSettings
+    Insecure        bool
+    ReportedDataDir string                          // "" means dataDir
+    HTTP            *http.Client                    // nil means a default client with no overall timeout
+    Backoff         func(attempt int) time.Duration // nil means 2s, 8s, 30s
+    Exit            func()                          // nil means os.Exit(0)
+}
+```
+
+    These pass through to `SourceDeps`, `TargetDeps` and `NewFinalizer`. It returns the `*migration.Target` too, so `main.go` can call `ResumeIfPending`. `--insecure-migration-source` is parsed in `main.go` from `os.Args`.
+  - After the restart, `Progress()` rebuilds `PhaseDone` from `.migration/summary.json` when `state.json` is gone. `GET progress` then requires the admin cookie, because an admin now exists.
   - While `/api/auth/setup` would succeed and the Target's phase is past `connected`, `/api/auth/setup` answers `409` with `A migration is in progress`. This is wired through an `auth.Service.SetSetupBlocker(func() bool)`.
 - [ ] **Step 1: Write failing tests.**
   - `TestPullRoutesOpenOnlyBeforeAdminExists`: with no admin, `200`. With an admin and no cookie, `401`. With an admin and a cookie, `200`.
   - `TestSetupBlockedDuringMigration`
   - `TestStartConflictCarriesBlockingMessage`
+  - `TestProgressAfterRestartReadsSummary`: there is no `state.json` and there is a `summary.json`. With the cookie, `phase` is `done` with the summary. Without it, `401`.
 - [ ] **Step 2: Run `go test ./internal/migration/ ./internal/auth/ ./internal/httpapi/`.** Expected: FAIL.
 - [ ] **Step 3: Implement** and wire `main.go`: `PrepareFinalize`, `OpenAndMigrate`, `ClearCopiedState`, `NewHandler`, then go `source.ResumeLock` and go `target.ResumeIfPending`.
 - [ ] **Step 4: Run `go test ./...` and `task build`.** Expected: PASS, and the binary builds.
@@ -776,6 +795,7 @@ target.ResumeIfPending(ctx) // which calls CompleteFinalize at PhaseFinalizing
 
 **Interfaces:**
 - Consumes: everything above. Each panel is a full `httpapi.NewHandler` over its own `t.TempDir()` data dir, with its own `fakeDocker`, and the two share nothing. `Insecure: true`. The identical-path check compares `SourceInfo.DataDir` with the new panel's `DataDir`. Because two panels in one process cannot share one directory, the old panel's `SourceDeps.ReportedDataDir` is set to the new panel's path (Task 8).
+- The test sets `Options.Exit` to cancel the first new-host handler's ctx, `Options.Backoff` to return 0 and `Options.HTTP` to a client with a test `RoundTripper`. Before building the second new-host handler on the same data dir, it waits on the first one's worker (the `wait` func `NewHandler` returns).
 - [ ] **Step 1: Write the tests.**
   - `TestMigrationHappyPath`: seed the old panel with an admin, a Project, two Composes (one with a Source and one running), a Domain, a Volume with files owned `999:999`, a host path and a digest-less Image. Then run `connect`, `start`, poll until done, and restart the new handler: `PrepareFinalize`, `OpenAndMigrate`, `ClearCopiedState`, `NewHandler` and `ResumeIfPending`. Assert:
     - the new database has the same Composes, Domains and admin;
@@ -817,13 +837,15 @@ target.ResumeIfPending(ctx) // which calls CompleteFinalize at PhaseFinalizing
       - every `Check` as an `Alert` (`error` when blocking, otherwise `warning`);
       - **Start migration**, disabled while any check is blocking.
     - **Progress**: poll `progress` every 2s. One `Table` row per item with a `Progress` bar, state and error. **Retry** and **Abort** show when paused.
+    - While `phase` is `finalizing`, connection errors and `502`/`503` from `progress` are expected, because the panel exits and restarts. Show "Restarting the panel…" and keep polling.
+    - A `401` from `progress` redirects to `/signin` with `state.from = '/migration'`, with the copy `Sign in with the admin account of the old server`.
     - **Done**: a `Result` with a Deployment list (links to each log), the warnings and the DNS hosts to point at this server. It also says to sign in with the old admin account.
 - [ ] **Step 1: Read the Ant Design docs** listed in Global Constraints and `docs/GUIDELINES.md`.
 - [ ] **Step 2: Write failing vitest tests.**
   - `migration.test.ts`: the API functions' URLs and bodies.
   - `ServerMigrationCard.test.tsx`: the default lifetime is 24 hours, and the token is shown once after create.
   - `MigrationLockPage.test.tsx`: Resume is disabled until `RESUME` is typed.
-  - `MigrationPage.test.tsx`: Start is disabled with a blocking check, and system paths are unticked.
+  - `MigrationPage.test.tsx`: Start is disabled with a blocking check, and system paths are unticked. A network error while finalizing keeps polling. A `401` redirects to sign-in with `from` set to `/migration`.
 - [ ] **Step 3: Run `pnpm --dir web test`.** Expected: FAIL.
 - [ ] **Step 4: Implement.**
 - [ ] **Step 5: Run `pnpm --dir web test` and `pnpm --dir web typecheck`.** Expected: PASS.
