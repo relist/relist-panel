@@ -1,0 +1,293 @@
+package migration
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	"relist-panel/internal/composes"
+	"relist-panel/internal/domains"
+)
+
+type fakeQueue struct {
+	mu        sync.Mutex
+	canceled  []string
+	waited    int
+	waitBlock chan struct{}
+}
+
+func (q *fakeQueue) CancelAllQueued(_ context.Context, reason string) (int, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.canceled = append(q.canceled, reason)
+	return 1, nil
+}
+
+func (q *fakeQueue) WaitIdle(ctx context.Context) error {
+	if q.waitBlock != nil {
+		select {
+		case <-q.waitBlock:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	q.mu.Lock()
+	q.waited++
+	q.mu.Unlock()
+	return nil
+}
+
+func (q *fakeQueue) Running() (int64, int, bool) { return 0, 0, false }
+
+// statusFromDocker reports a Compose running when the fake says so.
+type statusFromDocker struct{ d *FakeDocker }
+
+func (s statusFromDocker) Status(_ context.Context, req composes.RunRequest) (composes.ComposeStatus, error) {
+	s.d.mu.Lock()
+	defer s.d.mu.Unlock()
+	if s.d.Running[req.ProjectName] {
+		return composes.ComposeStatus{Running: 1, Total: 1}, nil
+	}
+	return composes.ComposeStatus{Total: 1}, nil
+}
+
+type fakeDomains []domains.Domain
+
+func (f fakeDomains) ListAll(context.Context) ([]domains.Domain, error) { return f, nil }
+
+type sourceFixture struct {
+	*manifestFixture
+	store *Store
+	queue *fakeQueue
+	src   *Source
+	a, b  int64
+}
+
+func newSourceFixture(t *testing.T, ds ...domains.Domain) *sourceFixture {
+	t.Helper()
+	m := newManifestFixture(t)
+	f := &sourceFixture{manifestFixture: m, store: NewStore(m.db, newClock().now), queue: &fakeQueue{}}
+	f.a = m.compose("api", "services: {}", `{"services":{"api":{"image":"nginx"}}}`, true)
+	f.b = m.compose("worker", "services: {}", `{"services":{"w":{"image":"nginx"}}}`, true)
+	m.docker.Running[fmt.Sprintf("relist-c%d", f.a)] = true
+	f.src = NewSource(SourceDeps{Store: f.store, Builder: m.builder(), Queue: f.queue, Docker: m.docker,
+		Status: statusFromDocker{m.docker}, Composes: m.targets, Domains: fakeDomains(ds)})
+	return f
+}
+
+var httpsDomain = domains.Domain{ID: 3, ComposeID: 1, Host: "shop.example.com", Path: "/api", Port: 80, HTTPS: true, CertProvider: "letsencrypt"}
+
+func TestStartRecordsRunningThenStops(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	m, err := f.src.Start(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(m.RunningComposeIDs, []int64{f.a}) {
+		t.Fatalf("running = %v, want [%d]", m.RunningComposeIDs, f.a)
+	}
+	if got := f.docker.CallsOf("compose-stop"); !slices.Equal(got, []string{fmt.Sprintf("compose-stop relist-c%d", f.a)}) {
+		t.Fatalf("stops = %q", got)
+	}
+	if !f.docker.MaintenanceUp {
+		t.Fatal("maintenance container not started")
+	}
+	step, st, _ := f.store.Lock(context.Background())
+	if step != StepReady || st.Manifest == nil {
+		t.Fatalf("lock = %q, manifest %v", step, st.Manifest)
+	}
+}
+
+func TestStartCancelsQueuedAndWaitsForRunning(t *testing.T) {
+	f := newSourceFixture(t)
+	f.queue.waitBlock = make(chan struct{})
+	done := make(chan error, 1)
+	go func() { _, err := f.src.Start(context.Background(), nil); done <- err }()
+	eventuallyTrue(t, "the lock to reach stopping", func() bool {
+		step, _, _ := f.store.Lock(context.Background())
+		return step == StepStopping
+	})
+	if len(f.docker.CallsOf("compose-stop")) != 0 {
+		t.Fatal("Composes stopped before the running Deployment ended")
+	}
+	f.queue.mu.Lock()
+	canceled := slices.Clone(f.queue.canceled)
+	f.queue.mu.Unlock()
+	if !slices.Equal(canceled, []string{"server migration"}) {
+		t.Fatalf("canceled = %q", canceled)
+	}
+	close(f.queue.waitBlock)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStartIsIdempotent(t *testing.T) {
+	f := newSourceFixture(t)
+	first, err := f.src.Start(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.src.Start(context.Background(), []string{"/ignored"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(first) != fmt.Sprint(second) || len(f.docker.CallsOf("compose-stop")) != 1 {
+		t.Fatalf("second Start changed things: stops %q", f.docker.CallsOf("compose-stop"))
+	}
+}
+
+func TestResumeLockAtBootRecreatesMaintenance(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	f.docker.MaintenanceUp = false
+	f.docker.Running[fmt.Sprintf("relist-c%d", f.a)] = true // restart policy brought it back
+	booted := NewSource(SourceDeps{Store: f.store, Builder: f.builder(), Queue: f.queue, Docker: f.docker,
+		Status: statusFromDocker{f.docker}, Composes: f.targets, Domains: fakeDomains{httpsDomain}})
+	if err := booted.ResumeLock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !f.docker.MaintenanceUp {
+		t.Fatal("maintenance container not recreated")
+	}
+	if f.docker.Running[fmt.Sprintf("relist-c%d", f.a)] {
+		t.Fatal("a Compose that came back up was not stopped again")
+	}
+	if len(f.docker.CallsOf("compose-start")) != 0 {
+		t.Fatal("ResumeLock started a Compose")
+	}
+}
+
+func TestResumeLockContinuesAnInterruptedStart(t *testing.T) {
+	f := newSourceFixture(t)
+	if err := f.store.SetLock(context.Background(), StepLocked, LockState{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.src.ResumeLock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if step, _, _ := f.store.Lock(context.Background()); step != StepReady {
+		t.Fatalf("step = %q, want ready", step)
+	}
+}
+
+func TestResumeStartsWhatWasRunningAndClears(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.src.Resume(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.docker.CallsOf("compose-start"); !slices.Equal(got, []string{fmt.Sprintf("compose-start relist-c%d", f.a)}) {
+		t.Fatalf("starts = %q", got)
+	}
+	if f.docker.MaintenanceUp {
+		t.Fatal("maintenance container left running")
+	}
+	if step, _, _ := f.store.Lock(context.Background()); step != StepNone {
+		t.Fatalf("step = %q, want none", step)
+	}
+}
+
+func TestMiddlewareAllowlist(t *testing.T) {
+	f := newSourceFixture(t)
+	if err := f.store.SetLock(context.Background(), StepLocked, LockState{}); err != nil {
+		t.Fatal(err)
+	}
+	handler := f.src.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusTeapot) }))
+	cases := []struct {
+		method, path string
+		want         int
+	}{
+		{"GET", "/healthz", http.StatusTeapot},
+		{"GET", "/api/auth/status", http.StatusTeapot},
+		{"POST", "/api/auth/login", http.StatusTeapot},
+		{"POST", "/api/auth/logout", http.StatusTeapot},
+		{"GET", "/api/migration/items/database", http.StatusTeapot},
+		{"POST", "/api/migration/resume", http.StatusTeapot},
+		{"GET", "/projects/1", http.StatusTeapot},
+		{"GET", "/", http.StatusTeapot},
+		{"GET", "/api/projects", http.StatusServiceUnavailable},
+		{"POST", "/api/projects/1/environments/1/composes/1/deployments", http.StatusServiceUnavailable},
+		{"PUT", "/api/images", http.StatusServiceUnavailable},
+		{"POST", "/api/auth/setup", http.StatusServiceUnavailable},
+		{"GET", "/api", http.StatusServiceUnavailable},
+	}
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(c.method, c.path, nil))
+		if rec.Code != c.want {
+			t.Errorf("%s %s = %d, want %d", c.method, c.path, rec.Code, c.want)
+		}
+		if c.want == http.StatusServiceUnavailable && strings.TrimSpace(rec.Body.String()) != `{"error":"This server is being migrated"}` {
+			t.Errorf("%s %s body = %q", c.method, c.path, rec.Body.String())
+		}
+	}
+
+	if err := f.src.Finish(context.Background(), "https://new.example.com"); err == nil {
+		t.Fatal("Finish before ready succeeded")
+	}
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.src.Finish(context.Background(), "https://new.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("GET", "/api/projects", nil))
+	var body map[string]string
+	json.Unmarshal(rec.Body.Bytes(), &body)
+	if rec.Code != http.StatusServiceUnavailable || body["error"] != "This server was migrated to https://new.example.com" {
+		t.Fatalf("migrated = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMiddlewarePassesEverythingWhenUnlocked(t *testing.T) {
+	f := newSourceFixture(t)
+	handler := f.src.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusTeapot) }))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("GET", "/api/projects", nil))
+	if rec.Code != http.StatusTeapot {
+		t.Fatalf("unlocked = %d", rec.Code)
+	}
+}
+
+func TestMaintenanceLabelsHTTPSDomain(t *testing.T) {
+	got := MaintenanceLabels([]domains.Domain{httpsDomain})
+	want := map[string]string{
+		"traefik.enable":         "true",
+		"traefik.docker.network": "relist-network",
+		"traefik.http.services.relist-maint.loadbalancer.server.port": "8080",
+		"traefik.http.routers.relist-maint-d3.rule":                   "Host(`shop.example.com`) && PathPrefix(`/api`)",
+		"traefik.http.routers.relist-maint-d3.entrypoints":            "websecure",
+		"traefik.http.routers.relist-maint-d3.service":                "relist-maint",
+		"traefik.http.routers.relist-maint-d3.tls":                    "true",
+		"traefik.http.routers.relist-maint-d3.tls.certresolver":       "letsencrypt",
+		"traefik.http.routers.relist-maint-d3-http.rule":              "Host(`shop.example.com`) && PathPrefix(`/api`)",
+		"traefik.http.routers.relist-maint-d3-http.entrypoints":       "web",
+		"traefik.http.routers.relist-maint-d3-http.service":           "relist-maint",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("labels =\n%v\nwant\n%v", got, want)
+	}
+}
+
+func TestMaintenancePageAnswers503(t *testing.T) {
+	rec := httptest.NewRecorder()
+	maintenanceHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/anything", nil))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "Down for maintenance") {
+		t.Fatalf("maintenance page = %d %q", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("no Retry-After")
+	}
+}

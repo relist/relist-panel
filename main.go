@@ -19,6 +19,7 @@ import (
 	"relist-panel/internal/hostmetrics"
 	"relist-panel/internal/httpapi"
 	"relist-panel/internal/metrics"
+	"relist-panel/internal/migration"
 	"relist-panel/internal/terminal"
 	"relist-panel/internal/volumes"
 )
@@ -26,6 +27,16 @@ import (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "reset-2fa" {
 		os.Exit(runResetTwoFactor(os.Args[2:], os.Stdout, os.Stderr))
+	}
+	// The maintenance container a server migration runs from this image
+	// (ADR-0018): it only answers 503 with the maintenance page.
+	if len(os.Args) > 1 && os.Args[1] == "maintenance-page" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := migration.ServeMaintenancePage(ctx, ":8080"); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 
 	cfg, err := config.Load()
