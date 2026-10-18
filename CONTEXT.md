@@ -82,3 +82,15 @@ _Avoid_: Attachment, Mount.
 **Two-factor**:
 A time-based one-time code (TOTP) the admin account may require at sign-in, on top of its password. Opt-in from the Account page. Recovery is deliberately the host: `relist-panel reset-2fa`, run inside the panel container, clears it — anyone who can run that already owns the Docker host.
 _Avoid_: MFA, OTP (as the feature name), 2FA in code identifiers — use `twoFactor` / `totp`.
+
+**Migration**:
+Moving everything one panel manages to an empty panel on another host, which pulls it from the old one over HTTPS (ADR-0018). Everything moves; the operator chooses only which host paths outside the data directory to include.
+_Avoid_: Backup, Restore, Transfer (as the feature name).
+
+**Migration token**:
+A short-lived, single-use secret created on the old panel that lets one new panel claim it as its Migration source. Lives 1 hour, 24 hours or 7 days.
+_Avoid_: API key, Pairing code.
+
+**Migration lock**:
+The persisted state in which the old panel refuses every change and keeps its Composes stopped, so what is copied stays what is there. It survives a restart. After the Migration it remains as **Migrated** until the operator resumes that server.
+_Avoid_: Maintenance mode (the maintenance page is what visitors of its Domains see, not the lock).
