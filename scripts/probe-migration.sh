@@ -111,6 +111,9 @@ done
 docker exec "$OLD" docker exec "relist-c$C-db-1" psql -qU postgres -c \
 	'CREATE TABLE probe (n int); INSERT INTO probe SELECT generate_series(1, 1000);' >/dev/null
 SUM_OLD=$(docker exec "$OLD" sh -c 'cd /srv/probe && sha256sum small big')
+# The Volume's root itself: owner and mode must survive, not only its files.
+rootstat() { docker exec "$1" docker run --rm -v "relist-c${C}_pgdata:/v" busybox:1.37 stat -c '%u:%g %a' /v; }
+ROOT_OLD=$(rootstat "$OLD")
 ACME_OLD=$(docker exec "$OLD" sh -c "cat $DATA/.traefik/acme.json 2>/dev/null | sha256sum")
 ACME_OLD_TEXT=$(docker exec "$OLD" cat "$DATA/.traefik/acme.json" 2>/dev/null || echo "(none)")
 
@@ -140,6 +143,7 @@ done
 ROWS=$(docker exec "$NEW" docker exec "relist-c$C-db-1" psql -tAU postgres -c 'SELECT count(*) FROM probe')
 [ "$ROWS" = 1000 ] || fail "postgres rows on the new host: $ROWS"
 [ "$(docker exec "$NEW" sh -c 'cd /srv/probe && sha256sum small big')" = "$SUM_OLD" ] || fail "/srv/probe differs"
+[ "$(rootstat "$NEW")" = "$ROOT_OLD" ] || fail "the Volume root is $(rootstat "$NEW") on the new host, $ROOT_OLD on the old"
 if [ "$(docker exec "$NEW" sh -c "cat $DATA/.traefik/acme.json 2>/dev/null | sha256sum")" != "$ACME_OLD" ]; then
 	echo "old acme.json:"; echo "$ACME_OLD_TEXT"
 	echo "new acme.json:"; docker exec "$NEW" cat "$DATA/.traefik/acme.json" || true
