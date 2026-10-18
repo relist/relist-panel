@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"relist-panel/internal/composes"
 	"relist-panel/internal/domains"
@@ -289,5 +290,30 @@ func TestMaintenancePageAnswers503(t *testing.T) {
 	}
 	if rec.Header().Get("Retry-After") == "" {
 		t.Fatal("no Retry-After")
+	}
+}
+
+func TestResumeDoesNotWaitForARunningDeployment(t *testing.T) {
+	f := newSourceFixture(t)
+	f.queue.waitBlock = make(chan struct{}) // a Deployment that never ends
+	started := make(chan error, 1)
+	go func() { _, err := f.src.Start(context.Background(), nil); started <- err }()
+	eventuallyTrue(t, "stopping", func() bool {
+		step, _, _ := f.store.Lock(context.Background())
+		return step == StepStopping
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := f.src.Resume(ctx); err != nil {
+		t.Fatalf("Resume while waiting for a Deployment: %v", err)
+	}
+	if err := <-started; err == nil {
+		t.Fatal("the interrupted Start reported success")
+	}
+	if step, _, _ := f.store.Lock(context.Background()); step != StepNone {
+		t.Fatalf("step after Resume = %q", step)
+	}
+	if len(f.docker.CallsOf("compose-stop")) != 0 {
+		t.Fatal("Composes were stopped after Resume")
 	}
 }

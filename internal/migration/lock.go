@@ -68,6 +68,10 @@ type Source struct {
 	// run serialises the lock sequence: Start, ResumeLock and Resume.
 	run sync.Mutex
 
+	// cancelStart cancels the Start in flight, so Resume never waits for a
+	// running Deployment. Guarded by mu.
+	cancelStart context.CancelFunc
+
 	// startMu guards the background Start the start route launches.
 	startMu  sync.Mutex
 	starting bool
@@ -116,8 +120,16 @@ func (s *Source) cached(ctx context.Context) (Step, string, error) {
 // before it acts, so a second call, or ResumeLock after a restart, carries on
 // from where the last one stopped. hostPaths is used by the first call only.
 func (s *Source) Start(ctx context.Context, hostPaths []string) (Manifest, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.mu.Lock()
+	s.cancelStart = cancel
+	s.mu.Unlock()
 	s.run.Lock()
 	defer s.run.Unlock()
+	if err := ctx.Err(); err != nil {
+		return Manifest{}, err
+	}
 	return s.start(ctx, hostPaths)
 }
 
@@ -291,6 +303,11 @@ func (s *Source) ResumeLock(ctx context.Context) error {
 // the maintenance page goes, the Composes that were running start again, and
 // the lock, token and session are cleared.
 func (s *Source) Resume(ctx context.Context) error {
+	s.mu.Lock()
+	if s.cancelStart != nil {
+		s.cancelStart()
+	}
+	s.mu.Unlock()
 	s.run.Lock()
 	defer s.run.Unlock()
 	step, st, err := s.d.Store.Lock(ctx)
