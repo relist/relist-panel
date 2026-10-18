@@ -215,7 +215,7 @@ export const api = {
   migrationStatus: () => request<MigrationStatus>('/api/migration/status'),
   createMigrationToken: (lifetime: TokenLifetime) => request<MigrationToken>('/api/migration/tokens', jsonInit('POST', { lifetime })),
   revokeMigrationToken: () => request<void>('/api/migration/tokens/current', { method: 'DELETE' }),
-  resumeMigration: (confirm: string) => request<void>('/api/migration/resume', jsonInit('POST', { confirm })),
+  resumeMigration: (confirm: string) => request<{ warning?: string } | undefined>('/api/migration/resume', jsonInit('POST', { confirm })),
   // Its new host: the setup screen's pull.
   migrationConnect: (sourceUrl: string, token: string) =>
     request<MigrationProgress>('/api/migration/pull/connect', jsonInit('POST', { sourceUrl, token })),

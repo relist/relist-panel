@@ -51,3 +51,21 @@ describe('MigrationLockPage', () => {
     expect(screen.getByText('Data written on the new server after the migration is not here.')).toBeTruthy();
   });
 });
+
+describe('MigrationLockPage resume warnings', () => {
+  it('unlocks and shows which Composes did not start', async () => {
+    mocks.resumeMigration.mockResolvedValue({ warning: 'store did not start, deploy it again' });
+    const onResumed = vi.fn();
+    render(
+      <App>
+        <MigrationLockPage onResumed={onResumed} status={{ ...base, step: 'ready' }} />
+      </App>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel migration' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: 'RESUME' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel migration' }));
+    expect(await screen.findByText('store did not start, deploy it again')).toBeTruthy();
+    expect(onResumed).toHaveBeenCalled();
+  });
+});

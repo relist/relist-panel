@@ -182,6 +182,11 @@ func (s *Source) digest(w http.ResponseWriter, r *http.Request) {
 
 func (s *Source) abort(w http.ResponseWriter, r *http.Request) {
 	if err := s.Resume(r.Context()); err != nil {
+		var unstarted *UnstartedError
+		if errors.As(err, &unstarted) {
+			writeJSON(w, http.StatusOK, map[string]string{"warning": err.Error()})
+			return
+		}
 		writeJSONError(w, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -283,6 +288,11 @@ func (s *Source) resume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Resume(r.Context()); err != nil {
+		var unstarted *UnstartedError
+		if errors.As(err, &unstarted) {
+			writeJSON(w, http.StatusOK, map[string]string{"warning": err.Error()})
+			return
+		}
 		writeJSONError(w, http.StatusBadGateway, err.Error())
 		return
 	}

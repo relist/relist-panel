@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -315,5 +316,20 @@ func TestResumeDoesNotWaitForARunningDeployment(t *testing.T) {
 	}
 	if len(f.docker.CallsOf("compose-stop")) != 0 {
 		t.Fatal("Composes were stopped after Resume")
+	}
+}
+
+func TestResumeClearsTheLockEvenWhenAComposeFailsToStart(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	f.docker.Fail["compose-start"] = errors.New("no container to start")
+	err := f.src.Resume(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "api") {
+		t.Fatalf("Resume() error = %v, want it to name the Compose that did not start", err)
+	}
+	if step, _, _ := f.store.Lock(context.Background()); step != StepNone {
+		t.Fatalf("step = %q: one failed Compose wedged the lock", step)
 	}
 }

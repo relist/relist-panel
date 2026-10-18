@@ -21,6 +21,13 @@ import (
 // cancels.
 const reasonMigration = "server migration"
 
+// UnstartedError reports Composes that did not start again on Resume. The
+// lock is cleared all the same.
+type UnstartedError struct{ Err error }
+
+func (e *UnstartedError) Error() string { return e.Err.Error() }
+func (e *UnstartedError) Unwrap() error { return e.Err }
+
 // ErrNotReady refuses an action that needs the manifest before it exists.
 var ErrNotReady = errors.New("the migration source is not ready yet")
 
@@ -314,6 +321,9 @@ func (s *Source) Resume(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// One Compose that will not start must not keep the whole server
+	// locked: start what can be started, unlock, then report the rest.
+	var failed []error
 	if step != StepNone {
 		if err := s.d.Docker.RemoveMaintenance(ctx); err != nil {
 			return fmt.Errorf("remove the maintenance page: %w", err)
@@ -325,7 +335,7 @@ func (s *Source) Resume(ctx context.Context) error {
 				continue
 			}
 			if err := s.d.Docker.ComposeStart(ctx, target.Request); err != nil {
-				return fmt.Errorf("start %s: %w", target.Compose.Name, err)
+				failed = append(failed, fmt.Errorf("%s did not start, deploy it again: %w", target.Compose.Name, err))
 			}
 		}
 	}
@@ -336,6 +346,9 @@ func (s *Source) Resume(ctx context.Context) error {
 	s.loaded, s.step, s.target = true, StepNone, ""
 	s.digests = map[string]string{}
 	s.mu.Unlock()
+	if len(failed) > 0 {
+		return &UnstartedError{Err: errors.Join(failed...)}
+	}
 	return nil
 }
 

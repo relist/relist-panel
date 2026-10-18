@@ -33,9 +33,14 @@ export function MigrationLockPage({ onResumed, status }: { onResumed: () => void
     setResuming(true);
     setError(undefined);
     try {
-      await api.resumeMigration('RESUME');
+      const result = await api.resumeMigration('RESUME');
       setConfirming(false);
-      message.success(migrated ? 'This server is running again' : 'Migration canceled');
+      if (result?.warning) {
+        // Unlocked, but some Composes did not start; say which.
+        message.warning(result.warning, 10);
+      } else {
+        message.success(migrated ? 'This server is running again' : 'Migration canceled');
+      }
       onResumed();
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : 'Could not resume this server');
