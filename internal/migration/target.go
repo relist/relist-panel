@@ -509,7 +509,7 @@ func (t *Target) Retry(ctx context.Context) error {
 // forgets the Migration.
 func (t *Target) Abort(ctx context.Context) error {
 	t.mu.Lock()
-	if t.st.Phase == PhaseFinalizing || t.st.Phase == PhaseDone {
+	if t.st.Phase == PhaseDone || (t.st.Phase == PhaseFinalizing && (t.running || t.markerWritten())) {
 		t.mu.Unlock()
 		return errors.New("the migration is finalizing and can no longer be aborted here; resume the old server from its own panel instead")
 	}
@@ -610,11 +610,24 @@ func (t *Target) ResumeIfPending(ctx context.Context) error {
 		t.launch()
 	}
 	if phase == PhaseFinalizing {
-		t.restarted = true
-		t.completeAsync()
+		if t.markerWritten() {
+			// Begin finished and the database was swapped in at boot.
+			t.restarted = true
+			t.completeAsync()
+		} else {
+			// Begin never finished: run it again.
+			t.launch()
+		}
 	}
 	t.mu.Unlock()
 	return nil
+}
+
+// markerWritten reports whether Begin wrote its marker, after which the
+// Migration can only go forward.
+func (t *Target) markerWritten() bool {
+	_, err := os.Stat(filepath.Join(t.d.StateDir, markerName))
+	return err == nil
 }
 
 // loadSummary restores PhaseDone from summary.json after a restart.

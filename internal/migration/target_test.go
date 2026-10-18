@@ -178,13 +178,14 @@ func (r *recordingRestorer) Discard(_ context.Context, items []Item) error {
 type recordingFinalizer struct {
 	mu    sync.Mutex
 	began []Manifest
+	fail  error
 }
 
 func (f *recordingFinalizer) Begin(_ context.Context, m Manifest) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.began = append(f.began, m)
-	return nil
+	return f.fail
 }
 
 func (f *recordingFinalizer) Complete(context.Context, Manifest) (Summary, error) {
@@ -409,6 +410,8 @@ func TestResumeAtFinalizingCompletesAndFinishes(t *testing.T) {
 	f := newTargetFixture(t)
 	f.connectAndStart(t)
 	waitPhase(t, f.target, PhaseFinalizing)
+	// Begin wrote its marker before the panel exited.
+	os.WriteFile(filepath.Join(f.deps.StateDir, markerName), []byte(`{}`), 0o600)
 	restarted := NewTarget(f.deps)
 	if err := restarted.ResumeIfPending(context.Background()); err != nil {
 		t.Fatal(err)
@@ -428,5 +431,40 @@ func TestResumeAtFinalizingCompletesAndFinishes(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.deps.StateDir, "summary.json")); err != nil {
 		t.Fatal("no summary.json")
+	}
+}
+
+func TestRestartBeforeTheMarkerRunsBeginAgain(t *testing.T) {
+	f := newTargetFixture(t)
+	f.connectAndStart(t)
+	waitPhase(t, f.target, PhaseFinalizing)
+	eventuallyTrue(t, "Begin", func() bool { return f.final.count() == 1 })
+	// No marker: Begin failed or the panel died before writing it.
+	restarted := NewTarget(f.deps)
+	if err := restarted.ResumeIfPending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	eventuallyTrue(t, "Begin again", func() bool { return f.final.count() == 2 })
+	f.src.mu.Lock()
+	finished := f.src.finished
+	f.src.mu.Unlock()
+	if finished != "" {
+		t.Fatal("finish was sent without the database swapped in")
+	}
+	if p := restarted.Progress(); p.Phase == PhaseDone {
+		t.Fatal("reported done without the marker")
+	}
+}
+
+func TestAbortAllowedWhileFinalizingBeforeTheMarker(t *testing.T) {
+	f := newTargetFixture(t)
+	f.final.fail = errors.New("stop Traefik: no traefik service")
+	f.connectAndStart(t)
+	eventuallyTrue(t, "Begin to fail", func() bool { return f.target.Progress().Error != "" })
+	if err := f.target.Abort(context.Background()); err != nil {
+		t.Fatalf("Abort before the marker: %v", err)
+	}
+	if !f.src.aborted {
+		t.Fatal("the source was not told to abort")
 	}
 }
