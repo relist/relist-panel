@@ -187,7 +187,9 @@ func (f *recordingFinalizer) Begin(_ context.Context, m Manifest) error {
 	return nil
 }
 
-func (f *recordingFinalizer) Complete(context.Context, Manifest) error { return nil }
+func (f *recordingFinalizer) Complete(context.Context, Manifest) (Summary, error) {
+	return Summary{Deployments: []SummaryDeployment{{ComposeID: 1, Number: 1}}, Warnings: []string{}, DNS: []string{"shop.example.com"}}, nil
+}
 
 func (f *recordingFinalizer) count() int {
 	f.mu.Lock()
@@ -400,5 +402,31 @@ func TestStateFileMode0600(t *testing.T) {
 	info, err := os.Stat(filepath.Join(f.deps.StateDir, "state.json"))
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("state.json = %v, %v", info, err)
+	}
+}
+
+func TestResumeAtFinalizingCompletesAndFinishes(t *testing.T) {
+	f := newTargetFixture(t)
+	f.connectAndStart(t)
+	waitPhase(t, f.target, PhaseFinalizing)
+	restarted := NewTarget(f.deps)
+	if err := restarted.ResumeIfPending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p := waitPhase(t, restarted, PhaseDone)
+	if p.Summary == nil || p.Summary.DNS[0] != "shop.example.com" {
+		t.Fatalf("summary = %+v", p.Summary)
+	}
+	f.src.mu.Lock()
+	finished := f.src.finished
+	f.src.mu.Unlock()
+	if finished != "https://new.example.com" {
+		t.Fatalf("finish sent %q", finished)
+	}
+	if _, err := os.Stat(filepath.Join(f.deps.StateDir, "state.json")); !os.IsNotExist(err) {
+		t.Fatal("state.json survived completion")
+	}
+	if _, err := os.Stat(filepath.Join(f.deps.StateDir, "summary.json")); err != nil {
+		t.Fatal("no summary.json")
 	}
 }

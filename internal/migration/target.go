@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,7 +50,7 @@ type ImageRestorer interface {
 // then, after the restart, starts what was running (Complete).
 type Finalizer interface {
 	Begin(ctx context.Context, m Manifest) error
-	Complete(ctx context.Context, m Manifest) error
+	Complete(ctx context.Context, m Manifest) (Summary, error)
 }
 
 // BlockedError refuses Start while a blocking check stands.
@@ -77,6 +78,7 @@ type Progress struct {
 	Info      *SourceInfo    `json:"info"`
 	Warnings  []string       `json:"warnings"`
 	Error     string         `json:"error,omitempty"`
+	Summary   *Summary       `json:"summary,omitempty"`
 }
 
 type TargetDeps struct {
@@ -122,6 +124,10 @@ type Target struct {
 	done    map[string]*atomic.Int64 // bytes read per item, in memory only
 	running bool
 	cancel  context.CancelFunc
+	// restarted is set when the panel came back up after Begin: what is left
+	// is Complete, never Begin again.
+	restarted bool
+	summary   *Summary
 }
 
 func NewTarget(d TargetDeps) *Target {
@@ -473,15 +479,22 @@ func (t *Target) attempt(ctx context.Context, item Item, counter *atomic.Int64) 
 func (t *Target) Retry(ctx context.Context) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.st.Phase != PhasePaused && !(t.st.Phase == PhaseLocking && !t.running) && !(t.st.Phase == PhasePulling && !t.running) {
+	stalled := !t.running && (t.st.Phase == PhaseLocking || t.st.Phase == PhasePulling || t.st.Phase == PhaseFinalizing)
+	if t.st.Phase != PhasePaused && !stalled {
 		return errors.New("nothing to retry")
+	}
+	if t.restarted {
+		t.st.Error = ""
+		t.save()
+		t.completeAsync()
+		return nil
 	}
 	for _, is := range t.st.Items {
 		if is.State == "failed" {
 			is.State, is.Attempts = "pending", 0
 		}
 	}
-	if t.st.Manifest != nil {
+	if t.st.Manifest != nil && t.st.Phase != PhaseFinalizing {
 		t.st.Phase = PhasePulling
 	}
 	t.st.Error = ""
@@ -543,7 +556,7 @@ func (t *Target) Progress() Progress {
 
 func (t *Target) progress() Progress {
 	p := Progress{Phase: t.st.Phase, SourceURL: t.st.SourceURL, LockStep: t.st.LockStep, Selected: t.st.Selected,
-		Items: []ItemProgress{}, Checks: t.st.Checks, Info: t.st.Info, Warnings: t.st.Warnings, Error: t.st.Error}
+		Items: []ItemProgress{}, Checks: t.st.Checks, Info: t.st.Info, Warnings: t.st.Warnings, Error: t.st.Error, Summary: t.summary}
 	if p.Checks == nil {
 		p.Checks = []Check{}
 	}
@@ -596,13 +609,79 @@ func (t *Target) ResumeIfPending(ctx context.Context) error {
 		}
 		t.launch()
 	}
+	if phase == PhaseFinalizing {
+		t.restarted = true
+		t.completeAsync()
+	}
+	t.mu.Unlock()
+	return nil
+}
+
+// completeAsync runs complete in the background. The caller holds t.mu.
+func (t *Target) completeAsync() {
+	if t.running {
+		return
+	}
+	ctx, cancel := context.WithCancel(t.d.Context)
+	t.running, t.cancel = true, cancel
+	go func() {
+		defer cancel()
+		err := t.complete(ctx)
+		t.mu.Lock()
+		t.running = false
+		if err != nil && ctx.Err() == nil {
+			log.Printf("migration: complete: %v", err)
+			t.st.Error = err.Error()
+			t.save()
+		}
+		t.mu.Unlock()
+	}()
+}
+
+// complete runs after the restart: Traefik and the Deployments, then finish
+// on the old host, then summary.json in place of the state.
+func (t *Target) complete(ctx context.Context) error {
+	t.mu.Lock()
 	var m Manifest
 	if t.st.Manifest != nil {
 		m = *t.st.Manifest
 	}
+	c, self, warnings := t.client(), t.st.SelfURL, slices.Clone(t.st.Warnings)
 	t.mu.Unlock()
-	if phase == PhaseFinalizing {
-		return t.d.Finalizer.Complete(ctx, m)
+
+	summary, err := t.d.Finalizer.Complete(ctx, m)
+	if err != nil {
+		return err
 	}
+	var finishErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if finishErr = c.finish(ctx, self); finishErr == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(t.d.Backoff(attempt)):
+		}
+	}
+	summary.Warnings = append(warnings, summary.Warnings...)
+	if finishErr != nil {
+		summary.Warnings = append(summary.Warnings, "Could not tell the old server the migration finished ("+finishErr.Error()+"); it stays locked, so turn it off or resume it from its own panel")
+	}
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(t.d.StateDir, "summary.json"), raw, 0o600); err != nil {
+		return err
+	}
+	for _, name := range []string{"state.json", markerName, "staging"} {
+		if err := os.RemoveAll(filepath.Join(t.d.StateDir, name)); err != nil {
+			return err
+		}
+	}
+	t.mu.Lock()
+	t.st.Phase, t.summary = PhaseDone, &summary
+	t.mu.Unlock()
 	return nil
 }
