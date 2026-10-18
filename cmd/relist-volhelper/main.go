@@ -52,10 +52,16 @@ const usage = `usage:
   relist-volhelper create  -- <path>
   relist-volhelper archive --format tar.gz -- <path>
   relist-volhelper extract -- <path>
+  relist-volhelper pack    -- <path>
+  relist-volhelper unpack  -- .
+  relist-volhelper size    -- <path>
+  relist-volhelper free    -- .
 <path> is relative to the Volume root mounted at /data.
 --expect is a write's declared size in bytes, checked against the Volume's free space before stdin is read.
 mkdir creates one directory; create creates one empty file. Neither replaces an existing entry.
 extract consumes a tar.gz on stdin and writes it into the existing directory <path>.
+pack and unpack move a whole Volume for a server migration: an uncompressed tar that keeps
+owners and modes, with no size cap. size and free answer {"bytes":N}.
 `
 
 // The helper's exit codes: 0 for success, 1 when an operation failed and 2
@@ -142,6 +148,29 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, rootDir strin
 		return failOn(stderr, vol.Archive(cmd.name, stdout))
 	case "extract":
 		return runExtract(stderr, vol, stdin, cmd)
+	case "pack":
+		return failOn(stderr, vol.Pack(cmd.name, stdout))
+	case "unpack":
+		if err := vol.Unpack(stdin); err != nil {
+			if errors.Is(err, volfs.ErrUnsafeArchive) || errors.Is(err, volfs.ErrInvalidArchive) {
+				fmt.Fprintf(stderr, "relist-volhelper: %v\n", err)
+				return exitArchiveRefused
+			}
+			return fail(stderr, err)
+		}
+		return exitOK
+	case "size":
+		n, err := vol.Size(cmd.name)
+		if err != nil {
+			return fail(stderr, err)
+		}
+		return writeBytes(stdout, stderr, int64(n))
+	case "free":
+		n, err := freeSpace(vol)
+		if err != nil {
+			return fail(stderr, err)
+		}
+		return writeBytes(stdout, stderr, int64(n))
 	default:
 		// Unreachable while parse and this switch agree; a failure here is a
 		// bug, and must still be a non-zero exit, not a silent success.
@@ -174,7 +203,13 @@ func parse(args []string) (command, error) {
 	rest := args[1:]
 
 	switch cmd.op {
-	case "list", "stat", "read", "delete", "extract", "mkdir", "create":
+	case "list", "stat", "read", "delete", "extract", "mkdir", "create", "pack", "size":
+		// No extra flags: the path follows immediately after `--`.
+	case "unpack", "free":
+		// Whole-Volume operations: the path must be the root.
+		if len(rest) == 2 && rest[0] == "--" && rest[1] != "." {
+			return command{}, fmt.Errorf("%s takes `-- .`", cmd.op)
+		}
 		// No extra flags: the path follows immediately after `--`.
 	case "write":
 		// An upload's declared byte count, so the helper can refuse a write
@@ -303,6 +338,16 @@ func runNewEntry(stderr io.Writer, err error) int {
 		return exitExists
 	}
 	return failOn(stderr, err)
+}
+
+// writeBytes answers size and free with {"bytes":N}.
+func writeBytes(stdout, stderr io.Writer, n int64) int {
+	if err := json.NewEncoder(stdout).Encode(struct {
+		Bytes int64 `json:"bytes"`
+	}{n}); err != nil {
+		return fail(stderr, fmt.Errorf("write bytes: %w", err))
+	}
+	return exitOK
 }
 
 // fail reports one operation's error on stderr — the only place errors go,
