@@ -22,12 +22,32 @@ type fakeQueue struct {
 	canceled  []string
 	waited    int
 	waitBlock chan struct{}
+	events    []string // hold, cancel and release, in order
+}
+
+func (q *fakeQueue) Hold() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.events = append(q.events, "hold")
+}
+
+func (q *fakeQueue) Release() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.events = append(q.events, "release")
+}
+
+func (q *fakeQueue) eventList() []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return slices.Clone(q.events)
 }
 
 func (q *fakeQueue) CancelAllQueued(_ context.Context, reason string) (int, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.canceled = append(q.canceled, reason)
+	q.events = append(q.events, "cancel")
 	return 1, nil
 }
 
@@ -331,5 +351,32 @@ func TestResumeClearsTheLockEvenWhenAComposeFailsToStart(t *testing.T) {
 	}
 	if step, _, _ := f.store.Lock(context.Background()); step != StepNone {
 		t.Fatalf("step = %q: one failed Compose wedged the lock", step)
+	}
+}
+
+func TestTheLockHoldsTheQueueUntilResume(t *testing.T) {
+	f := newSourceFixture(t)
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.queue.eventList(); len(got) < 2 || got[0] != "hold" || got[1] != "cancel" {
+		t.Fatalf("events = %q, want hold before cancel", got)
+	}
+
+	// After a reboot the queue is a new one: ResumeLock holds it again.
+	rebooted := &fakeQueue{}
+	src := NewSource(SourceDeps{Store: f.store, Builder: f.builder(), Queue: rebooted, Docker: f.docker,
+		Status: statusFromDocker{f.docker}, Composes: f.targets, Domains: fakeDomains(nil)})
+	if err := src.ResumeLock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := rebooted.eventList(); !slices.Equal(got, []string{"hold"}) {
+		t.Fatalf("events after reboot = %q, want [hold]", got)
+	}
+	if err := src.Resume(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := rebooted.eventList(); got[len(got)-1] != "release" {
+		t.Fatalf("events after resume = %q, want a final release", got)
 	}
 }

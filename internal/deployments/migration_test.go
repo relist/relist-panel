@@ -2,6 +2,7 @@ package deployments
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -74,5 +75,18 @@ func TestCancelUnfinished(t *testing.T) {
 		if d.Status != StatusCanceled || d.Reason != "server migration" || d.FinishedAt == nil {
 			t.Fatalf("deployment = %+v", d)
 		}
+	}
+}
+
+func TestHoldRefusesEnqueueUntilRelease(t *testing.T) {
+	h := newHarness(t)
+	h.newQueue()
+	h.q.Hold()
+	if _, _, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeDeploy}); !errors.Is(err, ErrHeld) {
+		t.Fatalf("Enqueue while held error = %v, want ErrHeld", err)
+	}
+	h.q.Release()
+	if _, created, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeDeploy}); err != nil || !created {
+		t.Fatalf("Enqueue after Release = %v, %v", created, err)
 	}
 }

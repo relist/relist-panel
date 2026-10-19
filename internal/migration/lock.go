@@ -34,6 +34,10 @@ var ErrNotReady = errors.New("the migration source is not ready yet")
 
 // QueueControl is the part of the deployment queue the lock drives.
 type QueueControl interface {
+	// Hold refuses new Deployments until Release, so none slips in after
+	// CancelAllQueued.
+	Hold()
+	Release()
 	CancelAllQueued(ctx context.Context, reason string) (int, error)
 	WaitIdle(ctx context.Context) error
 	Running() (composeID int64, number int, ok bool)
@@ -151,6 +155,7 @@ func (s *Source) start(ctx context.Context, hostPaths []string) (Manifest, error
 	if err != nil {
 		return Manifest{}, err
 	}
+	s.d.Queue.Hold()
 	if step == StepNone {
 		_, claimedBy, err := s.d.Store.TokenStatus(ctx)
 		if err != nil {
@@ -289,10 +294,12 @@ func (s *Source) ResumeLock(ctx context.Context) error {
 	s.mu.Lock()
 	s.loaded, s.step, s.target = true, step, st.TargetURL
 	s.mu.Unlock()
-	switch step {
-	case StepNone:
+	if step == StepNone {
 		s.settled.Store(true)
 		return nil
+	}
+	s.d.Queue.Hold()
+	switch step {
 	case StepLocked, StepStopping, StepMaintenance:
 		_, err := s.start(ctx, st.HostPaths)
 		return err
@@ -349,6 +356,7 @@ func (s *Source) Resume(ctx context.Context) error {
 	if err := s.d.Store.ClearAll(ctx); err != nil {
 		return err
 	}
+	s.d.Queue.Release()
 	s.mu.Lock()
 	s.loaded, s.step, s.target = true, StepNone, ""
 	s.digests = map[string]string{}

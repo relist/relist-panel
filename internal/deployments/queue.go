@@ -65,6 +65,9 @@ type Request struct {
 // already settled.
 var ErrNotCancelable = errors.New("deployment can no longer be canceled")
 
+// ErrHeld refuses a Deployment while a server Migration holds the queue.
+var ErrHeld = errors.New("deployments are paused while this server is being migrated")
+
 const (
 	reasonRestarted      = "panel restarted"
 	reasonTimeout        = "timeout"
@@ -107,6 +110,31 @@ type Queue struct {
 	mu       sync.Mutex
 	running  map[int64]*activeRun
 	srcLocks map[int64]chan struct{}
+
+	// holdMu is held around the insert, so once Hold returns no Enqueue
+	// can still add a row that CancelAllQueued would miss.
+	holdMu sync.Mutex
+	held   bool
+}
+
+// Hold makes Enqueue refuse with ErrHeld until Release (ADR-0018). An
+// Enqueue already inserting finishes first.
+func (q *Queue) Hold() {
+	q.holdMu.Lock()
+	q.held = true
+	q.holdMu.Unlock()
+}
+
+func (q *Queue) Release() {
+	q.holdMu.Lock()
+	q.held = false
+	q.holdMu.Unlock()
+}
+
+func (q *Queue) isHeld() bool {
+	q.holdMu.Lock()
+	defer q.holdMu.Unlock()
+	return q.held
 }
 
 func NewQueue(d Deps) *Queue {
@@ -175,6 +203,9 @@ func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deploy
 	default:
 		return Deployment{}, false, fmt.Errorf("unknown deployment mode %q", r.Mode)
 	}
+	if q.isHeld() {
+		return Deployment{}, false, ErrHeld
+	}
 	if existing, err := queuedFor(ctx, q.d.Store.db, composeID); err == nil {
 		return existing, false, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -189,7 +220,15 @@ func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deploy
 		return Deployment{}, false, err
 	}
 	defer snapshot.release()
-	d, created, err := q.d.Store.enqueue(ctx, composeID, r.Mode, r.NoCache, r.FreshVolumes, q.d.Now(), snapshot)
+	q.holdMu.Lock()
+	var d Deployment
+	var created bool
+	if q.held {
+		err = ErrHeld
+	} else {
+		d, created, err = q.d.Store.enqueue(ctx, composeID, r.Mode, r.NoCache, r.FreshVolumes, q.d.Now(), snapshot)
+	}
+	q.holdMu.Unlock()
 	if err != nil || !created {
 		discardCaptured(snapshot)
 	}
