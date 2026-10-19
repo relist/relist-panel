@@ -141,6 +141,19 @@ func TestSessionRoutesRejectMissingOrWrongBearer(t *testing.T) {
 	}
 }
 
+func TestPreflightCountsQueuedDeployments(t *testing.T) {
+	s := newSourceServer(t)
+	key := s.claim(t)
+	if _, err := s.db.Exec(`INSERT INTO deployments (compose_id, number, mode, status, queued_at) VALUES (?, 1, 'deploy', 'queued', 1), (?, 1, 'deploy', 'succeeded', 1)`, s.a, s.b); err != nil {
+		t.Fatal(err)
+	}
+	var info SourceInfo
+	json.Unmarshal(s.do(t, "GET", "/api/migration/preflight", key, nil).Body.Bytes(), &info)
+	if info.QueuedDeployments != 1 {
+		t.Fatalf("queued deployments = %d, want 1", info.QueuedDeployments)
+	}
+}
+
 func TestStartReturns202ThenManifest(t *testing.T) {
 	s := newSourceServer(t)
 	key := s.claim(t)

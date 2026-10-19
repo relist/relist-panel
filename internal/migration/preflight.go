@@ -15,17 +15,18 @@ import (
 // SourceInfo is what the old host tells the new one before anything is
 // locked, so every blocking check runs first.
 type SourceInfo struct {
-	Protocol         int                    `json:"protocol"`
-	SchemaVersion    int64                  `json:"schemaVersion"`
-	DataDir          string                 `json:"dataDir"`
-	Install          config.InstallSettings `json:"install"`
-	HostPaths        []HostPathCandidate    `json:"hostPaths"`
-	Volumes          []Item                 `json:"volumes"`
-	Images           []Item                 `json:"images"`
-	DataDirSize      int64                  `json:"dataDirSize"`
-	DatabaseSize     int64                  `json:"databaseSize"`
-	ActiveDeployment string                 `json:"activeDeployment,omitempty"`
-	Warnings         []string               `json:"warnings"`
+	Protocol          int                    `json:"protocol"`
+	SchemaVersion     int64                  `json:"schemaVersion"`
+	DataDir           string                 `json:"dataDir"`
+	Install           config.InstallSettings `json:"install"`
+	HostPaths         []HostPathCandidate    `json:"hostPaths"`
+	Volumes           []Item                 `json:"volumes"`
+	Images            []Item                 `json:"images"`
+	DataDirSize       int64                  `json:"dataDirSize"`
+	DatabaseSize      int64                  `json:"databaseSize"`
+	ActiveDeployment  string                 `json:"activeDeployment,omitempty"`
+	QueuedDeployments int                    `json:"queuedDeployments"`
+	Warnings          []string               `json:"warnings"`
 }
 
 // Info resolves every Compose the way Start will, so a resolution error
@@ -61,6 +62,9 @@ func (s *Source) Info(ctx context.Context) (SourceInfo, error) {
 		case KindImage:
 			info.Images = append(info.Images, it)
 		}
+	}
+	if err := s.d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM deployments WHERE status = 'queued'").Scan(&info.QueuedDeployments); err != nil {
+		return SourceInfo{}, fmt.Errorf("count queued deployments: %w", err)
 	}
 	if id, number, ok := s.d.Queue.Running(); ok {
 		name := fmt.Sprintf("Compose %d", id)
@@ -217,6 +221,13 @@ func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []s
 	}
 	for _, w := range src.Warnings {
 		warn(w)
+	}
+	if n := src.QueuedDeployments; n > 0 {
+		noun := "Deployments"
+		if n == 1 {
+			noun = "Deployment"
+		}
+		warn(fmt.Sprintf("%d queued %s on the source will be canceled when the migration starts", n, noun))
 	}
 	if src.ActiveDeployment != "" {
 		warn(src.ActiveDeployment + " is running on the source; queued Deployments there will be canceled")

@@ -70,6 +70,8 @@ func TestEvaluate(t *testing.T) {
 		{name: "install differs", local: func(l *LocalHost, _ *FakeDocker, _ *sql.DB) { l.Install.Domain = "panel.new.example.com" },
 			want: Check{false, "RELIST_DOMAIN is panel.example.com on the source and panel.new.example.com here; copy it into this host's .env"}},
 		{name: "source warning", want: Check{false, "draft was never deployed; only its files and database rows move"}},
+		{name: "queued deployments", src: func(s SourceInfo) SourceInfo { s.QueuedDeployments = 2; return s },
+			want: Check{false, "2 queued Deployments on the source will be canceled when the migration starts"}},
 		{name: "active deployment", src: func(s SourceInfo) SourceInfo { s.ActiveDeployment = "api #4"; return s },
 			want: Check{false, "api #4 is running on the source; queued Deployments there will be canceled"}},
 	}
