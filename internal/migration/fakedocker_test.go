@@ -22,10 +22,10 @@ type FakeDocker struct {
 	mu sync.Mutex
 
 	Volumes  map[string]VolumeInfo
-	Blobs    map[string][]byte // "mountSource|name" -> packed bytes, read by Pack
-	Unpacked map[string][]byte // mountSource -> bytes Unpack received
-	Sizes    map[string]int64  // "mountSource|name" -> Size answer
-	FreeB    map[string]int64  // mountSource -> Free answer
+	Blobs    map[string][]byte    // "mountSource|name" -> packed bytes, read by Pack
+	Unpacked map[string][]byte    // mountSource -> bytes Unpack received
+	Sizes    map[string]int64     // "mountSource|name" -> Size answer
+	FreeB    map[string]int64     // mountSource -> Free answer
 	Paths    map[string]PathState // "mountSource|name" -> Probe answer; missing when absent
 
 	Images   map[string]ImageInfo // tag or ID -> image
@@ -39,7 +39,7 @@ type FakeDocker struct {
 	MaintenanceUp bool
 	TraefikUp     bool
 	RootDir       string
-	RestartPolicy string // the panel container's own
+	RestartPolicy string           // the panel container's own
 	Fail          map[string]error // op name -> error to return
 	Calls         []string
 }

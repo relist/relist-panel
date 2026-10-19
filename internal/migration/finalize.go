@@ -26,6 +26,7 @@ type Summary struct {
 	Deployments []SummaryDeployment `json:"deployments"`
 	Warnings    []string            `json:"warnings"`
 	DNS         []string            `json:"dns"` // every Domain host, deduplicated
+	Log         []LogEntry          `json:"log,omitempty"`
 }
 
 type SummaryDeployment struct {
@@ -69,9 +70,11 @@ func (f *finalizer) dir() string { return filepath.Join(f.d.Local.DataDir, migra
 // database, writes the marker and exits. The install's restart policy brings
 // the panel back, and PrepareFinalize swaps the database before it is opened.
 func (f *finalizer) Begin(ctx context.Context, m Manifest) error {
+	reportStep(ctx, FinalizeStopTraefik)
 	if err := f.d.Local.Docker.StopTraefik(ctx); err != nil {
 		return fmt.Errorf("stop Traefik: %w", err)
 	}
+	reportStep(ctx, FinalizeMoveData)
 	staged := filepath.Join(f.dir(), "staging", "data")
 	entries, err := os.ReadDir(staged)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -99,6 +102,7 @@ func (f *finalizer) Begin(ctx context.Context, m Manifest) error {
 		return err
 	}
 	log.Printf("migration: data in place; restarting the panel to swap in the migrated database")
+	reportStep(ctx, FinalizeRestart)
 	f.d.Exit()
 	return nil
 }
@@ -143,9 +147,11 @@ func ClearCopiedState(ctx context.Context, db *sql.DB, now time.Time) error {
 // is not contacted, and deploy for the rest.
 func (f *finalizer) Complete(ctx context.Context, m Manifest) (Summary, error) {
 	summary := Summary{Deployments: []SummaryDeployment{}, Warnings: []string{}, DNS: []string{}}
+	reportStep(ctx, FinalizeStartTraefik)
 	if err := f.d.Local.Docker.StartTraefik(ctx); err != nil {
 		return summary, fmt.Errorf("start Traefik: %w", err)
 	}
+	reportStep(ctx, FinalizeDeploy)
 	for _, id := range m.RunningComposeIDs {
 		mode := deployments.ModeDeploy
 		if _, err := f.d.Sources.Get(ctx, id); err == nil {

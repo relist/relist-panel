@@ -23,19 +23,19 @@ import (
 
 // fakeSourceServer serves canned items the way the old host's routes do.
 type fakeSourceServer struct {
-	mu        sync.Mutex
-	srv       *httptest.Server
-	key       string
-	manifest  Manifest
-	bodies    map[string]string
-	cutOnce   map[string]bool // first stream of the id stops halfway
-	badDigest map[string]int  // how many times the id's digest is wrong
-	starts    int
-	failStart int // the first n start calls answer 502, like Traefik while the old panel restarts
-	aborted   bool
-	finished  string
-	served    []string
-	hostPaths []HostPathCandidate
+	mu            sync.Mutex
+	srv           *httptest.Server
+	key           string
+	manifest      Manifest
+	bodies        map[string]string
+	cutOnce       map[string]bool // first stream of the id stops halfway
+	badDigest     map[string]int  // how many times the id's digest is wrong
+	starts        int
+	failStart     int // the first n start calls answer 502, like Traefik while the old panel restarts
+	aborted       bool
+	finished      string
+	served        []string
+	hostPaths     []HostPathCandidate
 	claimed       bool          // a claimed token answers 409, like the real one
 	failPreflight int           // the first n preflights answer 502
 	holdPreflight chan struct{} // when set, preflight waits for it to close

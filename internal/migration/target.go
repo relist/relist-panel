@@ -79,6 +79,10 @@ type Progress struct {
 	Warnings  []string       `json:"warnings"`
 	Error     string         `json:"error,omitempty"`
 	Summary   *Summary       `json:"summary,omitempty"`
+	// Log is the activity log, oldest first; FinalizeStep is where
+	// finalize is while finalizing.
+	Log          []LogEntry   `json:"log"`
+	FinalizeStep FinalizeStep `json:"finalizeStep,omitempty"`
 }
 
 type TargetDeps struct {
@@ -101,18 +105,20 @@ type itemState struct {
 
 // targetState is state.json: everything needed to continue after a restart.
 type targetState struct {
-	Phase      Phase                 `json:"phase"`
-	SourceURL  string                `json:"sourceUrl"`
-	SelfURL    string                `json:"selfUrl"`
-	SessionKey string                `json:"sessionKey"`
-	Selected   []string              `json:"selected"`
-	Info       *SourceInfo           `json:"info"`
-	Checks     []Check               `json:"checks"`
-	LockStep   Step                  `json:"lockStep"`
-	Manifest   *Manifest             `json:"manifest"`
-	Items      map[string]*itemState `json:"items"`
-	Warnings   []string              `json:"warnings"`
-	Error      string                `json:"error,omitempty"`
+	Phase        Phase                 `json:"phase"`
+	SourceURL    string                `json:"sourceUrl"`
+	SelfURL      string                `json:"selfUrl"`
+	SessionKey   string                `json:"sessionKey"`
+	Selected     []string              `json:"selected"`
+	Info         *SourceInfo           `json:"info"`
+	Checks       []Check               `json:"checks"`
+	LockStep     Step                  `json:"lockStep"`
+	Manifest     *Manifest             `json:"manifest"`
+	Items        map[string]*itemState `json:"items"`
+	Warnings     []string              `json:"warnings"`
+	Error        string                `json:"error,omitempty"`
+	Log          []LogEntry            `json:"log"`
+	FinalizeStep FinalizeStep          `json:"finalizeStep,omitempty"`
 }
 
 // Target is the new host's side of a Migration.
@@ -210,6 +216,7 @@ func (t *Target) Connect(ctx context.Context, sourceURL, token, selfURL string) 
 		t.mu.Lock()
 		t.st = targetState{Phase: PhaseConnected, SourceURL: c.base, SelfURL: selfURL, SessionKey: key,
 			Selected: []string{}, Warnings: []string{}}
+		t.record("info", "", "Claimed the migration token on "+c.base)
 		err = t.save()
 		t.mu.Unlock()
 		if err != nil {
@@ -236,6 +243,7 @@ func (t *Target) Connect(ctx context.Context, sourceURL, token, selfURL string) 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.st.SelfURL, t.st.Selected, t.st.Info, t.st.Checks, t.st.Error = selfURL, selected, &info, checks, ""
+	t.record("info", "", fmt.Sprintf("Connected to %s: %d volumes, %d images, %d host paths", c.base, len(info.Volumes), len(info.Images), len(info.HostPaths)))
 	if err := t.save(); err != nil {
 		return Progress{}, err
 	}
@@ -247,6 +255,7 @@ func (t *Target) setError(err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.st.Error = err.Error()
+	t.record("error", "", err.Error())
 	t.save()
 }
 
@@ -305,6 +314,7 @@ func (t *Target) Start(ctx context.Context, selected []string) error {
 		}
 	}
 	t.st.Phase = PhaseLocking
+	t.record("info", "", fmt.Sprintf("Locking the old server; copying %d host paths", len(t.st.Selected)))
 	if err := t.save(); err != nil {
 		return err
 	}
@@ -329,6 +339,7 @@ func (t *Target) launch() {
 		if err != nil && ctx.Err() == nil {
 			log.Printf("migration: %v", err)
 			t.st.Error = err.Error()
+			t.record("error", "", err.Error())
 			t.save()
 		}
 		t.mu.Unlock()
@@ -361,15 +372,18 @@ func (t *Target) run(ctx context.Context) error {
 	}
 	t.mu.Lock()
 	t.st.Phase = PhaseFinalizing
+	t.record("info", "", "Every item copied. Finalizing")
 	err := t.save()
 	t.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	return t.d.Finalizer.Begin(ctx, m)
+	return t.d.Finalizer.Begin(WithFinalizeReporter(ctx, t.reportFinalize), m)
 }
 
 func (t *Target) waitManifest(ctx context.Context) error {
+	var loggedStep Step
+	var loggedErr string
 	for {
 		t.mu.Lock()
 		c, selected := t.client(), t.st.Selected
@@ -393,6 +407,14 @@ func (t *Target) waitManifest(ctx context.Context) error {
 		if step == "" {
 			step = t.st.LockStep
 		}
+		if step != "" && step != loggedStep {
+			t.record("info", "", "Old server: "+string(step))
+			loggedStep = step
+		}
+		if lastErr != "" && lastErr != loggedErr {
+			t.record("warn", "", lastErr)
+		}
+		loggedErr = lastErr
 		t.st.LockStep, t.st.Error = step, lastErr
 		if m != nil {
 			t.st.Manifest, t.st.Phase = m, PhasePulling
@@ -401,6 +423,10 @@ func (t *Target) waitManifest(ctx context.Context) error {
 				t.st.Items[it.ID] = &itemState{State: "pending"}
 			}
 			t.st.Warnings = append(t.st.Warnings, m.Warnings...)
+			t.record("info", "", fmt.Sprintf("Old server locked: %d items to copy", len(m.Items)))
+			for _, w := range m.Warnings {
+				t.record("warn", "", w)
+			}
 		}
 		err = t.save()
 		t.mu.Unlock()
@@ -435,6 +461,11 @@ func (t *Target) pull(ctx context.Context, item Item) bool {
 		is.State, is.Error = "running", ""
 		counter := &atomic.Int64{}
 		t.done[item.ID] = counter
+		if is.Attempts == 0 {
+			t.record("info", item.ID, "Copying "+item.ID)
+		} else {
+			t.record("info", item.ID, fmt.Sprintf("Copying %s (attempt %d)", item.ID, is.Attempts+1))
+		}
 		t.save()
 		t.mu.Unlock()
 
@@ -448,8 +479,10 @@ func (t *Target) pull(ctx context.Context, item Item) bool {
 		t.mu.Lock()
 		if err == nil {
 			is.State = "done"
+			t.record("info", item.ID, "Copied "+item.ID)
 			if warning != "" {
 				t.st.Warnings = append(t.st.Warnings, warning)
+				t.record("warn", item.ID, warning)
 			}
 			t.save()
 			t.mu.Unlock()
@@ -460,12 +493,14 @@ func (t *Target) pull(ctx context.Context, item Item) bool {
 		if is.Attempts >= maxAttempts {
 			is.State = "failed"
 			t.st.Phase = PhasePaused
+			t.record("error", item.ID, fmt.Sprintf("%s failed %d times: %s. Paused", item.ID, is.Attempts, err))
 			t.save()
 			t.mu.Unlock()
 			t.d.Restore.Cleanup(ctx, item)
 			return false
 		}
 		is.State = "pending"
+		t.record("warn", item.ID, fmt.Sprintf("%s failed: %s. Retrying", item.ID, err))
 		attempts := is.Attempts
 		t.save()
 		t.mu.Unlock()
@@ -564,6 +599,7 @@ func (t *Target) Retry(ctx context.Context) error {
 	if t.st.Phase != PhasePaused && !stalled {
 		return errors.New("nothing to retry")
 	}
+	t.record("info", "", "Retrying")
 	if t.restarted {
 		t.st.Error = ""
 		t.save()
@@ -656,6 +692,14 @@ func (t *Target) progress() Progress {
 	if p.Selected == nil {
 		p.Selected = []string{}
 	}
+	p.Log, p.FinalizeStep = t.st.Log, t.st.FinalizeStep
+	if len(p.Log) == 0 && t.summary != nil {
+		p.Log = t.summary.Log
+	}
+	p.Log = slices.Clone(p.Log)
+	if p.Log == nil {
+		p.Log = []LogEntry{}
+	}
 	if t.st.Manifest != nil {
 		for _, it := range t.st.Manifest.Items {
 			ip := ItemProgress{ID: it.ID, Kind: it.Kind, Size: it.Size, State: "pending"}
@@ -703,6 +747,8 @@ func (t *Target) ResumeIfPending(ctx context.Context) error {
 		if t.markerWritten() {
 			// Begin finished and the database was swapped in at boot.
 			t.restarted = true
+			t.record("info", "", "Panel restarted with the migrated database")
+			t.save()
 			t.completeAsync()
 		} else {
 			// Begin never finished: run it again.
@@ -768,6 +814,7 @@ func (t *Target) completeAsync() {
 		if err != nil && ctx.Err() == nil {
 			log.Printf("migration: complete: %v", err)
 			t.st.Error = err.Error()
+			t.record("error", "", err.Error())
 			t.save()
 		}
 		t.mu.Unlock()
@@ -785,10 +832,11 @@ func (t *Target) complete(ctx context.Context) error {
 	c, self, warnings := t.client(), t.st.SelfURL, slices.Clone(t.st.Warnings)
 	t.mu.Unlock()
 
-	summary, err := t.d.Finalizer.Complete(ctx, m)
+	summary, err := t.d.Finalizer.Complete(WithFinalizeReporter(ctx, t.reportFinalize), m)
 	if err != nil {
 		return err
 	}
+	t.reportFinalize(FinalizeFinish)
 	var finishErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		finishErr = c.finish(ctx, self)
@@ -807,7 +855,12 @@ func (t *Target) complete(ctx context.Context) error {
 	summary.Warnings = append(warnings, summary.Warnings...)
 	if finishErr != nil {
 		summary.Warnings = append(summary.Warnings, "Could not tell the old server the migration finished ("+finishErr.Error()+"); it stays locked, so turn it off or resume it from its own panel")
+		t.logf("warn", "", "Could not tell the old server the migration finished: "+finishErr.Error())
 	}
+	t.logf("info", "", "Migration complete")
+	t.mu.Lock()
+	summary.Log = slices.Clone(t.st.Log)
+	t.mu.Unlock()
 	raw, err := json.Marshal(summary)
 	if err != nil {
 		return err
