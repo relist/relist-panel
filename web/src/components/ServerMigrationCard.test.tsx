@@ -2,6 +2,7 @@
 import '../test/dom-setup';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App } from 'antd';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ServerMigrationCard } from './ServerMigrationCard';
@@ -27,9 +28,11 @@ afterEach(() => {
 
 function show() {
   return render(
-    <App>
-      <ServerMigrationCard />
-    </App>,
+    <MemoryRouter>
+      <App>
+        <ServerMigrationCard />
+      </App>
+    </MemoryRouter>,
   );
 }
 
@@ -64,5 +67,10 @@ describe('ServerMigrationCard', () => {
     expect(await screen.findByText('The token expired. Create a new one.')).toBeTruthy();
     expect(screen.queryByText('secret-token-value')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull();
+  });
+
+  it('offers to migrate another panel into this one', async () => {
+    show();
+    expect((await screen.findByRole('link', { name: 'Migrate from another panel' })).getAttribute('href')).toBe('/migration');
   });
 });

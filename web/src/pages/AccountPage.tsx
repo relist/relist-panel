@@ -2,6 +2,7 @@ import { LockOutlined } from '@ant-design/icons';
 import { Alert, App, Button, Card, Flex, Form, Input, Modal, QRCode, Skeleton, Steps, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 
+import { ChangePasswordCard } from '../components/ChangePasswordCard';
 import { PageHeader } from '../components/primitives';
 import { api } from '../data/api';
 import type { Account, TwoFactorSetup } from '../data/api';
@@ -149,6 +150,12 @@ export function AccountPage() {
               <Text>{account.email}</Text>
             </Flex>
           </Card>
+
+          <ChangePasswordCard
+            onChanged={() => void loadAccount()}
+            passwordFromEnv={account.passwordFromEnv}
+            twoFactorEnabled={account.twoFactorEnabled}
+          />
 
           <Card title="Two-factor authentication" variant="outlined">
             <Flex gap={16} vertical>

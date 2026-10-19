@@ -26,7 +26,7 @@ export type MigrationItem = {
   id: string;
   kind: MigrationItemKind;
   size: number;
-  volume?: { name: string };
+  volume?: { name: string; driver?: string; options?: Record<string, string> | null };
   hostPath?: string;
   image?: { id: string; tags: string[]; repoDigests: string[]; size: number };
 };

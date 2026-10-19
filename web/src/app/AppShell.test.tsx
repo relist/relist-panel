@@ -24,6 +24,7 @@ describe('Deployments navigation', () => {
     const originalMatchMedia = window.matchMedia;
     vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({ ...originalMatchMedia(query), matches: query.includes('max-width: 991.98px') }));
     vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, setupRequired: false });
+    vi.spyOn(api, 'account').mockResolvedValue({ email: 'admin@example.com', passwordFromEnv: false, twoFactorEnabled: false });
     vi.spyOn(api, 'listProjects').mockResolvedValue([]);
     vi.spyOn(api, 'globalDeploymentQueue').mockResolvedValue([]);
     const router = createMemoryRouter([{ element: <AppShell />, children: [
@@ -47,6 +48,7 @@ describe('Deployments navigation', () => {
 
   it('shows the queued count and opens the global page with selected menu and breadcrumb', async () => {
     vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, setupRequired: false });
+    vi.spyOn(api, 'account').mockResolvedValue({ email: 'admin@example.com', passwordFromEnv: false, twoFactorEnabled: false });
     vi.spyOn(api, 'listProjects').mockResolvedValue([]);
     vi.spyOn(api, 'globalDeploymentQueue').mockResolvedValue([
       { status: 'running' } as never, { status: 'queued' } as never, { status: 'queued' } as never,

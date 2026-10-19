@@ -131,6 +131,28 @@ describe('MigrationPage edge states', () => {
   });
 });
 
+describe('MigrationPage preview', () => {
+  it('lists every Volume with its driver before Start', async () => {
+    mocks.migrationProgress.mockResolvedValue({
+      ...connected,
+      info: {
+        ...connected.info!,
+        volumes: [{ id: 'volume-relist-c1_pgdata', kind: 'volume', size: 4096, volume: { name: 'relist-c1_pgdata', driver: 'local', options: {} } }],
+      },
+    });
+    show();
+    const table = await screen.findByRole('region', { name: 'Volumes' });
+    expect(table.textContent).toContain('relist-c1_pgdata');
+    expect(table.textContent).toContain('local');
+  });
+
+  it('goes back to the panel, not to a setup screen an admin never sees', async () => {
+    mocks.migrationProgress.mockResolvedValue({ ...connected, phase: '', info: null, selected: [] });
+    show();
+    expect((await screen.findByRole('link', { name: 'Back' })).getAttribute('href')).toBe('/');
+  });
+});
+
 describe('MigrationPage progress view', () => {
   const currentStep = (container: HTMLElement, list: string) =>
     container.querySelector(`[aria-label="${list}"] .ant-steps-item-process`)?.textContent ?? '';

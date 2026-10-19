@@ -26,6 +26,7 @@ import { ApiError, api } from '../data/api';
 import type {
   FinalizeStep,
   HostPathCandidate,
+  MigrationItem,
   MigrationItemProgress,
   MigrationLogEntry,
   MigrationProgress,
@@ -238,8 +239,9 @@ export function MigrationPage() {
           <Input.Password autoComplete="off" />
         </Form.Item>
         <Flex gap={8} justify="space-between" wrap>
-          <Link to={paths.setup}>
-            <Button>Back to setup</Button>
+          {/* The panel's root sends a visitor to setup or sign-in as needed. */}
+          <Link to={paths.overview}>
+            <Button>Back</Button>
           </Link>
           <Button htmlType="submit" loading={pending === 'connect'} type="primary">
             Connect
@@ -474,6 +476,34 @@ function Preview({
           ]}
           size="small"
         />
+      )}
+      {info && info.volumes.length > 0 && (
+        <section aria-label="Volumes">
+          <Table<MigrationItem>
+            columns={[
+              { key: 'volume', render: (_, item) => item.volume?.name, title: 'Volume' },
+              { key: 'driver', render: (_, item) => item.volume?.driver || 'local', title: 'Driver', width: 120 },
+              {
+                key: 'options',
+                render: (_, item) => {
+                  const options = Object.entries(item.volume?.options ?? {});
+                  return options.length > 0 ? (
+                    <Text type="danger">{options.map(([k, v]) => `${k}=${v}`).join(', ')}</Text>
+                  ) : (
+                    <Text type="secondary">none</Text>
+                  );
+                },
+                title: 'Options',
+              },
+              { key: 'size', render: (_, item) => formatBytes(item.size), title: 'Size', width: 120 },
+            ]}
+            dataSource={info.volumes}
+            pagination={false}
+            rowKey="id"
+            scroll={{ x: 'max-content' }}
+            size="small"
+          />
+        </section>
       )}
       {info && info.images.length > 0 && (
         <Table

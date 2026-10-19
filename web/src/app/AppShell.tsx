@@ -21,6 +21,7 @@ import type { ReactNode } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 
 import { DiskPressureFooter } from '../components/DiskPressureFooter';
+import { PasswordFromEnvBanner } from '../components/PasswordFromEnvBanner';
 import { useDiskPressure } from '../data/useDiskPressure';
 import { useGlobalDeploymentQueue } from '../data/useGlobalDeploymentQueue';
 import { usePanel } from '../data/store';
@@ -328,6 +329,7 @@ export function AppShell() {
                 type="error"
               />
             )}
+            <PasswordFromEnvBanner />
             <Outlet />
           </div>
         </Layout.Content>

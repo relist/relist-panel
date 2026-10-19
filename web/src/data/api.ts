@@ -56,6 +56,8 @@ export type AuthStatus = {
 export type Account = {
   email: string;
   twoFactorEnabled: boolean;
+  /** The password is still the one RELIST_ADMIN_PASSWORD seeded. */
+  passwordFromEnv: boolean;
 };
 
 /** The setup answer: the base32 secret for manual entry and the URI the QR code encodes. */
@@ -263,6 +265,12 @@ export const api = {
   twoFactorSetup: (password: string) => request<TwoFactorSetup>('/api/auth/2fa/setup', jsonInit('POST', { password })),
   /** Confirms the pending secret with a code; success is 204. */
   twoFactorEnable: (code: string) => request<void>('/api/auth/2fa/enable', jsonInit('POST', { code })),
+  /**
+   * Replaces the password after checking the current one, and a code when
+   * two-factor is on. Every other session ends; success is 204.
+   */
+  changePassword: (currentPassword: string, newPassword: string, code?: string) =>
+    request<void>('/api/auth/password', jsonInit('POST', { currentPassword, newPassword, code })),
   /** Turns two-factor off, checking both the password and a current code; success is 204. */
   twoFactorDisable: (password: string, code: string) =>
     request<void>('/api/auth/2fa/disable', jsonInit('POST', { password, code })),
