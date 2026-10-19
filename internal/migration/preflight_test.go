@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"relist-panel/internal/config"
@@ -70,6 +71,8 @@ func TestEvaluate(t *testing.T) {
 		{name: "install differs", local: func(l *LocalHost, _ *FakeDocker, _ *sql.DB) { l.Install.Domain = "panel.new.example.com" },
 			want: Check{false, "RELIST_DOMAIN is panel.example.com on the source and panel.new.example.com here; copy it into this host's .env"}},
 		{name: "source warning", want: Check{false, "draft was never deployed; only its files and database rows move"}},
+		{name: "no restart policy", local: func(_ *LocalHost, d *FakeDocker, _ *sql.DB) { d.RestartPolicy = "no" },
+			want: Check{false, "This panel's container has no restart policy, so it will not come back by itself when the migration restarts it; set restart: unless-stopped, or run docker compose up -d when it stops"}},
 		{name: "queued deployments", src: func(s SourceInfo) SourceInfo { s.QueuedDeployments = 2; return s },
 			want: Check{false, "2 queued Deployments on the source will be canceled when the migration starts"}},
 		{name: "active deployment", src: func(s SourceInfo) SourceInfo { s.ActiveDeployment = "api #4"; return s },
@@ -97,6 +100,22 @@ func TestEvaluate(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("restart policy unknown", func(t *testing.T) {
+		docker := NewFakeDocker()
+		docker.Fail["restart-policy"] = errors.New("not in a container")
+		local := LocalHost{DB: openDB(t), Docker: docker, DataDir: "/var/lib/relist-panel",
+			Install: config.InstallSettings{Domain: "panel.example.com"}, FreeBytes: func(string) (int64, error) { return 1 << 40, nil }}
+		checks, err := Evaluate(context.Background(), local, base(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range checks {
+			if strings.Contains(c.Message, "restart policy") {
+				t.Fatalf("an unknown policy was reported: %q", c.Message)
+			}
+		}
+	})
 
 	t.Run("clean", func(t *testing.T) {
 		local := LocalHost{DB: openDB(t), Docker: NewFakeDocker(), DataDir: "/var/lib/relist-panel",

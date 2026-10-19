@@ -69,6 +69,9 @@ type Docker interface {
 	RunMaintenance(ctx context.Context, labels map[string]string) error
 	RemoveMaintenance(ctx context.Context) error
 	MaintenanceRunning(ctx context.Context) (bool, error)
+	// PanelRestartPolicy is the panel container's own restart policy; an
+	// error means it is unknown, as outside a container.
+	PanelRestartPolicy(ctx context.Context) (string, error)
 	StopTraefik(ctx context.Context) error
 	StartTraefik(ctx context.Context) error
 }
