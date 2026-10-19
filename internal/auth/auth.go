@@ -88,6 +88,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/login", s.login)
 	mux.HandleFunc("POST /api/auth/logout", s.logout)
 	mux.HandleFunc("GET /api/auth/account", s.account)
+	mux.HandleFunc("POST /api/auth/password", s.changePassword)
 	mux.HandleFunc("POST /api/auth/2fa/setup", s.twoFactorSetup)
 	mux.HandleFunc("POST /api/auth/2fa/enable", s.twoFactorEnable)
 	mux.HandleFunc("POST /api/auth/2fa/disable", s.twoFactorDisable)
