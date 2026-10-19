@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -200,6 +201,10 @@ func (s *Source) finish(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
+	if !webURL(in.TargetURL) {
+		writeJSONError(w, http.StatusBadRequest, "targetUrl must be an http:// or https:// URL")
+		return
+	}
 	if err := s.Finish(r.Context(), in.TargetURL); err != nil {
 		if errors.Is(err, ErrNotReady) {
 			writeJSONError(w, http.StatusConflict, err.Error())
@@ -209,6 +214,13 @@ func (s *Source) finish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// webURL reports an absolute http or https URL with a host: the old host's
+// lock page shows the new host's URL as a link.
+func webURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 func (s *Source) createToken(w http.ResponseWriter, r *http.Request) {

@@ -174,6 +174,9 @@ func (t *Target) Connect(ctx context.Context, sourceURL, token, selfURL string) 
 	if !strings.HasPrefix(sourceURL, "https://") && !(t.d.Insecure && strings.HasPrefix(sourceURL, "http://")) {
 		return Progress{}, errors.New("The source must use https://")
 	}
+	if !webURL(selfURL) {
+		return Progress{}, fmt.Errorf("this panel's own URL %q is not an http:// or https:// URL", selfURL)
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.st.Phase != PhaseIdle && t.st.Phase != PhaseConnected {

@@ -272,6 +272,20 @@ func TestStatusAndFinishRoutes(t *testing.T) {
 	}
 }
 
+func TestFinishRefusesATargetURLThatIsNotHTTP(t *testing.T) {
+	s := newSourceServer(t)
+	key := s.claim(t)
+	s.startReady(t, key)
+	for _, bad := range []string{"javascript:alert(1)", "data:text/html,x", "https://", "new.example.com", ""} {
+		if rec := s.do(t, "POST", "/api/migration/finish", key, map[string]string{"targetUrl": bad}); rec.Code != http.StatusBadRequest {
+			t.Fatalf("finish with %q = %d %s, want 400", bad, rec.Code, rec.Body)
+		}
+	}
+	if step, _, _ := s.store.Lock(context.Background()); step != StepReady {
+		t.Fatalf("step = %q, want ready: a refused finish changes nothing", step)
+	}
+}
+
 func TestItemsWaitForTheLockToSettleAfterARestart(t *testing.T) {
 	s := newSourceServer(t)
 	key := s.claim(t)

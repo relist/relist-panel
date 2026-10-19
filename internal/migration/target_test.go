@@ -278,6 +278,13 @@ func TestConnectSelectsNonSystemPaths(t *testing.T) {
 	}
 }
 
+func TestConnectRefusesASelfURLThatIsNotHTTP(t *testing.T) {
+	f := newTargetFixture(t)
+	if _, err := f.target.Connect(context.Background(), f.src.srv.URL, "tok", "javascript:alert(1)"); err == nil {
+		t.Fatal("Connect accepted a javascript: URL for this panel")
+	}
+}
+
 func TestConnectJudgesSystemPathsItself(t *testing.T) {
 	f := newTargetFixture(t)
 	f.src.hostPaths = []HostPathCandidate{{Path: "/srv/up"}, {Path: "/var/lib/docker/volumes"}, {Path: "/var/lib/relist-panel/x"}}
