@@ -39,6 +39,10 @@ func TestEvaluate(t *testing.T) {
 		}, want: Check{true, "This panel already has Projects. Migrate into a freshly installed panel"}},
 		{name: "volume exists", local: func(_ *LocalHost, d *FakeDocker, _ *sql.DB) { d.Volumes["pg"] = VolumeInfo{Name: "pg"} },
 			want: Check{true, "Volume pg already exists on this host"}},
+		{name: "volume with a driver", src: func(s SourceInfo) SourceInfo {
+			s.Volumes = append(s.Volumes, Item{ID: "volume-nfs", Kind: KindVolume, Volume: &VolumeInfo{Name: "nfs", Driver: "local", Options: map[string]string{"type": "none", "o": "bind", "device": "/"}}})
+			return s
+		}, want: Check{true, "Volume nfs has driver options (device=/, o=bind, type=none) and cannot be restored here"}},
 		{name: "host path busy", selected: []string{"/srv/uploads"},
 			local: func(_ *LocalHost, d *FakeDocker, _ *sql.DB) { d.Paths["/srv|uploads"] = PathOccupied },
 			want:  Check{true, "/srv/uploads exists on this host and is not empty"}},

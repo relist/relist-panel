@@ -403,6 +403,18 @@ func (t *Target) waitManifest(ctx context.Context) error {
 				t.mu.Unlock()
 				return err
 			}
+			var reviewed []Item
+			if t.st.Info != nil {
+				reviewed = t.st.Info.Volumes
+			}
+			late, err := checkVolumes(*m, reviewed)
+			if err != nil {
+				t.mu.Unlock()
+				return err
+			}
+			for _, name := range late {
+				t.record("warn", "volume-"+name, "Volume "+name+" was not in the preview: the old server created it after, and it is copied too")
+			}
 		}
 		if step == "" {
 			step = t.st.LockStep
@@ -450,6 +462,25 @@ func checkHostPaths(m Manifest, selected []string) error {
 		}
 	}
 	return nil
+}
+
+// checkVolumes refuses a manifest Volume this host would not create, and
+// returns the plain local ones that were not in the preview: a Deployment the
+// lock waited for may have created them.
+func checkVolumes(m Manifest, reviewed []Item) ([]string, error) {
+	var late []string
+	for _, it := range m.Items {
+		if it.Kind != KindVolume || it.Volume == nil {
+			continue
+		}
+		if reason := unrestorableVolume(*it.Volume); reason != "" {
+			return nil, fmt.Errorf("the source sent volume %s, which %s; abort this migration", it.Volume.Name, reason)
+		}
+		if !slices.ContainsFunc(reviewed, func(r Item) bool { return r.Volume != nil && r.Volume.Name == it.Volume.Name }) {
+			late = append(late, it.Volume.Name)
+		}
+	}
+	return late, nil
 }
 
 // pull restores one item with retries. It reports false when the Migration

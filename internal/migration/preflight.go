@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 
 	"relist-panel/internal/config"
@@ -142,6 +143,9 @@ func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []s
 	var dockerNeed int64
 	for _, v := range src.Volumes {
 		dockerNeed += v.Size
+		if reason := unrestorableVolume(*v.Volume); reason != "" {
+			block("Volume " + v.Volume.Name + " " + reason + " and cannot be restored here")
+		}
 		if _, ok, err := local.Docker.InspectVolume(ctx, v.Volume.Name); err != nil {
 			return nil, err
 		} else if ok {
@@ -242,6 +246,24 @@ func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []s
 		checks = []Check{}
 	}
 	return checks, nil
+}
+
+// unrestorableVolume says why this host will not create v, or "". The old
+// host never sends such a Volume; a driver or an option such as a bind
+// device would mount whatever it names on this host.
+func unrestorableVolume(v VolumeInfo) string {
+	if v.Driver != "" && v.Driver != "local" {
+		return "uses driver " + v.Driver
+	}
+	if len(v.Options) > 0 {
+		opts := make([]string, 0, len(v.Options))
+		for k, val := range v.Options {
+			opts = append(opts, k+"="+val)
+		}
+		slices.Sort(opts)
+		return "has driver options (" + strings.Join(opts, ", ") + ")"
+	}
+	return ""
 }
 
 func humanBytes(n int64) string {

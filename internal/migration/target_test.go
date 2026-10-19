@@ -379,6 +379,32 @@ func TestManifestWithAnUnselectedHostPathIsRefused(t *testing.T) {
 	}
 }
 
+func TestManifestVolumesAreCheckedAgainstThePreview(t *testing.T) {
+	bind := Item{ID: "volume-x", Kind: KindVolume, Volume: &VolumeInfo{Name: "x", Driver: "local", Options: map[string]string{"o": "bind", "device": "/etc"}}}
+	f := newTargetFixture(t, Item{ID: "database", Kind: KindDatabase}, bind)
+	f.connectAndStart(t)
+	eventuallyTrue(t, "refusal", func() bool {
+		return strings.Contains(f.target.Progress().Error, "volume x, which has driver options")
+	})
+	f.restorer.mu.Lock()
+	defer f.restorer.mu.Unlock()
+	if len(f.restorer.restored) != 0 {
+		t.Fatalf("restored %v from a refused manifest", f.restorer.restored)
+	}
+}
+
+func TestAVolumeNewSinceThePreviewIsCopiedAndLogged(t *testing.T) {
+	f := newTargetFixture(t, Item{ID: "database", Kind: KindDatabase}, Item{ID: "volume-late", Kind: KindVolume, Volume: &VolumeInfo{Name: "late", Driver: "local"}})
+	f.connectAndStart(t)
+	p := waitPhase(t, f.target, PhaseFinalizing)
+	i := slices.IndexFunc(p.Log, func(e LogEntry) bool {
+		return e.Level == "warn" && strings.Contains(e.Message, "Volume late was not in the preview")
+	})
+	if i < 0 {
+		t.Fatalf("no warning about the new volume:\n%+v", p.Log)
+	}
+}
+
 func TestStartRefusedWithBlockingCheck(t *testing.T) {
 	f := newTargetFixture(t)
 	f.deps.Local.DataDir = "/elsewhere"
