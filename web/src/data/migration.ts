@@ -64,6 +64,10 @@ export type MigrationSummary = {
   dns: string[];
 };
 
+export type MigrationLogEntry = { at: string; level: 'info' | 'warn' | 'error'; item?: string; message: string };
+
+export type FinalizeStep = 'stop-traefik' | 'move-data' | 'restart' | 'start-traefik' | 'deploy' | 'finish';
+
 export type MigrationProgress = {
   phase: MigrationPhase;
   sourceUrl: string;
@@ -75,4 +79,7 @@ export type MigrationProgress = {
   warnings: string[];
   error?: string;
   summary?: MigrationSummary;
+  /** The activity log, oldest first. */
+  log: MigrationLogEntry[];
+  finalizeStep?: FinalizeStep;
 };

@@ -36,6 +36,7 @@ const connected: MigrationProgress = {
   items: [],
   checks: [],
   warnings: [],
+  log: [],
   info: {
     protocol: 1,
     schemaVersion: 18,
@@ -127,6 +128,50 @@ describe('MigrationPage edge states', () => {
     expect(screen.getByRole('button', { name: 'Start migration' }).hasAttribute('disabled')).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(mocks.migrationConnect).toHaveBeenCalledWith('https://old.example.com', ''));
+  });
+});
+
+describe('MigrationPage progress view', () => {
+  const currentStep = (container: HTMLElement, list: string) =>
+    container.querySelector(`[aria-label="${list}"] .ant-steps-item-process`)?.textContent ?? '';
+
+  it('shows where the whole migration is and the lock step on the old server', async () => {
+    mocks.migrationProgress.mockResolvedValue({ ...connected, phase: 'locking', lockStep: 'stopping' });
+    const { container } = show();
+    await screen.findByText(/Locking the old server/);
+    expect(currentStep(container, 'Migration steps')).toContain('Lock old server');
+    expect(currentStep(container, 'Old server steps')).toContain('Stopping Composes');
+  });
+
+  it('marks the copy step as failed while paused', async () => {
+    mocks.migrationProgress.mockResolvedValue({ ...connected, phase: 'paused' });
+    const { container } = show();
+    await screen.findByText('The migration is paused');
+    expect(container.querySelector('[aria-label="Migration steps"] .ant-steps-item-error')?.textContent).toContain('Copy');
+  });
+
+  it('lists the finalize steps with the current one', async () => {
+    mocks.migrationProgress.mockResolvedValue({ ...connected, phase: 'finalizing', finalizeStep: 'move-data' });
+    const { container } = show();
+    await screen.findByText(/Restarting the panel/);
+    expect(currentStep(container, 'Finalize steps')).toContain('Move the copied data');
+  });
+
+  it('shows the activity log newest first, warnings marked', async () => {
+    mocks.migrationProgress.mockResolvedValue({
+      ...connected,
+      phase: 'pulling',
+      log: [
+        { at: '2026-10-20T03:00:00Z', level: 'info', message: 'Copying volume-pg', item: 'volume-pg' },
+        { at: '2026-10-20T03:01:00Z', level: 'warn', message: 'volume-pg failed: digest mismatch. Retrying', item: 'volume-pg' },
+      ],
+    });
+    show();
+    const log = await screen.findByRole('list', { name: 'Activity log' });
+    const entries = log.querySelectorAll('.ant-timeline-item');
+    expect(entries).toHaveLength(2);
+    expect(entries[0].textContent).toContain('digest mismatch');
+    expect(entries[1].textContent).toContain('Copying volume-pg');
   });
 });
 

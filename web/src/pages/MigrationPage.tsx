@@ -1,15 +1,105 @@
-import { Alert, App, Button, Card, Descriptions, Flex, Form, Input, Layout, Progress, Result, Spin, Table, Tag, Typography } from 'antd';
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Descriptions,
+  Flex,
+  Form,
+  Input,
+  Layout,
+  Progress,
+  Result,
+  Spin,
+  Steps,
+  Table,
+  Tag,
+  Timeline,
+  Typography,
+} from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, Navigate } from 'react-router';
 
 import { paths } from '../app/paths';
 import { formatBytes } from '../components/MetricChart';
 import { ApiError, api } from '../data/api';
-import type { HostPathCandidate, MigrationItemProgress, MigrationProgress, SourceInfo } from '../data/migration';
+import type {
+  FinalizeStep,
+  HostPathCandidate,
+  MigrationItemProgress,
+  MigrationLogEntry,
+  MigrationProgress,
+  MigrationStep,
+  SourceInfo,
+} from '../data/migration';
 
 const { Paragraph, Text, Title } = Typography;
 
 const POLL_MS = 2000;
+
+const LOCK_STEPS: { step: MigrationStep; title: string }[] = [
+  { step: 'locked', title: 'Lock and cancel queued Deployments' },
+  { step: 'stopping', title: 'Stopping Composes' },
+  { step: 'maintenance', title: 'Maintenance page up' },
+  { step: 'ready', title: 'Ready to copy' },
+];
+
+const FINALIZE_STEPS: { step: FinalizeStep; title: string }[] = [
+  { step: 'stop-traefik', title: 'Stop Traefik' },
+  { step: 'move-data', title: 'Move the copied data into place' },
+  { step: 'restart', title: 'Restart the panel with the migrated database' },
+  { step: 'start-traefik', title: 'Start Traefik' },
+  { step: 'deploy', title: 'Deploy the Composes that were running' },
+  { step: 'finish', title: 'Tell the old server it is done' },
+];
+
+const LOG_COLORS: Record<MigrationLogEntry['level'], string> = { error: 'red', info: 'blue', warn: 'orange' };
+
+/** The whole Migration as five steps, with where each one is. */
+function Journey({ progress }: { progress: MigrationProgress }) {
+  const { phase } = progress;
+  const current = { '': 0, connected: 0, done: 4, finalizing: 3, locking: 1, paused: 2, pulling: 2 }[phase];
+  const failed = phase === 'paused' || (!!progress.error && (phase === 'locking' || phase === 'finalizing'));
+  const copied = progress.items.filter((i) => i.state === 'done').length;
+  const lock = LOCK_STEPS.find((s) => s.step === progress.lockStep)?.title;
+  const finalize = FINALIZE_STEPS.find((s) => s.step === progress.finalizeStep)?.title;
+  return (
+    <Steps
+      aria-label="Migration steps"
+      current={current}
+      items={[
+        { title: 'Connect' },
+        { content: phase === 'locking' ? lock : undefined, title: 'Lock old server' },
+        { content: progress.items.length > 0 ? `${copied} / ${progress.items.length} items` : undefined, title: 'Copy' },
+        { content: phase === 'finalizing' ? finalize : undefined, title: 'Finalize' },
+        { title: 'Done' },
+      ]}
+      size="small"
+      status={phase === 'done' ? 'finish' : failed ? 'error' : 'process'}
+      style={{ marginBottom: 24 }}
+    />
+  );
+}
+
+/** What the Migration did, newest first. */
+function ActivityLog({ log }: { log: MigrationLogEntry[] }) {
+  return (
+    <Card size="small" style={{ marginTop: 24 }} title="Activity">
+      <div style={{ maxHeight: 320, overflowY: 'auto', paddingTop: 8 }}>
+        <Timeline
+          aria-label="Activity log"
+          items={[...log].reverse().map((entry, i) => ({
+            color: LOG_COLORS[entry.level],
+            content: <Text type={entry.level === 'error' ? 'danger' : undefined}>{entry.message}</Text>,
+            key: `${entry.at}-${i}`,
+            title: <Text type="secondary">{new Date(entry.at).toLocaleTimeString()}</Text>,
+          }))}
+          mode="start"
+        />
+      </div>
+    </Card>
+  );
+}
 
 /** One item's name as the operator knows it. */
 function itemLabel(item: MigrationItemProgress, info: SourceInfo | null): string {
@@ -166,6 +256,14 @@ export function MigrationPage() {
           Locking the old server{progress.lockStep ? ` — ${progress.lockStep}` : ''}. Its Composes stop once a running
           Deployment ends.
         </Text>
+        <Steps
+          aria-label="Old server steps"
+          current={Math.max(0, LOCK_STEPS.findIndex((s) => s.step === progress.lockStep))}
+          items={LOCK_STEPS.map((s) => ({ title: s.title }))}
+          orientation="vertical"
+          size="small"
+          status={progress.error ? 'error' : 'process'}
+        />
         {progress.info?.activeDeployment && <Alert showIcon title={`Waiting for ${progress.info.activeDeployment}`} type="info" />}
         {progress.error && <Alert showIcon title={progress.error} type="error" />}
         <Flex gap={8} justify="flex-end">
@@ -243,6 +341,14 @@ export function MigrationPage() {
       <Flex align="center" gap={12} vertical>
         <Spin />
         <Text>Restarting the panel to swap in the migrated database…</Text>
+        <Steps
+          aria-label="Finalize steps"
+          current={Math.max(0, FINALIZE_STEPS.findIndex((s) => s.step === progress.finalizeStep))}
+          items={FINALIZE_STEPS.map((s) => ({ title: s.title }))}
+          orientation="vertical"
+          size="small"
+          status={progress.error ? 'error' : 'process'}
+        />
         <Text type="secondary">
           If this page does not come back within a few minutes, the panel container did not restart by itself: run docker
           compose up -d in the panel&apos;s directory on this server.
@@ -306,7 +412,9 @@ export function MigrationPage() {
         </Title>
         {pollError && phase !== 'finalizing' && <Alert showIcon style={{ marginBottom: 16 }} title={pollError} type="error" />}
         {actionError && <Alert showIcon style={{ marginBottom: 16 }} title={actionError} type="error" />}
+        {progress && phase !== '' && <Journey progress={progress} />}
         {body}
+        {progress && phase !== '' && progress.log.length > 0 && <ActivityLog log={progress.log} />}
       </Card>
     </Layout>
   );
