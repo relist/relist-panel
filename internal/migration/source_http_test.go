@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -229,6 +230,29 @@ func TestDatabaseItemIsAConsistentCopy(t *testing.T) {
 		entries, _ := os.ReadDir(filepath.Join(s.dataDir, ".migration-out"))
 		if len(entries) != 0 {
 			t.Fatalf("the VACUUM copy was left behind: %v", entries)
+		}
+	}
+}
+
+func TestConcurrentDatabaseStreamsDoNotCollide(t *testing.T) {
+	s := newSourceServer(t)
+	key := s.claim(t)
+	s.startReady(t, key)
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var buf bytes.Buffer
+			errs <- s.src.StreamItem(context.Background(), "database", &buf)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("a concurrent database stream failed: %v", err)
 		}
 	}
 }

@@ -83,15 +83,20 @@ func (s *Source) writeItem(ctx context.Context, item Item, w io.Writer) error {
 	return fmt.Errorf("unknown item kind %q", item.Kind)
 }
 
-// writeDatabase streams a consistent copy of panel.db made with VACUUM INTO.
+// writeDatabase streams a consistent copy of panel.db made with VACUUM INTO,
+// into a directory of its own: a retried stream may overlap one still
+// running, and VACUUM INTO refuses a file that exists.
 func (s *Source) writeDatabase(ctx context.Context, w io.Writer) error {
-	dir := filepath.Join(s.d.DataDir, ".migration-out")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	base := filepath.Join(s.d.DataDir, ".migration-out")
+	if err := os.MkdirAll(base, 0o700); err != nil {
 		return err
 	}
+	dir, err := os.MkdirTemp(base, "db-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
 	path := filepath.Join(dir, "panel.db")
-	os.Remove(path)
-	defer os.Remove(path)
 	if _, err := s.d.DB.ExecContext(ctx, "VACUUM INTO ?", path); err != nil {
 		return fmt.Errorf("copy the database: %w", err)
 	}
