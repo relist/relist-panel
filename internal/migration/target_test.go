@@ -36,6 +36,9 @@ type fakeSourceServer struct {
 	finished  string
 	served    []string
 	hostPaths []HostPathCandidate
+	claimed       bool          // a claimed token answers 409, like the real one
+	failPreflight int           // the first n preflights answer 502
+	holdPreflight chan struct{} // when set, preflight waits for it to close
 }
 
 func newFakeSourceServer(t *testing.T, items ...Item) *fakeSourceServer {
@@ -63,12 +66,31 @@ func newFakeSourceServer(t *testing.T, items ...Item) *fakeSourceServer {
 			writeJSONError(w, 401, "invalid or expired migration token")
 			return
 		}
+		f.mu.Lock()
+		claimed := f.claimed
+		f.claimed = true
+		f.mu.Unlock()
+		if claimed {
+			writeJSONError(w, 409, "this migration token was already claimed")
+			return
+		}
 		writeJSON(w, 200, map[string]string{"sessionKey": f.key})
 	})
 	mux.HandleFunc("GET /api/migration/preflight", auth(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
-		paths := f.hostPaths
+		paths, hold := f.hostPaths, f.holdPreflight
+		failing := f.failPreflight > 0
+		if failing {
+			f.failPreflight--
+		}
 		f.mu.Unlock()
+		if hold != nil {
+			<-hold
+		}
+		if failing {
+			writeJSONError(w, 502, "source busy")
+			return
+		}
 		writeJSON(w, 200, SourceInfo{Protocol: ProtocolVersion, SchemaVersion: 18, DataDir: "/var/lib/relist-panel",
 			HostPaths: paths, Volumes: []Item{}, Images: []Item{}, Warnings: []string{}})
 	}))
@@ -275,6 +297,53 @@ func TestConnectSelectsNonSystemPaths(t *testing.T) {
 	}
 	if p.Phase != PhaseConnected || !slices.Equal(p.Selected, []string{"/srv/up"}) || p.Info == nil {
 		t.Fatalf("progress = %+v", p)
+	}
+}
+
+func TestConnectKeepsTheSessionWhenPreflightFails(t *testing.T) {
+	f := newTargetFixture(t)
+	f.src.failPreflight = 1
+	if _, err := f.target.Connect(context.Background(), f.src.srv.URL, "tok", "https://new"); err == nil {
+		t.Fatal("Connect succeeded with a failing preflight")
+	}
+	// The token is spent on the source; the session it bought is not lost.
+	p, err := f.target.Connect(context.Background(), f.src.srv.URL, "tok", "https://new")
+	if err != nil {
+		t.Fatalf("second Connect = %v, want it to reuse the session", err)
+	}
+	if p.Phase != PhaseConnected || p.Info == nil {
+		t.Fatalf("progress = %+v", p)
+	}
+}
+
+func TestProgressDoesNotWaitForTheNetwork(t *testing.T) {
+	f := newTargetFixture(t)
+	f.src.holdPreflight = make(chan struct{})
+	release := sync.OnceFunc(func() { close(f.src.holdPreflight) })
+	t.Cleanup(release) // before the server closes, which waits for the handler
+	connected := make(chan error, 1)
+	go func() {
+		_, err := f.target.Connect(context.Background(), f.src.srv.URL, "tok", "https://new")
+		connected <- err
+	}()
+	eventuallyTrue(t, "the claim", func() bool {
+		f.src.mu.Lock()
+		defer f.src.mu.Unlock()
+		return f.src.claimed
+	})
+	polled := make(chan Progress, 1)
+	go func() { polled <- f.target.Progress() }()
+	select {
+	case <-polled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Progress blocked while Connect waited on the source")
+	}
+	if err := f.target.Start(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "in progress") {
+		t.Fatalf("Start during Connect = %v, want another action in progress", err)
+	}
+	release()
+	if err := <-connected; err != nil {
+		t.Fatal(err)
 	}
 }
 

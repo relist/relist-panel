@@ -119,6 +119,10 @@ type targetState struct {
 type Target struct {
 	d TargetDeps
 
+	// op serialises the actions that talk to the source (Connect, Recheck,
+	// Start, Abort) without holding mu, which Progress needs.
+	op sync.Mutex
+
 	mu      sync.Mutex
 	st      targetState
 	done    map[string]*atomic.Int64 // bytes read per item, in memory only
@@ -168,8 +172,12 @@ func (t *Target) client() *client {
 	return &client{http: t.d.HTTP, base: strings.TrimRight(t.st.SourceURL, "/"), sessionKey: t.st.SessionKey}
 }
 
+// errBusy refuses an action while another one talks to the source.
+var errBusy = errors.New("another migration action is in progress; try again in a moment")
+
 // Connect claims the token and runs preflight with every non-system host
-// path selected.
+// path selected. The session is kept as soon as the claim succeeds, so a
+// preflight that fails can be retried without a new token.
 func (t *Target) Connect(ctx context.Context, sourceURL, token, selfURL string) (Progress, error) {
 	if !strings.HasPrefix(sourceURL, "https://") && !(t.d.Insecure && strings.HasPrefix(sourceURL, "http://")) {
 		return Progress{}, errors.New("The source must use https://")
@@ -177,19 +185,40 @@ func (t *Target) Connect(ctx context.Context, sourceURL, token, selfURL string) 
 	if !webURL(selfURL) {
 		return Progress{}, fmt.Errorf("this panel's own URL %q is not an http:// or https:// URL", selfURL)
 	}
+	if !t.op.TryLock() {
+		return Progress{}, errBusy
+	}
+	defer t.op.Unlock()
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.st.Phase != PhaseIdle && t.st.Phase != PhaseConnected {
+	phase, key, claimedFrom := t.st.Phase, t.st.SessionKey, t.st.SourceURL
+	t.mu.Unlock()
+	if phase != PhaseIdle && phase != PhaseConnected {
 		return Progress{}, errors.New("a migration is already running")
 	}
 	c := &client{http: t.d.HTTP, base: strings.TrimRight(sourceURL, "/")}
-	key, err := c.claim(ctx, token, selfURL)
-	if err != nil {
-		return Progress{}, err
+	switch {
+	case key != "" && claimedFrom == c.base:
+		c.sessionKey = key
+	case key != "":
+		return Progress{}, fmt.Errorf("this panel is connected to %s; abort that migration first", claimedFrom)
+	default:
+		key, err := c.claim(ctx, token, selfURL)
+		if err != nil {
+			return Progress{}, err
+		}
+		c.sessionKey = key
+		t.mu.Lock()
+		t.st = targetState{Phase: PhaseConnected, SourceURL: c.base, SelfURL: selfURL, SessionKey: key,
+			Selected: []string{}, Warnings: []string{}}
+		err = t.save()
+		t.mu.Unlock()
+		if err != nil {
+			return Progress{}, err
+		}
 	}
-	c.sessionKey = key
 	info, err := c.preflight(ctx)
 	if err != nil {
+		t.setError(err)
 		return Progress{}, err
 	}
 	selected := []string{}
@@ -201,34 +230,51 @@ func (t *Target) Connect(ctx context.Context, sourceURL, token, selfURL string) 
 	}
 	checks, err := Evaluate(ctx, t.d.Local, info, selected)
 	if err != nil {
+		t.setError(err)
 		return Progress{}, err
 	}
-	t.st = targetState{Phase: PhaseConnected, SourceURL: c.base, SelfURL: selfURL, SessionKey: key,
-		Selected: selected, Info: &info, Checks: checks, Warnings: []string{}}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.st.SelfURL, t.st.Selected, t.st.Info, t.st.Checks, t.st.Error = selfURL, selected, &info, checks, ""
 	if err := t.save(); err != nil {
 		return Progress{}, err
 	}
 	return t.progress(), nil
 }
 
-// Recheck re-runs preflight for another host path selection.
-func (t *Target) Recheck(ctx context.Context, selected []string) (Progress, error) {
+// setError records err for the setup screen.
+func (t *Target) setError(err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.st.Phase != PhaseConnected {
-		return Progress{}, errors.New("connect to a source first")
+	t.st.Error = err.Error()
+	t.save()
+}
+
+// Recheck re-runs preflight for another host path selection.
+func (t *Target) Recheck(ctx context.Context, selected []string) (Progress, error) {
+	if !t.op.TryLock() {
+		return Progress{}, errBusy
 	}
+	defer t.op.Unlock()
 	if err := t.recheck(ctx, selected); err != nil {
 		return Progress{}, err
 	}
-	return t.progress(), nil
+	return t.Progress(), nil
 }
 
+// recheck runs preflight without holding t.mu, so polling never waits on
+// the source or on a helper container. The caller holds t.op.
 func (t *Target) recheck(ctx context.Context, selected []string) error {
 	if selected == nil {
 		selected = []string{}
 	}
-	info, err := t.client().preflight(ctx)
+	t.mu.Lock()
+	phase, c := t.st.Phase, t.client()
+	t.mu.Unlock()
+	if phase != PhaseConnected {
+		return errors.New("connect to a source first")
+	}
+	info, err := c.preflight(ctx)
 	if err != nil {
 		return err
 	}
@@ -236,20 +282,23 @@ func (t *Target) recheck(ctx context.Context, selected []string) error {
 	if err != nil {
 		return err
 	}
-	t.st.Info, t.st.Checks, t.st.Selected = &info, checks, selected
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.st.Info, t.st.Checks, t.st.Selected, t.st.Error = &info, checks, selected, ""
 	return t.save()
 }
 
 // Start locks the source and pulls every item in the background.
 func (t *Target) Start(ctx context.Context, selected []string) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.st.Phase != PhaseConnected {
-		return errors.New("connect to a source first")
+	if !t.op.TryLock() {
+		return errBusy
 	}
+	defer t.op.Unlock()
 	if err := t.recheck(ctx, selected); err != nil {
 		return err
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	for _, c := range t.st.Checks {
 		if c.Blocking {
 			return &BlockedError{Message: c.Message}
@@ -540,6 +589,8 @@ func (t *Target) Retry(ctx context.Context) error {
 // Abort tells the old host to resume, removes everything restored and
 // forgets the Migration.
 func (t *Target) Abort(ctx context.Context) error {
+	t.op.Lock()
+	defer t.op.Unlock()
 	t.mu.Lock()
 	if t.st.Phase == PhaseDone || (t.st.Phase == PhaseFinalizing && (t.running || t.markerWritten())) {
 		t.mu.Unlock()
