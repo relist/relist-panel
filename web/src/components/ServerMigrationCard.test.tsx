@@ -17,7 +17,7 @@ const idle = { step: '', claimedBy: '', targetUrl: '', lockedAt: null, migratedA
 
 beforeEach(() => {
   mocks.migrationStatus.mockResolvedValue(idle);
-  mocks.createMigrationToken.mockResolvedValue({ token: 'secret-token-value', expiresAt: '2026-10-20T00:00:00Z' });
+  mocks.createMigrationToken.mockResolvedValue({ token: 'secret-token-value', expiresAt: '2999-01-01T00:00:00Z' });
   mocks.revokeMigrationToken.mockResolvedValue(undefined);
 });
 afterEach(() => {
@@ -51,9 +51,18 @@ describe('ServerMigrationCard', () => {
   });
 
   it('revokes a live token', async () => {
-    mocks.migrationStatus.mockResolvedValue({ ...idle, tokenExpiresAt: '2026-10-20T00:00:00Z' });
+    mocks.migrationStatus.mockResolvedValue({ ...idle, tokenExpiresAt: '2999-01-01T00:00:00Z' });
     show();
     fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }));
     await waitFor(() => expect(mocks.revokeMigrationToken).toHaveBeenCalled());
+  });
+
+  it('stops offering a token once it has expired unclaimed', async () => {
+    mocks.createMigrationToken.mockResolvedValue({ token: 'secret-token-value', expiresAt: '2000-01-01T00:00:00Z' });
+    show();
+    fireEvent.click(await screen.findByRole('button', { name: 'Create migration token' }));
+    expect(await screen.findByText('The token expired. Create a new one.')).toBeTruthy();
+    expect(screen.queryByText('secret-token-value')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull();
   });
 });

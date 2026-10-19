@@ -52,6 +52,21 @@ describe('MigrationLockPage', () => {
   });
 });
 
+describe('MigrationLockPage target link', () => {
+  it('links only to an http or https target', () => {
+    render(
+      <App>
+        <MigrationLockPage
+          onResumed={() => undefined}
+          status={{ ...base, step: 'migrated', targetUrl: 'javascript:alert(1)', migratedAt: '2026-10-19T01:00:00Z' }}
+        />
+      </App>,
+    );
+    expect(screen.getByText('javascript:alert(1)')).toBeTruthy();
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+});
+
 describe('MigrationLockPage resume warnings', () => {
   it('unlocks and shows which Composes did not start', async () => {
     mocks.resumeMigration.mockResolvedValue({ warning: 'store did not start, deploy it again' });

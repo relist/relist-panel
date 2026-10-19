@@ -61,7 +61,11 @@ export function ServerMigrationCard() {
     }
   };
 
-  const expiresAt = created?.expiresAt ?? status?.tokenExpiresAt ?? undefined;
+  const knownExpiry = created?.expiresAt ?? status?.tokenExpiresAt ?? undefined;
+  // An unclaimed token past its expiry cannot be claimed any more; a claimed
+  // one stays, because the copy it started outlives it.
+  const expired = !!knownExpiry && !status?.claimedBy && new Date(knownExpiry).getTime() <= Date.now();
+  const expiresAt = expired ? undefined : knownExpiry;
 
   return (
     <Card title="Server migration">
@@ -72,7 +76,8 @@ export function ServerMigrationCard() {
           migration token. Nothing here stops until the new server starts the migration.
         </Paragraph>
         {error && <Alert showIcon title={error} type="error" />}
-        {created && (
+        {expired && <Alert showIcon title="The token expired. Create a new one." type="info" />}
+        {created && !expired && (
           <Alert
             description={
               <Text code copyable={{ text: created.token }} style={{ wordBreak: 'break-all' }}>

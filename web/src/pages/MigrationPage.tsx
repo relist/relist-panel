@@ -243,6 +243,10 @@ export function MigrationPage() {
       <Flex align="center" gap={12} vertical>
         <Spin />
         <Text>Restarting the panel to swap in the migrated database…</Text>
+        <Text type="secondary">
+          If this page does not come back within a few minutes, the panel container did not restart by itself: run docker
+          compose up -d in the panel&apos;s directory on this server.
+        </Text>
         {progress.error && <Alert showIcon action={<Button onClick={() => void run('retry', api.migrationRetry)}>Retry</Button>} title={progress.error} type="error" />}
       </Flex>
     );
@@ -328,6 +332,22 @@ function Preview({
   return (
     <Flex gap={16} vertical>
       <Text type="secondary">Connected to {progress.sourceUrl}. Nothing there is locked until you start.</Text>
+      {!info && (
+        // The token was claimed but preflight failed: retry on the same session.
+        <Alert
+          action={
+            <Button
+              loading={pending === 'connect'}
+              onClick={() => void run('connect', () => api.migrationConnect(progress.sourceUrl, ''))}
+            >
+              Retry
+            </Button>
+          }
+          showIcon
+          title={progress.error || 'Could not read the old panel'}
+          type="error"
+        />
+      )}
       {progress.checks.map((c) => (
         <Alert key={c.message} showIcon title={c.message} type={c.blocking ? 'error' : 'warning'} />
       ))}
@@ -393,7 +413,7 @@ function Preview({
           Cancel
         </Button>
         <Button
-          disabled={blocked || pending === 'recheck'}
+          disabled={blocked || !info || pending === 'recheck'}
           loading={pending === 'start'}
           onClick={() => void run('start', () => api.migrationStart(progress.selected))}
           type="primary"

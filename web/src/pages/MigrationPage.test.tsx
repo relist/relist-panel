@@ -112,6 +112,24 @@ describe('MigrationPage', () => {
   });
 });
 
+describe('MigrationPage edge states', () => {
+  it('tells how to bring the panel back if it does not restart', async () => {
+    mocks.migrationProgress.mockResolvedValue({ ...connected, phase: 'finalizing' });
+    show();
+    expect(await screen.findByText(/docker compose up -d/)).toBeTruthy();
+  });
+
+  it('retries a preflight that failed after the token was claimed', async () => {
+    mocks.migrationProgress.mockResolvedValue({ ...connected, info: null, selected: [], error: 'source busy' });
+    mocks.migrationConnect.mockResolvedValue(connected);
+    show();
+    expect(await screen.findByText('source busy')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Start migration' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mocks.migrationConnect).toHaveBeenCalledWith('https://old.example.com', ''));
+  });
+});
+
 describe('MigrationPage while locking', () => {
   it('offers Retry when locking stopped on an error', async () => {
     mocks.migrationProgress.mockResolvedValue({ ...connected, phase: 'locking', error: 'lock the source: invalid migration session' });

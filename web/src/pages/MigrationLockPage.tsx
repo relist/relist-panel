@@ -74,9 +74,14 @@ export function MigrationLockPage({ onResumed, status }: { onResumed: () => void
             title={
               <>
                 Migrated to{' '}
-                <Typography.Link href={status.targetUrl} target="_blank">
-                  {status.targetUrl}
-                </Typography.Link>
+                {/^https?:\/\//i.test(status.targetUrl) ? (
+                  <Typography.Link href={status.targetUrl} rel="noreferrer" target="_blank">
+                    {status.targetUrl}
+                  </Typography.Link>
+                ) : (
+                  // Only an http(s) address becomes a link; anything else is shown, never followed.
+                  <Text>{status.targetUrl}</Text>
+                )}
               </>
             }
           />
