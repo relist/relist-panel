@@ -944,8 +944,22 @@ func TestRunPackUnpackSizeFree(t *testing.T) {
 	if code, _, _ := runHelper(t, dst, []byte("not a tar at all, definitely"), "unpack", "--", "."); code != exitArchiveRefused {
 		t.Fatalf("unpack of garbage exit = %d, want %d", code, exitArchiveRefused)
 	}
-	if code, _, _ := runHelper(t, dst, nil, "unpack", "--", "sub"); code != exitUsage {
-		t.Fatalf("unpack into a subpath exit = %d, want %d", code, exitUsage)
+	for _, bad := range []string{"a/b", "..", "/abs"} {
+		if code, _, _ := runHelper(t, dst, nil, "unpack", "--", bad); code != exitUsage {
+			t.Fatalf("unpack -- %s exit = %d, want %d", bad, code, exitUsage)
+		}
+	}
+	// unpack -- <name> takes only name and what is beneath it: d's stream
+	// fits, the whole root's does not.
+	code, packedD, _ := runHelper(t, src, nil, "pack", "--", "d")
+	if code != exitOK {
+		t.Fatal("pack d failed")
+	}
+	if code, _, stderr := runHelper(t, t.TempDir(), packedD, "unpack", "--", "d"); code != exitOK {
+		t.Fatalf("unpack -- d exit = %d, stderr %q", code, stderr)
+	}
+	if code, _, _ := runHelper(t, t.TempDir(), packed, "unpack", "--", "d"); code != exitArchiveRefused {
+		t.Fatalf("unpack -- d of a whole-root stream exit = %d, want %d", code, exitArchiveRefused)
 	}
 }
 

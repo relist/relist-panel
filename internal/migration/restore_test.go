@@ -83,6 +83,9 @@ func TestRestoreHostPathFileAndDir(t *testing.T) {
 			t.Fatalf("%s unpacked into %v", p, docker.Unpacked)
 		}
 	}
+	if got := docker.CallsOf("unpack"); !slices.Equal(got, []string{"unpack /srv uploads", "unpack /opt/app config.yml"}) {
+		t.Fatalf("unpacks = %q, want each confined to its own name", got)
+	}
 	r.Cleanup(context.Background(), Item{Kind: KindHostPath, HostPath: "/srv/uploads"})
 	if got := docker.CallsOf("delete"); !slices.Equal(got, []string{"delete /srv uploads"}) {
 		t.Fatalf("deletes = %q", got)

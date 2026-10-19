@@ -35,11 +35,13 @@ type fakeSourceServer struct {
 	aborted   bool
 	finished  string
 	served    []string
+	hostPaths []HostPathCandidate
 }
 
 func newFakeSourceServer(t *testing.T, items ...Item) *fakeSourceServer {
 	t.Helper()
-	f := &fakeSourceServer{key: "sess", bodies: map[string]string{}, cutOnce: map[string]bool{}, badDigest: map[string]int{}}
+	f := &fakeSourceServer{key: "sess", bodies: map[string]string{}, cutOnce: map[string]bool{}, badDigest: map[string]int{},
+		hostPaths: []HostPathCandidate{{Path: "/srv/up"}, {Path: "/etc/localtime", System: true}}}
 	f.manifest = Manifest{Protocol: ProtocolVersion, SchemaVersion: 18, DataDir: "/var/lib/relist-panel", RunningComposeIDs: []int64{1}, Items: items, Warnings: []string{}}
 	for _, it := range items {
 		f.bodies[it.ID] = "body of " + it.ID
@@ -64,8 +66,11 @@ func newFakeSourceServer(t *testing.T, items ...Item) *fakeSourceServer {
 		writeJSON(w, 200, map[string]string{"sessionKey": f.key})
 	})
 	mux.HandleFunc("GET /api/migration/preflight", auth(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		paths := f.hostPaths
+		f.mu.Unlock()
 		writeJSON(w, 200, SourceInfo{Protocol: ProtocolVersion, SchemaVersion: 18, DataDir: "/var/lib/relist-panel",
-			HostPaths: []HostPathCandidate{{Path: "/srv/up"}, {Path: "/etc/localtime", System: true}}, Volumes: []Item{}, Images: []Item{}, Warnings: []string{}})
+			HostPaths: paths, Volumes: []Item{}, Images: []Item{}, Warnings: []string{}})
 	}))
 	mux.HandleFunc("POST /api/migration/start", auth(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -270,6 +275,31 @@ func TestConnectSelectsNonSystemPaths(t *testing.T) {
 	}
 	if p.Phase != PhaseConnected || !slices.Equal(p.Selected, []string{"/srv/up"}) || p.Info == nil {
 		t.Fatalf("progress = %+v", p)
+	}
+}
+
+func TestConnectJudgesSystemPathsItself(t *testing.T) {
+	f := newTargetFixture(t)
+	f.src.hostPaths = []HostPathCandidate{{Path: "/srv/up"}, {Path: "/var/lib/docker/volumes"}, {Path: "/var/lib/relist-panel/x"}}
+	p, err := f.target.Connect(context.Background(), f.src.srv.URL, "tok", "https://new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.Selected, []string{"/srv/up"}) {
+		t.Fatalf("selected = %q, want only /srv/up whatever the source flags", p.Selected)
+	}
+}
+
+func TestManifestWithAnUnselectedHostPathIsRefused(t *testing.T) {
+	f := newTargetFixture(t, Item{ID: "database", Kind: KindDatabase}, Item{ID: "host-path-x", Kind: KindHostPath, HostPath: "/etc/cron.d"})
+	f.connectAndStart(t)
+	eventuallyTrue(t, "refusal", func() bool {
+		return strings.Contains(f.target.Progress().Error, "sent /etc/cron.d, which was not selected")
+	})
+	f.restorer.mu.Lock()
+	defer f.restorer.mu.Unlock()
+	if len(f.restorer.restored) != 0 {
+		t.Fatalf("restored %v from a manifest that was refused", f.restorer.restored)
 	}
 }
 

@@ -47,6 +47,18 @@ func TestEvaluate(t *testing.T) {
 				d.Sizes["/srv|uploads"] = 0
 			},
 			want: Check{true, "/srv/uploads exists on this host and is not empty"}},
+		{name: "host path holds this panel's data", selected: []string{"/var/lib/relist-panel/x"},
+			src: func(s SourceInfo) SourceInfo {
+				s.HostPaths = append(s.HostPaths, HostPathCandidate{Path: "/var/lib/relist-panel/x"})
+				return s
+			},
+			want: Check{true, "/var/lib/relist-panel/x holds this panel's data or Docker's storage and cannot be restored here"}},
+		{name: "host path is the root", selected: []string{"/"},
+			src: func(s SourceInfo) SourceInfo {
+				s.HostPaths = append(s.HostPaths, HostPathCandidate{Path: "/"})
+				return s
+			},
+			want: Check{true, "/ holds this panel's data or Docker's storage and cannot be restored here"}},
 		{name: "host path unreadable", selected: []string{"/srv/uploads"},
 			local: func(_ *LocalHost, d *FakeDocker, _ *sql.DB) { d.Fail["probe"] = errors.New("docker is down") },
 			want:  Check{true, "Could not check /srv/uploads on this host: docker is down"}},

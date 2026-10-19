@@ -232,8 +232,8 @@ func (d *MigrationDocker) Pack(ctx context.Context, mountSource, name string, w 
 	return err
 }
 
-func (d *MigrationDocker) Unpack(ctx context.Context, mountSource string, r io.Reader) error {
-	_, err := d.helper(ctx, mountSource, "unpack", ".", r, nil)
+func (d *MigrationDocker) Unpack(ctx context.Context, mountSource, name string, r io.Reader) error {
+	_, err := d.helper(ctx, mountSource, "unpack", name, r, nil)
 	return err
 }
 

@@ -139,6 +139,13 @@ func fileMode(mode int64) fs.FileMode {
 // verbatim. Hardlinks, devices and FIFOs are refused. Every refusal wraps
 // ErrUnsafeArchive; a malformed stream wraps ErrInvalidArchive.
 func (fs *FS) Unpack(src io.Reader) error {
+	return fs.UnpackUnder("", src)
+}
+
+// UnpackUnder is Unpack for a stream that must hold top and nothing else:
+// every entry is top or beneath it, so a host path's stream cannot write
+// beside it in the parent directory. An empty top allows the whole root.
+func (fs *FS) UnpackUnder(top string, src io.Reader) error {
 	tr := tar.NewReader(src)
 	type dirMeta struct {
 		name string
@@ -156,6 +163,9 @@ func (fs *FS) Unpack(src io.Reader) error {
 		name, err := entryName(".", hdr)
 		if err != nil {
 			return fmt.Errorf("unpack: %w", err)
+		}
+		if top != "" && name != top && !strings.HasPrefix(name, top+"/") {
+			return fmt.Errorf("unpack: %w: entry %q is outside %q", ErrUnsafeArchive, hdr.Name, top)
 		}
 		if err := fs.refuseLinkedParent(name); err != nil {
 			return fmt.Errorf("unpack: %w", err)

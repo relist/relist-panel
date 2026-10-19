@@ -55,9 +55,10 @@ type Docker interface {
 	RemoveImage(ctx context.Context, ref string) error
 	// Helper runs out of the panel's image. mountSource is a volume name or
 	// an absolute host path, mounted at /data; Pack, Size and Free mount it
-	// read-only, and name is relative to it.
+	// read-only, and name is relative to it. Unpack writes only name and
+	// what is beneath it; name "." is the whole mount.
 	Pack(ctx context.Context, mountSource, name string, w io.Writer) error
-	Unpack(ctx context.Context, mountSource string, r io.Reader) error
+	Unpack(ctx context.Context, mountSource, name string, r io.Reader) error
 	Delete(ctx context.Context, mountSource, name string) error
 	Size(ctx context.Context, mountSource, name string) (int64, error)
 	Probe(ctx context.Context, mountSource, name string) (PathState, error)

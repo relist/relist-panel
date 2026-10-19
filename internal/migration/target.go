@@ -191,7 +191,8 @@ func (t *Target) Connect(ctx context.Context, sourceURL, token, selfURL string) 
 	}
 	selected := []string{}
 	for _, p := range info.HostPaths {
-		if !p.System {
+		// The source's flag is advice: this host judges its own paths.
+		if !p.System && !IsSystemPath(p.Path, t.d.Local.DataDir) {
 			selected = append(selected, p.Path)
 		}
 	}
@@ -331,6 +332,12 @@ func (t *Target) waitManifest(ctx context.Context) error {
 			lastErr = "Waiting for the source: " + err.Error()
 		}
 		t.mu.Lock()
+		if m != nil {
+			if err := checkHostPaths(*m, t.st.Selected); err != nil {
+				t.mu.Unlock()
+				return err
+			}
+		}
 		if step == "" {
 			step = t.st.LockStep
 		}
@@ -354,6 +361,17 @@ func (t *Target) waitManifest(ctx context.Context) error {
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// checkHostPaths refuses a manifest carrying a host path the operator did
+// not select: the new host writes only what it was asked to.
+func checkHostPaths(m Manifest, selected []string) error {
+	for _, it := range m.Items {
+		if it.Kind == KindHostPath && !slices.Contains(selected, it.HostPath) {
+			return fmt.Errorf("the source sent %s, which was not selected; abort this migration", it.HostPath)
+		}
+	}
+	return nil
 }
 
 // pull restores one item with retries. It reports false when the Migration

@@ -31,6 +31,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"relist-panel/internal/volfs"
 	"relist-panel/internal/volumes"
@@ -53,7 +54,7 @@ const usage = `usage:
   relist-volhelper archive --format tar.gz -- <path>
   relist-volhelper extract -- <path>
   relist-volhelper pack    -- <path>
-  relist-volhelper unpack  -- .
+  relist-volhelper unpack  -- . | <name>
   relist-volhelper size    -- <path>
   relist-volhelper free    -- .
   relist-volhelper probe   -- <path>
@@ -153,7 +154,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, rootDir strin
 	case "pack":
 		return failOn(stderr, vol.Pack(cmd.name, stdout))
 	case "unpack":
-		if err := vol.Unpack(stdin); err != nil {
+		top := cmd.name
+		if top == "." {
+			top = ""
+		}
+		if err := vol.UnpackUnder(top, stdin); err != nil {
 			if errors.Is(err, volfs.ErrUnsafeArchive) || errors.Is(err, volfs.ErrInvalidArchive) {
 				fmt.Fprintf(stderr, "relist-volhelper: %v\n", err)
 				return exitArchiveRefused
@@ -209,10 +214,16 @@ func parse(args []string) (command, error) {
 	switch cmd.op {
 	case "list", "stat", "read", "delete", "extract", "mkdir", "create", "pack", "size", "probe":
 		// No extra flags: the path follows immediately after `--`.
-	case "unpack", "free":
-		// Whole-Volume operations: the path must be the root.
+	case "free":
+		// A whole-Volume operation: the path must be the root.
 		if len(rest) == 2 && rest[0] == "--" && rest[1] != "." {
 			return command{}, fmt.Errorf("%s takes `-- .`", cmd.op)
+		}
+	case "unpack":
+		// The root, or one name directly in it that every entry must be
+		// or be beneath: a host path's stream.
+		if len(rest) == 2 && rest[0] == "--" && (rest[1] == ".." || rest[1] == "" || strings.ContainsAny(rest[1], `/\`)) {
+			return command{}, errors.New("unpack takes `-- .` or `-- <name>`")
 		}
 		// No extra flags: the path follows immediately after `--`.
 	case "write":

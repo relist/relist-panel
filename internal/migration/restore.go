@@ -59,11 +59,12 @@ func (r *restorer) Restore(ctx context.Context, item Item, body io.Reader) error
 		if err := r.local.Docker.CreateVolume(ctx, *item.Volume); err != nil {
 			return fmt.Errorf("create volume %s: %w", item.Volume.Name, err)
 		}
-		return r.local.Docker.Unpack(ctx, item.Volume.Name, body)
+		return r.local.Docker.Unpack(ctx, item.Volume.Name, ".", body)
 	case KindHostPath:
-		// Docker creates a missing bind source directory; the stream's one
-		// top entry is the path's base name.
-		return r.local.Docker.Unpack(ctx, filepath.Dir(item.HostPath), body)
+		// Docker creates a missing bind source directory. The stream's one
+		// top entry is the path's base name, and the helper refuses any
+		// entry beside it.
+		return r.local.Docker.Unpack(ctx, filepath.Dir(item.HostPath), filepath.Base(item.HostPath), body)
 	case KindImage:
 		return errors.New("images are restored with RestoreImage")
 	}

@@ -241,14 +241,14 @@ func (f *FakeDocker) Pack(_ context.Context, mountSource, name string, w io.Writ
 	return err
 }
 
-func (f *FakeDocker) Unpack(_ context.Context, mountSource string, r io.Reader) error {
+func (f *FakeDocker) Unpack(_ context.Context, mountSource, name string, r io.Reader) error {
 	body, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.call("unpack", mountSource); err != nil {
+	if err := f.call("unpack", mountSource, name); err != nil {
 		return err
 	}
 	f.Unpacked[mountSource] = body

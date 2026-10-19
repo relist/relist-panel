@@ -263,3 +263,32 @@ func TestPackUnpackKeepsTheRootsModeAndOwner(t *testing.T) {
 		t.Fatalf("root owner = %d:%d, want %d:%d", gu, gg, wu, wg)
 	}
 }
+
+func TestUnpackUnderKeepsEveryEntryBeneathTop(t *testing.T) {
+	refused := map[string]*bytes.Buffer{
+		"sibling": tarOf(t, &tar.Header{Name: "uploads/", Typeflag: tar.TypeDir, Mode: 0o755},
+			&tar.Header{Name: "cron.d/x", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1}),
+		"root entry": tarOf(t, &tar.Header{Name: "./", Typeflag: tar.TypeDir, Mode: 0o777}),
+		"prefix only": tarOf(t, &tar.Header{Name: "uploads-old", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1}),
+	}
+	for name, body := range refused {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			err := openRoot(t, root).UnpackUnder("uploads", body)
+			if !errors.Is(err, ErrUnsafeArchive) {
+				t.Fatalf("UnpackUnder() error = %v, want ErrUnsafeArchive", err)
+			}
+		})
+	}
+	t.Run("beneath", func(t *testing.T) {
+		root := t.TempDir()
+		body := tarOf(t, &tar.Header{Name: "uploads/", Typeflag: tar.TypeDir, Mode: 0o755},
+			&tar.Header{Name: "uploads/a", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1})
+		if err := openRoot(t, root).UnpackUnder("uploads", body); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(root, "uploads", "a")); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

@@ -153,6 +153,13 @@ func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []s
 			block(p + " is not a host path the source mounts")
 			continue
 		}
+		// Restoring over this panel's own data or Docker's storage would
+		// break the host, whatever the source says about the path.
+		if p == "/" || p != filepath.Clean(p) || !filepath.IsAbs(p) || inside(p, local.DataDir) || inside(local.DataDir, p) ||
+			inside(p, "/var/lib/docker") || inside("/var/lib/docker", p) {
+			block(p + " holds this panel's data or Docker's storage and cannot be restored here")
+			continue
+		}
 		parent := filepath.Dir(p)
 		// A failed restore cleans the path up, so anything already there
 		// must block, and so must not knowing.
