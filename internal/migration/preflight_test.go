@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"slices"
 	"testing"
 
@@ -38,8 +39,17 @@ func TestEvaluate(t *testing.T) {
 		{name: "volume exists", local: func(_ *LocalHost, d *FakeDocker, _ *sql.DB) { d.Volumes["pg"] = VolumeInfo{Name: "pg"} },
 			want: Check{true, "Volume pg already exists on this host"}},
 		{name: "host path busy", selected: []string{"/srv/uploads"},
-			local: func(_ *LocalHost, d *FakeDocker, _ *sql.DB) { d.Sizes["/srv|uploads"] = 7 },
+			local: func(_ *LocalHost, d *FakeDocker, _ *sql.DB) { d.Paths["/srv|uploads"] = PathOccupied },
 			want:  Check{true, "/srv/uploads exists on this host and is not empty"}},
+		{name: "host path holds only empty files", selected: []string{"/srv/uploads"},
+			local: func(_ *LocalHost, d *FakeDocker, _ *sql.DB) {
+				d.Paths["/srv|uploads"] = PathOccupied
+				d.Sizes["/srv|uploads"] = 0
+			},
+			want: Check{true, "/srv/uploads exists on this host and is not empty"}},
+		{name: "host path unreadable", selected: []string{"/srv/uploads"},
+			local: func(_ *LocalHost, d *FakeDocker, _ *sql.DB) { d.Fail["probe"] = errors.New("docker is down") },
+			want:  Check{true, "Could not check /srv/uploads on this host: docker is down"}},
 		{name: "data dir space", local: func(l *LocalHost, _ *FakeDocker, _ *sql.DB) {
 			l.FreeBytes = func(string) (int64, error) { return 10, nil }
 		}, want: Check{true, "Not enough free space in /var/lib/relist-panel: need 66 B, have 10 B"}},

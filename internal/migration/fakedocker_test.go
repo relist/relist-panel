@@ -26,6 +26,7 @@ type FakeDocker struct {
 	Unpacked map[string][]byte // mountSource -> bytes Unpack received
 	Sizes    map[string]int64  // "mountSource|name" -> Size answer
 	FreeB    map[string]int64  // mountSource -> Free answer
+	Paths    map[string]PathState // "mountSource|name" -> Probe answer; missing when absent
 
 	Images   map[string]ImageInfo // tag or ID -> image
 	Pullable map[string]ImageInfo // "repo@sha256:..." -> image a pull installs
@@ -45,7 +46,7 @@ type FakeDocker struct {
 func NewFakeDocker() *FakeDocker {
 	return &FakeDocker{
 		Volumes: map[string]VolumeInfo{}, Blobs: map[string][]byte{}, Unpacked: map[string][]byte{},
-		Sizes: map[string]int64{}, FreeB: map[string]int64{}, Images: map[string]ImageInfo{},
+		Sizes: map[string]int64{}, Paths: map[string]PathState{}, FreeB: map[string]int64{}, Images: map[string]ImageInfo{},
 		Pullable: map[string]ImageInfo{}, Loadable: map[string]ImageInfo{}, Running: map[string]bool{},
 		ContainerImages: map[string][]string{}, TraefikUp: true, RootDir: "/var/lib/docker", Fail: map[string]error{},
 	}
@@ -265,6 +266,15 @@ func (f *FakeDocker) Size(_ context.Context, mountSource, name string) (int64, e
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.Sizes[mountSource+"|"+name], f.call("size", mountSource, name)
+}
+
+func (f *FakeDocker) Probe(_ context.Context, mountSource, name string) (PathState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.call("probe", mountSource, name); err != nil {
+		return PathMissing, err
+	}
+	return f.Paths[mountSource+"|"+name], nil
 }
 
 func (f *FakeDocker) Free(_ context.Context, mountSource string) (int64, error) {

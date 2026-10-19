@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"relist-panel/internal/composes"
+	"relist-panel/internal/migration"
 )
 
 // recorder captures every argv a MigrationDocker runs and answers with canned
@@ -119,5 +120,22 @@ func TestParseLoaded(t *testing.T) {
 	got := parseLoaded("Loaded image: relist-c7-api:latest\nLoaded image ID: sha256:abc\n")
 	if !reflect.DeepEqual(got, []string{"relist-c7-api:latest", "sha256:abc"}) {
 		t.Fatalf("parseLoaded() = %q", got)
+	}
+}
+
+func TestProbeRunsReadOnlyAndParsesTheAnswer(t *testing.T) {
+	for answer, want := range map[string]migration.PathState{
+		`{"exists":false,"empty":false}`: migration.PathMissing,
+		`{"exists":true,"empty":true}`:   migration.PathEmpty,
+		`{"exists":true,"empty":false}`:  migration.PathOccupied,
+	} {
+		argv := []string{"docker", "run", "--rm", "-i", "--log-driver", "none", "--network", "none", "--user", "0:0", "--read-only", "--tmpfs", "/tmp",
+			"--cap-drop", "ALL", "--cap-add", "DAC_READ_SEARCH", "--security-opt", "no-new-privileges",
+			"-v", "/srv:/data:ro", "--entrypoint", helperEntrypoint, testImage, "probe", "--", "uploads"}
+		r := &recorder{answers: map[string]string{strings.Join(argv, " "): answer}}
+		got, err := newTestMigrationDocker(r).Probe(context.Background(), "/srv", "uploads")
+		if err != nil || got != want {
+			t.Fatalf("Probe for %s = %v, %v; want %v", answer, got, err, want)
+		}
 	}
 }

@@ -24,6 +24,16 @@ type ImageInfo struct {
 	Size        int64    `json:"size"`
 }
 
+// PathState is what is at a host path: nothing, an empty directory, or
+// anything holding data, an empty file included.
+type PathState int
+
+const (
+	PathMissing PathState = iota
+	PathEmpty
+	PathOccupied
+)
+
 // Docker is every Docker operation a Migration needs, on either host. It is
 // implemented for real in dockerexec and faked in tests.
 type Docker interface {
@@ -50,6 +60,7 @@ type Docker interface {
 	Unpack(ctx context.Context, mountSource string, r io.Reader) error
 	Delete(ctx context.Context, mountSource, name string) error
 	Size(ctx context.Context, mountSource, name string) (int64, error)
+	Probe(ctx context.Context, mountSource, name string) (PathState, error)
 	Free(ctx context.Context, mountSource string) (int64, error)
 	DockerRootDir(ctx context.Context) (string, error)
 	// RunMaintenance replaces any running maintenance container with one

@@ -56,12 +56,14 @@ const usage = `usage:
   relist-volhelper unpack  -- .
   relist-volhelper size    -- <path>
   relist-volhelper free    -- .
+  relist-volhelper probe   -- <path>
 <path> is relative to the Volume root mounted at /data.
 --expect is a write's declared size in bytes, checked against the Volume's free space before stdin is read.
 mkdir creates one directory; create creates one empty file. Neither replaces an existing entry.
 extract consumes a tar.gz on stdin and writes it into the existing directory <path>.
 pack and unpack move a whole Volume for a server migration: an uncompressed tar that keeps
 owners and modes, with no size cap. size and free answer {"bytes":N}.
+probe answers {"exists":B,"empty":B}: empty only for a directory with no entries.
 `
 
 // The helper's exit codes: 0 for success, 1 when an operation failed and 2
@@ -165,6 +167,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, rootDir strin
 			return fail(stderr, err)
 		}
 		return writeBytes(stdout, stderr, int64(n))
+	case "probe":
+		return runProbe(stdout, stderr, vol, cmd.name)
 	case "free":
 		n, err := freeSpace(vol)
 		if err != nil {
@@ -203,7 +207,7 @@ func parse(args []string) (command, error) {
 	rest := args[1:]
 
 	switch cmd.op {
-	case "list", "stat", "read", "delete", "extract", "mkdir", "create", "pack", "size":
+	case "list", "stat", "read", "delete", "extract", "mkdir", "create", "pack", "size", "probe":
 		// No extra flags: the path follows immediately after `--`.
 	case "unpack", "free":
 		// Whole-Volume operations: the path must be the root.
@@ -338,6 +342,35 @@ func runNewEntry(stderr io.Writer, err error) int {
 		return exitExists
 	}
 	return failOn(stderr, err)
+}
+
+// runProbe tells a missing path from an empty directory and from anything
+// holding data, a file of zero bytes included, so a Migration never takes
+// an occupied path for a free one.
+func runProbe(stdout, stderr io.Writer, vol *volfs.FS, name string) int {
+	var answer struct {
+		Exists bool `json:"exists"`
+		Empty  bool `json:"empty"`
+	}
+	entry, err := vol.Stat(name)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return fail(stderr, err)
+	default:
+		answer.Exists = true
+		if entry.Kind == volfs.KindDir {
+			children, err := vol.List(name)
+			if err != nil {
+				return fail(stderr, err)
+			}
+			answer.Empty = len(children) == 0
+		}
+	}
+	if err := json.NewEncoder(stdout).Encode(answer); err != nil {
+		return fail(stderr, fmt.Errorf("write probe: %w", err))
+	}
+	return exitOK
 }
 
 // writeBytes answers size and free with {"bytes":N}.

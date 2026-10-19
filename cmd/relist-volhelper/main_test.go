@@ -948,3 +948,29 @@ func TestRunPackUnpackSizeFree(t *testing.T) {
 		t.Fatalf("unpack into a subpath exit = %d, want %d", code, exitUsage)
 	}
 }
+
+func TestProbeTellsMissingEmptyAndOccupiedApart(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"empty", "zeros"} {
+		if err := os.Mkdir(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "zeros", "z"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "file"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"missing": `{"exists":false,"empty":false}`,
+		"empty":   `{"exists":true,"empty":true}`,
+		"zeros":   `{"exists":true,"empty":false}`,
+		"file":    `{"exists":true,"empty":false}`,
+	} {
+		code, out, stderr := runHelper(t, root, nil, "probe", "--", name)
+		if code != exitOK || strings.TrimSpace(string(out)) != want {
+			t.Errorf("probe %s = %d %q %q, want %s", name, code, out, stderr, want)
+		}
+	}
+}

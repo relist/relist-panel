@@ -154,7 +154,11 @@ func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []s
 			continue
 		}
 		parent := filepath.Dir(p)
-		if size, err := local.Docker.Size(ctx, parent, filepath.Base(p)); err == nil && size > 0 {
+		// A failed restore cleans the path up, so anything already there
+		// must block, and so must not knowing.
+		if state, err := local.Docker.Probe(ctx, parent, filepath.Base(p)); err != nil {
+			block("Could not check " + p + " on this host: " + err.Error())
+		} else if state == PathOccupied {
 			block(p + " exists on this host and is not empty")
 		}
 		if _, ok := parentNeed[parent]; !ok {

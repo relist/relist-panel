@@ -260,6 +260,27 @@ func (d *MigrationDocker) Size(ctx context.Context, mountSource, name string) (i
 	return d.bytesOf(ctx, mountSource, "size", name)
 }
 
+func (d *MigrationDocker) Probe(ctx context.Context, mountSource, name string) (migration.PathState, error) {
+	out, err := d.helper(ctx, mountSource, "probe", name, nil, nil)
+	if err != nil {
+		return migration.PathMissing, err
+	}
+	var answer struct {
+		Exists bool `json:"exists"`
+		Empty  bool `json:"empty"`
+	}
+	if err := json.Unmarshal([]byte(out), &answer); err != nil {
+		return migration.PathMissing, fmt.Errorf("parse helper probe: %w", err)
+	}
+	switch {
+	case !answer.Exists:
+		return migration.PathMissing, nil
+	case answer.Empty:
+		return migration.PathEmpty, nil
+	}
+	return migration.PathOccupied, nil
+}
+
 func (d *MigrationDocker) Free(ctx context.Context, mountSource string) (int64, error) {
 	return d.bytesOf(ctx, mountSource, "free", ".")
 }
