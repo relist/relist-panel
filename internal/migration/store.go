@@ -199,7 +199,8 @@ func (s *Store) VerifySession(ctx context.Context, sessionKey string) error {
 }
 
 // TokenStatus reports the live token's expiry, nil when there is none, and
-// who claimed it.
+// who claimed it. An unclaimed token past its expiry can no longer be used,
+// so it is no token; a claimed one stays, because its session outlives it.
 func (s *Store) TokenStatus(ctx context.Context) (*time.Time, string, error) {
 	var expiresAt int64
 	var claimedBy sql.NullString
@@ -209,6 +210,9 @@ func (s *Store) TokenStatus(ctx context.Context) (*time.Time, string, error) {
 	}
 	if err != nil {
 		return nil, "", err
+	}
+	if !claimedBy.Valid && s.now().UTC().Unix() >= expiresAt {
+		return nil, "", nil
 	}
 	t := time.Unix(expiresAt, 0).UTC()
 	return &t, claimedBy.String, nil

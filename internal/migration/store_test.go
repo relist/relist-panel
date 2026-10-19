@@ -81,6 +81,26 @@ func TestTokenExpires(t *testing.T) {
 	}
 }
 
+func TestTokenStatusHidesAnExpiredUnclaimedToken(t *testing.T) {
+	s, c, _ := newTestStore(t)
+	ctx := context.Background()
+	s.CreateToken(ctx, time.Hour)
+	c.advance(time.Hour)
+	if expires, _, err := s.TokenStatus(ctx); err != nil || expires != nil {
+		t.Fatalf("TokenStatus after expiry = %v, %v; want no token", expires, err)
+	}
+
+	// A claimed session outlives the token's expiry: a long copy keeps it.
+	token, _, _ := s.CreateToken(ctx, time.Hour)
+	if _, err := s.Claim(ctx, token, "https://new"); err != nil {
+		t.Fatal(err)
+	}
+	c.advance(2 * time.Hour)
+	if expires, claimedBy, _ := s.TokenStatus(ctx); expires == nil || claimedBy != "https://new" {
+		t.Fatalf("TokenStatus of a claimed token = %v, %q", expires, claimedBy)
+	}
+}
+
 func TestClaimIsSingleUse(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	ctx := context.Background()
