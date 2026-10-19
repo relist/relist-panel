@@ -207,7 +207,8 @@ func (d *MigrationDocker) RemoveImage(ctx context.Context, ref string) error {
 
 // helper runs the Volume helper as root with only the capabilities op needs:
 // reading every file for pack, size and free; setting owners and modes for
-// unpack and delete.
+// unpack and delete, FSETID so a setgid bit survives on a directory whose
+// group root is not in.
 func (d *MigrationDocker) helper(ctx context.Context, mountSource, op, name string, stdin io.Reader, stdout io.Writer) (string, error) {
 	image, err := d.resolveImage(ctx)
 	if err != nil {
@@ -218,7 +219,7 @@ func (d *MigrationDocker) helper(ctx context.Context, mountSource, op, name stri
 	args := []string{"run", "--rm", "-i", "--log-driver", "none", "--network", "none", "--user", "0:0", "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL"}
 	mount := mountSource + ":/data"
 	if write {
-		args = append(args, "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER")
+		args = append(args, "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--cap-add", "FSETID")
 	} else {
 		args = append(args, "--cap-add", "DAC_READ_SEARCH")
 		mount += ":ro"

@@ -99,6 +99,9 @@ P=$(create /api/projects '{"name":"probe"}')
 E=$(create "/api/projects/$P/environments" '{"name":"prod"}')
 docker exec "$OLD" sh -c 'printf "FROM busybox:1.37\nCMD [\"sleep\",\"1d\"]\n" | docker build -q -t probe/local:1 - >/dev/null'
 docker exec "$OLD" sh -c 'mkdir -p /srv/probe && head -c 1048576 /dev/urandom > /srv/probe/small && truncate -s 5G /srv/probe/big'
+# A setgid directory of a group the helper's root is not in: chmod keeps the
+# bit only with CAP_FSETID.
+docker exec "$OLD" sh -c 'mkdir /srv/probe/shared && chown 0:1234 /srv/probe/shared && chmod 2775 /srv/probe/shared'
 YAML='services:\n  db:\n    image: postgres:16\n    environment:\n      POSTGRES_PASSWORD: probe\n    volumes:\n      - pgdata:/var/lib/postgresql/data\n  local:\n    image: probe/local:1\n  files:\n    image: busybox:1.37\n    command: [\"httpd\", \"-f\", \"-p\", \"80\", \"-h\", \"/data\"]\n    volumes:\n      - /srv/probe:/data\nvolumes:\n  pgdata: {}\n'
 C=$(create "/api/projects/$P/environments/$E/composes" "{\"name\":\"store\",\"yamlContent\":\"$YAML\"}")
 BASE="/api/projects/$P/environments/$E/composes/$C"
@@ -143,6 +146,8 @@ done
 ROWS=$(docker exec "$NEW" docker exec "relist-c$C-db-1" psql -tAU postgres -c 'SELECT count(*) FROM probe')
 [ "$ROWS" = 1000 ] || fail "postgres rows on the new host: $ROWS"
 [ "$(docker exec "$NEW" sh -c 'cd /srv/probe && sha256sum small big')" = "$SUM_OLD" ] || fail "/srv/probe differs"
+SHARED=$(docker exec "$NEW" stat -c '%u:%g %a' /srv/probe/shared)
+[ "$SHARED" = "0:1234 2775" ] || fail "/srv/probe/shared is $SHARED on the new host, want 0:1234 2775"
 [ "$(rootstat "$NEW")" = "$ROOT_OLD" ] || fail "the Volume root is $(rootstat "$NEW") on the new host, $ROOT_OLD on the old"
 if [ "$(docker exec "$NEW" sh -c "cat $DATA/.traefik/acme.json 2>/dev/null | sha256sum")" != "$ACME_OLD" ]; then
 	echo "old acme.json:"; echo "$ACME_OLD_TEXT"

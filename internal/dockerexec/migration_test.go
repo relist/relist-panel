@@ -53,7 +53,7 @@ func TestUnpackArgvAddsChownCaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"docker", "run", "--rm", "-i", "--log-driver", "none", "--network", "none", "--user", "0:0", "--read-only", "--tmpfs", "/tmp",
-		"--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER",
+		"--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER", "--cap-add", "FSETID",
 		"--security-opt", "no-new-privileges", "-v", "/srv:/data", "--entrypoint", helperEntrypoint, testImage, "unpack", "--", "uploads"}
 	if !reflect.DeepEqual(r.calls[0], want) {
 		t.Fatalf("argv = %q\nwant  %q", r.calls[0], want)
