@@ -19,6 +19,9 @@ JAR=probe-mig-cookies
 IMAGE=relist-panel:probe
 DATA=/var/lib/relist-panel
 CREDS='{"email":"admin@example.com","password":"correct horse battery staple"}'
+# The new host is installed with its admin in the env, the way the README
+# recommends; the migrated database replaces that admin with the old one.
+SEED='{"email":"seed@example.com","password":"seeded password 123"}'
 
 ACME_SEED='{"letsencrypt":{"Account":null,"Certificates":null},"probe-marker":{"Account":null,"Certificates":null}}'
 
@@ -84,7 +87,9 @@ services:
     command: $flags
 EOF
 	docker exec "$host" docker network create relist-network >/dev/null
-	docker exec -w /install -e RELIST_DATA_DIR="$DATA" "$host" docker compose up -d --no-build --quiet-pull >/dev/null
+	admin=()
+	[ "$host" = "$NEW" ] && admin=(-e RELIST_ADMIN_EMAIL=seed@example.com -e "RELIST_ADMIN_PASSWORD=seeded password 123")
+	docker exec -w /install -e RELIST_DATA_DIR="$DATA" "${admin[@]}" "$host" docker compose up -d --no-build --quiet-pull >/dev/null
 done
 OLD_IP=$(ip "$OLD")
 NEW_IP=$(ip "$NEW")
@@ -122,6 +127,10 @@ ACME_OLD_TEXT=$(docker exec "$OLD" cat "$DATA/.traefik/acme.json" 2>/dev/null ||
 
 say "migrating"
 TOKEN=$(api "$OLD_IP" old POST /api/migration/tokens '{"lifetime":"1h"}' | body | json 'd["token"]')
+# The env admin closes setup and the pull routes until someone signs in.
+[ "$(api "$NEW_IP" new POST /api/auth/setup "$CREDS" | code)" = 409 ] || fail "setup is still open on the new host"
+[ "$(api "$NEW_IP" new GET /api/migration/pull/progress | code)" = 401 ] || fail "the pull routes answer without a sign-in"
+[ "$(api "$NEW_IP" new POST /api/auth/login "$SEED" | code)" = 200 ] || fail "sign-in with the env admin"
 [ "$(api "$NEW_IP" new POST /api/migration/pull/connect "{\"sourceUrl\":\"http://$OLD_IP:8888\",\"token\":\"$TOKEN\"}" | code)" = 200 ] || fail "connect"
 start=$(api "$NEW_IP" new POST /api/migration/pull/start '{"hostPaths":["/srv/probe"]}')
 [ "$(echo "$start" | code)" = 202 ] || fail "start: $(echo "$start" | body)"
@@ -154,6 +163,7 @@ if [ "$(docker exec "$NEW" sh -c "cat $DATA/.traefik/acme.json 2>/dev/null | sha
 	echo "new acme.json:"; docker exec "$NEW" cat "$DATA/.traefik/acme.json" || true
 	fail "acme.json differs"
 fi
+[ "$(api "$NEW_IP" fresh POST /api/auth/login "$SEED" | code)" = 401 ] || fail "the env admin survived the migration"
 for svc in db local files; do
 	state=$(docker exec "$NEW" docker inspect -f '{{.State.Status}}' "relist-c$C-$svc-1" 2>/dev/null || true)
 	[ "$state" = running ] || fail "service $svc on the new host is $state"
