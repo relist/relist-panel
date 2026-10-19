@@ -402,14 +402,19 @@ func (s *Service) adminExists(r *http.Request) (bool, error) {
 }
 
 func (s *Service) createAdmin(r *http.Request, email, passwordHash string) error {
-	tx, err := s.db.BeginTx(r.Context(), nil)
+	return insertAdmin(r.Context(), s.db, email, passwordHash, s.now())
+}
+
+// insertAdmin adds the single admin row, or returns ErrAdminAlreadyExists.
+func insertAdmin(ctx context.Context, db *sql.DB, email, passwordHash string, now time.Time) error {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
 	var id int64
-	err = tx.QueryRowContext(r.Context(), "SELECT id FROM admin_credentials LIMIT 1").Scan(&id)
+	err = tx.QueryRowContext(ctx, "SELECT id FROM admin_credentials LIMIT 1").Scan(&id)
 	if err == nil {
 		return ErrAdminAlreadyExists
 	}
@@ -417,10 +422,10 @@ func (s *Service) createAdmin(r *http.Request, email, passwordHash string) error
 		return err
 	}
 
-	if _, err := tx.ExecContext(r.Context(), `
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO admin_credentials (id, email, password_hash, created_at)
 		VALUES (1, ?, ?, ?)
-	`, email, passwordHash, s.now().UTC().Unix()); err != nil {
+	`, email, passwordHash, now.UTC().Unix()); err != nil {
 		if isUniqueConstraint(err) {
 			return ErrAdminAlreadyExists
 		}

@@ -68,6 +68,14 @@ Override the defaults via environment variables (or a `.env` file next to
   as required, but an empty value registers an account anyway (ADR-0013). Set
   it so Let's Encrypt can reach you about expiring certificates and so you can
   recover the account, and in case a later Traefik enforces it
+- `RELIST_ADMIN_EMAIL` and `RELIST_ADMIN_PASSWORD` (unset by default;
+  recommended) — create the admin account at boot, so the setup screen is
+  never open to whoever reaches a fresh panel first. They are used only while
+  no admin exists, and an invalid or half-set pair stops the panel from
+  starting. The password stays readable in `.env` and `docker inspect`:
+  change it in **Account** after the first sign-in, then remove both. A panel
+  with only this admin can still take a Migration; the old host's admin
+  replaces it
 - `RELIST_IMAGE` (unset by default) — the panel image that Volume file
   operations run from; set it only when the panel cannot name its own image
   (`docker inspect $(hostname)` fails, e.g. a custom `hostname:` on the panel
@@ -164,7 +172,9 @@ involved.
 2. On the old panel, open **Docker → Server migration** and create a migration
    token (1 hour, 24 hours or 7 days). It is shown once.
 3. Open the new panel. On its setup screen choose **Migrate from another
-   panel**, and enter the old panel's `https://` URL and the token.
+   panel** (with `RELIST_ADMIN_EMAIL` set, sign in and use **Docker → Server
+   migration → Migrate from another panel**), and enter the old panel's
+   `https://` URL and the token.
 4. Check the preview: sizes, which Images are pulled and which are copied,
    the host paths to include (system paths such as `/etc/localtime` and the
    Docker socket are unticked) and every warning. Start stays disabled while a

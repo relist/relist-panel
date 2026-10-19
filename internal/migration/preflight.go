@@ -130,12 +130,14 @@ func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []s
 	if filepath.Clean(src.DataDir) != filepath.Clean(local.DataDir) {
 		block("RELIST_DATA_DIR differs: set it to " + src.DataDir + " on this host")
 	}
+	// An admin alone is not data: one seeded from the env keeps the setup
+	// screen closed, and the migrated database replaces it.
 	var data int
-	if err := local.DB.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM admin_credentials) OR EXISTS (SELECT 1 FROM projects)").Scan(&data); err != nil {
+	if err := local.DB.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM projects)").Scan(&data); err != nil {
 		return nil, err
 	}
 	if data == 1 {
-		block("This panel already has data. Migrate into a freshly installed panel")
+		block("This panel already has Projects. Migrate into a freshly installed panel")
 	}
 	var dockerNeed int64
 	for _, v := range src.Volumes {

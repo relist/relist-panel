@@ -1,12 +1,16 @@
 package auth
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -17,6 +21,48 @@ const (
 	AdminEmailEnv    = "RELIST_ADMIN_EMAIL"
 	AdminPasswordEnv = "RELIST_ADMIN_PASSWORD"
 )
+
+// SeedAdmin creates the admin from email and password when there is none
+// yet; both empty is no seed. Invalid values are an error naming the
+// variable, never its value, so the panel never starts with setup left open
+// by mistake.
+func SeedAdmin(ctx context.Context, db *sql.DB, email, password string, now func() time.Time) (bool, error) {
+	if email == "" && password == "" {
+		return false, nil
+	}
+	if email == "" {
+		return false, fmt.Errorf("%s is set but %s is not: set both, or neither", AdminPasswordEnv, AdminEmailEnv)
+	}
+	if password == "" {
+		return false, fmt.Errorf("%s is set but %s is not: set both, or neither", AdminEmailEnv, AdminPasswordEnv)
+	}
+	normalized, err := validateEmail(email)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", AdminEmailEnv, err)
+	}
+	if err := validatePassword(password); err != nil {
+		return false, fmt.Errorf("%s: %w", AdminPasswordEnv, err)
+	}
+	var exists int
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM admin_credentials)").Scan(&exists); err != nil {
+		return false, err
+	}
+	if exists == 1 {
+		log.Printf("auth: an admin already exists, so %s and %s are ignored", AdminEmailEnv, AdminPasswordEnv)
+		return false, nil
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return false, err
+	}
+	if err := insertAdmin(ctx, db, normalized, string(hash), now()); err != nil {
+		if errors.Is(err, ErrAdminAlreadyExists) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
 
 // passwordFromEnv reports whether hash is still the password the env seeded.
 func passwordFromEnv(hash string) bool {

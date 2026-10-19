@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"relist-panel/internal/auth"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/config"
 	"relist-panel/internal/database"
@@ -77,6 +78,13 @@ func main() {
 		if err := migration.ClearCopiedState(ctx, db, time.Now()); err != nil {
 			log.Fatal(err)
 		}
+	}
+
+	// An admin from the install's .env closes the setup screen before the
+	// panel listens, so nobody else can claim a fresh install. After a
+	// migration the old host's admin exists and the env is ignored.
+	if _, err := auth.SeedAdmin(ctx, db, os.Getenv(auth.AdminEmailEnv), os.Getenv(auth.AdminPasswordEnv), time.Now); err != nil {
+		log.Fatal(err)
 	}
 
 	// Rows created before identity was stored (ADR-0005) must be frozen to

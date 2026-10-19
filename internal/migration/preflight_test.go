@@ -36,7 +36,7 @@ func TestEvaluate(t *testing.T) {
 			want: Check{true, "RELIST_DATA_DIR differs: set it to /srv/relist on this host"}},
 		{name: "not empty", local: func(_ *LocalHost, _ *FakeDocker, db *sql.DB) {
 			db.Exec(`INSERT INTO projects (name, created_at, updated_at) VALUES ('p', 1, 1)`)
-		}, want: Check{true, "This panel already has data. Migrate into a freshly installed panel"}},
+		}, want: Check{true, "This panel already has Projects. Migrate into a freshly installed panel"}},
 		{name: "volume exists", local: func(_ *LocalHost, d *FakeDocker, _ *sql.DB) { d.Volumes["pg"] = VolumeInfo{Name: "pg"} },
 			want: Check{true, "Volume pg already exists on this host"}},
 		{name: "host path busy", selected: []string{"/srv/uploads"},
@@ -113,6 +113,24 @@ func TestEvaluate(t *testing.T) {
 		for _, c := range checks {
 			if strings.Contains(c.Message, "restart policy") {
 				t.Fatalf("an unknown policy was reported: %q", c.Message)
+			}
+		}
+	})
+
+	t.Run("an admin seeded from the env is not data", func(t *testing.T) {
+		db := openDB(t)
+		if _, err := db.Exec(`INSERT INTO admin_credentials (id, email, password_hash, created_at) VALUES (1, 'a@example.com', 'x', 1)`); err != nil {
+			t.Fatal(err)
+		}
+		local := LocalHost{DB: db, Docker: NewFakeDocker(), DataDir: "/var/lib/relist-panel",
+			Install: config.InstallSettings{Domain: "panel.example.com"}, FreeBytes: func(string) (int64, error) { return 1 << 40, nil }}
+		checks, err := Evaluate(context.Background(), local, base(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range checks {
+			if c.Blocking {
+				t.Fatalf("an admin-only panel was blocked: %q", c.Message)
 			}
 		}
 	})
