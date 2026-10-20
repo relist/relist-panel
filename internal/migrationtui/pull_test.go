@@ -129,6 +129,8 @@ func key(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyDown}
 	case "ctrl+c":
 		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+	case "ctrl+u":
+		return tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}
 	}
 	r := []rune(s)[0]
 	return tea.KeyPressMsg{Code: r, Text: s}
@@ -142,7 +144,7 @@ func send(t *testing.T, m tea.Model, msg tea.Msg) tea.Model {
 	m, cmd := m.Update(msg)
 	for _, out := range runCmd(cmd) {
 		switch out.(type) {
-		case ActionDoneMsg, ProgressMsg:
+		case ActionDoneMsg, ProgressMsg, tokenMsg, statusMsg, resumeDoneMsg:
 			m, _ = m.Update(out)
 		}
 	}
