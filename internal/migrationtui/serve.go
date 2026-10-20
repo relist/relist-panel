@@ -307,7 +307,7 @@ func sourceLines(s migration.SourceStatus, a migration.Activity) []string {
 		}
 	}
 	out = append(out, "")
-	if line := activityLine(a); line != "" && (s.Step == migration.StepReady || s.Step == migration.StepMigrated) {
+	if line := ActivityLine(a); line != "" && (s.Step == migration.StepReady || s.Step == migration.StepMigrated) {
 		out = append(out, line)
 	}
 	if s.Step == migration.StepMigrated {
@@ -320,8 +320,8 @@ func sourceLines(s migration.SourceStatus, a migration.Activity) []string {
 	return out
 }
 
-// activityLine says what the old host is sending.
-func activityLine(a migration.Activity) string {
+// ActivityLine says what the old host is sending.
+func ActivityLine(a migration.Activity) string {
 	sent := fmt.Sprintf("%d items sent", a.Done)
 	if a.Done == 1 {
 		sent = "1 item sent"

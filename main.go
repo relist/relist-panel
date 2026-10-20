@@ -23,6 +23,7 @@ import (
 	"relist-panel/internal/httpapi"
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/migration"
+	"relist-panel/internal/migrationcli"
 	"relist-panel/internal/terminal"
 	"relist-panel/internal/volumes"
 )
@@ -30,6 +31,11 @@ import (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "reset-2fa" {
 		os.Exit(runResetTwoFactor(os.Args[2:], os.Stdout, os.Stderr))
+	}
+	// Drive a server migration from a terminal in the panel container,
+	// through the running panel's control socket (ADR-0019).
+	if len(os.Args) > 1 && os.Args[1] == "migration" {
+		os.Exit(migrationcli.Run(os.Args[2:], migrationcli.DefaultEnv()))
 	}
 	// The maintenance container a server migration runs from this image
 	// (ADR-0018): it only answers 503 with the maintenance page.
