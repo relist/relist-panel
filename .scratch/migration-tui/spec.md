@@ -294,3 +294,16 @@ docker exec -it sandbox-new docker exec -it install-panel-1 relist-panel migrati
 3. **`resume` from the lock page.** Phase 2 makes Resume terminal-only. Resume does not move data
    out, so it is not part of the stolen-session problem. Keeping the web button is possible, at
    the cost of one more admin route. Recommendation: terminal-only, for one way to do it.
+
+## Probe record
+
+- **2026-10-20**, Docker 29.8.0 on the host, two `docker:27-dind` hosts, `task probe:migration`:
+  `probe: migration ok`. The new host was driven over the control socket with
+  `relist-panel migration api`. The panel container's `StartedAt` and restart count were the same
+  before `start` and after `done`, so finalize re-executed the panel in place. A
+  `relist-panel migration status --watch` started with `docker exec` before `start` followed it
+  to its final `done` line. Its 2 s interval did not land in the re-execute itself, which was
+  shorter than that. No descriptor of PID 1 pointed at a deleted file. The rows, files and
+  `acme.json` matched as before.
+- The first run that day failed to build the image: the Dockerfile copied only `main.go` and
+  `cli.go`, not the new `restart.go` and `control.go`. It now copies every root `.go` file.

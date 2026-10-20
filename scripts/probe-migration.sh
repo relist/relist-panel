@@ -131,21 +131,38 @@ TOKEN=$(api "$OLD_IP" old POST /api/migration/tokens '{"lifetime":"1h"}' | body 
 [ "$(api "$NEW_IP" new POST /api/auth/setup "$CREDS" | code)" = 409 ] || fail "setup is still open on the new host"
 [ "$(api "$NEW_IP" new GET /api/migration/pull/progress | code)" = 401 ] || fail "the pull routes answer without a sign-in"
 [ "$(api "$NEW_IP" new POST /api/auth/login "$SEED" | code)" = 200 ] || fail "sign-in with the env admin"
-[ "$(api "$NEW_IP" new POST /api/migration/pull/connect "{\"sourceUrl\":\"http://$OLD_IP:8888\",\"token\":\"$TOKEN\"}" | code)" = 200 ] || fail "connect"
-start=$(api "$NEW_IP" new POST /api/migration/pull/start '{"hostPaths":["/srv/probe"]}')
-[ "$(echo "$start" | code)" = 202 ] || fail "start: $(echo "$start" | body)"
+# The pull is driven over the control socket inside the panel container, the
+# way relist-panel migration pull does it (ADR-0019).
+ctl() { docker exec "$NEW" docker exec install-panel-1 relist-panel migration api "$@"; }
+out=$(ctl POST /api/migration/pull/connect "{\"sourceUrl\":\"http://$OLD_IP:8888\",\"token\":\"$TOKEN\",\"selfUrl\":\"http://$NEW_IP:8888\"}") || fail "connect: $out"
+# Finalize must re-execute the panel in place: same container, nothing
+# restarted, so a status --watch started before it follows it to the end.
+before=$(docker exec "$NEW" docker inspect -f '{{.State.StartedAt}} {{.RestartCount}}' install-panel-1)
+docker exec "$NEW" docker exec -d install-panel-1 sh -c 'relist-panel migration status --watch > /tmp/watch.log 2>&1'
+out=$(ctl POST /api/migration/pull/start '{"hostPaths":["/srv/probe"]}') || fail "start: $out"
 phase=""
 for _ in $(seq 900); do
-	out=$(api "$NEW_IP" new GET /api/migration/pull/progress 2>/dev/null || true)
-	case "$(echo "$out" | code)" in
-	200) phase=$(echo "$out" | body | json 'd["phase"]') ;;
-	401) api "$NEW_IP" new POST /api/auth/login "$CREDS" >/dev/null ;;
-	esac
+	# Empty while the panel re-executes: the socket is briefly gone.
+	out=$(ctl GET /api/migration/pull/progress 2>/dev/null || true)
+	[ -n "$out" ] && phase=$(echo "$out" | json 'd["phase"]')
 	[ "$phase" = done ] && break
-	[ "$phase" = paused ] && fail "paused: $(echo "$out" | body)"
+	[ "$phase" = paused ] && fail "paused: $out"
 	sleep 2
 done
 [ "$phase" = done ] || fail "the migration did not finish (last phase: $phase)"
+after=$(docker exec "$NEW" docker inspect -f '{{.State.StartedAt}} {{.RestartCount}}' install-panel-1)
+[ "$after" = "$before" ] || fail "the panel container restarted at finalize: $before, then $after"
+for _ in $(seq 15); do
+	tail -n1 <(docker exec "$NEW" docker exec install-panel-1 cat /tmp/watch.log) | grep -q 'done' && break
+	sleep 1
+done
+WATCH=$(docker exec "$NEW" docker exec install-panel-1 cat /tmp/watch.log)
+echo "$WATCH" | tail -n1 | grep -q 'done' || { echo "$WATCH"; fail "status --watch did not follow the migration to done"; }
+grep -q 'Restarting the panel' <<<"$WATCH" && say "status --watch saw the panel re-execute" || say "status --watch did not poll during the re-execute"
+if docker exec "$NEW" docker exec install-panel-1 ls -l /proc/1/fd | grep -q '(deleted)'; then
+	docker exec "$NEW" docker exec install-panel-1 ls -l /proc/1/fd
+	fail "the re-executed panel holds a deleted file open"
+fi
 
 say "checking the new host"
 for _ in $(seq 120); do
