@@ -112,12 +112,18 @@ C=$(create "/api/projects/$P/environments/$E/composes" "{\"name\":\"store\",\"ya
 BASE="/api/projects/$P/environments/$E/composes/$C"
 api "$OLD_IP" old POST "$BASE/domains" '{"host":"probe.localhost","service":"files","port":80}' >/dev/null
 [ "$(api "$OLD_IP" old POST "$BASE/deployments" '{"mode":"deploy"}' | code)" = 202 ] || fail "deploy on the old host"
+# pg_isready can answer from the image's temporary initdb server, which then
+# shuts down: retry the seed until the real server takes it.
+seeded=""
 for _ in $(seq 120); do
-	docker exec "$OLD" sh -c "docker exec relist-c$C-db-1 pg_isready -U postgres" >/dev/null 2>&1 && break
+	if docker exec "$OLD" docker exec "relist-c$C-db-1" psql -qU postgres -c \
+		'CREATE TABLE probe (n int); INSERT INTO probe SELECT generate_series(1, 1000);' >/dev/null 2>&1; then
+		seeded=1
+		break
+	fi
 	sleep 2
 done
-docker exec "$OLD" docker exec "relist-c$C-db-1" psql -qU postgres -c \
-	'CREATE TABLE probe (n int); INSERT INTO probe SELECT generate_series(1, 1000);' >/dev/null
+[ -n "$seeded" ] || fail "could not seed postgres on the old host"
 SUM_OLD=$(docker exec "$OLD" sh -c 'cd /srv/probe && sha256sum small big')
 # The Volume's root itself: owner and mode must survive, not only its files.
 rootstat() { docker exec "$1" docker run --rm -v "relist-c${C}_pgdata:/v" busybox:1.37 stat -c '%u:%g %a' /v; }
