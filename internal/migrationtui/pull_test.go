@@ -522,3 +522,16 @@ func TestPullPreviewKeepsTheCursorVisibleUnderMultiLineChecks(t *testing.T) {
 	}
 	mustContain(t, m, "> [ ] /srv/p19")
 }
+
+func TestPullRetriesPreflightWithTheStoredSelfURL(t *testing.T) {
+	c := &fakeController{}
+	p := connected()
+	p.Info, p.Error, p.SelfURL = nil, "source busy", "http://10.0.0.2:8888"
+	m := NewPull(c, "") // a re-run without RELIST_DOMAIN
+	m, _ = m.Update(ProgressMsg{P: p})
+	mustContain(t, m, "source busy")
+	m = send(t, m, key("r"))
+	if len(c.connected) != 1 || !slices.Equal(c.connected[0], []string{"https://old.example.com", "", "http://10.0.0.2:8888"}) {
+		t.Fatalf("retry connect = %q, want the stored selfUrl", c.connected)
+	}
+}

@@ -69,16 +69,19 @@ type ItemProgress struct {
 }
 
 type Progress struct {
-	Phase     Phase          `json:"phase"`
-	SourceURL string         `json:"sourceUrl"`
-	LockStep  Step           `json:"lockStep"`
-	Selected  []string       `json:"selected"`
-	Items     []ItemProgress `json:"items"`
-	Checks    []Check        `json:"checks"`
-	Info      *SourceInfo    `json:"info"`
-	Warnings  []string       `json:"warnings"`
-	Error     string         `json:"error,omitempty"`
-	Summary   *Summary       `json:"summary,omitempty"`
+	Phase     Phase  `json:"phase"`
+	SourceURL string `json:"sourceUrl"`
+	// SelfURL is this panel's own URL as given at connect, so a retried
+	// preflight on the same session keeps it.
+	SelfURL  string         `json:"selfUrl,omitempty"`
+	LockStep Step           `json:"lockStep"`
+	Selected []string       `json:"selected"`
+	Items    []ItemProgress `json:"items"`
+	Checks   []Check        `json:"checks"`
+	Info     *SourceInfo    `json:"info"`
+	Warnings []string       `json:"warnings"`
+	Error    string         `json:"error,omitempty"`
+	Summary  *Summary       `json:"summary,omitempty"`
 	// Log is the activity log, oldest first; FinalizeStep is where
 	// finalize is while finalizing.
 	Log          []LogEntry   `json:"log"`
@@ -722,7 +725,7 @@ func (t *Target) Progress() Progress {
 }
 
 func (t *Target) progress() Progress {
-	p := Progress{Phase: t.st.Phase, SourceURL: t.st.SourceURL, LockStep: t.st.LockStep, Selected: t.st.Selected,
+	p := Progress{Phase: t.st.Phase, SourceURL: t.st.SourceURL, SelfURL: t.st.SelfURL, LockStep: t.st.LockStep, Selected: t.st.Selected,
 		Items: []ItemProgress{}, Checks: t.st.Checks, Info: t.st.Info, Warnings: t.st.Warnings, Error: t.st.Error, Summary: t.summary}
 	if p.Checks == nil {
 		p.Checks = []Check{}

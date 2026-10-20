@@ -226,8 +226,11 @@ func (m *pullModel) act(what string) tea.Cmd {
 		source, token, self := strings.TrimSpace(m.inputs[0].Value()), strings.TrimSpace(m.inputs[1].Value()), strings.TrimSpace(m.inputs[2].Value())
 		if m.p.Phase == migration.PhaseConnected {
 			// Preflight failed after the token was claimed: retry on the
-			// same session.
+			// same session, with the URL this panel was given then.
 			source, token = m.p.SourceURL, ""
+			if m.p.SelfURL != "" {
+				self = m.p.SelfURL
+			}
 		}
 		return func() tea.Msg {
 			p, err := c.Connect(context.Background(), source, token, self)

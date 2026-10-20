@@ -662,3 +662,13 @@ func TestAbortDuringRetryLeavesAConsistentState(t *testing.T) {
 		t.Fatal("state.json came back after the abort")
 	}
 }
+
+func TestProgressReportsSelfURL(t *testing.T) {
+	f := newTargetFixture(t)
+	if _, err := f.target.Connect(context.Background(), f.src.srv.URL, "tok", "https://new.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.target.Progress().SelfURL; got != "https://new.example.com" {
+		t.Fatalf("Progress().SelfURL = %q", got)
+	}
+}
