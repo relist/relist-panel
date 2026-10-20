@@ -167,11 +167,14 @@ func newFakeSourceServer(t *testing.T, items ...Item) *fakeSourceServer {
 // recordingRestorer keeps what it restored.
 type recordingRestorer struct {
 	discardErr error
-	mu         sync.Mutex
-	restored   map[string]string
-	cleaned    []string
-	discarded  []string
-	failNext   map[string]int
+	// onDiscard runs at the start of Discard, outside the lock: a test's
+	// way into the middle of an Abort.
+	onDiscard func()
+	mu        sync.Mutex
+	restored  map[string]string
+	cleaned   []string
+	discarded []string
+	failNext  map[string]int
 }
 
 func newRecordingRestorer() *recordingRestorer {
@@ -202,6 +205,9 @@ func (r *recordingRestorer) Cleanup(_ context.Context, item Item) error {
 }
 
 func (r *recordingRestorer) Discard(_ context.Context, items []Item) error {
+	if r.onDiscard != nil {
+		r.onDiscard()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, it := range items {
@@ -638,13 +644,16 @@ func TestAbortDuringRetryLeavesAConsistentState(t *testing.T) {
 	f.restorer.failNext["volume-b"] = 6
 	f.connectAndStart(t)
 	waitPhase(t, f.target, PhasePaused)
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); f.target.Retry(context.Background()) }()
-	go func() { defer wg.Done(); f.target.Abort(context.Background()) }()
-	wg.Wait()
-	// Whichever ran last, an abort must not be undone by the retry's pull.
-	f.target.Abort(context.Background())
+	// A second driver presses Retry while Abort is removing what was
+	// restored: the page and the TUI both still show paused then.
+	var retryErr error
+	f.restorer.onDiscard = func() { retryErr = f.target.Retry(context.Background()) }
+	if err := f.target.Abort(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(retryErr, errBusy) {
+		t.Fatalf("Retry during Abort = %v, want the busy error", retryErr)
+	}
 	time.Sleep(200 * time.Millisecond)
 	if p := f.target.Progress(); p.Phase != PhaseIdle {
 		t.Fatalf("phase after abort = %q", p.Phase)

@@ -357,6 +357,11 @@ func (t *Target) run(ctx context.Context) error {
 		}
 	}
 	t.mu.Lock()
+	if t.st.Manifest == nil {
+		// Aborted under this run: there is nothing left to pull.
+		t.mu.Unlock()
+		return errors.New("the migration was aborted")
+	}
 	m := *t.st.Manifest
 	t.mu.Unlock()
 	for _, item := range m.Items {
@@ -623,7 +628,12 @@ func (t *Target) attempt(ctx context.Context, item Item, counter *atomic.Int64) 
 }
 
 // Retry continues a paused Migration, giving failed items three more tries.
+// It refuses while another action, such as an Abort, is under way.
 func (t *Target) Retry(ctx context.Context) error {
+	if !t.op.TryLock() {
+		return errBusy
+	}
+	defer t.op.Unlock()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	stalled := !t.running && (t.st.Phase == PhaseLocking || t.st.Phase == PhasePulling || t.st.Phase == PhaseFinalizing)
