@@ -2,6 +2,7 @@ package migrationtui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -555,4 +556,33 @@ func TestPullOffersRetryWhenALockOrFinalizeStepFails(t *testing.T) {
 	if strings.Contains(screen(m), "r retry") {
 		t.Fatal("retry offered while pulling without an error")
 	}
+}
+
+func TestPullTakesTheServersSelection(t *testing.T) {
+	c := &fakeController{}
+	p := connected()
+	p.Selected = []string{} // the operator unticked everything on the web
+	m := pull(c, p)
+	mustContain(t, m, "[ ] /srv/up", "[ ] /etc/localtime")
+}
+
+func TestPullClearsAPollErrorWhenPollsRecover(t *testing.T) {
+	p := connected()
+	p.Phase = migration.PhasePulling
+	m := pull(&fakeController{}, p)
+	m, _ = m.Update(ProgressMsg{Err: errors.New("the panel answered 500")})
+	mustContain(t, m, "the panel answered 500")
+	m, _ = m.Update(ProgressMsg{P: p})
+	if strings.Contains(screen(m), "the panel answered 500") {
+		t.Fatal("the poll error stayed after a good poll")
+	}
+}
+
+func TestPullKeepsAnActionErrorAcrossPolls(t *testing.T) {
+	c := &fakeController{startErr: &migrationctl.APIError{Status: 409, Message: "another action is in progress"}}
+	m := pull(c, connected())
+	m = send(t, m, key("enter"))
+	m = send(t, m, key("y"))
+	m, _ = m.Update(ProgressMsg{P: connected()})
+	mustContain(t, m, "another action is in progress")
 }

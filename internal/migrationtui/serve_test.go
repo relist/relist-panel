@@ -172,3 +172,41 @@ func TestServeFollowsAClaimBeforeStart(t *testing.T) {
 		t.Fatalf("created a token over a claimed session: %q", c.tokens)
 	}
 }
+
+func TestServeCtrlCBeforeClaimAsksToo(t *testing.T) {
+	c := &fakeController{createdTok: migrationctl.Token{Token: "tok"}}
+	m := serveWith(c, migration.SourceStatus{}, migration.Activity{})
+	m = send(t, m, key("enter"))
+	m, quit := sendAll(t, m, key("ctrl+c"))
+	if quit {
+		t.Fatal("ctrl+c quit without asking about the live token")
+	}
+	mustContain(t, m, "Revoke the token? [Y/n]")
+	if _, quit = sendAll(t, m, key("ctrl+c")); !quit || c.revoked != 0 {
+		t.Fatalf("second ctrl+c: quit=%v revoked=%d, want quit without a revoke", quit, c.revoked)
+	}
+}
+
+func TestServeQuitNote(t *testing.T) {
+	expires := time.Date(2026, 10, 21, 9, 30, 0, 0, time.UTC)
+	c := &fakeController{createdTok: migrationctl.Token{Token: "tok", ExpiresAt: expires}}
+	m := serveWith(c, migration.SourceStatus{}, migration.Activity{})
+	if note := QuitNote(m); note != "" {
+		t.Fatalf("note before a token = %q", note)
+	}
+	m = send(t, m, key("enter"))
+	if note := QuitNote(m); !strings.Contains(note, "live until "+expires.Local().Format("2006-01-02 15:04")) {
+		t.Fatalf("note with a live token = %q", note)
+	}
+	m, _ = m.Update(statusMsg{S: migration.SourceStatus{Step: migration.StepReady, ClaimedBy: "x"}})
+	if note := QuitNote(m); !strings.Contains(note, "relist-panel migration serve") {
+		t.Fatalf("note under way = %q", note)
+	}
+}
+
+func TestServeResumeDoesNotStartASecondPoll(t *testing.T) {
+	m := serveWith(&fakeController{}, migration.SourceStatus{Step: migration.StepReady, ClaimedBy: "x"}, migration.Activity{})
+	if _, cmd := m.Update(resumeDoneMsg{}); cmd != nil {
+		t.Fatal("a resume started another status poll; the running one picks the change up")
+	}
+}

@@ -131,7 +131,8 @@ func (m *serveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.warning != "" {
 			m.notice += " " + msg.warning
 		}
-		return m, fetchStatus(m.c)
+		// The running poll picks the resumed state up.
+		return m, nil
 	case tea.KeyPressMsg:
 		return m.onKey(msg)
 	}
@@ -144,6 +145,12 @@ func (m *serveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *serveModel) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	k := msg.String()
 	if k == "ctrl+c" {
+		// Ctrl-C asks about a live token like q does; a second one quits
+		// without revoking it.
+		if m.unclaimed() && !m.confirm && !m.pending {
+			m.confirm = true
+			return m, nil
+		}
 		return m, tea.Quit
 	}
 	if m.pending {

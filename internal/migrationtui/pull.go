@@ -61,7 +61,8 @@ type pullModel struct {
 
 	confirm string // "", "start" or "abort"
 	pending string
-	message string
+	message string // the last action's refusal, kept until the next action
+	pollErr string // the last poll's error, cleared by a good poll
 
 	goneSince  time.Time
 	restarting bool
@@ -150,10 +151,10 @@ func (m *pullModel) onProgress(msg ProgressMsg) {
 			m.gaveUp = m.now().Sub(m.goneSince) > giveUpAfter
 			return
 		}
-		m.message = msg.Err.Error()
+		m.pollErr = msg.Err.Error()
 		return
 	}
-	m.goneSince, m.restarting, m.gaveUp = time.Time{}, false, false
+	m.goneSince, m.restarting, m.gaveUp, m.pollErr = time.Time{}, false, false, ""
 	m.setProgress(msg.P)
 }
 
@@ -163,15 +164,11 @@ func (m *pullModel) setProgress(p migration.Progress) {
 	case p.Phase == migration.PhaseIdle:
 		m.selected, m.selectedFor = nil, ""
 	case p.Phase == migration.PhaseConnected && p.Info != nil && (m.selected == nil || m.selectedFor != p.SourceURL):
+		// The panel picked the default (no system paths, nothing in its
+		// data directory) or kept the operator's choice: take it as it is.
 		m.selected, m.selectedFor = map[string]bool{}, p.SourceURL
-		if len(p.Selected) > 0 {
-			for _, path := range p.Selected {
-				m.selected[path] = true
-			}
-		} else {
-			for _, hp := range p.Info.HostPaths {
-				m.selected[hp.Path] = !hp.System
-			}
+		for _, path := range p.Selected {
+			m.selected[path] = true
 		}
 	}
 }
@@ -734,6 +731,9 @@ func (m *pullModel) footer() []string {
 			out = append(out, warnStyle.Render("The panel is not answering; retrying…"))
 		}
 	}
+	if m.pollErr != "" {
+		out = append(out, dangerStyle.Render(m.pollErr))
+	}
 	if m.message != "" {
 		out = append(out, dangerStyle.Render(m.message))
 	}
@@ -774,6 +774,16 @@ func (m *pullModel) footer() []string {
 // QuitNote is the line printed after a TUI ends, saying what goes on without
 // it; "" when there is nothing to say.
 func QuitNote(m tea.Model) string {
+	if s, ok := m.(*serveModel); ok {
+		switch {
+		case s.unclaimed():
+			return fmt.Sprintf("The migration token stays live until %s. Run relist-panel migration serve to follow it.",
+				s.token.ExpiresAt.Local().Format("2006-01-02 15:04"))
+		case s.following() && s.s.Step != migration.StepMigrated:
+			return "The migration goes on. Run relist-panel migration serve to follow it again."
+		}
+		return ""
+	}
 	if p, ok := m.(*pullModel); ok {
 		switch p.p.Phase {
 		case migration.PhaseLocking, migration.PhasePulling, migration.PhasePaused, migration.PhaseFinalizing:
