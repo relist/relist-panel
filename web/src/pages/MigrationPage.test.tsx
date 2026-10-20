@@ -16,11 +16,14 @@ const mocks = vi.hoisted(() => ({
   migrationStart: vi.fn(),
   migrationRetry: vi.fn(),
   migrationAbort: vi.fn(),
+  loadAuthStatus: vi.fn(),
 }));
 vi.mock('../data/api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../data/api')>();
-  return { ...original, api: mocks };
+  const { loadAuthStatus: _, ...api } = mocks;
+  return { ...original, api };
 });
+vi.mock('../data/store', () => ({ usePanel: () => ({ loadAuthStatus: mocks.loadAuthStatus }) }));
 
 afterEach(() => {
   cleanup();
@@ -106,11 +109,30 @@ describe('MigrationPage', () => {
     expect(await screen.findByText('shop.example.com', {}, { timeout: 8000 })).toBeTruthy();
   }, 15000);
 
-  it('sends a signed-out visitor to sign in and back', async () => {
+  it('asks a signed-out visitor to sign in, and sends them there and back on a click', async () => {
     mocks.migrationProgress.mockRejectedValue(new ApiError(401, 'authentication required'));
     show();
+    expect(await screen.findByText('Sign in to continue')).toBeTruthy();
+    expect(screen.queryByText(/sign in from/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     expect(await screen.findByText('sign in from /migration')).toBeTruthy();
+    expect(mocks.loadAuthStatus).toHaveBeenCalled();
   });
+
+  it('says the migration is complete when the swapped database ends the session', async () => {
+    mocks.migrationProgress
+      .mockResolvedValueOnce({ ...connected, phase: 'finalizing' })
+      .mockRejectedValue(new ApiError(401, 'authentication required'));
+    show();
+    expect(await screen.findByText('Migration complete', {}, { timeout: 8000 })).toBeTruthy();
+    expect(screen.getByText(/admin account of the old server/)).toBeTruthy();
+    const calls = mocks.migrationProgress.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 3500));
+    expect(mocks.migrationProgress.mock.calls.length).toBe(calls);
+    expect(screen.queryByText(/sign in from/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    expect(await screen.findByText('sign in from /migration')).toBeTruthy();
+  }, 15000);
 });
 
 describe('MigrationPage edge states', () => {

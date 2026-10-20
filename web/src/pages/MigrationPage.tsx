@@ -18,11 +18,12 @@ import {
   Typography,
 } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, Navigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 
 import { paths } from '../app/paths';
 import { formatBytes } from '../components/MetricChart';
 import { ApiError, api } from '../data/api';
+import { usePanel } from '../data/store';
 import type {
   FinalizeStep,
   HostPathCandidate,
@@ -128,18 +129,22 @@ function errorText(reason: unknown, fallback: string): string {
  * The new host's half of a server Migration (ADR-0018), reached from the
  * setup screen: Connect, Preview, Progress, Done. It polls the pull's
  * progress, and keeps polling through the restart that swaps in the copied
- * database. After that the old admin account exists here, so a 401 sends the
- * visitor to sign in and back.
+ * database. After that the old admin account exists here, so a 401 stops the
+ * polling and offers to sign in, and back: as Migration complete when the
+ * swap ended the session, as Sign in to continue otherwise.
  */
 export function MigrationPage() {
-  const { message, modal } = App.useApp();
+  const { modal } = App.useApp();
+  const { loadAuthStatus } = usePanel();
+  const navigate = useNavigate();
   const [progress, setProgress] = useState<MigrationProgress>();
   const [pollError, setPollError] = useState<string>();
-  const [signIn, setSignIn] = useState(false);
+  const [signIn, setSignIn] = useState<'migrated' | 'required'>();
   const [pending, setPending] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const phaseRef = useRef<string>('');
 
+  // poll reports whether to keep polling: not once the session is gone.
   const poll = useCallback(async () => {
     try {
       const next = await api.migrationProgress();
@@ -148,22 +153,23 @@ export function MigrationPage() {
       setPollError(undefined);
     } catch (reason: unknown) {
       if (reason instanceof ApiError && reason.status === 401) {
-        setSignIn(true);
-        return;
+        setSignIn(phaseRef.current === 'finalizing' || phaseRef.current === 'done' ? 'migrated' : 'required');
+        return false;
       }
       // The panel exits and restarts while finalizing; errors then are expected.
       if (phaseRef.current !== 'finalizing') {
         setPollError(errorText(reason, 'Could not read the migration progress'));
       }
     }
+    return true;
   }, []);
 
   useEffect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
-      await poll();
-      if (!stopped) timer = setTimeout(() => void tick(), POLL_MS);
+      const more = await poll();
+      if (more && !stopped) timer = setTimeout(() => void tick(), POLL_MS);
     };
     void tick();
     return () => {
@@ -172,12 +178,43 @@ export function MigrationPage() {
     };
   }, [poll]);
 
-  useEffect(() => {
-    if (signIn) message.info('Sign in with the admin account of the old server');
-  }, [message, signIn]);
-
   if (signIn) {
-    return <Navigate replace state={{ from: '/migration' }} to={paths.signIn} />;
+    // The auth state still says signed in from before the swap: re-read it,
+    // or sign-in would send the visitor straight back here.
+    const goSignIn = async () => {
+      try {
+        await loadAuthStatus();
+      } catch {
+        // The sign-in page shows its own error if the panel is unreachable.
+      }
+      navigate(paths.signIn, { replace: true, state: { from: paths.migration } });
+    };
+    const action = (
+      <Button onClick={() => void goSignIn()} type="primary">
+        Sign in
+      </Button>
+    );
+    return (
+      <Layout style={{ alignItems: 'center', minHeight: '100vh', padding: 24 }}>
+        <Card style={{ maxWidth: 960, width: '100%' }}>
+          {signIn === 'migrated' ? (
+            <Result
+              extra={action}
+              status="success"
+              subTitle="This panel now has the admin account of the old server. Sign in with it to see the DNS to change and the Deployments started."
+              title="Migration complete"
+            />
+          ) : (
+            <Result
+              extra={action}
+              status="info"
+              subTitle="This panel already has an admin. Sign in to migrate into it, or to follow a migration under way."
+              title="Sign in to continue"
+            />
+          )}
+        </Card>
+      </Layout>
+    );
   }
 
   const run = async (name: string, action: () => Promise<MigrationProgress | void>) => {
