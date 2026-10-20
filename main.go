@@ -223,18 +223,19 @@ func main() {
 		defer cancel()
 		shutdown(shutdownCtx)
 	case <-restartCh:
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		shutdown(shutdownCtx)
-		cancel()
-		if err := db.Close(); err != nil {
-			log.Printf("close the database: %v", err)
-		}
-		exe, err := os.Executable()
-		if err != nil {
-			log.Printf("migration: find the panel binary: %v; exiting for the restart policy", err)
-			os.Exit(1)
-		}
-		reexec(exe, os.Args, os.Environ(), syscall.Exec, os.Exit)
+		// The shutdown's own deadline is 5 s; the watchdog gives it 10.
+		restartAfter(10*time.Second, func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			shutdown(shutdownCtx)
+		}, db.Close, func() {
+			exe, err := os.Executable()
+			if err != nil {
+				log.Printf("migration: find the panel binary: %v; exiting for the restart policy", err)
+				os.Exit(1)
+			}
+			reexec(exe, os.Args, os.Environ(), syscall.Exec, os.Exit)
+		})
 	}
 }
 
