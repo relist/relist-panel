@@ -159,3 +159,16 @@ func TestResumeWithNothingLocked(t *testing.T) {
 	m, _ = m.Update(statusMsg{S: migration.SourceStatus{}})
 	mustContain(t, m, "This server is not locked for a migration.")
 }
+
+func TestServeFollowsAClaimBeforeStart(t *testing.T) {
+	c := &fakeController{}
+	m := serveWith(c, migration.SourceStatus{ClaimedBy: "203.0.113.9"}, migration.Activity{})
+	if strings.Contains(screen(m), "24 hours") {
+		t.Fatal("offered a new token while the new server holds the claimed one")
+	}
+	mustContain(t, m, "Claimed by 203.0.113.9")
+	m = send(t, m, key("enter"))
+	if len(c.tokens) != 0 {
+		t.Fatalf("created a token over a claimed session: %q", c.tokens)
+	}
+}

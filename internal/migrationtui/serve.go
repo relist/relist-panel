@@ -79,6 +79,11 @@ func (m *serveModel) Init() tea.Cmd { return fetchStatus(m.c) }
 
 func (m *serveModel) underWay() bool { return m.s.Step != migration.StepNone }
 
+// following is when serve shows the Migration rather than the token form:
+// under way, or claimed by a new server that has not started yet, whose
+// session a new token would revoke.
+func (m *serveModel) following() bool { return m.underWay() || m.s.ClaimedBy != "" }
+
 func (m *serveModel) unclaimed() bool {
 	return m.token != nil && m.s.ClaimedBy == "" && !m.underWay()
 }
@@ -175,7 +180,7 @@ func (m *serveModel) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if m.token == nil && !m.underWay() {
+	if m.token == nil && !m.following() {
 		switch k {
 		case "up", "k":
 			m.choice = max(0, m.choice-1)
@@ -216,7 +221,7 @@ func (m *serveModel) stage() int {
 		return 3
 	case m.underWay():
 		return 2
-	case m.token != nil:
+	case m.token != nil, m.s.ClaimedBy != "":
 		return 1
 	}
 	return 0
@@ -228,7 +233,7 @@ func (m *serveModel) View() tea.View {
 	switch {
 	case !m.loaded:
 		middle = []string{"Reading the migration state…"}
-	case m.token == nil && !m.underWay():
+	case m.token == nil && !m.following():
 		middle = append(middle, "How long may the new server take to connect?")
 		for i, l := range lifetimes {
 			if i == m.choice {
@@ -264,7 +269,7 @@ func (m *serveModel) View() tea.View {
 		bottom = append(bottom, warnStyle.Render("Revoke the token? [Y/n]"))
 	case m.resume.active:
 		bottom = append(bottom, m.resume.lines()...)
-	case m.loaded && m.token == nil && !m.underWay():
+	case m.loaded && m.token == nil && !m.following():
 		bottom = append(bottom, dimStyle.Render("↑/↓ choose · enter create the token · q quit"))
 	case m.underWay() && m.s.Step != migration.StepMigrated:
 		bottom = append(bottom, dimStyle.Render("c cancel the migration · q quit"))
