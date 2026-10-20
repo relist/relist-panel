@@ -437,6 +437,7 @@ func (m *pullModel) View() tea.View {
 		}
 	}
 	bottom = append(bottom, m.footer()...)
+	top, bottom = split(top...), split(bottom...)
 
 	if cursorLine >= 0 && m.height > 0 {
 		avail := max(1, m.height-len(top)-len(bottom))
@@ -505,9 +506,9 @@ func (m *pullModel) previewLines() ([]string, int) {
 	}
 	for _, c := range p.Checks {
 		if c.Blocking {
-			out = append(out, dangerStyle.Render("✗ "+c.Message))
+			out = append(out, split(dangerStyle.Render("✗ "+c.Message))...)
 		} else {
-			out = append(out, warnStyle.Render("! "+c.Message))
+			out = append(out, split(warnStyle.Render("! "+c.Message))...)
 		}
 	}
 	out = append(out, "", titleStyle.Render("Volumes"))
@@ -642,8 +643,9 @@ func (m *pullModel) itemLines() []string {
 		case it.State == "pending":
 			state = "waiting"
 		}
-		line := fmt.Sprintf("  %-9s %-26s %s %9s / %-9s %s", it.Kind, it.ID, m.bar.ViewAs(frac),
-			migration.HumanBytes(it.Done), migration.HumanBytes(it.Size), state)
+		// The ID comes last, so a narrow window cuts the ID, never the state.
+		line := fmt.Sprintf("  %-12s %-9s %s %9s / %-9s %s", state, it.Kind, m.bar.ViewAs(frac),
+			migration.HumanBytes(it.Done), migration.HumanBytes(it.Size), it.ID)
 		switch it.State {
 		case "failed":
 			line = dangerStyle.Render(line)

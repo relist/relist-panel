@@ -478,3 +478,47 @@ func TestQuitNote(t *testing.T) {
 		t.Fatalf("note with nothing started = %q", note)
 	}
 }
+
+func TestPullFitsMultiLineErrorsInASmallWindow(t *testing.T) {
+	p := connected()
+	p.Phase = migration.PhaseFinalizing
+	p.Error = "start traefik: exit status 1\nError response from daemon: driver failed\nprogramming external connectivity"
+	m := NewPull(&fakeController{}, "https://new.example.com")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
+	m, _ = m.Update(ProgressMsg{P: p})
+	lines := strings.Split(screen(m), "\n")
+	if len(lines) > 12 {
+		t.Fatalf("%d lines in a 12-line window:\n%s", len(lines), screen(m))
+	}
+	if !strings.Contains(lines[len(lines)-1], "q quit") {
+		t.Fatalf("the keys line fell off the bottom:\n%s", screen(m))
+	}
+	if !strings.Contains(lines[1], "[Finalize]") {
+		t.Fatalf("the journey line is gone:\n%s", screen(m))
+	}
+}
+
+func TestPullShowsItemStateAt80Columns(t *testing.T) {
+	p := connected()
+	p.Phase = migration.PhasePulling
+	p.Items = []migration.ItemProgress{{ID: "host-path-srv-a-rather-long-directory-name", Kind: migration.KindHostPath, Size: 100, Done: 40, State: "running", Attempts: 2}}
+	m := NewPull(&fakeController{}, "https://new.example.com")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = m.Update(ProgressMsg{P: p})
+	mustContain(t, m, "retrying 2/3")
+}
+
+func TestPullPreviewKeepsTheCursorVisibleUnderMultiLineChecks(t *testing.T) {
+	p := connected()
+	p.Checks = []migration.Check{{Message: "line one\nline two\nline three\nline four\nline five\nline six"}}
+	for i := range 20 {
+		p.Info.HostPaths = append(p.Info.HostPaths, migration.HostPathCandidate{Path: fmt.Sprintf("/srv/p%02d", i)})
+	}
+	m := NewPull(&fakeController{}, "https://new.example.com")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
+	m, _ = m.Update(ProgressMsg{P: p})
+	for range 21 {
+		m = send(t, m, key("down"))
+	}
+	mustContain(t, m, "> [ ] /srv/p19")
+}

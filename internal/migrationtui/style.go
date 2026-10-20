@@ -45,7 +45,12 @@ func journey(stages []string, current int, failed bool) string {
 // layout fits top, a scrolling window of middle starting at offset, and
 // bottom into width×height, and returns the content with the offset clamped.
 // A zero height (no window size yet) shows everything.
+//
+// Elements holding newlines count as the lines they render as. When top and
+// bottom alone overflow, the last line (the keys) is kept and the lines
+// above it are cut.
 func layout(width, height int, top, middle, bottom []string, offset int) (string, int) {
+	top, middle, bottom = split(top...), split(middle...), split(bottom...)
 	avail := len(middle)
 	if height > 0 {
 		avail = max(1, height-len(top)-len(bottom))
@@ -53,8 +58,10 @@ func layout(width, height int, top, middle, bottom []string, offset int) (string
 	offset = max(0, min(offset, len(middle)-avail))
 	end := min(len(middle), offset+avail)
 	lines := append(append(append([]string{}, top...), middle[offset:end]...), bottom...)
-	if height > 0 && len(lines) > height {
-		lines = lines[:height]
+	if height > 1 && len(lines) > height {
+		lines = append(lines[:height-1], lines[len(lines)-1])
+	} else if height == 1 && len(lines) > 1 {
+		lines = lines[len(lines)-1:]
 	}
 	if width > 0 {
 		for i, l := range lines {
