@@ -672,3 +672,24 @@ func TestProgressReportsSelfURL(t *testing.T) {
 		t.Fatalf("Progress().SelfURL = %q", got)
 	}
 }
+
+// A connected panel holds the old host's session key, so first-admin setup
+// must wait until the Migration is aborted.
+func TestInProgressOnceConnectedUntilAborted(t *testing.T) {
+	f := newTargetFixture(t)
+	if f.target.InProgress() {
+		t.Fatal("in progress before connecting")
+	}
+	if _, err := f.target.Connect(context.Background(), f.src.srv.URL, "tok", "https://new.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if !f.target.InProgress() {
+		t.Fatal("connected, holding a session key, but not in progress")
+	}
+	if err := f.target.Abort(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.target.InProgress() {
+		t.Fatal("still in progress after abort")
+	}
+}

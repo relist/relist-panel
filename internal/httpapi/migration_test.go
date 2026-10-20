@@ -80,6 +80,17 @@ func TestSetupBlockedDuringMigration(t *testing.T) {
 	}
 }
 
+func TestSetupBlockedWhileConnected(t *testing.T) {
+	s := newTestServer(t)
+	writeMigrationFile(t, s, "state.json", `{"phase":"connected","sourceUrl":"https://old","sessionKey":"k"}`)
+	s.restartWithMigration(t)
+	response := postJSON(t, s, "/api/auth/setup", map[string]string{"email": "admin@example.com", "password": "correct horse battery staple"})
+	body := readBody(t, response)
+	if response.StatusCode != http.StatusConflict || !strings.Contains(body, "abort it") {
+		t.Fatalf("setup while connected = %d %s", response.StatusCode, body)
+	}
+}
+
 func TestStartConflictCarriesBlockingMessage(t *testing.T) {
 	s := newMigrationServer(t)
 	response := s.request(t, http.MethodPost, "/api/migration/pull/start", map[string]any{"hostPaths": []string{}})

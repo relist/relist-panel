@@ -829,13 +829,14 @@ func (t *Target) loadSummary() error {
 	return nil
 }
 
-// InProgress reports a Migration past connecting and not yet done, during
-// which first-admin setup is refused.
+// InProgress reports a Migration connected and not yet done, during which
+// first-admin setup is refused: once connected, the panel holds a session key
+// that streams the old host, which a stranger who set it up could read.
 func (t *Target) InProgress() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	switch t.st.Phase {
-	case PhaseLocking, PhasePulling, PhasePaused, PhaseFinalizing:
+	case PhaseConnected, PhaseLocking, PhasePulling, PhasePaused, PhaseFinalizing:
 		return true
 	}
 	return false

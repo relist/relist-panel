@@ -150,7 +150,7 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) setup(w http.ResponseWriter, r *http.Request) {
 	if s.setupBlocked != nil && s.setupBlocked() {
-		writeError(w, http.StatusConflict, "A migration is in progress")
+		writeError(w, http.StatusConflict, "A migration is in progress; finish or abort it before setting up this panel")
 		return
 	}
 	if err := s.requireDatabase(); err != nil {
