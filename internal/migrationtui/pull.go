@@ -191,6 +191,18 @@ func (m *pullModel) blocked() bool {
 	return m.p.Info == nil || slices.ContainsFunc(m.p.Checks, func(c migration.Check) bool { return c.Blocking })
 }
 
+// canRetry is when the panel's Retry applies: a paused pull, or a lock,
+// copy or finalize step that stopped on an error.
+func (m *pullModel) canRetry() bool {
+	switch m.p.Phase {
+	case migration.PhasePaused:
+		return true
+	case migration.PhaseLocking, migration.PhasePulling, migration.PhaseFinalizing:
+		return m.p.Error != ""
+	}
+	return false
+}
+
 func (m *pullModel) canAbort() bool {
 	switch m.p.Phase {
 	case migration.PhaseConnected, migration.PhaseLocking, migration.PhasePulling, migration.PhasePaused:
@@ -290,7 +302,7 @@ func (m *pullModel) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "l":
 		m.showLog, m.logOffset = true, len(m.p.Log)
 	case "r":
-		if m.p.Phase == migration.PhasePaused && m.pending == "" {
+		if m.canRetry() && m.pending == "" {
 			return m, m.act("retry")
 		}
 	case "a":
@@ -748,7 +760,7 @@ func (m *pullModel) footer() []string {
 		help = "l log · q quit"
 	default:
 		parts := []string{"j/k scroll", "l log"}
-		if m.p.Phase == migration.PhasePaused {
+		if m.canRetry() {
 			parts = append(parts, "r retry")
 		}
 		if m.canAbort() {

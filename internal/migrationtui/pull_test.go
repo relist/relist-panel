@@ -535,3 +535,24 @@ func TestPullRetriesPreflightWithTheStoredSelfURL(t *testing.T) {
 		t.Fatalf("retry connect = %q, want the stored selfUrl", c.connected)
 	}
 }
+
+func TestPullOffersRetryWhenALockOrFinalizeStepFails(t *testing.T) {
+	for _, phase := range []migration.Phase{migration.PhaseLocking, migration.PhasePulling, migration.PhaseFinalizing} {
+		c := &fakeController{}
+		p := connected()
+		p.Phase, p.Error = phase, "start traefik: no traefik service"
+		m := pull(c, p)
+		mustContain(t, m, "r retry")
+		m = send(t, m, key("r"))
+		if c.retried != 1 {
+			t.Fatalf("%s with an error: retry calls = %d", phase, c.retried)
+		}
+	}
+	c := &fakeController{}
+	p := connected()
+	p.Phase = migration.PhasePulling
+	m := pull(c, p)
+	if strings.Contains(screen(m), "r retry") {
+		t.Fatal("retry offered while pulling without an error")
+	}
+}
