@@ -262,6 +262,12 @@ func unrestorableVolume(v VolumeInfo) string {
 	return ""
 }
 
+// HumanBytes formats a size the way preflight's messages do, for the TUI.
+func HumanBytes(n int64) string { return humanBytes(n) }
+
+// UnrestorableVolume says why v cannot be restored on a new host, or "".
+func UnrestorableVolume(v VolumeInfo) string { return unrestorableVolume(v) }
+
 func humanBytes(n int64) string {
 	if n < 1024 {
 		return fmt.Sprintf("%d B", n)
