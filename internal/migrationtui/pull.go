@@ -616,6 +616,8 @@ func (m *pullModel) followHeader() []string {
 			}
 		}
 		out = append(out, "")
+	} else if p.LockStep == migration.StepStopping && p.Info != nil && p.Info.ActiveDeployment != "" {
+		out = append(out, "Old server: waiting for Deployment "+p.Info.ActiveDeployment+" to finish, then stopping its Composes", "")
 	} else if step, ok := lockSteps[p.LockStep]; ok {
 		out = append(out, "Old server: "+step, "")
 	} else if p.Phase == migration.PhaseLocking {

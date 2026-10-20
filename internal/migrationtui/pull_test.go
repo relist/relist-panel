@@ -586,3 +586,11 @@ func TestPullKeepsAnActionErrorAcrossPolls(t *testing.T) {
 	m, _ = m.Update(ProgressMsg{P: connected()})
 	mustContain(t, m, "another action is in progress")
 }
+
+func TestPullSaysWhichDeploymentTheOldServerWaitsFor(t *testing.T) {
+	p := connected()
+	p.Phase, p.LockStep = migration.PhaseLocking, migration.StepStopping
+	p.Info.ActiveDeployment = "api #12"
+	m := pull(&fakeController{}, p)
+	mustContain(t, m, "Old server: waiting for Deployment api #12 to finish, then stopping its Composes")
+}
