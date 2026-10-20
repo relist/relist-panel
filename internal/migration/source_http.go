@@ -30,6 +30,28 @@ func (s *Source) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/migration/resume", s.resume)
 }
 
+// RegisterControlRoutes adds the old host's admin routes to the control
+// socket's mux (ADR-0019): the same handlers as the web's, without the
+// admin cookie, since reaching the socket already takes a shell in the
+// container.
+func (s *Source) RegisterControlRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/migration/tokens", s.createToken)
+	mux.HandleFunc("DELETE /api/migration/tokens/current", s.revokeToken)
+	mux.HandleFunc("GET /api/migration/status", s.status)
+	mux.HandleFunc("POST /api/migration/resume", s.resume)
+}
+
+// SourceStatus is the old host's own view of its Migration, for its lock
+// page and `relist-panel migration`.
+type SourceStatus struct {
+	Step           Step       `json:"step"`
+	ClaimedBy      string     `json:"claimedBy"`
+	TargetURL      string     `json:"targetUrl"`
+	TokenExpiresAt *time.Time `json:"tokenExpiresAt"`
+	LockedAt       *time.Time `json:"lockedAt"`
+	MigratedAt     *time.Time `json:"migratedAt"`
+}
+
 // SessionPath reports the routes the cookie middleware must let through: the
 // old host's routes that authenticate with the Migration session key, and the
 // new host's pull routes, which allow themselves only before an admin exists.
@@ -274,16 +296,14 @@ func (s *Source) status(w http.ResponseWriter, r *http.Request) {
 	if st.ClaimedBy != "" {
 		claimedBy = st.ClaimedBy
 	}
-	out := map[string]any{"step": string(step), "claimedBy": claimedBy, "targetUrl": st.TargetURL, "tokenExpiresAt": expires}
+	out := SourceStatus{Step: step, ClaimedBy: claimedBy, TargetURL: st.TargetURL, TokenExpiresAt: expires}
 	if st.LockedAt != 0 {
-		out["lockedAt"] = time.Unix(st.LockedAt, 0).UTC()
-	} else {
-		out["lockedAt"] = nil
+		at := time.Unix(st.LockedAt, 0).UTC()
+		out.LockedAt = &at
 	}
 	if st.MigratedAt != 0 {
-		out["migratedAt"] = time.Unix(st.MigratedAt, 0).UTC()
-	} else {
-		out["migratedAt"] = nil
+		at := time.Unix(st.MigratedAt, 0).UTC()
+		out.MigratedAt = &at
 	}
 	writeJSON(w, http.StatusOK, out)
 }

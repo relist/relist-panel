@@ -131,6 +131,7 @@ func main() {
 		select {}
 	}
 
+	control := http.NewServeMux()
 	handler, waitDeployments := httpapi.NewHandler(ctx, db, dockerexec.New(), cfg.DataDir, sampler, collector, volumeRunner, volumeResolver, &terminal.Options{
 		Exec: terminalExec,
 	}, dockerexec.NewImages(dockerexec.DefaultSocketPath), &migration.Options{
@@ -138,8 +139,13 @@ func main() {
 		Install:  cfg.Install,
 		Insecure: slices.Contains(os.Args[1:], "--insecure-migration-source"),
 		Restart:  restart,
+		Control:  control,
 	}, dockerexec.NewDockerHost(dockerexec.DefaultSocketPath))
 	server := &http.Server{Addr: cfg.Address(), Handler: handler}
+	controlServer, err := serveControl(migration.ControlSocketPath(), control)
+	if err != nil {
+		log.Printf("warning: no migration control socket: %v", err)
+	}
 
 	log.Printf("relist-panel listening on %s", cfg.Address())
 	serveErr := make(chan error, 1)
@@ -173,6 +179,11 @@ func main() {
 	shutdown := func(ctx context.Context) {
 		if err := server.Shutdown(ctx); err != nil {
 			log.Printf("shutdown: %v", err)
+		}
+		if controlServer != nil {
+			if err := controlServer.Shutdown(ctx); err != nil {
+				log.Printf("shutdown the control socket: %v", err)
+			}
 		}
 		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("serve: %v", err)

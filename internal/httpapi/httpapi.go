@@ -145,6 +145,10 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 			}
 			return authService.Authenticated(r)
 		})
+		if migrationOptions.Control != nil {
+			source.RegisterControlRoutes(migrationOptions.Control)
+			target.RegisterControlRoutes(migrationOptions.Control)
+		}
 		authService.SetSetupBlocker(target.InProgress)
 		authService.AllowSelfAuthenticated(migration.SessionPath)
 		inner = source.Middleware(inner)

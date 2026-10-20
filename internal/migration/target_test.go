@@ -632,3 +632,24 @@ func TestAbortFinishesEvenWhenDiscardFails(t *testing.T) {
 		t.Fatal("state.json survived the abort")
 	}
 }
+
+func TestAbortDuringRetryLeavesAConsistentState(t *testing.T) {
+	f := newTargetFixture(t)
+	f.restorer.failNext["volume-b"] = 6
+	f.connectAndStart(t)
+	waitPhase(t, f.target, PhasePaused)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); f.target.Retry(context.Background()) }()
+	go func() { defer wg.Done(); f.target.Abort(context.Background()) }()
+	wg.Wait()
+	// Whichever ran last, an abort must not be undone by the retry's pull.
+	f.target.Abort(context.Background())
+	time.Sleep(200 * time.Millisecond)
+	if p := f.target.Progress(); p.Phase != PhaseIdle {
+		t.Fatalf("phase after abort = %q", p.Phase)
+	}
+	if _, err := os.Stat(filepath.Join(f.deps.StateDir, "state.json")); !os.IsNotExist(err) {
+		t.Fatal("state.json came back after the abort")
+	}
+}
