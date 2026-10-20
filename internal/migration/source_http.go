@@ -39,6 +39,9 @@ func (s *Source) RegisterControlRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/migration/tokens/current", s.revokeToken)
 	mux.HandleFunc("GET /api/migration/status", s.status)
 	mux.HandleFunc("POST /api/migration/resume", s.resume)
+	mux.HandleFunc("GET /api/migration/serve/activity", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, s.Activity())
+	})
 }
 
 // SourceStatus is the old host's own view of its Migration, for its lock

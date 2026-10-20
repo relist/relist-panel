@@ -100,6 +100,10 @@ type Source struct {
 	step    Step
 	target  string
 	digests map[string]string
+	// sending is the stream started last, for Activity; sent counts the
+	// streams that completed.
+	sending *sendingItem
+	sent    int
 }
 
 func NewSource(d SourceDeps) *Source {

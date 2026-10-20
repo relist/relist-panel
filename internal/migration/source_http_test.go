@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -346,5 +347,70 @@ func TestItemsWaitForTheLockToSettleAfterARestart(t *testing.T) {
 	}
 	if rec := s.do(t, "GET", "/api/migration/items/data-dir", key, nil); rec.Code != http.StatusOK {
 		t.Fatalf("item after ResumeLock = %d", rec.Code)
+	}
+}
+
+// pausingWriter signals after its first write and blocks until released.
+type pausingWriter struct {
+	first   chan struct{}
+	release chan struct{}
+	once    sync.Once
+	err     error
+}
+
+func (w *pausingWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	w.once.Do(func() {
+		close(w.first)
+		<-w.release
+	})
+	return len(p), nil
+}
+
+func TestActivityFollowsAStream(t *testing.T) {
+	s := newSourceServer(t)
+	s.startReady(t, s.claim(t))
+	w := &pausingWriter{first: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { done <- s.src.StreamItem(context.Background(), "database", w) }()
+	<-w.first
+	if a := s.src.Activity(); a.Item != "database" || a.Bytes <= 0 || a.Done != 0 {
+		t.Fatalf("activity mid-stream = %+v, want database with bytes and none done", a)
+	}
+	close(w.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if a := s.src.Activity(); a.Item != "" || a.Bytes != 0 || a.Done != 1 {
+		t.Fatalf("activity after the stream = %+v, want idle with one done", a)
+	}
+}
+
+func TestActivityIgnoresAFailedStream(t *testing.T) {
+	s := newSourceServer(t)
+	s.startReady(t, s.claim(t))
+	w := &pausingWriter{err: errors.New("connection reset")}
+	if err := s.src.StreamItem(context.Background(), "database", w); err == nil {
+		t.Fatal("the stream did not fail")
+	}
+	if a := s.src.Activity(); a.Item != "" || a.Done != 0 {
+		t.Fatalf("activity after a failed stream = %+v", a)
+	}
+}
+
+func TestActivityRouteOnlyOnTheControlMux(t *testing.T) {
+	s := newSourceServer(t)
+	if rec := s.do(t, "GET", "/api/migration/serve/activity", "", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("activity on the web mux = %d, want 404", rec.Code)
+	}
+	control := http.NewServeMux()
+	s.src.RegisterControlRoutes(control)
+	rec := httptest.NewRecorder()
+	control.ServeHTTP(rec, httptest.NewRequest("GET", "/api/migration/serve/activity", nil))
+	var a Activity
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &a) != nil {
+		t.Fatalf("activity on the control mux = %d %s", rec.Code, rec.Body)
 	}
 }

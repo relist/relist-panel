@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	"relist-panel/internal/volfs"
 )
@@ -35,19 +36,60 @@ func (s *Source) StreamItem(ctx context.Context, id string, w io.Writer) error {
 	if item == nil {
 		return ErrUnknownItem
 	}
+	sending := &sendingItem{id: id}
 	s.mu.Lock()
 	delete(s.digests, id)
+	s.sending = sending
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if s.sending == sending {
+			s.sending = nil
+		}
+		s.mu.Unlock()
+	}()
 
 	h := sha256.New()
-	out := io.MultiWriter(w, h)
+	out := io.MultiWriter(sending, w, h)
 	if err := s.writeItem(ctx, *item, out); err != nil {
 		return fmt.Errorf("stream %s: %w", id, err)
 	}
 	s.mu.Lock()
 	s.digests[id] = hex.EncodeToString(h.Sum(nil))
+	s.sent++
 	s.mu.Unlock()
 	return nil
+}
+
+// Activity is what the old host is sending, for `relist-panel migration
+// serve` (ADR-0019): the item streamed last, its bytes so far, and how many
+// streams completed.
+type Activity struct {
+	Item  string `json:"item"`
+	Bytes int64  `json:"bytes"`
+	Done  int    `json:"done"`
+}
+
+// sendingItem counts one stream's bytes as they are written.
+type sendingItem struct {
+	id    string
+	bytes atomic.Int64
+}
+
+func (c *sendingItem) Write(p []byte) (int, error) {
+	c.bytes.Add(int64(len(p)))
+	return len(p), nil
+}
+
+func (s *Source) Activity() Activity {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := Activity{Done: s.sent}
+	if s.sending != nil {
+		a.Item = s.sending.id
+		a.Bytes = s.sending.bytes.Load()
+	}
+	return a
 }
 
 // Digest is the SHA-256 of the last complete stream of id.
