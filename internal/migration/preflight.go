@@ -225,10 +225,6 @@ func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []s
 			warn(fmt.Sprintf("%s is %s on the source and %s here; copy it into this host's .env", f.env, f.old, cur))
 		}
 	}
-	// Finalize exits the panel and counts on Docker to start it again.
-	if policy, err := local.Docker.PanelRestartPolicy(ctx); err == nil && (policy == "" || policy == "no") {
-		warn("This panel's container has no restart policy, so it will not come back by itself when the migration restarts it; set restart: unless-stopped, or run docker compose up -d when it stops")
-	}
 	for _, w := range src.Warnings {
 		warn(w)
 	}

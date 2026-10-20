@@ -16,5 +16,5 @@ type Options struct {
 	ReportedDataDir string                          // "" means the data directory
 	HTTP            *http.Client                    // nil means a client with no overall timeout
 	Backoff         func(attempt int) time.Duration // nil means 2s, 8s, 30s
-	Exit            func()                          // nil means os.Exit(0)
+	Restart         func()                          // nil means os.Exit(0); see FinalizeDeps.Restart
 }

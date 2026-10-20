@@ -30,7 +30,7 @@ func (s *testServer) restartWithMigration(t *testing.T) {
 	s.stopWorker()
 	ctx, cancel := context.WithCancel(context.Background())
 	handler, wait := httpapi.NewHandler(ctx, s.db, s.runner, s.dataDir, nil, nil, s.volumeRunner, nil, nil, s.images,
-		&migration.Options{Exit: func() {}})
+		&migration.Options{Restart: func() {}})
 	var once sync.Once
 	s.stopWorker = func() { once.Do(func() { cancel(); wait() }) }
 	t.Cleanup(s.stopWorker)

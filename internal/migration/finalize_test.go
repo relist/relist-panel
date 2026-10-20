@@ -197,7 +197,7 @@ func TestBeginStopsTraefikBeforeMovingDataDir(t *testing.T) {
 	os.WriteFile(filepath.Join(dataDir, ".traefik", "acme.json"), []byte("fresh"), 0o600)
 	freshDatabase(t, dataDir)
 	exited := false
-	f := NewFinalizer(FinalizeDeps{Local: LocalHost{Docker: docker, DataDir: dataDir}, Exit: func() {
+	f := NewFinalizer(FinalizeDeps{Local: LocalHost{Docker: docker, DataDir: dataDir}, Restart: func() {
 		exited = true
 		if docker.TraefikUp {
 			t.Error("exited with Traefik still running")
@@ -225,3 +225,22 @@ func TestBeginStopsTraefikBeforeMovingDataDir(t *testing.T) {
 
 var _ DomainLister = fakeDomains{}
 var _ = domains.Domain{}
+
+func TestBeginRestartsAfterTheMarker(t *testing.T) {
+	dataDir := t.TempDir()
+	freshDatabase(t, dataDir)
+	os.MkdirAll(filepath.Join(dataDir, ".migration"), 0o700)
+	calls := 0
+	f := NewFinalizer(FinalizeDeps{Local: LocalHost{Docker: NewFakeDocker(), DataDir: dataDir}, Restart: func() {
+		calls++
+		if _, err := os.Stat(filepath.Join(dataDir, ".migration", "finalize")); err != nil {
+			t.Errorf("restarted before the marker was written: %v", err)
+		}
+	}})
+	if err := f.Begin(context.Background(), Manifest{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("Restart called %d times, want 1", calls)
+	}
+}

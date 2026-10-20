@@ -108,7 +108,7 @@ func (p *panel) boot() {
 	opts := p.opts
 	opts.Docker = p.docker
 	opts.Backoff = func(int) time.Duration { return 0 }
-	opts.Exit = func() { p.exited <- struct{}{} }
+	opts.Restart = func() { p.exited <- struct{}{} }
 	handler, wait := httpapi.NewHandler(ctx, p.db, statusRunner{p.docker}, p.dataDir, nil, nil, nil,
 		volumes.NewResolver(configCLI{}, p.dataDir), nil, nil, &opts)
 	var once sync.Once

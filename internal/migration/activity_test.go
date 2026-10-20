@@ -93,7 +93,7 @@ func TestFinalizerReportsItsSteps(t *testing.T) {
 		mu.Unlock()
 	})
 	docker := NewFakeDocker()
-	f := NewFinalizer(FinalizeDeps{Local: LocalHost{Docker: docker, DataDir: dataDir}, Exit: func() {},
+	f := NewFinalizer(FinalizeDeps{Local: LocalHost{Docker: docker, DataDir: dataDir}, Restart: func() {},
 		Queue: &fakeEnqueuer{calls: map[int64]deployments.Mode{}}, Sources: sourceSet{}, Domains: fakeDomains{}})
 	os.MkdirAll(filepath.Join(dataDir, ".migration"), 0o700)
 	if err := f.Begin(ctx, Manifest{}); err != nil {

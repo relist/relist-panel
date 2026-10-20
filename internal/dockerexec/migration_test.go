@@ -139,11 +139,3 @@ func TestProbeRunsReadOnlyAndParsesTheAnswer(t *testing.T) {
 		}
 	}
 }
-
-func TestPanelRestartPolicyInspectsTheOwnContainer(t *testing.T) {
-	r := &recorder{answers: map[string]string{"docker inspect --format {{.HostConfig.RestartPolicy.Name}} panelhost": "unless-stopped\n"}}
-	got, err := newTestMigrationDocker(r).PanelRestartPolicy(context.Background())
-	if err != nil || got != "unless-stopped" {
-		t.Fatalf("PanelRestartPolicy = %q, %v", got, err)
-	}
-}

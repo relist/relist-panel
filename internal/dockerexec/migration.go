@@ -343,11 +343,6 @@ func (d *MigrationDocker) traefik(ctx context.Context) (string, error) {
 	return ids[0], nil
 }
 
-func (d *MigrationDocker) PanelRestartPolicy(ctx context.Context) (string, error) {
-	out, err := d.docker(ctx, nil, nil, "inspect", "--format", "{{.HostConfig.RestartPolicy.Name}}", d.hostname())
-	return strings.TrimSpace(out), err
-}
-
 func (d *MigrationDocker) StopTraefik(ctx context.Context) error {
 	id, err := d.traefik(ctx)
 	if err != nil {

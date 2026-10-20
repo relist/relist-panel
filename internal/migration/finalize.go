@@ -47,7 +47,7 @@ type SourceLookup interface {
 
 type FinalizeDeps struct {
 	Local   LocalHost
-	Exit    func() // nil means os.Exit(0)
+	Restart func() // nil means os.Exit(0); production re-executes the panel
 	Queue   Enqueuer
 	Sources SourceLookup
 	Domains DomainLister
@@ -57,8 +57,8 @@ type finalizer struct{ d FinalizeDeps }
 
 // NewFinalizer returns the Finalizer the Target runs once every item passed.
 func NewFinalizer(d FinalizeDeps) Finalizer {
-	if d.Exit == nil {
-		d.Exit = func() { os.Exit(0) }
+	if d.Restart == nil {
+		d.Restart = func() { os.Exit(0) }
 	}
 	return &finalizer{d: d}
 }
@@ -103,7 +103,7 @@ func (f *finalizer) Begin(ctx context.Context, m Manifest) error {
 	}
 	log.Printf("migration: data in place; restarting the panel to swap in the migrated database")
 	reportStep(ctx, FinalizeRestart)
-	f.d.Exit()
+	f.d.Restart()
 	return nil
 }
 

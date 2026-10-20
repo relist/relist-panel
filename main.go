@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"sync"
 	"syscall"
 	"time"
 
@@ -60,9 +61,10 @@ func main() {
 		log.Printf("warning: could not ensure docker network %q exists: %v", dockernet.NetworkName, err)
 	}
 
-	// A server migration that finished pulling restarted the panel to swap
+	// A server migration that finished pulling re-executed the panel to swap
 	// in the migrated database, which must happen before it is opened
-	// (ADR-0018); the old host's lock and queue are then cleared from it.
+	// (ADR-0018, ADR-0019); the old host's lock and queue are then cleared
+	// from it.
 	migrationPending, err := migration.PrepareFinalize(cfg.DataDir)
 	if err != nil {
 		log.Fatal(err)
@@ -119,12 +121,23 @@ func main() {
 	volumeResolver := volumes.NewResolver(dockerexec.NewVolumeResolver(), cfg.DataDir)
 	terminalExec := dockerexec.NewTerminalExec(dockerexec.DefaultSocketPath, hostmetrics.DefaultProcRoot)
 
+	// Finalize asks for a restart once the copied data is in place; main
+	// shuts down and re-executes the panel (ADR-0019), while the finalize
+	// goroutine waits to be replaced with the process.
+	restartCh := make(chan struct{})
+	var restartOnce sync.Once
+	restart := func() {
+		restartOnce.Do(func() { close(restartCh) })
+		select {}
+	}
+
 	handler, waitDeployments := httpapi.NewHandler(ctx, db, dockerexec.New(), cfg.DataDir, sampler, collector, volumeRunner, volumeResolver, &terminal.Options{
 		Exec: terminalExec,
 	}, dockerexec.NewImages(dockerexec.DefaultSocketPath), &migration.Options{
 		Docker:   dockerexec.NewMigrationDocker(),
 		Install:  cfg.Install,
 		Insecure: slices.Contains(os.Args[1:], "--insecure-migration-source"),
+		Restart:  restart,
 	}, dockerexec.NewDockerHost(dockerexec.DefaultSocketPath))
 	server := &http.Server{Addr: cfg.Address(), Handler: handler}
 
@@ -154,6 +167,30 @@ func main() {
 		terminal.Sweep(sweepCtx, terminalExec, names, 2*time.Second, log.Printf)
 	}()
 
+	// shutdown stops accepting requests, then lets the sampler's loop finish
+	// its tick and any in-flight sweep, and an in-progress Deploy step
+	// finish, within ctx's deadline.
+	shutdown := func(ctx context.Context) {
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
+		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("serve: %v", err)
+		}
+		stop()
+		sampler.Wait()
+		deploymentsDone := make(chan struct{})
+		go func() {
+			waitDeployments()
+			close(deploymentsDone)
+		}()
+		select {
+		case <-deploymentsDone:
+		case <-ctx.Done():
+			log.Printf("shutdown: a deployment was still running at the deadline")
+		}
+	}
+
 	select {
 	case err := <-serveErr:
 		// The server exited on its own (a listen failure, say): cancel the
@@ -165,30 +202,22 @@ func main() {
 			log.Fatal(err)
 		}
 	case <-ctx.Done():
-		// A signal: stop accepting requests, then let the sampler's loop
-		// finish its tick and any in-flight sweep before exiting.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("shutdown: %v", err)
+		shutdown(shutdownCtx)
+	case <-restartCh:
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdown(shutdownCtx)
+		cancel()
+		if err := db.Close(); err != nil {
+			log.Printf("close the database: %v", err)
 		}
-		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("serve: %v", err)
+		exe, err := os.Executable()
+		if err != nil {
+			log.Printf("migration: find the panel binary: %v; exiting for the restart policy", err)
+			os.Exit(1)
 		}
-		stop()
-		sampler.Wait()
-		// An in-progress Deploy step finishes before the panel exits, within
-		// the shutdown deadline.
-		deploymentsDone := make(chan struct{})
-		go func() {
-			waitDeployments()
-			close(deploymentsDone)
-		}()
-		select {
-		case <-deploymentsDone:
-		case <-shutdownCtx.Done():
-			log.Printf("shutdown: a deployment was still running at the deadline")
-		}
+		reexec(exe, os.Args, os.Environ(), syscall.Exec, os.Exit)
 	}
 }
 

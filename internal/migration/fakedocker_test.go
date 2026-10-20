@@ -39,7 +39,6 @@ type FakeDocker struct {
 	MaintenanceUp bool
 	TraefikUp     bool
 	RootDir       string
-	RestartPolicy string           // the panel container's own
 	Fail          map[string]error // op name -> error to return
 	Calls         []string
 }
@@ -49,7 +48,7 @@ func NewFakeDocker() *FakeDocker {
 		Volumes: map[string]VolumeInfo{}, Blobs: map[string][]byte{}, Unpacked: map[string][]byte{},
 		Sizes: map[string]int64{}, Paths: map[string]PathState{}, FreeB: map[string]int64{}, Images: map[string]ImageInfo{},
 		Pullable: map[string]ImageInfo{}, Loadable: map[string]ImageInfo{}, Running: map[string]bool{},
-		ContainerImages: map[string][]string{}, TraefikUp: true, RootDir: "/var/lib/docker", RestartPolicy: "unless-stopped", Fail: map[string]error{},
+		ContainerImages: map[string][]string{}, TraefikUp: true, RootDir: "/var/lib/docker", Fail: map[string]error{},
 	}
 }
 
@@ -289,12 +288,6 @@ func (f *FakeDocker) Free(_ context.Context, mountSource string) (int64, error) 
 }
 
 func (f *FakeDocker) DockerRootDir(context.Context) (string, error) { return f.RootDir, nil }
-
-func (f *FakeDocker) PanelRestartPolicy(context.Context) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.RestartPolicy, f.Fail["restart-policy"]
-}
 
 func (f *FakeDocker) RunMaintenance(_ context.Context, labels map[string]string) error {
 	f.mu.Lock()

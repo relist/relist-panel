@@ -133,7 +133,7 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 			StateDir: stateDir,
 			Restore:  migration.NewRestorer(local, filepath.Join(stateDir, "staging")),
 			Finalizer: migration.NewFinalizer(migration.FinalizeDeps{
-				Local: local, Exit: migrationOptions.Exit, Queue: queue, Sources: sources.NewStore(db), Domains: domains.NewStore(db),
+				Local: local, Restart: migrationOptions.Restart, Queue: queue, Sources: sources.NewStore(db), Domains: domains.NewStore(db),
 			}),
 			Backoff: migrationOptions.Backoff,
 			Context: ctx,
