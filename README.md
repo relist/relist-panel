@@ -164,17 +164,35 @@ Volume, the host paths you pick and every Image the Composes need. The new
 panel pulls it over HTTPS, item by item; no SSH and no archive file are
 involved.
 
+Drive it from a terminal on each host (ADR-0019), in the install directory:
+
+```bash
+# on the old server
+docker compose exec panel relist-panel migration serve
+# on the new server
+docker compose exec panel relist-panel migration pull
+```
+
+The terminal follows every step to the end, including the panel restarting
+to swap in the migrated database, which signs the web page out. Quitting
+either one does not stop the migration: run the command again to see where
+it is. `relist-panel migration status` prints the same without a terminal
+UI (`--watch` to follow it), and `relist-panel migration resume` is the old
+server's Resume. The web pages below do the same and remain for now.
+
 1. On the new host, install the panel with the **same `RELIST_DATA_DIR`** as
    the old one. Containers mount the data directory by absolute path, so the
    migration refuses a different one. Copy the old install's `.env` too:
    `RELIST_DOMAIN`, `RELIST_ACME_EMAIL` and the Traefik ports live there, not
    in the data directory.
-2. On the old panel, open **Docker → Server migration** and create a migration
-   token (1 hour, 24 hours or 7 days). It is shown once.
-3. Open the new panel. On its setup screen choose **Migrate from another
-   panel** (with `RELIST_ADMIN_EMAIL` set, sign in and use **Docker → Server
-   migration → Migrate from another panel**), and enter the old panel's
-   `https://` URL and the token.
+2. On the old panel, run `migration serve`, or open **Docker → Server
+   migration**, and create a migration token (1 hour, 24 hours or 7 days). It
+   is shown once.
+3. On the new host, run `migration pull`, or open the new panel and choose
+   **Migrate from another panel** on its setup screen (with
+   `RELIST_ADMIN_EMAIL` set, sign in and use **Docker → Server migration →
+   Migrate from another panel**). Enter the old panel's `https://` URL and the
+   token.
 4. Check the preview: sizes, which Images are pulled and which are copied,
    the host paths to include (system paths such as `/etc/localtime` and the
    Docker socket are unticked) and every warning. Start stays disabled while a
@@ -183,7 +201,7 @@ involved.
    a running one finishes, every Compose stops, and its panel-managed Domains
    show a maintenance page. Apps are down from here until DNS moves.
 6. The new panel copies each item, retrying a failed one on its own, then
-   restarts itself, starts Traefik with the old certificates and deploys the
+   re-executes itself in place (the container keeps running), starts Traefik with the old certificates and deploys the
    Composes that were running. Sign in with the old admin account.
 7. Point DNS at the new host, then turn the old one off.
 

@@ -94,3 +94,7 @@ _Avoid_: API key, Pairing code.
 **Migration lock**:
 The persisted state in which the old panel refuses every change and keeps its Composes stopped, so what is copied stays what is there. It survives a restart. After the Migration it remains as **Migrated** until the operator resumes that server.
 _Avoid_: Maintenance mode (the maintenance page is what visitors of its Domains see, not the lock).
+
+**Control socket**:
+The Unix socket inside the panel container through which the `relist-panel` command talks to the running panel. Reaching it requires running a command in the container.
+_Avoid_: admin socket, API socket.

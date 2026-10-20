@@ -69,6 +69,11 @@ describe('ServerMigrationCard', () => {
     expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull();
   });
 
+  it('shows the terminal command', async () => {
+    show();
+    expect(await screen.findByText('docker compose exec panel relist-panel migration serve')).toBeTruthy();
+  });
+
   it('offers to migrate another panel into this one', async () => {
     show();
     expect((await screen.findByRole('link', { name: 'Migrate from another panel' })).getAttribute('href')).toBe('/migration');

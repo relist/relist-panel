@@ -1,5 +1,7 @@
 # Server migration: an empty panel pulls everything from the old one
 
+Amended by ADR-0019: driven from the terminal; finalize re-executes the panel.
+
 Moving the panel to a new host meant copying the data directory, named Volumes, host paths and
 locally built Images by hand, with the same `RELIST_DATA_DIR`, then redeploying every Compose.
 Moving servers easily is the feature the panel was started for.

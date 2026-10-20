@@ -1,0 +1,48 @@
+# A Migration is driven from the terminal
+
+ADR-0018 drove a server **Migration** from web pages. On the new host, the session the operator
+signed in with disappears when finalize swaps in the old host's `panel.db`, so the steps worth
+watching (Traefik starting with the copied certificates, the Composes deploying, `finish` on the
+old host) run while the operator is on the sign-in page. On the old host, a Migration token
+needed only the admin cookie: a stolen session could create one and pull every Volume, the
+database, the chosen host paths and `acme.json` to a host of the thief's choosing.
+
+**Decision:** both hosts drive the Migration from a terminal UI built with Bubble Tea, run in
+the panel container: `relist-panel migration serve` on the old host, `relist-panel migration
+pull` on the new one, plus `status` and `resume`.
+
+- **The TUI is a client, not the worker.** The panel keeps doing the work (`Source`, `Target`,
+  the Finalizer). The TUI talks to it over the **Control socket**, a Unix socket at
+  `/run/relist-panel/control.sock` in the container, outside the data directory. It serves the
+  same handlers as the web routes, without the cookie. Quitting the TUI or losing the SSH
+  connection never stops or pauses a Migration.
+- **Finalize re-executes the panel instead of exiting.** `Begin` used to end with `os.Exit(0)`
+  and rely on `restart: unless-stopped`. The panel is PID 1 of its container, so everything
+  started with `docker exec` died with it. Now main shuts down and calls `syscall.Exec` on its
+  own binary: same PID, same container, a fresh process that swaps the database before opening
+  it, as before. If exec fails, the panel exits 1 and the restart policy takes over.
+- **Running a command in the container is the authorization.** Whoever can `docker exec` into
+  the panel container is root on that host already.
+- **In two phases.** Phase 1 adds the TUI next to the web pages. Phase 2, after real Migrations
+  with the TUI, removes the web pages and the web routes that create tokens and drive a pull,
+  which closes the stolen-session path.
+
+Rejected:
+
+- Carrying the session across the swap with a watch key in `state.json`. It fixes watching, but
+  not the token, and keeps the most complex page of the frontend.
+- A TUI that does the work itself. It dies with the SSH connection, and at finalize.
+- The TUI in a separate container (`docker compose run --rm panel …`). The command is long,
+  must run from the install directory, and still depends on the restart policy.
+- A TUI on the new host only. The token is the part that needs the terminal most.
+
+## Consequences
+
+- Preflight no longer warns about a panel container without a restart policy.
+- The panel image has no curl; the hidden `relist-panel migration api METHOD PATH [JSON]` sends
+  one raw request over the socket, for the probe and debugging.
+- A panel that cannot create the socket (a bare binary run by a user who cannot write `/run`)
+  logs a warning and serves the web as before. `RELIST_CONTROL_SOCKET` moves the socket.
+- Until phase 2, ADR-0018's "who can reach an empty panel can start a Migration into it" and
+  the token's cookie-only authorization still hold.
+- Spec: `.scratch/migration-tui/spec.md`.

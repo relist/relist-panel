@@ -167,6 +167,11 @@ $(say ready)
              seed@example.com / seeded password 123
              Source URL to connect to: http://$OLD:8888   Host path to select: /srv/shop
 
+  from a terminal (ADR-0019):
+    old  docker exec -it $OLD docker exec -it install-panel-1 relist-panel migration serve
+    new  docker exec -it $NEW docker exec -it install-panel-1 relist-panel migration pull
+         this panel's URL: http://127.0.0.1:$NEW_PORT
+
   check postgres on the new host after the migration:
     docker exec $NEW docker exec relist-c$C-db-1 psql -U postgres -c 'SELECT count(*) FROM orders'
   remove everything:

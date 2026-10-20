@@ -77,6 +77,12 @@ export function ServerMigrationCard() {
           RELIST_DATA_DIR, choose Migrate from another panel on its setup screen, and give it this server&apos;s URL and a
           migration token. Nothing here stops until the new server starts the migration.
         </Paragraph>
+        <Paragraph style={{ margin: 0 }}>
+          Or from a terminal on this server, which also shows every step as it happens:{' '}
+          <Text code copyable>
+            docker compose exec panel relist-panel migration serve
+          </Text>
+        </Paragraph>
         {error && <Alert showIcon title={error} type="error" />}
         {expired && <Alert showIcon title="The token expired. Create a new one." type="info" />}
         {created && !expired && (
