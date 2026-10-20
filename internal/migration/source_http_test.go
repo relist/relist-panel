@@ -414,3 +414,17 @@ func TestActivityRouteOnlyOnTheControlMux(t *testing.T) {
 		t.Fatalf("activity on the control mux = %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestActivityCountsItemsNotStreams(t *testing.T) {
+	s := newSourceServer(t)
+	s.startReady(t, s.claim(t))
+	for range 3 {
+		var buf bytes.Buffer
+		if err := s.src.StreamItem(context.Background(), "database", &buf); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a := s.src.Activity(); a.Done != 1 {
+		t.Fatalf("Done after three streams of one item = %d, want 1", a.Done)
+	}
+}

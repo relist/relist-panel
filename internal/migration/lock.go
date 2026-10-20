@@ -100,17 +100,17 @@ type Source struct {
 	step    Step
 	target  string
 	digests map[string]string
-	// sending is the stream started last, for Activity; sent counts the
-	// streams that completed.
+	// sending is the stream started last, for Activity; sent holds the
+	// items whose stream completed at least once.
 	sending *sendingItem
-	sent    int
+	sent    map[string]bool
 }
 
 func NewSource(d SourceDeps) *Source {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	return &Source{d: d, digests: map[string]string{}}
+	return &Source{d: d, digests: map[string]string{}, sent: map[string]bool{}}
 }
 
 func (s *Source) setLock(ctx context.Context, step Step, st LockState) error {

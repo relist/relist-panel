@@ -56,14 +56,14 @@ func (s *Source) StreamItem(ctx context.Context, id string, w io.Writer) error {
 	}
 	s.mu.Lock()
 	s.digests[id] = hex.EncodeToString(h.Sum(nil))
-	s.sent++
+	s.sent[id] = true
 	s.mu.Unlock()
 	return nil
 }
 
 // Activity is what the old host is sending, for `relist-panel migration
 // serve` (ADR-0019): the item streamed last, its bytes so far, and how many
-// streams completed.
+// items were sent whole, each counted once however often it was retried.
 type Activity struct {
 	Item  string `json:"item"`
 	Bytes int64  `json:"bytes"`
@@ -84,7 +84,7 @@ func (c *sendingItem) Write(p []byte) (int, error) {
 func (s *Source) Activity() Activity {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	a := Activity{Done: s.sent}
+	a := Activity{Done: len(s.sent)}
 	if s.sending != nil {
 		a.Item = s.sending.id
 		a.Bytes = s.sending.bytes.Load()
