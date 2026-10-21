@@ -45,7 +45,7 @@ import type {
   VolumeEntry,
 } from './types';
 import type { MetricWindow } from './types';
-import type { MigrationStatus, MigrationToken, TokenLifetime } from './migration';
+import type { MigrationStatus } from './migration';
 
 export type AuthStatus = {
   setupRequired: boolean;
@@ -213,11 +213,8 @@ function jsonInit(method: string, body: unknown): RequestInit {
 }
 
 export const api = {
-  // A server Migration's old host (ADR-0018).
+  // A server Migration's lock on the old host (ADR-0018).
   migrationStatus: () => request<MigrationStatus>('/api/migration/status'),
-  createMigrationToken: (lifetime: TokenLifetime) => request<MigrationToken>('/api/migration/tokens', jsonInit('POST', { lifetime })),
-  revokeMigrationToken: () => request<void>('/api/migration/tokens/current', { method: 'DELETE' }),
-  resumeMigration: (confirm: string) => request<{ warning?: string } | undefined>('/api/migration/resume', jsonInit('POST', { confirm })),
   resumeDocker: (confirm: string) => request<{ resumed: boolean }>('/api/docker/recover', jsonInit('POST', { confirm })),
   dockerReport: (refresh = false) => request<DockerReport>(`/api/docker${refresh ? '?refresh=1' : ''}`),
   pruneDocker: (kind: DockerPruneKind, confirm: string) => request<DockerPruneResult>('/api/docker/prune', jsonInit('POST', { kind, confirm })),

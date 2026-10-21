@@ -18,17 +18,10 @@ afterEach(() => {
 });
 
 describe('migration api', () => {
-  it('sends each old-host call to its route', async () => {
+  it('reads the lock status from its route', async () => {
     const calls = stubFetch();
     await api.migrationStatus();
-    await api.createMigrationToken('24h');
-    stubFetch(204);
-    await api.revokeMigrationToken();
-    await api.resumeMigration('RESUME');
-    expect(calls).toEqual([
-      { url: '/api/migration/status', method: 'GET', body: undefined },
-      { url: '/api/migration/tokens', method: 'POST', body: { lifetime: '24h' } },
-    ]);
+    expect(calls).toEqual([{ url: '/api/migration/status', method: 'GET', body: undefined }]);
   });
 
   it('carries the status of a refused call', async () => {

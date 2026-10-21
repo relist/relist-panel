@@ -26,7 +26,6 @@ export function RequireAuth() {
   const pending = isPending('auth-status');
   const [sawPending, setSawPending] = useState(false);
   const lock = useMigrationLock(auth.checked && auth.authenticated);
-  const setLock = lock.reset;
   useEffect(() => {
     if (pending) {
       setSawPending(true);
@@ -67,7 +66,7 @@ export function RequireAuth() {
 
   const screen = entryScreen(auth);
   if (screen === 'app' && lock.status && lock.status.step !== '') {
-    return <MigrationLockPage onResumed={() => setLock()} status={lock.status} />;
+    return <MigrationLockPage status={lock.status} />;
   }
   if (screen !== 'app') {
     return (
@@ -83,15 +82,17 @@ export function RequireAuth() {
 
 /**
  * The panel's Migration lock (ADR-0018), read once signed in and every five
- * seconds while it is set, so the lock page follows the old host's steps. A
- * failed read leaves the app as it is: the API's own 503s still say why.
+ * seconds while it is set, so the lock page follows the old host's steps and
+ * leaves once `migration resume` lifts it (ADR-0019). A failed read leaves the
+ * app as it is, the API's own 503s still saying why, but keeps a set lock
+ * polling: the page has no other way out.
  */
 function useMigrationLock(enabled: boolean) {
   const [status, setStatus] = useState<MigrationStatus>();
-  const [version, setVersion] = useState(0);
   useEffect(() => {
     if (!enabled) return;
     let stopped = false;
+    let locked = false;
     let timer: ReturnType<typeof setTimeout>;
     const read = () => {
       api
@@ -99,17 +100,20 @@ function useMigrationLock(enabled: boolean) {
         .then((next) => {
           if (stopped) return;
           setStatus(next);
-          if (next.step !== '') timer = setTimeout(read, 5000);
+          locked = next.step !== '';
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => {
+          if (!stopped && locked) timer = setTimeout(read, 5000);
+        });
     };
     read();
     return () => {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [enabled, version]);
-  return { status, reset: () => setVersion((v) => v + 1) };
+  }, [enabled]);
+  return { status };
 }
 
 export function CenteredScreen({ children }: { children: ReactNode }) {

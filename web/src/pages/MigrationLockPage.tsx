@@ -1,10 +1,7 @@
-import { Alert, App, Button, Card, Flex, Result, Steps, Typography } from 'antd';
-import { useState } from 'react';
+import { Card, Flex, Result, Steps, Typography } from 'antd';
 
 import { CenteredScreen } from '../app/RequireAuth';
-import { DangerModal } from '../components/DangerModal';
 import { RelativeTime } from '../components/primitives';
-import { api } from '../data/api';
 import type { MigrationStatus, MigrationStep } from '../data/migration';
 
 const { Paragraph, Text } = Typography;
@@ -17,49 +14,32 @@ const LOCK_STEPS: { step: MigrationStep; title: string }[] = [
 ];
 
 /**
- * The full page a locked old host shows instead of the app (ADR-0018). While
- * locked, the only action is Cancel migration; once Migrated, Resume this
- * server. Both are the same typed `RESUME`.
+ * The full page a locked old host shows instead of the app (ADR-0018). It only
+ * shows where the Migration is: cancelling it, or running this server again
+ * once Migrated, is `migration resume` in a terminal (ADR-0019). The page
+ * leaves by itself once the lock is gone.
  */
-export function MigrationLockPage({ onResumed, status }: { onResumed: () => void; status: MigrationStatus }) {
-  const { message } = App.useApp();
-  const [confirming, setConfirming] = useState(false);
-  const [resuming, setResuming] = useState(false);
-  const [error, setError] = useState<string>();
+export function MigrationLockPage({ status }: { status: MigrationStatus }) {
   const migrated = status.step === 'migrated';
-  const action = migrated ? 'Resume this server' : 'Cancel migration';
-
-  const resume = async () => {
-    setResuming(true);
-    setError(undefined);
-    try {
-      const result = await api.resumeMigration('RESUME');
-      setConfirming(false);
-      if (result?.warning) {
-        // Unlocked, but some Composes did not start; say which.
-        message.warning(result.warning, 10);
-      } else {
-        message.success(migrated ? 'This server is running again' : 'Migration canceled');
-      }
-      onResumed();
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : 'Could not resume this server');
-    } finally {
-      setResuming(false);
-    }
-  };
+  const resume = (
+    <Flex gap={4} vertical>
+      <Text type="secondary">
+        {migrated
+          ? 'To run this server again, run this on it. Data written on the new server after the migration is not here.'
+          : 'To cancel the migration, run this on this server. The Composes that were running start again here.'}
+      </Text>
+      <Text code copyable>
+        docker compose exec panel relist-panel migration resume
+      </Text>
+    </Flex>
+  );
 
   return (
     <CenteredScreen>
       <Card style={{ maxWidth: 640, width: '100%' }}>
-        {error && <Alert showIcon style={{ marginBottom: 16 }} title={error} type="error" />}
         {migrated ? (
           <Result
-            extra={
-              <Button danger onClick={() => setConfirming(true)}>
-                {action}
-              </Button>
-            }
+            extra={resume}
             status="success"
             subTitle={
               <Flex gap={4} vertical>
@@ -105,33 +85,10 @@ export function MigrationLockPage({ onResumed, status }: { onResumed: () => void
               orientation="vertical"
               size="small"
             />
-            <Flex justify="flex-end">
-              <Button danger onClick={() => setConfirming(true)}>
-                {action}
-              </Button>
-            </Flex>
+            {resume}
           </Flex>
         )}
       </Card>
-      <DangerModal
-        confirmWord="RESUME"
-        consequences={
-          migrated ? (
-            <Alert showIcon title="Data written on the new server after the migration is not here." type="warning" />
-          ) : undefined
-        }
-        description={
-          migrated
-            ? 'The maintenance page goes away and the Composes that were running start again on this server.'
-            : 'The new server stops copying. The maintenance page goes away and the Composes that were running start again here.'
-        }
-        loading={resuming}
-        okText={action}
-        onCancel={() => setConfirming(false)}
-        onConfirm={() => void resume()}
-        open={confirming}
-        title={action}
-      />
     </CenteredScreen>
   );
 }

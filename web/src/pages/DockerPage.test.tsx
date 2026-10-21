@@ -19,7 +19,6 @@ const mocks = vi.hoisted(() => ({
   pruneDocker: vi.fn(),
   globalDeploymentQueue: vi.fn(),
   resumeDocker: vi.fn(),
-  migrationStatus: vi.fn(),
 }));
 vi.mock('../data/api', () => ({ api: mocks }));
 const report = {
@@ -70,7 +69,6 @@ beforeEach(() => {
   mocks.dockerReport.mockResolvedValue(report);
   mocks.resumeDocker.mockResolvedValue({ resumed: true });
   mocks.globalDeploymentQueue.mockResolvedValue([]);
-  mocks.migrationStatus.mockResolvedValue({ step: '', claimedBy: '', targetUrl: '', lockedAt: null, migratedAt: null, tokenExpiresAt: null });
   mocks.pruneDocker.mockResolvedValue({
     kind: 'build-cache',
     spaceReclaimed: 1024,

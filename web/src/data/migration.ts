@@ -5,8 +5,6 @@
 
 export type MigrationStep = '' | 'locked' | 'stopping' | 'maintenance' | 'ready' | 'migrated';
 
-export type TokenLifetime = '1h' | '24h' | '168h';
-
 export type MigrationStatus = {
   step: MigrationStep;
   claimedBy: string;
@@ -15,5 +13,3 @@ export type MigrationStatus = {
   migratedAt: string | null;
   tokenExpiresAt: string | null;
 };
-
-export type MigrationToken = { token: string; expiresAt: string };
