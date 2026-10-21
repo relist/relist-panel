@@ -144,6 +144,21 @@ func TestRestoreUntaggedImageGetsMigratedTag(t *testing.T) {
 	}
 }
 
+// The Done screen lists an untagged Image under its new tag (spec): the
+// restorer reports it, and the pull carries it into the summary's notes.
+func TestRestoreUntaggedImageIsReported(t *testing.T) {
+	r, docker, _ := newTestRestorer(t)
+	img := ImageInfo{ID: "sha256:0123456789abcdef", Tags: []string{}, RepoDigests: []string{}}
+	docker.Loadable["sha256:0123456789abcdef"] = img
+	note, err := r.RestoreImage(context.Background(), Item{Kind: KindImage, Image: &img}, savedBody(img.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if note != "Image 0123456789ab had no tag; it is tagged relist-migrated/0123456789ab on this host" {
+		t.Fatalf("note = %q", note)
+	}
+}
+
 func TestLoadedImageIDMismatchIsWarning(t *testing.T) {
 	r, docker, _ := newTestRestorer(t)
 	img := ImageInfo{ID: "sha256:classic", Tags: []string{"app:1"}, RepoDigests: []string{}}

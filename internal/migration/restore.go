@@ -175,5 +175,9 @@ func (r *restorer) RestoreImage(ctx context.Context, item Item, fetch func(conte
 	} else if !ok || loaded.ID != img.ID {
 		return fmt.Sprintf("Image %s has a different ID on this host (image store differs); content was loaded from the source", ref), nil
 	}
+	if len(img.Tags) == 0 {
+		// The Done screen lists it, so the operator can find it again.
+		return fmt.Sprintf("Image %s had no tag; it is tagged %s on this host", shortID(img.ID), ref), nil
+	}
 	return "", nil
 }
