@@ -31,27 +31,8 @@ describe('migration api', () => {
     ]);
   });
 
-  it('sends each pull call to its route with its body', async () => {
-    const calls = stubFetch();
-    await api.migrationConnect('https://old.example.com', 'tok');
-    await api.migrationRecheck(['/srv/up']);
-    await api.migrationStart(['/srv/up']);
-    await api.migrationProgress();
-    await api.migrationRetry();
-    expect(calls).toEqual([
-      { url: '/api/migration/pull/connect', method: 'POST', body: { sourceUrl: 'https://old.example.com', token: 'tok' } },
-      { url: '/api/migration/pull/recheck', method: 'POST', body: { hostPaths: ['/srv/up'] } },
-      { url: '/api/migration/pull/start', method: 'POST', body: { hostPaths: ['/srv/up'] } },
-      { url: '/api/migration/pull/progress', method: 'GET', body: undefined },
-      { url: '/api/migration/pull/retry', method: 'POST', body: undefined },
-    ]);
-    const abort = stubFetch(204);
-    await api.migrationAbort();
-    expect(abort).toEqual([{ url: '/api/migration/pull/abort', method: 'POST', body: undefined }]);
-  });
-
   it('carries the status of a refused call', async () => {
     stubFetch(401, { error: 'authentication required' });
-    await expect(api.migrationProgress()).rejects.toEqual(new ApiError(401, 'authentication required'));
+    await expect(api.migrationStatus()).rejects.toEqual(new ApiError(401, 'authentication required'));
   });
 });

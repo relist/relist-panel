@@ -1,8 +1,6 @@
 import { Alert, App, Button, Card, Flex, Segmented, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router';
 
-import { paths } from '../app/paths';
 import { api } from '../data/api';
 import type { MigrationStatus, MigrationToken, TokenLifetime } from '../data/migration';
 import { RelativeTime } from './primitives';
@@ -113,10 +111,6 @@ export function ServerMigrationCard() {
               </Button>
             </>
           )}
-        </Flex>
-        <Flex align="center" gap={8} wrap>
-          <Text type="secondary">Moving another panel here instead? This panel must have no Projects yet.</Text>
-          <Link to={paths.migration}>Migrate from another panel</Link>
         </Flex>
       </Flex>
     </Card>

@@ -363,11 +363,12 @@ export function SetupPage() {
               Create admin account
             </Button>
           </Form>
-          <Flex justify="center" style={{ marginTop: 16 }}>
-            <Button onClick={() => navigate(paths.migration)} type="link">
-              Migrate from another panel
-            </Button>
-          </Flex>
+          <Paragraph style={{ marginBottom: 0, marginTop: 16 }} type="secondary">
+            Moving a panel here? Don&apos;t create an admin. Run this on this server instead:{' '}
+            <Text code copyable>
+              docker compose exec panel relist-panel migration pull
+            </Text>
+          </Paragraph>
         </>
       ) : (
         <Result

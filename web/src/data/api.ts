@@ -45,7 +45,7 @@ import type {
   VolumeEntry,
 } from './types';
 import type { MetricWindow } from './types';
-import type { MigrationProgress, MigrationStatus, MigrationToken, TokenLifetime } from './migration';
+import type { MigrationStatus, MigrationToken, TokenLifetime } from './migration';
 
 export type AuthStatus = {
   setupRequired: boolean;
@@ -218,14 +218,6 @@ export const api = {
   createMigrationToken: (lifetime: TokenLifetime) => request<MigrationToken>('/api/migration/tokens', jsonInit('POST', { lifetime })),
   revokeMigrationToken: () => request<void>('/api/migration/tokens/current', { method: 'DELETE' }),
   resumeMigration: (confirm: string) => request<{ warning?: string } | undefined>('/api/migration/resume', jsonInit('POST', { confirm })),
-  // Its new host: the setup screen's pull.
-  migrationConnect: (sourceUrl: string, token: string) =>
-    request<MigrationProgress>('/api/migration/pull/connect', jsonInit('POST', { sourceUrl, token })),
-  migrationRecheck: (hostPaths: string[]) => request<MigrationProgress>('/api/migration/pull/recheck', jsonInit('POST', { hostPaths })),
-  migrationStart: (hostPaths: string[]) => request<MigrationProgress>('/api/migration/pull/start', jsonInit('POST', { hostPaths })),
-  migrationProgress: () => request<MigrationProgress>('/api/migration/pull/progress'),
-  migrationRetry: () => request<MigrationProgress>('/api/migration/pull/retry', { method: 'POST' }),
-  migrationAbort: () => request<void>('/api/migration/pull/abort', { method: 'POST' }),
   resumeDocker: (confirm: string) => request<{ resumed: boolean }>('/api/docker/recover', jsonInit('POST', { confirm })),
   dockerReport: (refresh = false) => request<DockerReport>(`/api/docker${refresh ? '?refresh=1' : ''}`),
   pruneDocker: (kind: DockerPruneKind, confirm: string) => request<DockerPruneResult>('/api/docker/prune', jsonInit('POST', { kind, confirm })),

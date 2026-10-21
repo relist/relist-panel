@@ -1,6 +1,6 @@
 /**
  * A server Migration's wire types (ADR-0018). The old host reports its lock as
- * `MigrationStatus`; the new host's setup screen polls `MigrationProgress`.
+ * `MigrationStatus`; the pull itself is driven from the terminal (ADR-0019).
  */
 
 export type MigrationStep = '' | 'locked' | 'stopping' | 'maintenance' | 'ready' | 'migrated';
@@ -17,69 +17,3 @@ export type MigrationStatus = {
 };
 
 export type MigrationToken = { token: string; expiresAt: string };
-
-export type MigrationPhase = '' | 'connected' | 'locking' | 'pulling' | 'paused' | 'finalizing' | 'done';
-
-export type MigrationItemKind = 'database' | 'data-dir' | 'volume' | 'host-path' | 'image';
-
-export type MigrationItem = {
-  id: string;
-  kind: MigrationItemKind;
-  size: number;
-  volume?: { name: string; driver?: string; options?: Record<string, string> | null };
-  hostPath?: string;
-  image?: { id: string; tags: string[]; repoDigests: string[]; size: number };
-};
-
-export type HostPathCandidate = { path: string; system: boolean; size: number; composes: string[] };
-
-export type SourceInfo = {
-  protocol: number;
-  schemaVersion: number;
-  dataDir: string;
-  hostPaths: HostPathCandidate[];
-  volumes: MigrationItem[];
-  images: MigrationItem[];
-  dataDirSize: number;
-  databaseSize: number;
-  activeDeployment?: string;
-  warnings: string[];
-};
-
-export type MigrationCheck = { blocking: boolean; message: string };
-
-export type MigrationItemProgress = {
-  id: string;
-  kind: MigrationItemKind;
-  size: number;
-  done: number;
-  state: 'pending' | 'running' | 'done' | 'failed';
-  attempts: number;
-  error?: string;
-};
-
-export type MigrationSummary = {
-  deployments: { composeId: number; number: number; error?: string }[];
-  warnings: string[];
-  dns: string[];
-};
-
-export type MigrationLogEntry = { at: string; level: 'info' | 'warn' | 'error'; item?: string; message: string };
-
-export type FinalizeStep = 'stop-traefik' | 'move-data' | 'restart' | 'start-traefik' | 'deploy' | 'finish';
-
-export type MigrationProgress = {
-  phase: MigrationPhase;
-  sourceUrl: string;
-  lockStep: MigrationStep;
-  selected: string[];
-  items: MigrationItemProgress[];
-  checks: MigrationCheck[];
-  info: SourceInfo | null;
-  warnings: string[];
-  error?: string;
-  summary?: MigrationSummary;
-  /** The activity log, oldest first. */
-  log: MigrationLogEntry[];
-  finalizeStep?: FinalizeStep;
-};
