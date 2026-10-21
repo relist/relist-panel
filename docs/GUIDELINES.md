@@ -351,7 +351,17 @@ Split layout: what the panel is on the left (in `colorPrimaryBg`), the form on t
 two-step flow (Account → Ready) ending in a `Result` with the Project → Environment → Compose
 mental model restated. When the account has two-factor on, sign-in asks for the code as a second
 step: an autofocused six-digit `Input.OTP` replaces the password form, a complete code submits, and
-**Back** returns to the password step and clears it.
+**Back** returns to the password step and clears it. Under the setup form, a secondary line tells an
+operator moving a panel here not to create an admin and names
+`docker compose exec panel relist-panel migration pull` as copyable code: a server Migration is
+started from a terminal only (ADR-0019).
+
+**Migration lock.** While an old host is locked for a Migration, a signed-in admin sees one centred
+card instead of the app. Locked, it shows *This server is being migrated*, who is copying it, and the
+lock's steps as vertical `Steps`; Migrated, a success `Result` titled *Migrated to* the target (a link
+only when it is `http(s)://`) with when, and what is left to do. It has no action buttons: it names
+`docker compose exec panel relist-panel migration resume` as copyable code with what resuming does,
+and leaves by itself once the lock is lifted.
 
 ### 4.9 Design system (`#/design/flow`, `#/design/board`, `#/design/map`, `#/design/guidelines`, `#/design/states`)
 
@@ -388,8 +398,11 @@ for "does every state have a way in?", in the only terms the registry can honest
 
 ### 4.10 Account (`/account`)
 
-The single admin account, reached from the header's account dropdown. One `PageHeader` over two
-cards: *Sign-in* shows the email read-only, and *Two-factor authentication* carries an `On`/`Off`
+The single admin account, reached from the header's account dropdown. One `PageHeader` over three
+cards: *Sign-in* shows the email read-only; *Password* has a default **Change password** button
+opening a modal (current password, the new one twice, and a code when two-factor is on), with a
+warning while the password is still the one in `RELIST_ADMIN_PASSWORD`, which the app shell also
+flags in a banner; and *Two-factor authentication* carries an `On`/`Off`
 tag, the action button, and a permanent note with the `reset-2fa` command for a lost authenticator.
 Turning on is a three-step modal (Password → Scan → Verify): the QR code comes from the setup URI
 with the secret copyable beside it for manual entry, and a complete six-digit code confirms it.
@@ -456,6 +469,9 @@ remove eligible resources without opening a terminal.
 - Unknown prune completion pauses panel Docker work. Show **Resume Docker operations** with
   a typed `RESUME DOCKER` confirmation requiring the operator to verify daemon deletion has
   finished. This is an acknowledgement, not a cancellation or daemon completion probe.
+- A *Server migration* card closes the page. It explains a server Migration and names the two
+  commands as copyable code, `… relist-panel migration serve` on this server and
+  `… relist-panel migration pull` on the new one. It calls no API and offers no token (ADR-0019).
 
 ## 5. Status vocabulary
 
