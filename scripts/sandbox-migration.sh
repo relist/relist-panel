@@ -8,8 +8,10 @@
 #   new panel  http://127.0.0.1:18882   seed@example.com  / seeded password 123 (from the env)
 #
 # The two use different hostnames so their session cookies do not overwrite
-# each other. On the new panel, connect to http://sandbox-old:8888 (the old
-# host's name on the sandbox network). `task sandbox:migration:reload` puts a
+# each other. The migration itself runs from a terminal on each host
+# (ADR-0019): the printout names the commands, and on the new host the old
+# one is http://sandbox-old:8888 (its name on the sandbox network).
+# `task sandbox:migration:reload` puts a
 # backend change into the running panels, `task sandbox:migration:reset` wipes
 # both back to the start (the old one seeded, the new one empty), and
 # `task sandbox:migration:down` removes everything. Traefik's ACME CA points at an unreachable address, so nothing
@@ -171,12 +173,11 @@ $(say ready)
              Project "shop" > production > Compose "store" (postgres with 1000 rows, a local image, /srv/shop)
   new panel  http://127.0.0.1:$NEW_PORT
              seed@example.com / seeded password 123
-             Source URL to connect to: http://$OLD:8888   Host path to select: /srv/shop
 
-  from a terminal (ADR-0019):
+  migrate from a terminal (ADR-0019):
     old  docker exec -it $OLD docker exec -it install-panel-1 relist-panel migration serve
     new  docker exec -it $NEW docker exec -it install-panel-1 relist-panel migration pull
-         this panel's URL: http://127.0.0.1:$NEW_PORT
+         old panel URL: http://$OLD:8888   this panel's URL: http://127.0.0.1:$NEW_PORT   host path: /srv/shop
 
   check postgres on the new host after the migration:
     docker exec $NEW docker exec relist-c$C-db-1 psql -U postgres -c 'SELECT count(*) FROM orders'

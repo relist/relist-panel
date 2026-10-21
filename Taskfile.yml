@@ -48,11 +48,6 @@ tasks:
     cmds:
       - ./scripts/sandbox-migration.sh reload
 
-  dev:migration:
-    desc: Run Vite dev servers for both migration sandbox panels (starts the sandbox if needed, FRESH=1 for a new one)
-    cmds:
-      - ./scripts/dev-migration.sh
-
   sandbox:migration:reset:
     desc: Wipe the migration sandbox back to the start, the old panel reseeded and the new one empty
     cmds:

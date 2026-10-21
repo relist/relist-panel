@@ -132,14 +132,17 @@ ACME_OLD=$(docker exec "$OLD" sh -c "cat $DATA/.traefik/acme.json 2>/dev/null | 
 ACME_OLD_TEXT=$(docker exec "$OLD" cat "$DATA/.traefik/acme.json" 2>/dev/null || echo "(none)")
 
 say "migrating"
-TOKEN=$(api "$OLD_IP" old POST /api/migration/tokens '{"lifetime":"1h"}' | body | json 'd["token"]')
-# The env admin closes setup and the pull routes until someone signs in.
-[ "$(api "$NEW_IP" new POST /api/auth/setup "$CREDS" | code)" = 409 ] || fail "setup is still open on the new host"
-[ "$(api "$NEW_IP" new GET /api/migration/pull/progress | code)" = 401 ] || fail "the pull routes answer without a sign-in"
-[ "$(api "$NEW_IP" new POST /api/auth/login "$SEED" | code)" = 200 ] || fail "sign-in with the env admin"
-# The pull is driven over the control socket inside the panel container, the
-# way relist-panel migration pull does it (ADR-0019).
+# Both hosts are driven over the control socket inside the panel container,
+# the way relist-panel migration serve and pull do it (ADR-0019).
+oldctl() { docker exec "$OLD" docker exec install-panel-1 relist-panel migration api "$@"; }
 ctl() { docker exec "$NEW" docker exec install-panel-1 relist-panel migration api "$@"; }
+TOKEN=$(oldctl POST /api/migration/tokens '{"lifetime":"1h"}' | json 'd["token"]') || fail "token over the old host's socket"
+# The env admin closes setup on the new host.
+[ "$(api "$NEW_IP" new POST /api/auth/setup "$CREDS" | code)" = 409 ] || fail "setup is still open on the new host"
+[ "$(api "$NEW_IP" new POST /api/auth/login "$SEED" | code)" = 200 ] || fail "sign-in with the env admin"
+# A signed-in web session can neither pull nor create a token.
+[ "$(api "$NEW_IP" new GET /api/migration/pull/progress | code)" = 404 ] || fail "the new host still serves the pull routes on the web"
+[ "$(api "$OLD_IP" old POST /api/migration/tokens '{"lifetime":"1h"}' | code)" = 404 ] || fail "the old host still creates tokens on the web"
 out=$(ctl POST /api/migration/pull/connect "{\"sourceUrl\":\"http://$OLD_IP:8888\",\"token\":\"$TOKEN\",\"selfUrl\":\"http://$NEW_IP:8888\"}") || fail "connect: $out"
 # Finalize must re-execute the panel in place: same container, nothing
 # restarted, so a status --watch started before it follows it to the end.

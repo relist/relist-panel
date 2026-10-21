@@ -23,9 +23,9 @@ pull` on the new one, plus `status` and `resume`.
   it, as before. If exec fails, the panel exits 1 and the restart policy takes over.
 - **Running a command in the container is the authorization.** Whoever can `docker exec` into
   the panel container is root on that host already.
-- **In two phases.** Phase 1 adds the TUI next to the web pages. Phase 2, after real Migrations
-  with the TUI, removes the web pages and the web routes that create tokens and drive a pull,
-  which closes the stolen-session path.
+- **In two phases.** Phase 1 added the TUI next to the web pages. Phase 2 (2026-10-21) removed
+  the web pages and the web routes that create tokens, resume the old host and drive a pull,
+  which closes the stolen-session path. The old host's lock page stays, read-only.
 
 Rejected:
 
@@ -43,6 +43,7 @@ Rejected:
   one raw request over the socket, for the probe and debugging.
 - A panel that cannot create the socket (a bare binary run by a user who cannot write `/run`)
   logs a warning and serves the web as before. `RELIST_CONTROL_SOCKET` moves the socket.
-- Until phase 2, ADR-0018's "who can reach an empty panel can start a Migration into it" and
-  the token's cookie-only authorization still hold.
+- Tokens, Resume and the pull exist only on the control socket. The web keeps the routes that
+  move data between the hosts, which authenticate with the Migration session key, and the
+  lock's status for the lock page.
 - Spec: `.scratch/migration-tui/spec.md`.

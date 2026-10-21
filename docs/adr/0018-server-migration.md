@@ -47,6 +47,6 @@ Migration, the lock stays on as **Migrated** until the operator explicitly resum
   until DNS moves.
 - **Queued Deployments are canceled** on the old host at lock time, and in the copied database at
   finalize.
-- **Who can reach an empty panel can start a Migration into it.** This is the same exposure as the
-  first-admin setup screen today. Install, then migrate straight away.
+- **Superseded by ADR-0019:** a Migration is started from a shell in the panel container, so
+  reaching an empty panel's web page no longer starts one.
 - Spec: `.scratch/server-migration/spec.md`.

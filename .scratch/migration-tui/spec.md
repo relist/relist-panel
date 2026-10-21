@@ -1,7 +1,7 @@
 # Spec — Drive a server migration from the terminal
 
 Date: 2026-10-20.
-Status: needs-triage
+Status: done (phase 1 and phase 2)
 
 Builds on `.scratch/server-migration/spec.md` and ADR-0018. Everything those describe about what a
 **Migration** copies, the **Migration lock**, the item protocol between the two hosts, preflight
@@ -307,3 +307,7 @@ docker exec -it sandbox-new docker exec -it install-panel-1 relist-panel migrati
   `acme.json` matched as before.
 - The first run that day failed to build the image: the Dockerfile copied only `main.go` and
   `cli.go`, not the new `restart.go` and `control.go`. It now copies every root `.go` file.
+- **2026-10-21**, phase 2, Docker 29.8.0, two `docker:27-dind` hosts, `task probe:migration`:
+  `probe: migration ok`. The token came from the old host's control socket. Signed in on the web,
+  `GET /api/migration/pull/progress` on the new host and `POST /api/migration/tokens` on the old
+  host both answered 404. The re-execute checks passed as before.
