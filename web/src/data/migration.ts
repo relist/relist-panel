@@ -13,3 +13,8 @@ export type MigrationStatus = {
   migratedAt: string | null;
   tokenExpiresAt: string | null;
 };
+
+/** The terminal command that runs a migration subcommand in the panel container (ADR-0019). */
+export function migrationCommand(subcommand: 'serve' | 'pull' | 'resume'): string {
+  return `docker compose exec panel relist-panel migration ${subcommand}`;
+}

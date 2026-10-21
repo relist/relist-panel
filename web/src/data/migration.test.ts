@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError, api } from './api';
+import { migrationCommand } from './migration';
 
 type Call = { url: string; method: string; body: unknown };
 
@@ -27,5 +28,11 @@ describe('migration api', () => {
   it('carries the status of a refused call', async () => {
     stubFetch(401, { error: 'authentication required' });
     await expect(api.migrationStatus()).rejects.toEqual(new ApiError(401, 'authentication required'));
+  });
+});
+
+describe('migrationCommand', () => {
+  it('runs the subcommand in the panel container', () => {
+    expect(migrationCommand('pull')).toBe('docker compose exec panel relist-panel migration pull');
   });
 });

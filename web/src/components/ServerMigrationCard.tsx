@@ -1,5 +1,7 @@
 import { Card, Flex, Typography } from 'antd';
 
+import { migrationCommand } from '../data/migration';
+
 const { Paragraph, Text } = Typography;
 
 /**
@@ -19,13 +21,13 @@ export function ServerMigrationCard() {
         <Flex gap={4} vertical>
           <Text type="secondary">On this server</Text>
           <Text code copyable>
-            docker compose exec panel relist-panel migration serve
+            {migrationCommand('serve')}
           </Text>
         </Flex>
         <Flex gap={4} vertical>
           <Text type="secondary">On the new server</Text>
           <Text code copyable>
-            docker compose exec panel relist-panel migration pull
+            {migrationCommand('pull')}
           </Text>
         </Flex>
       </Flex>

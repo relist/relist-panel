@@ -3,6 +3,7 @@ import { Card, Flex, Result, Steps, Typography } from 'antd';
 import { CenteredScreen } from '../app/RequireAuth';
 import { RelativeTime } from '../components/primitives';
 import type { MigrationStatus, MigrationStep } from '../data/migration';
+import { migrationCommand } from '../data/migration';
 
 const { Paragraph, Text } = Typography;
 
@@ -29,7 +30,7 @@ export function MigrationLockPage({ status }: { status: MigrationStatus }) {
           : 'To cancel the migration, run this on this server. The Composes that were running start again here.'}
       </Text>
       <Text code copyable>
-        docker compose exec panel relist-panel migration resume
+        {migrationCommand('resume')}
       </Text>
     </Flex>
   );
