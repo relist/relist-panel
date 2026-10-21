@@ -150,12 +150,18 @@ C=$(create "/api/projects/$P/environments/$E/composes" "{\"name\":\"store\",\"ya
 BASE="/api/projects/$P/environments/$E/composes/$C"
 api "$OLD" POST "$BASE/domains" '{"host":"shop.localhost","service":"files","port":80}' >/dev/null
 [ "$(api "$OLD" POST "$BASE/deployments" '{"mode":"deploy"}' | code)" = 202 ] || fail "deploy on the old panel"
+# pg_isready can answer from the image's temporary initdb server, which then
+# shuts down: retry the seed until the real server takes it.
+seeded=""
 for _ in $(seq 120); do
-	docker exec "$OLD" sh -c "docker exec relist-c$C-db-1 pg_isready -U postgres" >/dev/null 2>&1 && break
+	if docker exec "$OLD" docker exec "relist-c$C-db-1" psql -qU postgres -c \
+		'CREATE TABLE orders (id int, item text); INSERT INTO orders SELECT n, '"'"'item '"'"' || n FROM generate_series(1, 1000) n;' >/dev/null 2>&1; then
+		seeded=1
+		break
+	fi
 	sleep 2
 done
-docker exec "$OLD" docker exec "relist-c$C-db-1" psql -qU postgres -c \
-	'CREATE TABLE orders (id int, item text); INSERT INTO orders SELECT n, '"'"'item '"'"' || n FROM generate_series(1, 1000) n;' >/dev/null
+[ -n "$seeded" ] || fail "seed postgres on the old panel"
 
 cat <<EOF
 
