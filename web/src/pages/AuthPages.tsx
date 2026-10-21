@@ -5,7 +5,7 @@ import { Navigate, useLocation, useNavigate } from 'react-router';
 
 import { entryScreen, signInTarget } from '../app/entry';
 import { paths } from '../app/paths';
-import { CenteredScreen } from '../app/RequireAuth';
+import { CenteredScreen } from '../app/CenteredScreen';
 import type { LoginResult } from '../data/api';
 import { migrationCommand } from '../data/migration';
 import { usePanel } from '../data/store';

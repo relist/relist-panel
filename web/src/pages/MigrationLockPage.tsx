@@ -1,6 +1,6 @@
 import { Card, Flex, Result, Steps, Typography } from 'antd';
 
-import { CenteredScreen } from '../app/RequireAuth';
+import { CenteredScreen } from '../app/CenteredScreen';
 import { RelativeTime } from '../components/primitives';
 import type { MigrationStatus, MigrationStep } from '../data/migration';
 import { migrationCommand } from '../data/migration';

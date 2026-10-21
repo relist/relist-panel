@@ -1,12 +1,12 @@
-import { Alert, Button, Card, Layout, Spin, Typography } from 'antd';
+import { Alert, Button, Card, Spin, Typography } from 'antd';
 import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router';
 
 import { ApiError, api } from '../data/api';
 import type { MigrationStatus } from '../data/migration';
 import { usePanel } from '../data/store';
 import { MigrationLockPage } from '../pages/MigrationLockPage';
+import { CenteredScreen } from './CenteredScreen';
 import { entryScreen } from './entry';
 import { paths } from './paths';
 
@@ -124,12 +124,4 @@ function useMigrationLock(enabled: boolean, signedOut: () => void) {
     };
   }, [enabled]);
   return { status };
-}
-
-export function CenteredScreen({ children }: { children: ReactNode }) {
-  return (
-    <Layout style={{ alignItems: 'center', display: 'flex', justifyContent: 'center', minHeight: '100vh', padding: 24 }}>
-      {children}
-    </Layout>
-  );
 }
