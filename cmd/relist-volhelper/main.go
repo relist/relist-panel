@@ -362,6 +362,8 @@ func runProbe(stdout, stderr io.Writer, vol *volfs.FS, name string) int {
 	var answer struct {
 		Exists bool `json:"exists"`
 		Empty  bool `json:"empty"`
+		// Special is a socket, device or FIFO: nothing a migration copies.
+		Special bool `json:"special"`
 	}
 	entry, err := vol.Stat(name)
 	switch {
@@ -370,6 +372,7 @@ func runProbe(stdout, stderr io.Writer, vol *volfs.FS, name string) int {
 		return fail(stderr, err)
 	default:
 		answer.Exists = true
+		answer.Special = entry.Kind == volfs.KindOther
 		if entry.Kind == volfs.KindDir {
 			children, err := vol.List(name)
 			if err != nil {

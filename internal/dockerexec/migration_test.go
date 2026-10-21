@@ -125,9 +125,10 @@ func TestParseLoaded(t *testing.T) {
 
 func TestProbeRunsReadOnlyAndParsesTheAnswer(t *testing.T) {
 	for answer, want := range map[string]migration.PathState{
-		`{"exists":false,"empty":false}`: migration.PathMissing,
-		`{"exists":true,"empty":true}`:   migration.PathEmpty,
-		`{"exists":true,"empty":false}`:  migration.PathOccupied,
+		`{"exists":false,"empty":false}`:               migration.PathMissing,
+		`{"exists":true,"empty":true}`:                 migration.PathEmpty,
+		`{"exists":true,"empty":false}`:                migration.PathOccupied,
+		`{"exists":true,"empty":false,"special":true}`: migration.PathSpecial,
 	} {
 		argv := []string{"docker", "run", "--rm", "-i", "--log-driver", "none", "--network", "none", "--user", "0:0", "--read-only", "--tmpfs", "/tmp",
 			"--cap-drop", "ALL", "--cap-add", "DAC_READ_SEARCH", "--security-opt", "no-new-privileges",

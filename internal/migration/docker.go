@@ -32,6 +32,7 @@ const (
 	PathMissing PathState = iota
 	PathEmpty
 	PathOccupied
+	PathSpecial // a socket, device or FIFO
 )
 
 // Docker is every Docker operation a Migration needs, on either host. It is

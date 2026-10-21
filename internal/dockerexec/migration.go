@@ -267,8 +267,9 @@ func (d *MigrationDocker) Probe(ctx context.Context, mountSource, name string) (
 		return migration.PathMissing, err
 	}
 	var answer struct {
-		Exists bool `json:"exists"`
-		Empty  bool `json:"empty"`
+		Exists  bool `json:"exists"`
+		Empty   bool `json:"empty"`
+		Special bool `json:"special"`
 	}
 	if err := json.Unmarshal([]byte(out), &answer); err != nil {
 		return migration.PathMissing, fmt.Errorf("parse helper probe: %w", err)
@@ -276,6 +277,8 @@ func (d *MigrationDocker) Probe(ctx context.Context, mountSource, name string) (
 	switch {
 	case !answer.Exists:
 		return migration.PathMissing, nil
+	case answer.Special:
+		return migration.PathSpecial, nil
 	case answer.Empty:
 		return migration.PathEmpty, nil
 	}

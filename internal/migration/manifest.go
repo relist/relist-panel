@@ -179,10 +179,21 @@ func (b Builder) HostPathCandidates(ctx context.Context) ([]HostPathCandidate, [
 		return nil, nil, err
 	}
 	for i := range s.hostPaths {
-		if s.hostPaths[i].System {
+		p := s.hostPaths[i].Path
+		dir, name := filepath.Dir(p), filepath.Base(p)
+		// A socket, device or FIFO starts unticked whatever its name, and
+		// has nothing to size.
+		if state, err := b.Docker.Probe(ctx, dir, name); err == nil && state == PathSpecial {
+			s.hostPaths[i].System = true
 			continue
 		}
-		size, err := b.Docker.Size(ctx, filepath.Dir(s.hostPaths[i].Path), filepath.Base(s.hostPaths[i].Path))
+		// A system path the operator may tick is sized too, so the preview
+		// and the free-space checks count it; not virtual file systems, nor
+		// what could never be restored anyway.
+		if s.hostPaths[i].System && (virtualPath(p) || holdsStorage(p, b.DataDir)) {
+			continue
+		}
+		size, err := b.Docker.Size(ctx, dir, name)
 		if err != nil {
 			// One unreadable path, such as a bind source deleted since the
 			// deploy, must not hide every other check.
@@ -304,6 +315,17 @@ func skipInDataDir(rel string) bool {
 	switch rel {
 	case "panel.db", "panel.db-journal", "panel.db-wal", "panel.db-shm", ".migration", ".migration-out":
 		return true
+	}
+	return false
+}
+
+// virtualPath reports a path on a kernel file system, which has no size to
+// count and nothing to copy.
+func virtualPath(p string) bool {
+	for _, root := range []string{"/proc", "/sys", "/dev"} {
+		if p == root || strings.HasPrefix(p, root+"/") {
+			return true
+		}
 	}
 	return false
 }

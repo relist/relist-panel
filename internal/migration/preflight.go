@@ -176,8 +176,7 @@ func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []s
 		}
 		// Restoring over this panel's own data or Docker's storage would
 		// break the host, whatever the source says about the path.
-		if p == "/" || p != filepath.Clean(p) || !filepath.IsAbs(p) || inside(p, local.DataDir) || inside(local.DataDir, p) ||
-			inside(p, "/var/lib/docker") || inside("/var/lib/docker", p) {
+		if holdsStorage(p, local.DataDir) {
 			block(p + " holds this panel's data or Docker's storage and cannot be restored here")
 			continue
 		}
@@ -186,7 +185,7 @@ func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []s
 		// must block, and so must not knowing.
 		if state, err := local.Docker.Probe(ctx, parent, filepath.Base(p)); err != nil {
 			block("Could not check " + p + " on this host: " + err.Error())
-		} else if state == PathOccupied {
+		} else if state == PathOccupied || state == PathSpecial {
 			block(p + " exists on this host and is not empty")
 		}
 		if _, ok := parentNeed[parent]; !ok {
@@ -291,4 +290,11 @@ func humanBytes(n int64) string {
 		}
 	}
 	return fmt.Sprintf("%.1f %s", value, unit)
+}
+
+// holdsStorage reports a path that is or holds this panel's data or Docker's
+// storage, or is not clean and absolute: restoring there would break the host.
+func holdsStorage(p, dataDir string) bool {
+	return p == "/" || p != filepath.Clean(p) || !filepath.IsAbs(p) || inside(p, dataDir) || inside(dataDir, p) ||
+		inside(p, "/var/lib/docker") || inside("/var/lib/docker", p)
 }

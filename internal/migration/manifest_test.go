@@ -313,3 +313,42 @@ func TestHostPathCandidatesTreatRootAndAncestorsAsSystem(t *testing.T) {
 		t.Fatalf("warnings = %q", warnings)
 	}
 }
+
+// A socket, device or FIFO bind source starts unticked whatever its name
+// (spec: "and any socket"), and is not sized: there is nothing to copy.
+func TestHostPathCandidatesMarkSpecialFilesAsSystem(t *testing.T) {
+	f := newManifestFixture(t)
+	f.compose("web", "services: {}", `{"services":{"web":{"image":"nginx","volumes":[
+		{"type":"bind","source":"/srv/app.ipc","target":"/ipc"}]}}}`, true)
+	f.docker.Paths["/srv|app.ipc"] = PathSpecial
+	got, _, err := f.builder().HostPathCandidates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].System || got[0].Size != 0 {
+		t.Fatalf("candidates = %+v, want /srv/app.ipc as an unsized system path", got)
+	}
+}
+
+// A system path the operator may tick is sized like any other, so the
+// preview and the free-space checks count it (spec: "the item sizes plus
+// 10%"). Virtual file systems and what holds the data directory are not.
+func TestHostPathCandidatesSizeSystemPathsThatCanMove(t *testing.T) {
+	f := newManifestFixture(t)
+	f.compose("web", "services: {}", `{"services":{"web":{"image":"nginx","volumes":[
+		{"type":"bind","source":"/etc/ssl","target":"/ssl"},
+		{"type":"bind","source":"/proc/cpuinfo","target":"/c"}]}}}`, true)
+	f.docker.Sizes["/etc|ssl"] = 4096
+	f.docker.Sizes["/proc|cpuinfo"] = 99
+	got, _, err := f.builder().HostPathCandidates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sizes := map[string]int64{}
+	for _, c := range got {
+		sizes[c.Path] = c.Size
+	}
+	if sizes["/etc/ssl"] != 4096 || sizes["/proc/cpuinfo"] != 0 {
+		t.Fatalf("sizes = %v, want /etc/ssl sized and /proc/cpuinfo not", sizes)
+	}
+}

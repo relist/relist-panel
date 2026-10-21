@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -976,11 +977,17 @@ func TestProbeTellsMissingEmptyAndOccupiedApart(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "file"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	sock, err := net.Listen("unix", filepath.Join(root, "sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sock.Close()
 	for name, want := range map[string]string{
-		"missing": `{"exists":false,"empty":false}`,
-		"empty":   `{"exists":true,"empty":true}`,
-		"zeros":   `{"exists":true,"empty":false}`,
-		"file":    `{"exists":true,"empty":false}`,
+		"missing": `{"exists":false,"empty":false,"special":false}`,
+		"empty":   `{"exists":true,"empty":true,"special":false}`,
+		"zeros":   `{"exists":true,"empty":false,"special":false}`,
+		"file":    `{"exists":true,"empty":false,"special":false}`,
+		"sock":    `{"exists":true,"empty":false,"special":true}`,
 	} {
 		code, out, stderr := runHelper(t, root, nil, "probe", "--", name)
 		if code != exitOK || strings.TrimSpace(string(out)) != want {
