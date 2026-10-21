@@ -154,7 +154,7 @@ func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []s
 	var dockerNeed int64
 	for _, v := range src.Volumes {
 		dockerNeed += v.Size
-		if reason := unrestorableVolume(*v.Volume); reason != "" {
+		if reason := UnrestorableVolume(*v.Volume); reason != "" {
 			block("Volume " + v.Volume.Name + " " + reason + " and cannot be restored here")
 		}
 		if _, ok, err := local.Docker.InspectVolume(ctx, v.Volume.Name); err != nil {
@@ -201,7 +201,7 @@ func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []s
 			return fmt.Errorf("free space in %s: %w", path, err)
 		}
 		if have < need {
-			block(fmt.Sprintf("Not enough free space in %s: need %s, have %s", path, humanBytes(need), humanBytes(have)))
+			block(fmt.Sprintf("Not enough free space in %s: need %s, have %s", path, HumanBytes(need), HumanBytes(have)))
 		}
 		return nil
 	}
@@ -254,10 +254,10 @@ func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []s
 	return checks, nil
 }
 
-// unrestorableVolume says why this host will not create v, or "". The old
+// UnrestorableVolume says why this host will not create v, or "". The old
 // host never sends such a Volume; a driver or an option such as a bind
 // device would mount whatever it names on this host.
-func unrestorableVolume(v VolumeInfo) string {
+func UnrestorableVolume(v VolumeInfo) string {
 	if v.Driver != "" && v.Driver != "local" {
 		return "uses driver " + v.Driver
 	}
@@ -272,13 +272,8 @@ func unrestorableVolume(v VolumeInfo) string {
 	return ""
 }
 
-// HumanBytes formats a size the way preflight's messages do, for the TUI.
-func HumanBytes(n int64) string { return humanBytes(n) }
-
-// UnrestorableVolume says why v cannot be restored on a new host, or "".
-func UnrestorableVolume(v VolumeInfo) string { return unrestorableVolume(v) }
-
-func humanBytes(n int64) string {
+// HumanBytes formats a size the way preflight's messages do.
+func HumanBytes(n int64) string {
 	if n < 1024 {
 		return fmt.Sprintf("%d B", n)
 	}

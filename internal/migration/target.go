@@ -491,7 +491,7 @@ func checkVolumes(m Manifest, reviewed []Item) ([]string, error) {
 		if it.Kind != KindVolume || it.Volume == nil {
 			continue
 		}
-		if reason := unrestorableVolume(*it.Volume); reason != "" {
+		if reason := UnrestorableVolume(*it.Volume); reason != "" {
 			return nil, fmt.Errorf("the source sent volume %s, which %s; abort this migration", it.Volume.Name, reason)
 		}
 		if !slices.ContainsFunc(reviewed, func(r Item) bool { return r.Volume != nil && r.Volume.Name == it.Volume.Name }) {
