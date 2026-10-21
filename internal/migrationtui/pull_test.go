@@ -594,3 +594,42 @@ func TestPullSaysWhichDeploymentTheOldServerWaitsFor(t *testing.T) {
 	m := pull(&fakeController{}, p)
 	mustContain(t, m, "Old server: waiting for Deployment api #12 to finish, then stopping its Composes")
 }
+
+func TestPullPreviewSaysItIsReadingBeforeTheOldPanelAnswers(t *testing.T) {
+	p := connected()
+	p.Info = nil
+	m := pull(&fakeController{}, p)
+	mustContain(t, m, "Reading the old panel")
+	if strings.Contains(screen(m), "Could not read") {
+		t.Fatalf("a preflight still under way reads as a failure:\n%s", screen(m))
+	}
+}
+
+func TestPullPreviewShowsAPreflightErrorWithRetry(t *testing.T) {
+	p := connected()
+	p.Info, p.Error = nil, "dial tcp: connection refused"
+	m := pull(&fakeController{}, p)
+	mustContain(t, m, "dial tcp: connection refused", "r retries on the same session")
+}
+
+func TestPullPreviewListsSizesOnePerLineBelowTheHostPaths(t *testing.T) {
+	p := connected()
+	p.Info.DataDirSize, p.Info.DatabaseSize = 1024, 4096
+	got := screen(pull(&fakeController{}, p))
+	sizes, hostPaths := strings.Index(got, "Sizes"), strings.Index(got, "Host paths")
+	if sizes < 0 || hostPaths < 0 || sizes < hostPaths {
+		t.Fatalf("Sizes should come after Host paths:\n%s", got)
+	}
+	for _, want := range []string{"data directory", "database", "Volumes", "host paths", "Images"} {
+		found := false
+		for _, line := range strings.Split(got[sizes:], "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), want) && !strings.Contains(line, "·") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("no line of its own for %q under Sizes:\n%s", want, got[sizes:])
+		}
+	}
+}

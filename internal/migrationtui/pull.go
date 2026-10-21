@@ -487,11 +487,13 @@ func (m *pullModel) previewLines() ([]string, int) {
 	p := m.p
 	out := []string{fmt.Sprintf("Connected to %s. Nothing there is locked until you start.", p.SourceURL), ""}
 	if p.Info == nil {
-		msg := p.Error
-		if msg == "" {
-			msg = "Could not read the old panel"
+		// Connect claims the token before it reads the old panel, so a
+		// poll can land between the two.
+		if p.Error == "" {
+			return append(out, "Reading the old panel: sizes, Volumes, Images and host paths…", "",
+				dimStyle.Render("r reads it again if this stays")), -1
 		}
-		return append(out, dangerStyle.Render(msg), "", "r retries on the same session"), -1
+		return append(out, dangerStyle.Render(p.Error), "", "r retries on the same session"), -1
 	}
 	info := p.Info
 	var volumes, images, paths int64
@@ -510,9 +512,6 @@ func (m *pullModel) previewLines() ([]string, int) {
 			paths += hp.Size
 		}
 	}
-	out = append(out, fmt.Sprintf("Sizes  data directory %s · database %s · Volumes %s · host paths %s · Images %s",
-		migration.HumanBytes(info.DataDirSize), migration.HumanBytes(info.DatabaseSize), migration.HumanBytes(volumes),
-		migration.HumanBytes(paths), migration.HumanBytes(images)), "")
 	if len(p.Checks) == 0 {
 		out = append(out, okStyle.Render("✓ Every check passed"))
 	}
@@ -562,6 +561,19 @@ func (m *pullModel) previewLines() ([]string, int) {
 	}
 	if len(info.HostPaths) == 0 {
 		out = append(out, dimStyle.Render("  none outside the data directory"))
+	}
+	out = append(out, "", titleStyle.Render("Sizes"))
+	for _, s := range []struct {
+		label string
+		size  int64
+	}{
+		{"data directory", info.DataDirSize},
+		{"database", info.DatabaseSize},
+		{"Volumes", volumes},
+		{"host paths", paths},
+		{"Images", images},
+	} {
+		out = append(out, fmt.Sprintf("  %-16s %s", s.label, migration.HumanBytes(s.size)))
 	}
 	return out, cursorLine
 }
