@@ -61,7 +61,7 @@ export function ChangePasswordCard({
         )}
         <Text type="secondary">Changing the password signs every other session out.</Text>
         <div>
-          <Button onClick={() => setOpen(true)} type={passwordFromEnv ? 'primary' : 'default'}>
+          <Button onClick={() => setOpen(true)}>
             Change password
           </Button>
         </div>

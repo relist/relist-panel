@@ -34,6 +34,11 @@ describe('ChangePasswordCard', () => {
     expect(screen.getByText(/still the one in RELIST_ADMIN_PASSWORD/)).toBeTruthy();
   });
 
+  it('keeps the button default: primary is for Deploy, Create and Save (GUIDELINES §2)', () => {
+    show({ passwordFromEnv: true });
+    expect(screen.getByRole('button', { name: 'Change password' }).className).not.toContain('ant-btn-primary');
+  });
+
   it('changes the password with the current one', async () => {
     mocks.changePassword.mockResolvedValue(undefined);
     const onChanged = show();
