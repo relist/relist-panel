@@ -674,7 +674,7 @@ func (t *Target) Abort(ctx context.Context) error {
 	t.mu.Lock()
 	if t.st.Phase == PhaseDone || (t.st.Phase == PhaseFinalizing && (t.running || t.markerWritten())) {
 		t.mu.Unlock()
-		return errors.New("the migration is finalizing and can no longer be aborted here; resume the old server from its own panel instead")
+		return errors.New("the migration is finalizing and can no longer be aborted here; on the old server run relist-panel migration resume instead")
 	}
 	if t.cancel != nil {
 		t.cancel()
@@ -899,7 +899,7 @@ func (t *Target) complete(ctx context.Context) error {
 	}
 	summary.Warnings = append(warnings, summary.Warnings...)
 	if finishErr != nil {
-		summary.Warnings = append(summary.Warnings, "Could not tell the old server the migration finished ("+finishErr.Error()+"); it stays locked, so turn it off or resume it from its own panel")
+		summary.Warnings = append(summary.Warnings, "Could not tell the old server the migration finished ("+finishErr.Error()+"); it stays locked, so turn it off, or run relist-panel migration resume on it")
 		t.logf("warn", "", "Could not tell the old server the migration finished: "+finishErr.Error())
 	}
 	t.logf("info", "", "Migration complete")

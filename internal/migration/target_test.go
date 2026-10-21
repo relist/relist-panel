@@ -34,6 +34,7 @@ type fakeSourceServer struct {
 	failStart     int // the first n start calls answer 502, like Traefik while the old panel restarts
 	aborted       bool
 	finished      string
+	failFinish    bool // finish answers 502 every time
 	served        []string
 	hostPaths     []HostPathCandidate
 	claimed       bool          // a claimed token answers 409, like the real one
@@ -155,6 +156,11 @@ func newFakeSourceServer(t *testing.T, items ...Item) *fakeSourceServer {
 		var in struct{ TargetURL string }
 		json.NewDecoder(r.Body).Decode(&in)
 		f.mu.Lock()
+		if f.failFinish {
+			f.mu.Unlock()
+			writeJSONError(w, 502, "bad gateway")
+			return
+		}
 		f.finished = in.TargetURL
 		f.mu.Unlock()
 		w.WriteHeader(204)
@@ -691,5 +697,26 @@ func TestInProgressOnceConnectedUntilAborted(t *testing.T) {
 	}
 	if f.target.InProgress() {
 		t.Fatal("still in progress after abort")
+	}
+}
+
+// Resume is terminal-only since phase 2 (ADR-0019): what the new host tells
+// the operator about the old one names the command, not a web button.
+func TestOldServerInstructionsNameTheResumeCommand(t *testing.T) {
+	f := newTargetFixture(t)
+	f.src.failFinish = true
+	f.connectAndStart(t)
+	waitPhase(t, f.target, PhaseFinalizing)
+	os.WriteFile(filepath.Join(f.deps.StateDir, markerName), []byte(`{}`), 0o600)
+	restarted := NewTarget(f.deps)
+	if err := restarted.ResumeIfPending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p := waitPhase(t, restarted, PhaseDone)
+	if p.Summary == nil || !strings.Contains(strings.Join(p.Summary.Warnings, "\n"), "relist-panel migration resume") {
+		t.Fatalf("finish failed but the warnings do not name the resume command: %+v", p.Summary)
+	}
+	if err := restarted.Abort(context.Background()); err == nil || !strings.Contains(err.Error(), "relist-panel migration resume") {
+		t.Fatalf("abort when done = %v, want it to name the resume command", err)
 	}
 }
