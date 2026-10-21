@@ -42,7 +42,8 @@ Rejected:
 - The panel image has no curl; the hidden `relist-panel migration api METHOD PATH [JSON]` sends
   one raw request over the socket, for the probe and debugging.
 - A panel that cannot create the socket (a bare binary run by a user who cannot write `/run`)
-  logs a warning and serves the web as before. `RELIST_CONTROL_SOCKET` moves the socket.
+  logs a warning and serves the web, but cannot start a Migration, pull, or resume a
+  Migration lock until `RELIST_CONTROL_SOCKET` points somewhere writable and it restarts.
 - Tokens, Resume and the pull exist only on the control socket. The web keeps the routes that
   move data between the hosts, which authenticate with the Migration session key, and the
   lock's status for the lock page.

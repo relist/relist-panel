@@ -17,7 +17,7 @@ type LogEntry struct {
 	Message string    `json:"message"`
 }
 
-// FinalizeStep is where finalize is, for the setup screen.
+// FinalizeStep is where finalize is, for the pull TUI.
 type FinalizeStep string
 
 const (

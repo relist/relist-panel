@@ -30,9 +30,9 @@ func (s *Source) RegisterRoutes(mux *http.ServeMux) {
 }
 
 // RegisterControlRoutes adds the old host's admin routes to the control
-// socket's mux (ADR-0019): the same handlers as the web's, without the
-// admin cookie, since reaching the socket already takes a shell in the
-// container.
+// socket's mux (ADR-0019), their only home: creating and revoking a token,
+// the status, resuming and the activity. They take no cookie, since reaching
+// the socket already takes a shell in the container.
 func (s *Source) RegisterControlRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/migration/tokens", s.createToken)
 	mux.HandleFunc("DELETE /api/migration/tokens/current", s.revokeToken)

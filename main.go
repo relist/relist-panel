@@ -150,7 +150,7 @@ func main() {
 	server := &http.Server{Addr: cfg.Address(), Handler: handler}
 	controlServer, err := serveControl(migration.ControlSocketPath(), control)
 	if err != nil {
-		log.Printf("warning: no migration control socket: %v", err)
+		log.Printf("warning: no migration control socket, so this panel cannot migrate or resume a migration lock; set %s to a writable path and restart: %v", migration.ControlSocketEnv, err)
 	}
 
 	log.Printf("relist-panel listening on %s", cfg.Address())

@@ -253,7 +253,7 @@ func (t *Target) Connect(ctx context.Context, sourceURL, token, selfURL string) 
 	return t.progress(), nil
 }
 
-// setError records err for the setup screen.
+// setError records err for the pull TUI.
 func (t *Target) setError(err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -717,7 +717,7 @@ func (t *Target) Abort(ctx context.Context) error {
 	return nil
 }
 
-// Progress is what the setup screen polls.
+// Progress is what the pull TUI polls over the control socket.
 func (t *Target) Progress() Progress {
 	t.mu.Lock()
 	defer t.mu.Unlock()

@@ -10,8 +10,8 @@ import (
 	"relist-panel/internal/migrationctl"
 )
 
-// resumeInput asks to type RESUME, as the web's Cancel migration and Resume
-// this server do.
+// resumeInput asks to type RESUME before cancelling the Migration or
+// resuming this server.
 type resumeInput struct {
 	prompt string
 	input  textinput.Model
