@@ -71,6 +71,7 @@ type panel struct {
 	docker  *migration.FakeDocker
 	srv     *httptest.Server
 	handler http.Handler
+	control *http.ServeMux // the control socket's routes (ADR-0019)
 	stop    func()
 	client  *http.Client
 	opts    migration.Options
@@ -109,6 +110,8 @@ func (p *panel) boot() {
 	opts.Docker = p.docker
 	opts.Backoff = func(int) time.Duration { return 0 }
 	opts.Restart = func() { p.exited <- struct{}{} }
+	p.control = http.NewServeMux()
+	opts.Control = p.control
 	handler, wait := httpapi.NewHandler(ctx, p.db, statusRunner{p.docker}, p.dataDir, nil, nil, nil,
 		volumes.NewResolver(configCLI{}, p.dataDir), nil, nil, &opts)
 	var once sync.Once
@@ -122,6 +125,19 @@ func (p *panel) boot() {
 func (p *panel) restart() {
 	p.stop()
 	p.boot()
+}
+
+// ctl serves a request on the control socket's routes, as the terminal does.
+func (p *panel) ctl(method, path string, body any) (int, []byte) {
+	p.t.Helper()
+	var r io.Reader
+	if body != nil {
+		raw, _ := json.Marshal(body)
+		r = bytes.NewReader(raw)
+	}
+	rec := httptest.NewRecorder()
+	p.control.ServeHTTP(rec, httptest.NewRequest(method, path, r))
+	return rec.Code, rec.Body.Bytes()
 }
 
 func (p *panel) do(method, path string, body any) (int, []byte) {
@@ -231,7 +247,7 @@ func newPair(t *testing.T, newOpts migration.Options) *pair {
 	newDocker.Loadable["relist-c1-api:latest"] = built
 	newDocker.Pullable["postgres@sha256:pg"] = pg
 
-	code, body := old.do("POST", "/api/migration/tokens", map[string]string{"lifetime": "24h"})
+	code, body := old.ctl("POST", "/api/migration/tokens", map[string]string{"lifetime": "24h"})
 	if code != http.StatusCreated {
 		t.Fatalf("token = %d %s", code, body)
 	}
@@ -384,7 +400,7 @@ func TestResumeOnOldHostAfterMigrated(t *testing.T) {
 	p.new.restart()
 	p.new.signIn(false)
 	eventually(t, "done", func() bool { return p.new.progress().Phase == migration.PhaseDone })
-	if code, body := p.old.do("POST", "/api/migration/resume", map[string]string{"confirm": "RESUME"}); code != http.StatusNoContent {
+	if code, body := p.old.ctl("POST", "/api/migration/resume", map[string]string{"confirm": "RESUME"}); code != http.StatusNoContent {
 		t.Fatalf("resume = %d %s", code, body)
 	}
 	if code, _ := p.old.do("GET", "/api/projects", nil); code != http.StatusOK {

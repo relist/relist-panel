@@ -129,21 +129,25 @@ func TestProgressAfterRestartReadsSummary(t *testing.T) {
 }
 
 func TestMigrationRoutesAuthWiring(t *testing.T) {
-	s := newMigrationServer(t)
+	s, control := newControlServer(t)
 
 	response := s.request(t, http.MethodPost, "/api/migration/tokens", map[string]string{"lifetime": "24h"})
 	if response.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("token create without a cookie = %d, want 401", response.StatusCode)
+		t.Fatalf("token create on the web without a cookie = %d, want 401", response.StatusCode)
 	}
 	response.Body.Close()
 
 	setupAndLogin(t, s)
 	response = s.request(t, http.MethodPost, "/api/migration/tokens", map[string]string{"lifetime": "24h"})
-	var tok struct{ Token string }
-	json.NewDecoder(response.Body).Decode(&tok)
 	response.Body.Close()
-	if response.StatusCode != http.StatusCreated || tok.Token == "" {
-		t.Fatalf("token create = %d", response.StatusCode)
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("token create on the web signed in = %d, want 404: tokens come from the terminal", response.StatusCode)
+	}
+	code, body := controlDo(t, control, http.MethodPost, "/api/migration/tokens", `{"lifetime":"24h"}`)
+	var tok struct{ Token string }
+	json.Unmarshal([]byte(body), &tok)
+	if code != http.StatusCreated || tok.Token == "" {
+		t.Fatalf("token create over the socket = %d %s", code, body)
 	}
 
 	cookies := s.cookies

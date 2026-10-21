@@ -24,7 +24,8 @@ import (
 
 type sourceServer struct {
 	*sourceFixture
-	mux *http.ServeMux
+	mux     *http.ServeMux
+	control *http.ServeMux
 }
 
 func newSourceServer(t *testing.T) *sourceServer {
@@ -33,9 +34,23 @@ func newSourceServer(t *testing.T) *sourceServer {
 	f.src = NewSource(SourceDeps{Store: f.store, Builder: f.builder(), Queue: f.queue, Docker: f.docker,
 		Status: statusFromDocker{f.docker}, Composes: f.targets, Domains: fakeDomains{httpsDomain},
 		DB: f.db, DataDir: f.dataDir, Install: config.InstallSettings{Domain: "panel.old.example.com"}})
-	mux := http.NewServeMux()
+	mux, control := http.NewServeMux(), http.NewServeMux()
 	f.src.RegisterRoutes(mux)
-	return &sourceServer{sourceFixture: f, mux: mux}
+	f.src.RegisterControlRoutes(control)
+	return &sourceServer{sourceFixture: f, mux: mux, control: control}
+}
+
+// ctl serves a request on the control socket's mux, as the terminal does.
+func (s *sourceServer) ctl(t *testing.T, method, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var r io.Reader
+	if body != nil {
+		raw, _ := json.Marshal(body)
+		r = bytes.NewReader(raw)
+	}
+	rec := httptest.NewRecorder()
+	s.control.ServeHTTP(rec, httptest.NewRequest(method, path, r))
+	return rec
 }
 
 func (s *sourceServer) do(t *testing.T, method, path, bearer string, body any) *httptest.ResponseRecorder {
@@ -56,7 +71,7 @@ func (s *sourceServer) do(t *testing.T, method, path, bearer string, body any) *
 
 func (s *sourceServer) claim(t *testing.T) string {
 	t.Helper()
-	rec := s.do(t, "POST", "/api/migration/tokens", "", map[string]string{"lifetime": "24h"})
+	rec := s.ctl(t, "POST", "/api/migration/tokens", map[string]string{"lifetime": "24h"})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create token = %d %s", rec.Code, rec.Body)
 	}
@@ -91,7 +106,7 @@ func (s *sourceServer) startReady(t *testing.T, key string) Manifest {
 
 func TestClaimRoute(t *testing.T) {
 	s := newSourceServer(t)
-	rec := s.do(t, "POST", "/api/migration/tokens", "", map[string]string{"lifetime": "24h"})
+	rec := s.ctl(t, "POST", "/api/migration/tokens", map[string]string{"lifetime": "24h"})
 	var tok struct {
 		Token     string
 		ExpiresAt time.Time
@@ -115,7 +130,7 @@ func TestClaimRoute(t *testing.T) {
 	if rec := s.do(t, "POST", "/api/migration/claim", "", map[string]string{"token": tok.Token}); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("locked claim = %d", rec.Code)
 	}
-	if rec := s.do(t, "POST", "/api/migration/tokens", "", map[string]string{"lifetime": "2h"}); rec.Code != http.StatusBadRequest ||
+	if rec := s.ctl(t, "POST", "/api/migration/tokens", map[string]string{"lifetime": "2h"}); rec.Code != http.StatusBadRequest ||
 		!strings.Contains(rec.Body.String(), "lifetime must be 1h, 24h or 168h") {
 		t.Fatalf("bad lifetime = %d %s", rec.Code, rec.Body)
 	}
@@ -275,11 +290,11 @@ func TestResumeRequiresConfirm(t *testing.T) {
 	s := newSourceServer(t)
 	key := s.claim(t)
 	s.startReady(t, key)
-	if rec := s.do(t, "POST", "/api/migration/resume", "", map[string]string{"confirm": "resume"}); rec.Code != http.StatusBadRequest ||
+	if rec := s.ctl(t, "POST", "/api/migration/resume", map[string]string{"confirm": "resume"}); rec.Code != http.StatusBadRequest ||
 		!strings.Contains(rec.Body.String(), "type RESUME to confirm") {
 		t.Fatalf("resume without confirm = %d %s", rec.Code, rec.Body)
 	}
-	if rec := s.do(t, "POST", "/api/migration/resume", "", map[string]string{"confirm": "RESUME"}); rec.Code != http.StatusNoContent {
+	if rec := s.ctl(t, "POST", "/api/migration/resume", map[string]string{"confirm": "RESUME"}); rec.Code != http.StatusNoContent {
 		t.Fatalf("resume = %d %s", rec.Code, rec.Body)
 	}
 	if step, _, _ := s.store.Lock(context.Background()); step != StepNone {
@@ -426,5 +441,24 @@ func TestActivityCountsItemsNotStreams(t *testing.T) {
 	}
 	if a := s.src.Activity(); a.Done != 1 {
 		t.Fatalf("Done after three streams of one item = %d, want 1", a.Done)
+	}
+}
+
+func TestTokenAndResumeRoutesOnlyOnTheControlMux(t *testing.T) {
+	s := newSourceServer(t)
+	for _, r := range []struct{ method, path string }{
+		{"POST", "/api/migration/tokens"},
+		{"DELETE", "/api/migration/tokens/current"},
+		{"POST", "/api/migration/resume"},
+	} {
+		if rec := s.do(t, r.method, r.path, "", map[string]string{"lifetime": "24h", "confirm": "RESUME"}); rec.Code != http.StatusNotFound {
+			t.Errorf("%s %s on the web mux = %d, want 404", r.method, r.path, rec.Code)
+		}
+	}
+	if rec := s.ctl(t, "POST", "/api/migration/tokens", map[string]string{"lifetime": "24h"}); rec.Code != http.StatusCreated {
+		t.Fatalf("token over the control mux = %d %s", rec.Code, rec.Body)
+	}
+	if rec := s.do(t, "GET", "/api/migration/status", "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("status on the web mux = %d, want 200", rec.Code)
 	}
 }

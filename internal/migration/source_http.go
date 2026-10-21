@@ -13,9 +13,11 @@ import (
 
 var tokenLifetimes = map[string]time.Duration{"1h": time.Hour, "24h": 24 * time.Hour, "168h": 168 * time.Hour}
 
-// RegisterRoutes adds the old host's routes. The session routes are public
-// to the cookie middleware and check the Migration session key themselves;
-// the token, status and resume routes rely on the admin cookie.
+// RegisterRoutes adds the old host's web routes: those that move data to the
+// new host, public to the cookie middleware and checking the Migration
+// session key themselves, and the status the lock page reads with the admin
+// cookie. Creating a token and resuming are the control socket's alone
+// (ADR-0019), so a stolen web session cannot start a Migration.
 func (s *Source) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/migration/claim", s.claim)
 	mux.HandleFunc("GET /api/migration/preflight", s.session(s.preflight))
@@ -24,10 +26,7 @@ func (s *Source) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/migration/items/{id}/digest", s.session(s.digest))
 	mux.HandleFunc("POST /api/migration/abort", s.session(s.abort))
 	mux.HandleFunc("POST /api/migration/finish", s.session(s.finish))
-	mux.HandleFunc("POST /api/migration/tokens", s.createToken)
-	mux.HandleFunc("DELETE /api/migration/tokens/current", s.revokeToken)
 	mux.HandleFunc("GET /api/migration/status", s.status)
-	mux.HandleFunc("POST /api/migration/resume", s.resume)
 }
 
 // RegisterControlRoutes adds the old host's admin routes to the control

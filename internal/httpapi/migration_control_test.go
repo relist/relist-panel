@@ -86,17 +86,19 @@ func TestControlCreatesATokenWithoutACookie(t *testing.T) {
 	}
 }
 
-func TestWebTokensStillNeedTheCookie(t *testing.T) {
+func TestWebHasNoTokenRoute(t *testing.T) {
 	s, _ := newControlServer(t)
 	setupAndLogin(t, s)
-	delete(s.cookies, "relist_session")
-	for name := range s.cookies {
-		delete(s.cookies, name)
-	}
-	response := postJSON(t, s, "/api/migration/tokens", map[string]string{"lifetime": "24h"})
-	response.Body.Close()
-	if response.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("token on the web without a cookie = %d, want 401", response.StatusCode)
+	for _, r := range []struct{ method, path string }{
+		{http.MethodPost, "/api/migration/tokens"},
+		{http.MethodDelete, "/api/migration/tokens/current"},
+		{http.MethodPost, "/api/migration/resume"},
+	} {
+		response := s.request(t, r.method, r.path, map[string]string{"lifetime": "24h", "confirm": "RESUME"})
+		response.Body.Close()
+		if response.StatusCode != http.StatusNotFound {
+			t.Errorf("%s %s on the web signed in = %d, want 404", r.method, r.path, response.StatusCode)
+		}
 	}
 }
 
