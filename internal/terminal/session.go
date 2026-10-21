@@ -120,6 +120,7 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 	select {
 	case s.sessions <- struct{}{}:
 		defer func() { <-s.sessions }()
+		defer s.track(conn)()
 	default:
 		s.fail(conn, fmt.Sprintf("Too many open terminal sessions (%d) — close one first", s.maxSessions))
 		return

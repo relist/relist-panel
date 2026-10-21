@@ -380,3 +380,21 @@ func TestTheLockHoldsTheQueueUntilResume(t *testing.T) {
 		t.Fatalf("events after resume = %q, want a final release", got)
 	}
 }
+
+type fakeTerminals struct{ reasons []string }
+
+func (f *fakeTerminals) CloseAll(reason string) { f.reasons = append(f.reasons, reason) }
+
+// Locking closes every open Terminal Session (spec, the lock's step 1): a
+// shell left open would change what is being copied.
+func TestStartClosesTerminalSessions(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	terminals := &fakeTerminals{}
+	f.src.d.Terminals = terminals
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(terminals.reasons) != 1 || !strings.Contains(terminals.reasons[0], "migrated") {
+		t.Fatalf("CloseAll calls = %q, want one naming the migration", terminals.reasons)
+	}
+}

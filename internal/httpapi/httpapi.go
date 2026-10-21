@@ -90,8 +90,11 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
 	volumeapi.New(composesService, volumeResolver, volumeRunner).RegisterRoutes(mux)
+	var terminals migration.TerminalCloser
 	if terminalOptions != nil {
-		terminal.New(composesService, *terminalOptions).RegisterRoutes(mux)
+		terminalService := terminal.New(composesService, *terminalOptions)
+		terminalService.RegisterRoutes(mux)
+		terminals = terminalService
 	}
 	if imageStore != nil {
 		images.New(imageStore).RegisterRoutes(mux)
@@ -118,6 +121,7 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 			Status:          runner,
 			Composes:        composesService,
 			Domains:         domains.NewStore(db),
+			Terminals:       terminals,
 			DB:              db,
 			DataDir:         dataDir,
 			ReportedDataDir: migrationOptions.ReportedDataDir,

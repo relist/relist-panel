@@ -62,6 +62,9 @@ type SourceDeps struct {
 	Composes ComposeTargets
 	Domains  DomainLister
 	Now      func() time.Time
+	// Terminals, when set, has its open Terminal Sessions closed as the
+	// lock is taken.
+	Terminals TerminalCloser
 
 	// DB is the panel database the database item copies; DataDir is the data
 	// directory the data-dir item packs. ReportedDataDir is the path preflight
@@ -71,6 +74,11 @@ type SourceDeps struct {
 	DataDir         string
 	ReportedDataDir string
 	Install         config.InstallSettings
+}
+
+// TerminalCloser ends every open Terminal Session; *terminal.Service is one.
+type TerminalCloser interface {
+	CloseAll(reason string)
 }
 
 // Source is the old host's side of a Migration.
@@ -172,6 +180,10 @@ func (s *Source) start(ctx context.Context, hostPaths []string) (Manifest, error
 		step = StepLocked
 		if err := s.setLock(ctx, step, st); err != nil {
 			return Manifest{}, err
+		}
+		// A shell left open would change what is being copied.
+		if s.d.Terminals != nil {
+			s.d.Terminals.CloseAll("This server is being migrated: Terminal Sessions are closed until it resumes")
 		}
 	}
 	if step == StepLocked {

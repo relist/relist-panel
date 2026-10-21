@@ -17,7 +17,10 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"relist-panel/internal/composes"
 )
@@ -115,6 +118,31 @@ type Service struct {
 	// session, and the send on it is non-blocking, so the (maxSessions+1)th
 	// is refused rather than queued.
 	sessions chan struct{}
+
+	// open is every live session's connection, so CloseAll can end them.
+	openMu sync.Mutex
+	open   map[*websocket.Conn]struct{}
+}
+
+// CloseAll ends every open session, telling each browser reason; a server
+// Migration's lock calls it (ADR-0018). It does not wait for the browsers.
+func (s *Service) CloseAll(reason string) {
+	s.openMu.Lock()
+	defer s.openMu.Unlock()
+	for conn := range s.open {
+		go conn.Close(websocket.StatusGoingAway, reason)
+	}
+}
+
+func (s *Service) track(conn *websocket.Conn) func() {
+	s.openMu.Lock()
+	s.open[conn] = struct{}{}
+	s.openMu.Unlock()
+	return func() {
+		s.openMu.Lock()
+		delete(s.open, conn)
+		s.openMu.Unlock()
+	}
 }
 
 // New constructs the terminal service over the Compose service. opts.Exec is
@@ -140,6 +168,7 @@ func New(composeService *composes.Service, opts Options) *Service {
 		pingTimeout:  opts.PingTimeout,
 		killGrace:    opts.KillGrace,
 		sessions:     make(chan struct{}, opts.MaxSessions),
+		open:         map[*websocket.Conn]struct{}{},
 	}
 }
 
