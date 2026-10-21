@@ -46,11 +46,11 @@ func journey(stages []string, current int, failed bool) string {
 // bottom into width×height, and returns the content with the offset clamped.
 // A zero height (no window size yet) shows everything.
 //
-// Elements holding newlines count as the lines they render as. When top and
-// bottom alone overflow, the last line (the keys) is kept and the lines
-// above it are cut.
+// Elements holding newlines, or wider than width, count as the lines they
+// render or wrap into. When top and bottom alone overflow, the last line
+// (the keys) is kept and the lines above it are cut.
 func layout(width, height int, top, middle, bottom []string, offset int) (string, int) {
-	top, middle, bottom = split(top...), split(middle...), split(bottom...)
+	top, middle, bottom = wrap(width, top), wrap(width, middle), wrap(width, bottom)
 	avail := len(middle)
 	if height > 0 {
 		avail = max(1, height-len(top)-len(bottom))
@@ -63,11 +63,6 @@ func layout(width, height int, top, middle, bottom []string, offset int) (string
 	} else if height == 1 && len(lines) > 1 {
 		lines = lines[len(lines)-1:]
 	}
-	if width > 0 {
-		for i, l := range lines {
-			lines[i] = ansi.Truncate(l, width, "…")
-		}
-	}
 	return strings.Join(lines, "\n"), offset
 }
 
@@ -76,6 +71,20 @@ func split(blocks ...string) []string {
 	var out []string
 	for _, b := range blocks {
 		out = append(out, strings.Split(b, "\n")...)
+	}
+	return out
+}
+
+// wrap splits blocks into lines and wraps each to width, at spaces where it
+// can. A zero width (no window size yet) leaves them as they are.
+func wrap(width int, blocks []string) []string {
+	lines := split(blocks...)
+	if width <= 0 {
+		return lines
+	}
+	var out []string
+	for _, l := range lines {
+		out = append(out, strings.Split(ansi.Wrap(l, width, ""), "\n")...)
 	}
 	return out
 }

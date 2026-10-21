@@ -633,3 +633,42 @@ func TestPullPreviewListsSizesOnePerLineBelowTheHostPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestPullWrapsLongLinesInsteadOfCuttingThem(t *testing.T) {
+	m := NewPull(&fakeController{}, "https://new.example.com")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 50, Height: 40})
+	m, _ = m.Update(ProgressMsg{P: connected()})
+	m = send(t, m, key("a"))
+	got := screen(m)
+	if strings.Contains(got, "…") {
+		t.Fatalf("a line was cut instead of wrapped:\n%s", got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if w := ansi.StringWidth(line); w > 50 {
+			t.Fatalf("line %d wide in a 50-wide window: %q", w, line)
+		}
+	}
+	joined := strings.Join(strings.Fields(got), " ")
+	mustContainText(t, joined, "Nothing there is locked until you start.", "Abort? The old server resumes and starts its Composes again.")
+}
+
+func TestPullKeepsTheCursorInViewWhenLinesAboveItWrap(t *testing.T) {
+	p := connected()
+	p.Checks = []migration.Check{{Message: strings.Repeat("a long warning that wraps ", 12)}}
+	m := NewPull(&fakeController{}, "https://new.example.com")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	m, _ = m.Update(ProgressMsg{P: p})
+	m = send(t, m, key("down"))
+	if !strings.Contains(screen(m), "> [ ] /etc/localtime") {
+		t.Fatalf("the cursor's host path is out of view:\n%s", screen(m))
+	}
+}
+
+func mustContainText(t *testing.T, got string, want ...string) {
+	t.Helper()
+	for _, w := range want {
+		if !strings.Contains(got, w) {
+			t.Fatalf("screen lacks %q:\n%s", w, got)
+		}
+	}
+}

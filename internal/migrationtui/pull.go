@@ -449,7 +449,11 @@ func (m *pullModel) View() tea.View {
 		}
 	}
 	bottom = append(bottom, m.footer()...)
-	top, bottom = split(top...), split(bottom...)
+	top, bottom = wrap(m.width, top), wrap(m.width, bottom)
+	if cursorLine >= 0 {
+		// Lines above the cursor may wrap, which moves it down.
+		cursorLine = len(wrap(m.width, middle[:cursorLine]))
+	}
 
 	if cursorLine >= 0 && m.height > 0 {
 		avail := max(1, m.height-len(top)-len(bottom))
