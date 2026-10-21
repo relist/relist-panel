@@ -59,7 +59,9 @@ func TestPullRoutesAreNotOnTheWeb(t *testing.T) {
 	for _, r := range []struct{ method, path string }{
 		{http.MethodGet, "/api/migration/pull/progress"},
 		{http.MethodPost, "/api/migration/pull/connect"},
+		{http.MethodPost, "/api/migration/pull/recheck"},
 		{http.MethodPost, "/api/migration/pull/start"},
+		{http.MethodPost, "/api/migration/pull/retry"},
 		{http.MethodPost, "/api/migration/pull/abort"},
 	} {
 		response := s.request(t, r.method, r.path, nil)
