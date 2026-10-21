@@ -84,6 +84,13 @@ func (m *serveModel) underWay() bool { return m.s.Step != migration.StepNone }
 // session a new token would revoke.
 func (m *serveModel) following() bool { return m.underWay() || m.s.ClaimedBy != "" }
 
+// cancellable reports a Migration the old host can still call off: claimed
+// or under way, and not yet Migrated. Before start, cancelling ends the
+// claimed session, so the new server can no longer lock this one.
+func (m *serveModel) cancellable() bool {
+	return m.following() && m.s.Step != migration.StepMigrated
+}
+
 func (m *serveModel) unclaimed() bool {
 	return m.token != nil && m.s.ClaimedBy == "" && !m.underWay()
 }
@@ -213,7 +220,7 @@ func (m *serveModel) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	case "c":
-		if m.underWay() && m.s.Step != migration.StepMigrated {
+		if m.cancellable() {
 			return m, m.resume.open()
 		}
 	}
@@ -278,7 +285,7 @@ func (m *serveModel) View() tea.View {
 		bottom = append(bottom, m.resume.lines()...)
 	case m.loaded && m.token == nil && !m.following():
 		bottom = append(bottom, dimStyle.Render("↑/↓ choose · enter create the token · q quit"))
-	case m.underWay() && m.s.Step != migration.StepMigrated:
+	case m.cancellable():
 		bottom = append(bottom, dimStyle.Render("c cancel the migration · q quit"))
 	default:
 		bottom = append(bottom, dimStyle.Render("q quit"))

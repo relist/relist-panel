@@ -210,3 +210,29 @@ func TestServeResumeDoesNotStartASecondPoll(t *testing.T) {
 		t.Fatal("a resume started another status poll; the running one picks the change up")
 	}
 }
+
+// A claimed session that never started must be endable from the old host:
+// otherwise the new server can lock it whenever it likes.
+func TestServeCancelsAClaimBeforeStart(t *testing.T) {
+	c := &fakeController{}
+	m := serveWith(c, migration.SourceStatus{ClaimedBy: "203.0.113.9"}, migration.Activity{})
+	mustContain(t, m, "c cancel the migration")
+	m = send(t, m, key("c"))
+	m = typeText(t, m, "RESUME")
+	m = send(t, m, key("enter"))
+	if c.resumed != 1 {
+		t.Fatalf("resume calls = %d, want the claimed session ended", c.resumed)
+	}
+}
+
+func TestResumeEndsAClaimBeforeStart(t *testing.T) {
+	c := &fakeController{}
+	m := NewResume(c)
+	m, _ = m.Update(statusMsg{S: migration.SourceStatus{ClaimedBy: "203.0.113.9"}})
+	mustContain(t, m, "Claimed by 203.0.113.9", "RESUME")
+	m = typeText(t, m, "RESUME")
+	m = send(t, m, key("enter"))
+	if c.resumed != 1 {
+		t.Fatalf("resume calls = %d, want the claimed session ended", c.resumed)
+	}
+}

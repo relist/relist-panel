@@ -89,7 +89,7 @@ func (m *resumeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.s, m.loaded = msg.S, true
-		if m.s.Step != migration.StepNone && !m.resumed {
+		if (m.s.Step != migration.StepNone || m.s.ClaimedBy != "") && !m.resumed {
 			return m, m.in.open()
 		}
 		return m, nil
@@ -146,6 +146,11 @@ func (m *resumeModel) View() tea.View {
 		if m.warning != "" {
 			out = append(out, warnStyle.Render("! "+m.warning))
 		}
+	case m.s.Step == migration.StepNone && m.s.ClaimedBy != "":
+		out = append(out, "Claimed by "+m.s.ClaimedBy+", not started yet.",
+			"Resuming ends its session, so it can no longer lock this server.", "")
+		out = append(out, m.in.lines()...)
+		return view(joinLines(out))
 	case m.s.Step == migration.StepNone:
 		out = append(out, "This server is not locked for a migration.")
 	default:

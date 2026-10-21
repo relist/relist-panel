@@ -462,3 +462,14 @@ func TestTokenAndResumeRoutesOnlyOnTheControlMux(t *testing.T) {
 		t.Fatalf("status on the web mux = %d, want 200", rec.Code)
 	}
 }
+
+func TestResumeBeforeStartEndsAClaimedSession(t *testing.T) {
+	s := newSourceServer(t)
+	key := s.claim(t)
+	if rec := s.ctl(t, "POST", "/api/migration/resume", map[string]string{"confirm": "RESUME"}); rec.Code != http.StatusNoContent {
+		t.Fatalf("resume before start = %d %s", rec.Code, rec.Body)
+	}
+	if rec := s.do(t, "POST", "/api/migration/start", key, map[string]any{"hostPaths": []string{}}); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("start with the ended session = %d, want 401", rec.Code)
+	}
+}
