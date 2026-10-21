@@ -136,9 +136,9 @@ func TestStatusNewHost(t *testing.T) {
 	p := migration.Progress{Phase: migration.PhasePulling, SourceURL: "https://old.example.com", LockStep: migration.StepReady,
 		Log: []migration.LogEntry{{At: at, Level: "info", Message: "Copied volume-a"}}}
 	for i := range 5 {
-		state := "pending"
+		state := migration.ItemPending
 		if i < 3 {
-			state = "done"
+			state = migration.ItemDone
 		}
 		p.Items = append(p.Items, migration.ItemProgress{ID: "i", State: state})
 	}

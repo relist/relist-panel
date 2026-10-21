@@ -154,11 +154,7 @@ func (m *resumeModel) View() tea.View {
 		out = append(out, "This server is not locked for a migration.")
 	default:
 		if m.s.Step == migration.StepMigrated {
-			line := "Migrated to " + m.s.TargetURL
-			if m.s.MigratedAt != nil {
-				line += " on " + m.s.MigratedAt.Local().Format("2006-01-02 15:04")
-			}
-			out = append(out, line+".")
+			out = append(out, MigratedTo(m.s)+".")
 		} else {
 			out = append(out, "A migration is under way: "+string(m.s.Step)+".")
 		}

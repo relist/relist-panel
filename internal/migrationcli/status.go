@@ -21,7 +21,7 @@ func FormatStatus(p migration.Progress, s migration.SourceStatus, a migration.Ac
 		if len(p.Items) > 0 {
 			done := 0
 			for _, it := range p.Items {
-				if it.State == "done" {
+				if it.State == migration.ItemDone {
 					done++
 				}
 			}
@@ -42,11 +42,7 @@ func FormatStatus(p migration.Progress, s migration.SourceStatus, a migration.Ac
 			out = append(out[1:], out[0])
 		}
 	case s.Step == migration.StepMigrated:
-		line := "This server was migrated to " + s.TargetURL
-		if s.MigratedAt != nil {
-			line += " on " + s.MigratedAt.Local().Format("2006-01-02 15:04")
-		}
-		out = append(out, line+". Run relist-panel migration resume to use it again.")
+		out = append(out, "This server: "+migrationtui.MigratedTo(s)+". Run relist-panel migration resume to use it again.")
 	case s.Step != migration.StepNone:
 		out = append(out, "This server is locked for a migration: "+string(s.Step))
 		if s.ClaimedBy != "" {

@@ -330,13 +330,18 @@ func sourceLines(s migration.SourceStatus, a migration.Activity) []string {
 		out = append(out, line)
 	}
 	if s.Step == migration.StepMigrated {
-		line := "Migrated to " + s.TargetURL
-		if s.MigratedAt != nil {
-			line += " on " + s.MigratedAt.Local().Format("2006-01-02 15:04")
-		}
-		out = append(out, okStyle.Render(line))
+		out = append(out, okStyle.Render(MigratedTo(s)))
 	}
 	return out
+}
+
+// MigratedTo says where a Migrated server went, and when.
+func MigratedTo(s migration.SourceStatus) string {
+	line := "Migrated to " + s.TargetURL
+	if s.MigratedAt != nil {
+		line += " on " + s.MigratedAt.Local().Format("2006-01-02 15:04")
+	}
+	return line
 }
 
 // ActivityLine says what the old host is sending.

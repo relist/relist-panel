@@ -236,3 +236,13 @@ func TestResumeEndsAClaimBeforeStart(t *testing.T) {
 		t.Fatalf("resume calls = %d, want the claimed session ended", c.resumed)
 	}
 }
+
+func TestMigratedToNamesTheTargetAndWhen(t *testing.T) {
+	at := time.Date(2026, 10, 21, 9, 30, 0, 0, time.Local)
+	if got := MigratedTo(migration.SourceStatus{TargetURL: "https://new.example.com", MigratedAt: &at}); got != "Migrated to https://new.example.com on 2026-10-21 09:30" {
+		t.Fatalf("MigratedTo = %q", got)
+	}
+	if got := MigratedTo(migration.SourceStatus{TargetURL: "https://new.example.com"}); got != "Migrated to https://new.example.com" {
+		t.Fatalf("MigratedTo without a time = %q", got)
+	}
+}
