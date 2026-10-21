@@ -9,20 +9,6 @@ import (
 	"path/filepath"
 )
 
-// ControlSocketEnv overrides where the control socket listens, for a bare
-// binary run by a user who cannot write /run.
-const ControlSocketEnv = "RELIST_CONTROL_SOCKET"
-
-// ControlSocketPath is where the panel serves the control socket and where
-// `relist-panel migration` finds it (ADR-0019). It is inside the container,
-// outside the data directory, so it is never copied by a Migration.
-func ControlSocketPath() string {
-	if p := os.Getenv(ControlSocketEnv); p != "" {
-		return p
-	}
-	return "/run/relist-panel/control.sock"
-}
-
 // ListenControl listens on the control socket at path. A missing directory
 // is created 0700; an existing one is left as it is. A stale socket file from
 // a previous run, or the run this one re-executed, is replaced. The socket

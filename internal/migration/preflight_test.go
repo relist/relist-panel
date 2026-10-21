@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"relist-panel/internal/database"
 	"relist-panel/internal/config"
 )
 
@@ -26,10 +27,14 @@ func TestEvaluate(t *testing.T) {
 		selected []string
 		want     Check
 	}
+	known, err := database.KnownVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
 	rows := []row{
 		{name: "protocol", src: func(s SourceInfo) SourceInfo { s.Protocol = 2; return s },
 			want: Check{true, "The two panels speak different migration protocols. Use the same panel version on both"}},
-		{name: "schema", src: func(s SourceInfo) SourceInfo { s.SchemaVersion = 19; return s },
+		{name: "schema", src: func(s SourceInfo) SourceInfo { s.SchemaVersion = known + 1; return s },
 			want: Check{true, "This panel is older than the source. Upgrade it first"}},
 		{name: "data dir", src: func(s SourceInfo) SourceInfo { s.DataDir = "/srv/relist"; return s },
 			want: Check{true, "RELIST_DATA_DIR differs: set it to /srv/relist on this host"}},
@@ -137,4 +142,3 @@ func TestEvaluate(t *testing.T) {
 		}
 	})
 }
-

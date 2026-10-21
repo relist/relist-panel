@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/term"
 
+	"relist-panel/internal/config"
 	"relist-panel/internal/migration"
 	"relist-panel/internal/migrationctl"
 	"relist-panel/internal/migrationtui"
@@ -45,13 +46,14 @@ type Env struct {
 	WatchEvery time.Duration
 }
 
-// DefaultEnv is the process's own terminal, socket and settings.
-func DefaultEnv() Env {
+// DefaultEnv is the process's own terminal, and the socket and settings cfg
+// holds.
+func DefaultEnv(cfg config.Config) Env {
 	return Env{
 		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 		IsTerminal: func() bool { return term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()) },
-		Socket:     migration.ControlSocketPath(),
-		Domain:     os.Getenv("RELIST_DOMAIN"),
+		Socket:     cfg.ControlSocket,
+		Domain:     cfg.Install.Domain,
 		Run: func(m tea.Model, in io.Reader, out io.Writer) (tea.Model, error) {
 			return tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out)).Run()
 		},

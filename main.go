@@ -4,11 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -35,7 +35,12 @@ func main() {
 	// Drive a server migration from a terminal in the panel container,
 	// through the running panel's control socket (ADR-0019).
 	if len(os.Args) > 1 && os.Args[1] == "migration" {
-		os.Exit(migrationcli.Run(os.Args[2:], migrationcli.DefaultEnv()))
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		os.Exit(migrationcli.Run(os.Args[2:], migrationcli.DefaultEnv(cfg)))
 	}
 	// The maintenance container a server migration runs from this image
 	// (ADR-0018): it only answers 503 with the maintenance page.
@@ -91,7 +96,7 @@ func main() {
 	// An admin from the install's .env closes the setup screen before the
 	// panel listens, so nobody else can claim a fresh install. After a
 	// migration the old host's admin exists and the env is ignored.
-	if _, err := auth.SeedAdmin(ctx, db, os.Getenv(auth.AdminEmailEnv), os.Getenv(auth.AdminPasswordEnv), time.Now); err != nil {
+	if _, err := auth.SeedAdmin(ctx, db, cfg.AdminEmail, cfg.AdminPassword, time.Now); err != nil {
 		log.Fatal(err)
 	}
 
@@ -143,15 +148,15 @@ func main() {
 	}, dockerexec.NewImages(dockerexec.DefaultSocketPath), &migration.Options{
 		Docker:      dockerexec.NewMigrationDocker(),
 		Install:     cfg.Install,
-		Insecure:    slices.Contains(os.Args[1:], "--insecure-migration-source"),
-		SeededAdmin: os.Getenv(auth.AdminEmailEnv),
+		Insecure:    cfg.InsecureMigrationSource,
+		SeededAdmin: cfg.AdminEmail,
 		Restart:     restart,
 		Control:     control,
 	}, dockerexec.NewDockerHost(dockerexec.DefaultSocketPath))
 	server := &http.Server{Addr: cfg.Address(), Handler: handler}
-	controlServer, err := serveControl(migration.ControlSocketPath(), control)
+	controlServer, err := serveControl(cfg.ControlSocket, control)
 	if err != nil {
-		log.Printf("warning: no migration control socket, so this panel cannot migrate or resume a migration lock; set %s to a writable path and restart: %v", migration.ControlSocketEnv, err)
+		log.Printf("warning: no migration control socket, so this panel cannot migrate or resume a migration lock; set RELIST_CONTROL_SOCKET to a writable path and restart: %v", err)
 	}
 
 	log.Printf("relist-panel listening on %s", cfg.Address())

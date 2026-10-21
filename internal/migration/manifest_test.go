@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"relist-panel/internal/database"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/volumes"
 )
@@ -249,7 +250,8 @@ func TestManifestItemOrder(t *testing.T) {
 	if !slices.Equal(itemIDs(m), want) {
 		t.Fatalf("items = %q, want %q", itemIDs(m), want)
 	}
-	if m.Protocol != ProtocolVersion || m.SchemaVersion != 18 || m.DataDir != f.dataDir || !slices.Equal(m.RunningComposeIDs, []int64{1}) {
+	known, _ := database.KnownVersion()
+	if m.Protocol != ProtocolVersion || m.SchemaVersion != known || m.DataDir != f.dataDir || !slices.Equal(m.RunningComposeIDs, []int64{1}) {
 		t.Fatalf("manifest header = %+v", m)
 	}
 }

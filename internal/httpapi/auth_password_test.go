@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -80,9 +81,13 @@ func TestChangePasswordSwapsItAndEndsOtherSessions(t *testing.T) {
 }
 
 func TestAccountSaysWhenThePasswordIsStillTheOneFromEnv(t *testing.T) {
-	t.Setenv(auth.AdminPasswordEnv, "correct horse battery staple")
 	server := newTestServer(t)
-	setupAndLogin(t, server)
+	if _, err := auth.SeedAdmin(context.Background(), server.db, "admin@example.com", "correct horse battery staple", time.Now); err != nil {
+		t.Fatal(err)
+	}
+	if code := loginAs(t, server, "correct horse battery staple"); code != http.StatusOK {
+		t.Fatalf("login as the seeded admin = %d", code)
+	}
 	fromEnv := func() bool {
 		response := server.request(t, http.MethodGet, "/api/auth/account", nil)
 		defer response.Body.Close()

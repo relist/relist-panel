@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -49,7 +48,7 @@ func SeedAdmin(ctx context.Context, db *sql.DB, email, password string, now func
 	}
 	if exists == 1 {
 		log.Printf("auth: an admin already exists, so %s and %s are ignored", AdminEmailEnv, AdminPasswordEnv)
-		return false, nil
+		return false, markPasswordFromEnv(ctx, db, password)
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -61,13 +60,21 @@ func SeedAdmin(ctx context.Context, db *sql.DB, email, password string, now func
 		}
 		return false, err
 	}
-	return true, nil
+	_, err = db.ExecContext(ctx, "UPDATE admin_credentials SET password_from_env = 1")
+	return err == nil, err
 }
 
-// passwordFromEnv reports whether hash is still the password the env seeded.
-func passwordFromEnv(hash string) bool {
-	seeded := os.Getenv(AdminPasswordEnv)
-	return seeded != "" && bcrypt.CompareHashAndPassword([]byte(hash), []byte(seeded)) == nil
+// markPasswordFromEnv records an existing admin whose password is still the
+// env's, such as one seeded before the flag was kept.
+func markPasswordFromEnv(ctx context.Context, db *sql.DB, password string) error {
+	var hash string
+	var flagged bool
+	err := db.QueryRowContext(ctx, "SELECT password_hash, password_from_env FROM admin_credentials LIMIT 1").Scan(&hash, &flagged)
+	if err != nil || flagged || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, "UPDATE admin_credentials SET password_from_env = 1")
+	return err
 }
 
 type passwordChange struct {
@@ -153,7 +160,7 @@ func (s *Service) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not secure the password")
 		return
 	}
-	if _, err := tx.ExecContext(r.Context(), "UPDATE admin_credentials SET password_hash = ? WHERE id = ?", string(hash), adminID); err != nil {
+	if _, err := tx.ExecContext(r.Context(), "UPDATE admin_credentials SET password_hash = ?, password_from_env = 0 WHERE id = ?", string(hash), adminID); err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
 	}

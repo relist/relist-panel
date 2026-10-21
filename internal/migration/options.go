@@ -19,6 +19,6 @@ type Options struct {
 	Backoff         func(attempt int) time.Duration // nil means 2s, 8s, 30s
 	Restart         func()                          // nil means os.Exit(0); see FinalizeDeps.Restart
 	// Control, when set, receives the routes the control socket serves
-	// (ADR-0019); main serves it on ControlSocketPath.
+	// (ADR-0019); main serves it on Config.ControlSocket.
 	Control *http.ServeMux
 }

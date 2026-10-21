@@ -65,14 +65,3 @@ func TestListenControlLeavesAnExistingDirectoryAlone(t *testing.T) {
 		t.Fatalf("an existing directory was changed to %v", d.Mode().Perm())
 	}
 }
-
-func TestControlSocketPathFromEnv(t *testing.T) {
-	t.Setenv(ControlSocketEnv, "")
-	if got := ControlSocketPath(); got != "/run/relist-panel/control.sock" {
-		t.Fatalf("default = %q", got)
-	}
-	t.Setenv(ControlSocketEnv, "/tmp/x.sock")
-	if got := ControlSocketPath(); got != "/tmp/x.sock" {
-		t.Fatalf("from env = %q", got)
-	}
-}

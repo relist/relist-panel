@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
@@ -60,5 +61,48 @@ func TestSeedAdminRefusesBadValuesWithoutEchoingThem(t *testing.T) {
 				t.Fatalf("error %q echoes the password", err)
 			}
 		})
+	}
+}
+
+func passwordFromEnvFlag(t *testing.T, db interface {
+	QueryRow(string, ...any) *sql.Row
+}) bool {
+	t.Helper()
+	var flag bool
+	if err := db.QueryRow("SELECT password_from_env FROM admin_credentials").Scan(&flag); err != nil {
+		t.Fatal(err)
+	}
+	return flag
+}
+
+// Whether the password is still the env's is recorded, so the account page
+// never reads the env or runs bcrypt per request (ADR-0003: env in Config).
+func TestSeedAdminRecordsThePasswordAsFromEnv(t *testing.T) {
+	db := openResetDatabase(t)
+	if _, err := SeedAdmin(context.Background(), db, "admin@example.com", "correct horse battery staple", time.Now); err != nil {
+		t.Fatal(err)
+	}
+	if !passwordFromEnvFlag(t, db) {
+		t.Fatal("a seeded admin's password is not recorded as from the env")
+	}
+}
+
+// An admin seeded before the flag existed is recognised at boot while its
+// password still matches the env.
+func TestSeedAdminRecognisesAnEarlierSeededPassword(t *testing.T) {
+	db := openResetDatabase(t)
+	hash, _ := bcrypt.GenerateFromPassword([]byte("correct horse battery staple"), bcrypt.MinCost)
+	db.Exec("INSERT INTO admin_credentials (id, email, password_hash, created_at) VALUES (1, 'admin@example.com', ?, 1)", string(hash))
+	if _, err := SeedAdmin(context.Background(), db, "admin@example.com", "another password here", time.Now); err != nil {
+		t.Fatal(err)
+	}
+	if passwordFromEnvFlag(t, db) {
+		t.Fatal("a password the env does not hold was recorded as from the env")
+	}
+	if _, err := SeedAdmin(context.Background(), db, "admin@example.com", "correct horse battery staple", time.Now); err != nil {
+		t.Fatal(err)
+	}
+	if !passwordFromEnvFlag(t, db) {
+		t.Fatal("an earlier seeded password was not recognised")
 	}
 }
