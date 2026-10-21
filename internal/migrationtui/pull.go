@@ -663,7 +663,7 @@ func (m *pullModel) itemLines() []string {
 	var out []string
 	done := 0
 	for _, it := range m.p.Items {
-		if it.State == "done" {
+		if it.State == migration.ItemDone {
 			done++
 		}
 	}
@@ -675,29 +675,29 @@ func (m *pullModel) itemLines() []string {
 		if it.Size > 0 {
 			frac = min(1, float64(it.Done)/float64(it.Size))
 		}
-		if it.State == "done" {
+		if it.State == migration.ItemDone {
 			frac = 1
 		}
-		state := it.State
+		state := string(it.State)
 		switch {
-		case it.State == "running" && it.Attempts > 1:
+		case it.State == migration.ItemRunning && it.Attempts > 1:
 			state = fmt.Sprintf("retrying %d/3", it.Attempts)
-		case it.State == "running":
+		case it.State == migration.ItemRunning:
 			state = "copying"
-		case it.State == "pending":
+		case it.State == migration.ItemPending:
 			state = "waiting"
 		}
 		// The ID comes last, so a narrow window cuts the ID, never the state.
 		line := fmt.Sprintf("  %-12s %-9s %s %9s / %-9s %s", state, it.Kind, m.bar.ViewAs(frac),
 			migration.HumanBytes(it.Done), migration.HumanBytes(it.Size), it.ID)
 		switch it.State {
-		case "failed":
+		case migration.ItemFailed:
 			line = dangerStyle.Render(line)
-		case "done":
+		case migration.ItemDone:
 			line = okStyle.Render(line)
 		}
 		out = append(out, line)
-		if it.Error != "" && it.State != "done" {
+		if it.Error != "" && it.State != migration.ItemDone {
 			out = append(out, dangerStyle.Render("      "+it.Error))
 		}
 	}

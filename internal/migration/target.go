@@ -31,6 +31,16 @@ const (
 	PhaseDone       Phase = "done"
 )
 
+// ItemState is where one item of the manifest is in the pull.
+type ItemState string
+
+const (
+	ItemPending ItemState = "pending"
+	ItemRunning ItemState = "running"
+	ItemDone    ItemState = "done"
+	ItemFailed  ItemState = "failed"
+)
+
 const maxAttempts = 3
 
 // Restorer writes items on the new host.
@@ -59,13 +69,13 @@ type BlockedError struct{ Message string }
 func (e *BlockedError) Error() string { return e.Message }
 
 type ItemProgress struct {
-	ID       string   `json:"id"`
-	Kind     ItemKind `json:"kind"`
-	Size     int64    `json:"size"`
-	Done     int64    `json:"done"`
-	State    string   `json:"state"` // pending | running | done | failed
-	Attempts int      `json:"attempts"`
-	Error    string   `json:"error,omitempty"`
+	ID       string    `json:"id"`
+	Kind     ItemKind  `json:"kind"`
+	Size     int64     `json:"size"`
+	Done     int64     `json:"done"`
+	State    ItemState `json:"state"`
+	Attempts int       `json:"attempts"`
+	Error    string    `json:"error,omitempty"`
 }
 
 type Progress struct {
@@ -101,9 +111,9 @@ type TargetDeps struct {
 }
 
 type itemState struct {
-	State    string `json:"state"`
-	Attempts int    `json:"attempts"`
-	Error    string `json:"error,omitempty"`
+	State    ItemState `json:"state"`
+	Attempts int       `json:"attempts"`
+	Error    string    `json:"error,omitempty"`
 }
 
 // targetState is state.json: everything needed to continue after a restart.
@@ -371,7 +381,7 @@ func (t *Target) run(ctx context.Context) error {
 		t.mu.Lock()
 		state := t.st.Items[item.ID].State
 		t.mu.Unlock()
-		if state == "done" {
+		if state == ItemDone {
 			continue
 		}
 		if !t.pull(ctx, item) {
@@ -440,7 +450,7 @@ func (t *Target) waitManifest(ctx context.Context) error {
 			t.st.Manifest, t.st.Phase = m, PhasePulling
 			t.st.Items = map[string]*itemState{}
 			for _, it := range m.Items {
-				t.st.Items[it.ID] = &itemState{State: "pending"}
+				t.st.Items[it.ID] = &itemState{State: ItemPending}
 			}
 			t.st.Warnings = append(t.st.Warnings, m.Warnings...)
 			t.record("info", "", fmt.Sprintf("Old server locked: %d items to copy", len(m.Items)))
@@ -497,7 +507,7 @@ func (t *Target) pull(ctx context.Context, item Item) bool {
 	for {
 		t.mu.Lock()
 		is := t.st.Items[item.ID]
-		is.State, is.Error = "running", ""
+		is.State, is.Error = ItemRunning, ""
 		counter := &atomic.Int64{}
 		t.done[item.ID] = counter
 		if is.Attempts == 0 {
@@ -517,7 +527,7 @@ func (t *Target) pull(ctx context.Context, item Item) bool {
 		}
 		t.mu.Lock()
 		if err == nil {
-			is.State = "done"
+			is.State = ItemDone
 			t.record("info", item.ID, "Copied "+item.ID)
 			if warning != "" {
 				t.st.Warnings = append(t.st.Warnings, warning)
@@ -530,7 +540,7 @@ func (t *Target) pull(ctx context.Context, item Item) bool {
 		is.Attempts++
 		is.Error = err.Error()
 		if is.Attempts >= maxAttempts {
-			is.State = "failed"
+			is.State = ItemFailed
 			t.st.Phase = PhasePaused
 			t.record("error", item.ID, fmt.Sprintf("%s failed %d times: %s. Paused", item.ID, is.Attempts, err))
 			t.save()
@@ -538,7 +548,7 @@ func (t *Target) pull(ctx context.Context, item Item) bool {
 			t.d.Restore.Cleanup(ctx, item)
 			return false
 		}
-		is.State = "pending"
+		is.State = ItemPending
 		t.record("warn", item.ID, fmt.Sprintf("%s failed: %s. Retrying", item.ID, err))
 		attempts := is.Attempts
 		t.save()
@@ -651,8 +661,8 @@ func (t *Target) Retry(ctx context.Context) error {
 		return nil
 	}
 	for _, is := range t.st.Items {
-		if is.State == "failed" {
-			is.State, is.Attempts = "pending", 0
+		if is.State == ItemFailed {
+			is.State, is.Attempts = ItemPending, 0
 		}
 	}
 	if t.st.Manifest != nil && t.st.Phase != PhaseFinalizing {
@@ -684,7 +694,7 @@ func (t *Target) Abort(ctx context.Context) error {
 	var restored []Item
 	if m != nil {
 		for _, it := range m.Items {
-			if is := t.st.Items[it.ID]; is != nil && is.State != "pending" {
+			if is := t.st.Items[it.ID]; is != nil && is.State != ItemPending {
 				restored = append(restored, it)
 			}
 		}
@@ -746,14 +756,14 @@ func (t *Target) progress() Progress {
 	}
 	if t.st.Manifest != nil {
 		for _, it := range t.st.Manifest.Items {
-			ip := ItemProgress{ID: it.ID, Kind: it.Kind, Size: it.Size, State: "pending"}
+			ip := ItemProgress{ID: it.ID, Kind: it.Kind, Size: it.Size, State: ItemPending}
 			if is := t.st.Items[it.ID]; is != nil {
 				ip.State, ip.Attempts, ip.Error = is.State, is.Attempts, is.Error
 			}
 			if c := t.done[it.ID]; c != nil {
 				ip.Done = c.Load()
 			}
-			if ip.State == "done" {
+			if ip.State == ItemDone {
 				ip.Done = max(ip.Done, it.Size)
 			}
 			p.Items = append(p.Items, ip)
@@ -781,8 +791,8 @@ func (t *Target) ResumeIfPending(ctx context.Context) error {
 	switch phase {
 	case PhaseLocking, PhasePulling:
 		for _, is := range t.st.Items {
-			if is.State == "running" {
-				is.State = "pending"
+			if is.State == ItemRunning {
+				is.State = ItemPending
 			}
 		}
 		t.launch()

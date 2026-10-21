@@ -7,8 +7,8 @@ import (
 	"slices"
 	"testing"
 
-	"relist-panel/internal/database"
 	"relist-panel/internal/config"
+	"relist-panel/internal/database"
 )
 
 func TestEvaluate(t *testing.T) {
