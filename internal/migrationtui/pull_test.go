@@ -672,3 +672,35 @@ func mustContainText(t *testing.T, got string, want ...string) {
 		}
 	}
 }
+
+func TestPullPreviewNamesEachImageAndHowItMoves(t *testing.T) {
+	p := connected()
+	p.Info.Images = []migration.Item{
+		{ID: "image-a", Kind: migration.KindImage, Size: 1 << 20, Image: &migration.ImageInfo{ID: "sha256:aaaa", Tags: []string{"postgres:16"}, RepoDigests: []string{"postgres@sha256:1"}}},
+		{ID: "image-b", Kind: migration.KindImage, Size: 2 << 20, Image: &migration.ImageInfo{ID: "sha256:0123456789abcdef"}},
+	}
+	got := screen(pull(&fakeController{}, p))
+	for _, want := range []string{"postgres:16", "pulled by digest", "0123456789ab", "copied"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("preview lacks %q:\n%s", want, got)
+		}
+	}
+	lines := strings.Split(got, "\n")
+	for _, l := range lines {
+		if strings.Contains(l, "postgres:16") && !strings.Contains(l, "pulled by digest") {
+			t.Fatalf("postgres:16 is not marked pulled by digest: %q", l)
+		}
+	}
+}
+
+func TestPullPreviewShowsStartUnavailableWhileACheckBlocks(t *testing.T) {
+	p := connected()
+	p.Checks = []migration.Check{{Blocking: true, Message: "Volume pg already exists on this host"}}
+	got := screen(pull(&fakeController{}, p))
+	if strings.Contains(got, "enter start ·") {
+		t.Fatalf("offers enter start while a check blocks:\n%s", got)
+	}
+	if !strings.Contains(got, "start blocked") {
+		t.Fatalf("does not say start is blocked:\n%s", got)
+	}
+}

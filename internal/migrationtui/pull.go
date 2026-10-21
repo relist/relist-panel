@@ -544,6 +544,20 @@ func (m *pullModel) previewLines() ([]string, int) {
 		out = append(out, fmt.Sprintf("  %-24s %-8s %-20s %s", name, driver, options, migration.HumanBytes(it.Size)))
 	}
 	out = append(out, "", fmt.Sprintf("%s  %d pulled by digest, %d copied", titleStyle.Render("Images"), digests, len(info.Images)-digests))
+	for _, it := range info.Images {
+		name, how := it.ID, "copied"
+		if img := it.Image; img != nil {
+			name = strings.TrimPrefix(img.ID, "sha256:")
+			name = name[:min(12, len(name))]
+			if len(img.Tags) > 0 {
+				name = img.Tags[0]
+			}
+			if len(img.RepoDigests) > 0 {
+				how = "pulled by digest"
+			}
+		}
+		out = append(out, fmt.Sprintf("  %-32s %-17s %s", name, how, migration.HumanBytes(it.Size)))
+	}
 	out = append(out, "", titleStyle.Render("Host paths")+dimStyle.Render("  space ticks, r rechecks"))
 	cursorLine := -1
 	for i, hp := range info.HostPaths {
@@ -772,6 +786,8 @@ func (m *pullModel) footer() []string {
 		help = "q quit"
 	case m.p.Phase == migration.PhaseIdle:
 		help = "enter next · tab move · esc quit"
+	case m.p.Phase == migration.PhaseConnected && m.blocked():
+		help = "↑/↓ move · space tick · r recheck · start blocked · a abort · q quit"
 	case m.p.Phase == migration.PhaseConnected:
 		help = "↑/↓ move · space tick · r recheck · enter start · a abort · q quit"
 	case m.p.Phase == migration.PhaseDone:
