@@ -98,6 +98,9 @@ type LocalHost struct {
 	DataDir   string
 	Install   config.InstallSettings
 	FreeBytes func(path string) (int64, error)
+	// SeededAdmin is RELIST_ADMIN_EMAIL: the one admin an empty panel may
+	// already have, since the migrated database replaces it.
+	SeededAdmin string
 }
 
 func (l LocalHost) free(path string) (int64, error) {
@@ -131,8 +134,16 @@ func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []s
 	if filepath.Clean(src.DataDir) != filepath.Clean(local.DataDir) {
 		block("RELIST_DATA_DIR differs: set it to " + src.DataDir + " on this host")
 	}
-	// An admin alone is not data: one seeded from the env keeps the setup
-	// screen closed, and the migrated database replaces it.
+	// An admin seeded from the env keeps the setup screen closed and the
+	// migrated database replaces it; any other admin means someone set this
+	// panel up by hand.
+	var other int
+	if err := local.DB.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM admin_credentials WHERE email <> ?)", local.SeededAdmin).Scan(&other); err != nil {
+		return nil, err
+	}
+	if other == 1 {
+		block("This panel already has an admin account. Migrate into a freshly installed panel; only an admin from RELIST_ADMIN_EMAIL may exist")
+	}
 	var data int
 	if err := local.DB.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM projects)").Scan(&data); err != nil {
 		return nil, err

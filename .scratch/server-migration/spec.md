@@ -185,7 +185,9 @@ Blocking:
 
 - The new panel's highest known goose migration is lower than the old database's applied version.
 - `RELIST_DATA_DIR` differs between the hosts. The message gives the value to set.
-- The new panel is not empty: an admin account exists, or any Project exists.
+- The new panel is not empty: an admin account exists, or any Project exists. (Amended 2026-10-21:
+  the admin seeded from `RELIST_ADMIN_EMAIL` does not count. It only keeps the setup screen
+  closed, and the migrated database replaces it.)
 - A named Volume in the manifest already exists on the new host.
 - A selected host path exists on the new host and is not an empty directory.
 - Free space is too small. The data directory is checked with `statfs`. The Docker root

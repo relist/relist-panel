@@ -141,11 +141,12 @@ func main() {
 	handler, waitDeployments := httpapi.NewHandler(ctx, db, dockerexec.New(), cfg.DataDir, sampler, collector, volumeRunner, volumeResolver, &terminal.Options{
 		Exec: terminalExec,
 	}, dockerexec.NewImages(dockerexec.DefaultSocketPath), &migration.Options{
-		Docker:   dockerexec.NewMigrationDocker(),
-		Install:  cfg.Install,
-		Insecure: slices.Contains(os.Args[1:], "--insecure-migration-source"),
-		Restart:  restart,
-		Control:  control,
+		Docker:      dockerexec.NewMigrationDocker(),
+		Install:     cfg.Install,
+		Insecure:    slices.Contains(os.Args[1:], "--insecure-migration-source"),
+		SeededAdmin: os.Getenv(auth.AdminEmailEnv),
+		Restart:     restart,
+		Control:     control,
 	}, dockerexec.NewDockerHost(dockerexec.DefaultSocketPath))
 	server := &http.Server{Addr: cfg.Address(), Handler: handler}
 	controlServer, err := serveControl(migration.ControlSocketPath(), control)

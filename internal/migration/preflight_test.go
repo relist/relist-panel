@@ -36,6 +36,9 @@ func TestEvaluate(t *testing.T) {
 		{name: "not empty", local: func(_ *LocalHost, _ *FakeDocker, db *sql.DB) {
 			db.Exec(`INSERT INTO projects (name, created_at, updated_at) VALUES ('p', 1, 1)`)
 		}, want: Check{true, "This panel already has Projects. Migrate into a freshly installed panel"}},
+		{name: "admin created by hand", local: func(_ *LocalHost, _ *FakeDocker, db *sql.DB) {
+			db.Exec(`INSERT INTO admin_credentials (id, email, password_hash, created_at) VALUES (1, 'me@example.com', 'x', 1)`)
+		}, want: Check{true, "This panel already has an admin account. Migrate into a freshly installed panel; only an admin from RELIST_ADMIN_EMAIL may exist"}},
 		{name: "volume exists", local: func(_ *LocalHost, d *FakeDocker, _ *sql.DB) { d.Volumes["pg"] = VolumeInfo{Name: "pg"} },
 			want: Check{true, "Volume pg already exists on this host"}},
 		{name: "volume with a driver", src: func(s SourceInfo) SourceInfo {
@@ -107,7 +110,7 @@ func TestEvaluate(t *testing.T) {
 		if _, err := db.Exec(`INSERT INTO admin_credentials (id, email, password_hash, created_at) VALUES (1, 'a@example.com', 'x', 1)`); err != nil {
 			t.Fatal(err)
 		}
-		local := LocalHost{DB: db, Docker: NewFakeDocker(), DataDir: "/var/lib/relist-panel",
+		local := LocalHost{DB: db, Docker: NewFakeDocker(), DataDir: "/var/lib/relist-panel", SeededAdmin: "A@example.com",
 			Install: config.InstallSettings{Domain: "panel.example.com"}, FreeBytes: func(string) (int64, error) { return 1 << 40, nil }}
 		checks, err := Evaluate(context.Background(), local, base(), nil)
 		if err != nil {
@@ -134,3 +137,4 @@ func TestEvaluate(t *testing.T) {
 		}
 	})
 }
+

@@ -124,7 +124,8 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 			Install:         migrationOptions.Install,
 		})
 		source.RegisterRoutes(mux)
-		local := migration.LocalHost{DB: db, Docker: migrationOptions.Docker, DataDir: dataDir, Install: migrationOptions.Install}
+		local := migration.LocalHost{DB: db, Docker: migrationOptions.Docker, DataDir: dataDir, Install: migrationOptions.Install,
+			SeededAdmin: migrationOptions.SeededAdmin}
 		stateDir := filepath.Join(dataDir, ".migration")
 		target := migration.NewTarget(migration.TargetDeps{
 			Local:    local,
