@@ -268,7 +268,7 @@ func TestUnpackUnderKeepsEveryEntryBeneathTop(t *testing.T) {
 	refused := map[string]*bytes.Buffer{
 		"sibling": tarOf(t, &tar.Header{Name: "uploads/", Typeflag: tar.TypeDir, Mode: 0o755},
 			&tar.Header{Name: "cron.d/x", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1}),
-		"root entry": tarOf(t, &tar.Header{Name: "./", Typeflag: tar.TypeDir, Mode: 0o777}),
+		"root entry":  tarOf(t, &tar.Header{Name: "./", Typeflag: tar.TypeDir, Mode: 0o777}),
 		"prefix only": tarOf(t, &tar.Header{Name: "uploads-old", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1}),
 	}
 	for name, body := range refused {
