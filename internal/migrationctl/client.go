@@ -36,21 +36,6 @@ type Token struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
-// Controller is what the TUI needs from the panel.
-type Controller interface {
-	Progress(ctx context.Context) (migration.Progress, error)
-	Connect(ctx context.Context, sourceURL, token, selfURL string) (migration.Progress, error)
-	Recheck(ctx context.Context, hostPaths []string) (migration.Progress, error)
-	Start(ctx context.Context, hostPaths []string) error
-	Retry(ctx context.Context) error
-	Abort(ctx context.Context) error
-	CreateToken(ctx context.Context, lifetime string) (Token, error)
-	RevokeToken(ctx context.Context) error
-	Status(ctx context.Context) (migration.SourceStatus, error)
-	Resume(ctx context.Context) (warning string, err error)
-	Activity(ctx context.Context) (migration.Activity, error)
-}
-
 // requestTimeout bounds every call except Start and Abort, which wait for
 // the old host.
 const requestTimeout = 30 * time.Second

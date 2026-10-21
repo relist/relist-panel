@@ -39,7 +39,7 @@ var sourceSteps = []struct {
 }
 
 type serveModel struct {
-	c      migrationctl.Controller
+	c      Controller
 	s      migration.SourceStatus
 	a      migration.Activity
 	loaded bool
@@ -58,11 +58,11 @@ type serveModel struct {
 
 // NewServe is `relist-panel migration serve`: it creates a Migration token,
 // then follows the claim, the lock and the items the new server pulls.
-func NewServe(c migrationctl.Controller) tea.Model {
+func NewServe(c Controller) tea.Model {
 	return &serveModel{c: c, choice: 1, resume: newResumeInput("Type RESUME to cancel the migration and start this server's Composes again:")}
 }
 
-func fetchStatus(c migrationctl.Controller) tea.Cmd {
+func fetchStatus(c Controller) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

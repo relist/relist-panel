@@ -99,7 +99,3 @@ func TestClientResumeWarning(t *testing.T) {
 		t.Fatalf("Resume = %q, %v; want no warning", got, err)
 	}
 }
-
-func TestClientImplementsController(t *testing.T) {
-	var _ Controller = New("x")
-}

@@ -7,7 +7,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"relist-panel/internal/migration"
-	"relist-panel/internal/migrationctl"
 )
 
 // resumeInput asks to type RESUME before cancelling the Migration or
@@ -63,7 +62,7 @@ func (r *resumeInput) lines() []string {
 }
 
 type resumeModel struct {
-	c       migrationctl.Controller
+	c       Controller
 	s       migration.SourceStatus
 	loaded  bool
 	in      resumeInput
@@ -75,7 +74,7 @@ type resumeModel struct {
 
 // NewResume is `relist-panel migration resume`: Cancel migration before
 // finish, Resume this server after it.
-func NewResume(c migrationctl.Controller) tea.Model {
+func NewResume(c Controller) tea.Model {
 	return &resumeModel{c: c, in: newResumeInput("Type RESUME to resume this server:")}
 }
 

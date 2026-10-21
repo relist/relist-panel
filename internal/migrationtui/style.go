@@ -1,7 +1,7 @@
 // Package migrationtui is the terminal user interface of a server Migration
 // (ADR-0019): Bubble Tea models for `relist-panel migration pull`, `serve`
 // and `resume`. They only drive and show the Migration the panel performs,
-// through a migrationctl.Controller, so quitting one never stops it.
+// through a Controller, so quitting one never stops it.
 package migrationtui
 
 import (

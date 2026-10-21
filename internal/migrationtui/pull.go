@@ -45,7 +45,7 @@ const (
 var pullStages = []string{"Connect", "Preview", "Lock old server", "Copy", "Finalize", "Done"}
 
 type pullModel struct {
-	c   migrationctl.Controller
+	c   Controller
 	now func() time.Time
 
 	p      migration.Progress
@@ -78,11 +78,11 @@ type pullModel struct {
 // NewPull is `relist-panel migration pull`: it connects, previews, starts
 // and follows a Migration into this panel. defaultSelfURL prefills this
 // panel's own URL.
-func NewPull(c migrationctl.Controller, defaultSelfURL string) tea.Model {
+func NewPull(c Controller, defaultSelfURL string) tea.Model {
 	return newPull(c, defaultSelfURL, time.Now)
 }
 
-func newPull(c migrationctl.Controller, defaultSelfURL string, now func() time.Time) *pullModel {
+func newPull(c Controller, defaultSelfURL string, now func() time.Time) *pullModel {
 	inputs := make([]textinput.Model, 3)
 	for i := range inputs {
 		inputs[i] = textinput.New()
