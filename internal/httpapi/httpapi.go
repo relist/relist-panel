@@ -113,6 +113,7 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 	}
 	var inner http.Handler = gate.middleware(mux)
 	if migrationOptions != nil {
+		domainStore := domains.NewStore(db)
 		source := migration.NewSource(migration.SourceDeps{
 			Store:           migration.NewStore(db, nil),
 			Builder:         migration.Builder{DB: db, Composes: composesService, Volumes: volumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir},
@@ -120,7 +121,7 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 			Docker:          migrationOptions.Docker,
 			Status:          runner,
 			Composes:        composesService,
-			Domains:         domains.NewStore(db),
+			Domains:         domainStore,
 			Terminals:       terminals,
 			DB:              db,
 			DataDir:         dataDir,
@@ -138,7 +139,7 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 			StateDir: stateDir,
 			Restore:  migration.NewRestorer(local, filepath.Join(stateDir, "staging")),
 			Finalizer: migration.NewFinalizer(migration.FinalizeDeps{
-				Local: local, Restart: migrationOptions.Restart, Queue: queue, Sources: sources.NewStore(db), Domains: domains.NewStore(db),
+				Local: local, Restart: migrationOptions.Restart, Queue: queue, Sources: sources.NewStore(db), Domains: domainStore,
 			}),
 			Backoff: migrationOptions.Backoff,
 			Context: ctx,
