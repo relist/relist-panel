@@ -55,14 +55,13 @@ type SourceStatus struct {
 }
 
 // SessionPath reports the routes the cookie middleware must let through: the
-// old host's routes that authenticate with the Migration session key, and the
-// new host's pull routes, which allow themselves only before an admin exists.
+// old host's routes that authenticate with the Migration session key.
 func SessionPath(path string) bool {
 	switch path {
 	case "/api/migration/claim", "/api/migration/preflight", "/api/migration/start", "/api/migration/abort", "/api/migration/finish":
 		return true
 	}
-	return strings.HasPrefix(path, "/api/migration/items/") || strings.HasPrefix(path, "/api/migration/pull/")
+	return strings.HasPrefix(path, "/api/migration/items/")
 }
 
 func (s *Source) session(next http.HandlerFunc) http.HandlerFunc {

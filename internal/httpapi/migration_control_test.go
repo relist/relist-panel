@@ -20,6 +20,14 @@ import (
 func newControlServer(t *testing.T) (*testServer, *http.Client) {
 	t.Helper()
 	s := newTestServer(t)
+	return s, s.restartWithControl(t)
+}
+
+// restartWithControl rebuilds the handler with Migration options and a
+// control socket, as a panel restart would: Migration state files are read
+// again. It returns a client for the new socket.
+func (s *testServer) restartWithControl(t *testing.T) *http.Client {
+	t.Helper()
 	s.stopWorker()
 	ctx, cancel := context.WithCancel(context.Background())
 	control := http.NewServeMux()
@@ -41,7 +49,7 @@ func newControlServer(t *testing.T) (*testServer, *http.Client) {
 	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", path)
 	}}}
-	return s, client
+	return client
 }
 
 func controlDo(t *testing.T, c *http.Client, method, path, body string) (int, string) {

@@ -138,13 +138,6 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 			Backoff: migrationOptions.Backoff,
 			Context: ctx,
 		})
-		target.RegisterRoutes(mux, func(r *http.Request) (bool, error) {
-			exists, err := authService.AdminExists(r)
-			if err != nil || !exists {
-				return !exists, err
-			}
-			return authService.Authenticated(r)
-		})
 		if migrationOptions.Control != nil {
 			source.RegisterControlRoutes(migrationOptions.Control)
 			target.RegisterControlRoutes(migrationOptions.Control)

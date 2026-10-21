@@ -173,7 +173,7 @@ func (p *panel) signIn(setup bool) {
 
 func (p *panel) progress() migration.Progress {
 	p.t.Helper()
-	code, body := p.do("GET", "/api/migration/pull/progress", nil)
+	code, body := p.ctl("GET", "/api/migration/pull/progress", nil)
 	if code != http.StatusOK {
 		p.t.Fatalf("progress = %d %s", code, body)
 	}
@@ -260,10 +260,10 @@ func newPair(t *testing.T, newOpts migration.Options) *pair {
 
 func (p *pair) connectAndStart(t *testing.T) {
 	t.Helper()
-	if code, body := p.new.do("POST", "/api/migration/pull/connect", map[string]string{"sourceUrl": p.old.srv.URL, "token": p.token}); code != http.StatusOK {
+	if code, body := p.new.ctl("POST", "/api/migration/pull/connect", map[string]string{"sourceUrl": p.old.srv.URL, "token": p.token, "selfUrl": p.new.srv.URL}); code != http.StatusOK {
 		t.Fatalf("connect = %d %s", code, body)
 	}
-	if code, body := p.new.do("POST", "/api/migration/pull/start", map[string]any{"hostPaths": []string{"/srv/up"}}); code != http.StatusAccepted {
+	if code, body := p.new.ctl("POST", "/api/migration/pull/start", map[string]any{"hostPaths": []string{"/srv/up"}}); code != http.StatusAccepted {
 		t.Fatalf("start = %d %s", code, body)
 	}
 }
@@ -373,7 +373,7 @@ func TestMigrationAbortRestoresOldHost(t *testing.T) {
 	p.new.docker.Fail["unpack"] = errors.New("disk on fire")
 	p.connectAndStart(t)
 	eventually(t, "paused", func() bool { return p.new.progress().Phase == migration.PhasePaused })
-	if code, body := p.new.do("POST", "/api/migration/pull/abort", nil); code != http.StatusNoContent {
+	if code, body := p.new.ctl("POST", "/api/migration/pull/abort", nil); code != http.StatusNoContent {
 		t.Fatalf("abort = %d %s", code, body)
 	}
 	if !p.old.docker.Running["relist-c1"] || p.old.docker.MaintenanceUp {

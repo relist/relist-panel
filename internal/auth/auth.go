@@ -44,15 +44,9 @@ type Service struct {
 // SetSetupBlocker makes setup answer 409 while blocked reports true.
 func (s *Service) SetSetupBlocker(blocked func() bool) { s.setupBlocked = blocked }
 
-// AdminExists reports whether the admin account has been set up.
-func (s *Service) AdminExists(r *http.Request) (bool, error) { return s.adminExists(r) }
-
-// Authenticated reports whether r carries a valid admin session.
-func (s *Service) Authenticated(r *http.Request) (bool, error) { return s.authenticated(r) }
-
 // AllowSelfAuthenticated lets requests to the paths allow reports true for
-// past the cookie check: a server migration's session-key routes and its
-// pre-setup pull routes (ADR-0018). Their handlers authenticate themselves.
+// past the cookie check: a server migration's session-key routes
+// (ADR-0018). Their handlers authenticate themselves.
 func (s *Service) AllowSelfAuthenticated(allow func(path string) bool) {
 	s.selfAuthenticated = allow
 }
