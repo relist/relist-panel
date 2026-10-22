@@ -116,7 +116,7 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 		domainStore := domains.NewStore(db)
 		source := migration.NewSource(migration.SourceDeps{
 			Store:           migration.NewStore(db, nil),
-			Builder:         migration.Builder{DB: db, Composes: composesService, Volumes: volumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir},
+			Manifests:       migration.ManifestBuilder{DB: db, Composes: composesService, Volumes: volumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir},
 			Queue:           queue,
 			Docker:          migrationOptions.Docker,
 			Status:          runner,

@@ -97,8 +97,8 @@ func (f *manifestFixture) compose(name, yaml, config string, deployed bool) int6
 	return id
 }
 
-func (f *manifestFixture) builder() Builder {
-	return Builder{DB: f.db, Composes: f.targets, Volumes: volumes.NewResolver(f.cli, f.dataDir), Docker: f.docker, DataDir: f.dataDir}
+func (f *manifestFixture) builder() ManifestBuilder {
+	return ManifestBuilder{DB: f.db, Composes: f.targets, Volumes: volumes.NewResolver(f.cli, f.dataDir), Docker: f.docker, DataDir: f.dataDir}
 }
 
 func localVolume(name, project, logical string) VolumeInfo {

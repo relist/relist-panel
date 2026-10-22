@@ -70,8 +70,8 @@ type ComposeTargets interface {
 	Target(ctx context.Context, composeID int64) (composes.DeployTarget, error)
 }
 
-// Builder derives the manifest from the database and Docker.
-type Builder struct {
+// ManifestBuilder derives the manifest from the database and Docker.
+type ManifestBuilder struct {
 	DB       *sql.DB
 	Composes ComposeTargets
 	Volumes  *volumes.Resolver
@@ -88,7 +88,7 @@ type scan struct {
 	warnings  []string
 }
 
-func (b Builder) composeIDs(ctx context.Context) ([]int64, error) {
+func (b ManifestBuilder) composeIDs(ctx context.Context) ([]int64, error) {
 	rows, err := b.DB.QueryContext(ctx, "SELECT id FROM composes ORDER BY id")
 	if err != nil {
 		return nil, err
@@ -105,7 +105,7 @@ func (b Builder) composeIDs(ctx context.Context) ([]int64, error) {
 	return ids, rows.Err()
 }
 
-func (b Builder) scan(ctx context.Context) (scan, error) {
+func (b ManifestBuilder) scan(ctx context.Context) (scan, error) {
 	ids, err := b.composeIDs(ctx)
 	if err != nil {
 		return scan{}, err
@@ -173,7 +173,7 @@ func (b Builder) scan(ctx context.Context) (scan, error) {
 
 // HostPathCandidates lists the bind sources outside the data directory, with
 // their sizes, and the warnings resolution produced.
-func (b Builder) HostPathCandidates(ctx context.Context) ([]HostPathCandidate, []string, error) {
+func (b ManifestBuilder) HostPathCandidates(ctx context.Context) ([]HostPathCandidate, []string, error) {
 	s, err := b.scan(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -207,7 +207,7 @@ func (b Builder) HostPathCandidates(ctx context.Context) ([]HostPathCandidate, [
 
 // Build lists every item to move. running is recorded as is; hostPaths must
 // each be a candidate.
-func (b Builder) Build(ctx context.Context, running []int64, hostPaths []string) (Manifest, error) {
+func (b ManifestBuilder) Build(ctx context.Context, running []int64, hostPaths []string) (Manifest, error) {
 	s, err := b.scan(ctx)
 	if err != nil {
 		return Manifest{}, err
@@ -282,7 +282,7 @@ func (b Builder) Build(ctx context.Context, running []int64, hostPaths []string)
 
 // dataDirSizes sizes panel.db and the rest of the data directory, without
 // the database files and the Migration's own directories.
-func (b Builder) dataDirSizes() (dbSize, dirSize int64, err error) {
+func (b ManifestBuilder) dataDirSizes() (dbSize, dirSize int64, err error) {
 	if info, err := os.Stat(filepath.Join(b.DataDir, "panel.db")); err == nil {
 		dbSize = info.Size()
 	}

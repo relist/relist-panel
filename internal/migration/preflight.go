@@ -37,11 +37,11 @@ func (s *Source) Info(ctx context.Context) (SourceInfo, error) {
 	if err != nil {
 		return SourceInfo{}, err
 	}
-	paths, _, err := s.d.Builder.HostPathCandidates(ctx)
+	paths, _, err := s.d.Manifests.HostPathCandidates(ctx)
 	if err != nil {
 		return SourceInfo{}, err
 	}
-	m, err := s.d.Builder.Build(ctx, nil, nil)
+	m, err := s.d.Manifests.Build(ctx, nil, nil)
 	if err != nil {
 		return SourceInfo{}, err
 	}

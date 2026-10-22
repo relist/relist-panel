@@ -31,7 +31,7 @@ type sourceServer struct {
 func newSourceServer(t *testing.T) *sourceServer {
 	t.Helper()
 	f := newSourceFixture(t, httpsDomain)
-	f.src = NewSource(SourceDeps{Store: f.store, Builder: f.builder(), Queue: f.queue, Docker: f.docker,
+	f.src = NewSource(SourceDeps{Store: f.store, Manifests: f.builder(), Queue: f.queue, Docker: f.docker,
 		Status: statusFromDocker{f.docker}, Composes: f.targets, Domains: fakeDomains{httpsDomain},
 		DB: f.db, DataDir: f.dataDir, Install: config.InstallSettings{Domain: "panel.old.example.com"}})
 	mux, control := http.NewServeMux(), http.NewServeMux()
@@ -346,7 +346,7 @@ func TestItemsWaitForTheLockToSettleAfterARestart(t *testing.T) {
 	// The old host reboots: restart: always brings back a Compose that was
 	// stopped before the lock, so it is not in RunningComposeIDs.
 	s.docker.Running[fmt.Sprintf("relist-c%d", s.b)] = true
-	rebooted := NewSource(SourceDeps{Store: s.store, Builder: s.builder(), Queue: s.queue, Docker: s.docker,
+	rebooted := NewSource(SourceDeps{Store: s.store, Manifests: s.builder(), Queue: s.queue, Docker: s.docker,
 		Status: statusFromDocker{s.docker}, Composes: s.targets, Domains: fakeDomains{httpsDomain}, DB: s.db, DataDir: s.dataDir})
 	mux := http.NewServeMux()
 	rebooted.RegisterRoutes(mux)

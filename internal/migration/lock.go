@@ -54,14 +54,14 @@ type DomainLister interface {
 }
 
 type SourceDeps struct {
-	Store    *Store
-	Builder  Builder
-	Queue    QueueControl
-	Docker   Docker
-	Status   StatusReader
-	Composes ComposeTargets
-	Domains  DomainLister
-	Now      func() time.Time
+	Store     *Store
+	Manifests ManifestBuilder
+	Queue     QueueControl
+	Docker    Docker
+	Status    StatusReader
+	Composes  ComposeTargets
+	Domains   DomainLister
+	Now       func() time.Time
 	// Terminals, when set, has its open Terminal Sessions closed as the
 	// lock is taken.
 	Terminals TerminalCloser
@@ -221,7 +221,7 @@ func (s *Source) start(ctx context.Context, hostPaths []string) (Manifest, error
 		if err := s.ensureMaintenance(ctx, true); err != nil {
 			return Manifest{}, err
 		}
-		m, err := s.d.Builder.Build(ctx, st.RunningComposeIDs, st.HostPaths)
+		m, err := s.d.Manifests.Build(ctx, st.RunningComposeIDs, st.HostPaths)
 		if err != nil {
 			return Manifest{}, fmt.Errorf("build manifest: %w", err)
 		}
@@ -241,7 +241,7 @@ func (s *Source) start(ctx context.Context, hostPaths []string) (Manifest, error
 // runningComposes lists the Composes with running Containers, never nil so
 // an empty list still records that the check ran.
 func (s *Source) runningComposes(ctx context.Context) ([]int64, error) {
-	ids, err := s.d.Builder.composeIDs(ctx)
+	ids, err := s.d.Manifests.composeIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
