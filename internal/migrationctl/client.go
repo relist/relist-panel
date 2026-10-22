@@ -167,8 +167,8 @@ func (c *Client) RevokeToken(ctx context.Context) error {
 	return c.call(ctx, requestTimeout, http.MethodDelete, "/api/migration/tokens/current", nil, nil)
 }
 
-func (c *Client) Status(ctx context.Context) (migration.SourceStatus, error) {
-	var s migration.SourceStatus
+func (c *Client) Status(ctx context.Context) (migration.OldHostStatus, error) {
+	var s migration.OldHostStatus
 	err := c.call(ctx, requestTimeout, http.MethodGet, "/api/migration/status", nil, &s)
 	return s, err
 }

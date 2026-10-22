@@ -85,10 +85,10 @@ _Avoid_: MFA, OTP (as the feature name), 2FA in code identifiers — use `twoFac
 
 **Migration**:
 Moving everything one panel manages to an empty panel on another host, which pulls it from the old one over HTTPS (ADR-0018). Everything moves; the operator chooses only which host paths outside the data directory to include.
-_Avoid_: Backup, Restore, Transfer (as the feature name).
+_Avoid_: Backup, Restore, Transfer (as the feature name); Source for the old panel (a Source is a Compose's code), say old host or old panel.
 
 **Migration token**:
-A short-lived, single-use secret created on the old panel that lets one new panel claim it as its Migration source. Lives 1 hour, 24 hours or 7 days.
+A short-lived, single-use secret created on the old panel that lets one new panel claim it for a Migration. Lives 1 hour, 24 hours or 7 days.
 _Avoid_: API key, Pairing code.
 
 **Migration lock**:

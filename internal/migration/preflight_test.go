@@ -12,8 +12,8 @@ import (
 )
 
 func TestEvaluate(t *testing.T) {
-	base := func() SourceInfo {
-		return SourceInfo{Protocol: ProtocolVersion, SchemaVersion: 18, DataDir: "/var/lib/relist-panel",
+	base := func() OldHostInfo {
+		return OldHostInfo{Protocol: ProtocolVersion, SchemaVersion: 18, DataDir: "/var/lib/relist-panel",
 			Install:     config.InstallSettings{Domain: "panel.example.com"},
 			HostPaths:   []HostPathCandidate{{Path: "/srv/uploads", Size: 100}},
 			Volumes:     []Item{{ID: "volume-pg", Kind: KindVolume, Size: 1000, Volume: &VolumeInfo{Name: "pg"}}},
@@ -22,7 +22,7 @@ func TestEvaluate(t *testing.T) {
 	}
 	type row struct {
 		name     string
-		src      func(SourceInfo) SourceInfo
+		src      func(OldHostInfo) OldHostInfo
 		local    func(*LocalHost, *FakeDocker, *sql.DB)
 		selected []string
 		want     Check
@@ -32,11 +32,11 @@ func TestEvaluate(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := []row{
-		{name: "protocol", src: func(s SourceInfo) SourceInfo { s.Protocol = 2; return s },
+		{name: "protocol", src: func(s OldHostInfo) OldHostInfo { s.Protocol = 2; return s },
 			want: Check{true, "The two panels speak different migration protocols. Use the same panel version on both"}},
-		{name: "schema", src: func(s SourceInfo) SourceInfo { s.SchemaVersion = known + 1; return s },
+		{name: "schema", src: func(s OldHostInfo) OldHostInfo { s.SchemaVersion = known + 1; return s },
 			want: Check{true, "This panel is older than the source. Upgrade it first"}},
-		{name: "data dir", src: func(s SourceInfo) SourceInfo { s.DataDir = "/srv/relist"; return s },
+		{name: "data dir", src: func(s OldHostInfo) OldHostInfo { s.DataDir = "/srv/relist"; return s },
 			want: Check{true, "RELIST_DATA_DIR differs: set it to /srv/relist on this host"}},
 		{name: "not empty", local: func(_ *LocalHost, _ *FakeDocker, db *sql.DB) {
 			db.Exec(`INSERT INTO projects (name, created_at, updated_at) VALUES ('p', 1, 1)`)
@@ -46,7 +46,7 @@ func TestEvaluate(t *testing.T) {
 		}, want: Check{true, "This panel already has an admin account. Migrate into a freshly installed panel; only an admin from RELIST_ADMIN_EMAIL may exist"}},
 		{name: "volume exists", local: func(_ *LocalHost, d *FakeDocker, _ *sql.DB) { d.Volumes["pg"] = VolumeInfo{Name: "pg"} },
 			want: Check{true, "Volume pg already exists on this host"}},
-		{name: "volume with a driver", src: func(s SourceInfo) SourceInfo {
+		{name: "volume with a driver", src: func(s OldHostInfo) OldHostInfo {
 			s.Volumes = append(s.Volumes, Item{ID: "volume-nfs", Kind: KindVolume, Volume: &VolumeInfo{Name: "nfs", Driver: "local", Options: map[string]string{"type": "none", "o": "bind", "device": "/"}}})
 			return s
 		}, want: Check{true, "Volume nfs has driver options (device=/, o=bind, type=none) and cannot be restored here"}},
@@ -60,13 +60,13 @@ func TestEvaluate(t *testing.T) {
 			},
 			want: Check{true, "/srv/uploads exists on this host and is not empty"}},
 		{name: "host path holds this panel's data", selected: []string{"/var/lib/relist-panel/x"},
-			src: func(s SourceInfo) SourceInfo {
+			src: func(s OldHostInfo) OldHostInfo {
 				s.HostPaths = append(s.HostPaths, HostPathCandidate{Path: "/var/lib/relist-panel/x"})
 				return s
 			},
 			want: Check{true, "/var/lib/relist-panel/x holds this panel's data or Docker's storage and cannot be restored here"}},
 		{name: "host path is the root", selected: []string{"/"},
-			src: func(s SourceInfo) SourceInfo {
+			src: func(s OldHostInfo) OldHostInfo {
 				s.HostPaths = append(s.HostPaths, HostPathCandidate{Path: "/"})
 				return s
 			},
@@ -82,9 +82,9 @@ func TestEvaluate(t *testing.T) {
 		{name: "install differs", local: func(l *LocalHost, _ *FakeDocker, _ *sql.DB) { l.Install.Domain = "panel.new.example.com" },
 			want: Check{false, "RELIST_DOMAIN is panel.example.com on the source and panel.new.example.com here; copy it into this host's .env"}},
 		{name: "source warning", want: Check{false, "draft was never deployed; only its files and database rows move"}},
-		{name: "queued deployments", src: func(s SourceInfo) SourceInfo { s.QueuedDeployments = 2; return s },
+		{name: "queued deployments", src: func(s OldHostInfo) OldHostInfo { s.QueuedDeployments = 2; return s },
 			want: Check{false, "2 queued Deployments on the source will be canceled when the migration starts"}},
-		{name: "active deployment", src: func(s SourceInfo) SourceInfo { s.ActiveDeployment = "api #4"; return s },
+		{name: "active deployment", src: func(s OldHostInfo) OldHostInfo { s.ActiveDeployment = "api #4"; return s },
 			want: Check{false, "api #4 is running on the source; queued Deployments there will be canceled"}},
 	}
 	for _, r := range rows {

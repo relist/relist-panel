@@ -26,7 +26,7 @@ const terminalLine = "needs a terminal: run it with docker compose exec, or dock
 type fakePanel struct {
 	mu       sync.Mutex
 	progress []migration.Progress // served in order, the last one repeats
-	status   migration.SourceStatus
+	status   migration.OldHostStatus
 	activity migration.Activity
 	dropOnce bool // close the connection of the next progress request
 	hits     int
@@ -142,7 +142,7 @@ func TestStatusNewHost(t *testing.T) {
 		}
 		p.Items = append(p.Items, migration.ItemProgress{ID: "i", State: state})
 	}
-	got := FormatStatus(p, migration.SourceStatus{}, migration.Activity{})
+	got := FormatStatus(p, migration.OldHostStatus{}, migration.Activity{})
 	for _, want := range []string{"Migration from https://old.example.com: pulling", "Items: 3/5 done",
 		"Last: " + at.Local().Format("15:04:05") + " Copied volume-a"} {
 		if !strings.Contains(got, want) {
@@ -152,7 +152,7 @@ func TestStatusNewHost(t *testing.T) {
 }
 
 func TestStatusOldHost(t *testing.T) {
-	got := FormatStatus(migration.Progress{}, migration.SourceStatus{Step: migration.StepReady, ClaimedBy: "203.0.113.9"},
+	got := FormatStatus(migration.Progress{}, migration.OldHostStatus{Step: migration.StepReady, ClaimedBy: "203.0.113.9"},
 		migration.Activity{Item: "volume-a", Bytes: 2048, Done: 3})
 	for _, want := range []string{"This server is locked for a migration: ready", "Sending volume-a (2.0 KiB), 3 items sent"} {
 		if !strings.Contains(got, want) {
@@ -162,7 +162,7 @@ func TestStatusOldHost(t *testing.T) {
 }
 
 func TestStatusNone(t *testing.T) {
-	if got := FormatStatus(migration.Progress{}, migration.SourceStatus{}, migration.Activity{}); got != "No migration on this host." {
+	if got := FormatStatus(migration.Progress{}, migration.OldHostStatus{}, migration.Activity{}); got != "No migration on this host." {
 		t.Fatalf("status = %q", got)
 	}
 }

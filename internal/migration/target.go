@@ -88,7 +88,7 @@ type Progress struct {
 	Selected []string       `json:"selected"`
 	Items    []ItemProgress `json:"items"`
 	Checks   []Check        `json:"checks"`
-	Info     *SourceInfo    `json:"info"`
+	Info     *OldHostInfo   `json:"info"`
 	Warnings []string       `json:"warnings"`
 	Error    string         `json:"error,omitempty"`
 	Summary  *Summary       `json:"summary,omitempty"`
@@ -126,7 +126,7 @@ type targetState struct {
 	SelfURL      string                `json:"selfUrl"`
 	SessionKey   string                `json:"sessionKey"`
 	Selected     []string              `json:"selected"`
-	Info         *SourceInfo           `json:"info"`
+	Info         *OldHostInfo          `json:"info"`
 	Checks       []Check               `json:"checks"`
 	LockStep     Step                  `json:"lockStep"`
 	Manifest     *Manifest             `json:"manifest"`

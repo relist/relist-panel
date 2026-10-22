@@ -18,7 +18,7 @@ var tokenLifetimes = map[string]time.Duration{"1h": time.Hour, "24h": 24 * time.
 // session key themselves, and the status the lock page reads with the admin
 // cookie. Creating a token and resuming are the control socket's alone
 // (ADR-0019), so a stolen web session cannot start a Migration.
-func (s *Source) RegisterRoutes(mux *http.ServeMux) {
+func (s *OldHost) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/migration/claim", s.claim)
 	mux.HandleFunc("GET /api/migration/preflight", s.session(s.preflight))
 	mux.HandleFunc("POST /api/migration/start", s.session(s.startRoute))
@@ -33,7 +33,7 @@ func (s *Source) RegisterRoutes(mux *http.ServeMux) {
 // socket's mux (ADR-0019), their only home: creating and revoking a token,
 // the status, resuming and the activity. They take no cookie, since reaching
 // the socket already takes a shell in the container.
-func (s *Source) RegisterControlRoutes(mux *http.ServeMux) {
+func (s *OldHost) RegisterControlRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/migration/tokens", s.createToken)
 	mux.HandleFunc("DELETE /api/migration/tokens/current", s.revokeToken)
 	mux.HandleFunc("GET /api/migration/status", s.status)
@@ -43,9 +43,9 @@ func (s *Source) RegisterControlRoutes(mux *http.ServeMux) {
 	})
 }
 
-// SourceStatus is the old host's own view of its Migration, for its lock
+// OldHostStatus is the old host's own view of its Migration, for its lock
 // page and `relist-panel migration`.
-type SourceStatus struct {
+type OldHostStatus struct {
 	Step           Step       `json:"step"`
 	ClaimedBy      string     `json:"claimedBy"`
 	TargetURL      string     `json:"targetUrl"`
@@ -64,7 +64,7 @@ func SessionPath(path string) bool {
 	return strings.HasPrefix(path, "/api/migration/items/")
 }
 
-func (s *Source) session(next http.HandlerFunc) http.HandlerFunc {
+func (s *OldHost) session(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || key == "" {
@@ -94,7 +94,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-func (s *Source) claim(w http.ResponseWriter, r *http.Request) {
+func (s *OldHost) claim(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Token     string `json:"token"`
 		ClaimedBy string `json:"claimedBy"`
@@ -118,7 +118,7 @@ func (s *Source) claim(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Source) preflight(w http.ResponseWriter, r *http.Request) {
+func (s *OldHost) preflight(w http.ResponseWriter, r *http.Request) {
 	info, err := s.Info(r.Context())
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, err.Error())
@@ -129,7 +129,7 @@ func (s *Source) preflight(w http.ResponseWriter, r *http.Request) {
 
 // startRoute answers 200 with the manifest once the lock is ready, and 202 while
 // the lock sequence runs in the background, detached from the request.
-func (s *Source) startRoute(w http.ResponseWriter, r *http.Request) {
+func (s *OldHost) startRoute(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		HostPaths []string `json:"hostPaths"`
 	}
@@ -167,7 +167,7 @@ func (s *Source) startRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, body)
 }
 
-func (s *Source) item(w http.ResponseWriter, r *http.Request) {
+func (s *OldHost) item(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	step, st, err := s.d.Store.Lock(r.Context())
 	if err != nil {
@@ -195,7 +195,7 @@ func (s *Source) item(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Source) digest(w http.ResponseWriter, r *http.Request) {
+func (s *OldHost) digest(w http.ResponseWriter, r *http.Request) {
 	d, ok := s.Digest(r.PathValue("id"))
 	if !ok {
 		writeJSONError(w, http.StatusNotFound, "no complete stream of this item yet")
@@ -204,7 +204,7 @@ func (s *Source) digest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"sha256": d})
 }
 
-func (s *Source) abort(w http.ResponseWriter, r *http.Request) {
+func (s *OldHost) abort(w http.ResponseWriter, r *http.Request) {
 	if err := s.Resume(r.Context()); err != nil {
 		var unstarted *UnstartedError
 		if errors.As(err, &unstarted) {
@@ -217,7 +217,7 @@ func (s *Source) abort(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Source) finish(w http.ResponseWriter, r *http.Request) {
+func (s *OldHost) finish(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		TargetURL string `json:"targetUrl"`
 	}
@@ -246,7 +246,7 @@ func webURL(raw string) bool {
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
-func (s *Source) createToken(w http.ResponseWriter, r *http.Request) {
+func (s *OldHost) createToken(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Lifetime string `json:"lifetime"`
 	}
@@ -270,7 +270,7 @@ func (s *Source) createToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"token": token, "expiresAt": expires})
 }
 
-func (s *Source) revokeToken(w http.ResponseWriter, r *http.Request) {
+func (s *OldHost) revokeToken(w http.ResponseWriter, r *http.Request) {
 	err := s.d.Store.RevokeToken(r.Context())
 	if errors.Is(err, ErrStarted) {
 		writeJSONError(w, http.StatusConflict, err.Error())
@@ -283,7 +283,7 @@ func (s *Source) revokeToken(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Source) status(w http.ResponseWriter, r *http.Request) {
+func (s *OldHost) status(w http.ResponseWriter, r *http.Request) {
 	step, st, err := s.d.Store.Lock(r.Context())
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "migration state is temporarily unavailable")
@@ -297,7 +297,7 @@ func (s *Source) status(w http.ResponseWriter, r *http.Request) {
 	if st.ClaimedBy != "" {
 		claimedBy = st.ClaimedBy
 	}
-	out := SourceStatus{Step: step, ClaimedBy: claimedBy, TargetURL: st.TargetURL, TokenExpiresAt: expires}
+	out := OldHostStatus{Step: step, ClaimedBy: claimedBy, TargetURL: st.TargetURL, TokenExpiresAt: expires}
 	if st.LockedAt != 0 {
 		at := time.Unix(st.LockedAt, 0).UTC()
 		out.LockedAt = &at
@@ -309,7 +309,7 @@ func (s *Source) status(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (s *Source) resume(w http.ResponseWriter, r *http.Request) {
+func (s *OldHost) resume(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Confirm string `json:"confirm"`
 	}

@@ -82,8 +82,8 @@ func (c *client) claim(ctx context.Context, token, claimedBy string) (string, er
 	return out.SessionKey, nil
 }
 
-func (c *client) preflight(ctx context.Context) (SourceInfo, error) {
-	var info SourceInfo
+func (c *client) preflight(ctx context.Context) (OldHostInfo, error) {
+	var info OldHostInfo
 	_, err := c.do(ctx, http.MethodGet, "/api/migration/preflight", nil, &info)
 	return info, err
 }

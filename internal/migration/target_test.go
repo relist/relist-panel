@@ -92,7 +92,7 @@ func newFakeSourceServer(t *testing.T, items ...Item) *fakeSourceServer {
 			writeJSONError(w, 502, "source busy")
 			return
 		}
-		writeJSON(w, 200, SourceInfo{Protocol: ProtocolVersion, SchemaVersion: 18, DataDir: "/var/lib/relist-panel",
+		writeJSON(w, 200, OldHostInfo{Protocol: ProtocolVersion, SchemaVersion: 18, DataDir: "/var/lib/relist-panel",
 			HostPaths: paths, Volumes: []Item{}, Images: []Item{}, Warnings: []string{}})
 	}))
 	mux.HandleFunc("POST /api/migration/start", auth(func(w http.ResponseWriter, r *http.Request) {

@@ -63,7 +63,7 @@ func (r *resumeInput) lines() []string {
 
 type resumeModel struct {
 	c       Controller
-	s       migration.SourceStatus
+	s       migration.OldHostStatus
 	loaded  bool
 	in      resumeInput
 	pending bool

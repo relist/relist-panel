@@ -114,7 +114,7 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 	var inner http.Handler = gate.middleware(mux)
 	if migrationOptions != nil {
 		domainStore := domains.NewStore(db)
-		source := migration.NewSource(migration.SourceDeps{
+		oldHost := migration.NewOldHost(migration.OldHostDeps{
 			Store:           migration.NewStore(db, nil),
 			Manifests:       migration.ManifestBuilder{DB: db, Composes: composesService, Volumes: volumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir},
 			Queue:           queue,
@@ -128,7 +128,7 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 			ReportedDataDir: migrationOptions.ReportedDataDir,
 			Install:         migrationOptions.Install,
 		})
-		source.RegisterRoutes(mux)
+		oldHost.RegisterRoutes(mux)
 		local := migration.LocalHost{DB: db, Docker: migrationOptions.Docker, DataDir: dataDir, Install: migrationOptions.Install,
 			SeededAdmin: migrationOptions.SeededAdmin}
 		stateDir := filepath.Join(dataDir, ".migration")
@@ -145,16 +145,16 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 			Context: ctx,
 		})
 		if migrationOptions.Control != nil {
-			source.RegisterControlRoutes(migrationOptions.Control)
+			oldHost.RegisterControlRoutes(migrationOptions.Control)
 			target.RegisterControlRoutes(migrationOptions.Control)
 		}
 		authService.SetSetupBlocker(target.InProgress)
 		authService.AllowSelfAuthenticated(migration.SessionPath)
-		inner = source.Middleware(inner)
+		inner = oldHost.Middleware(inner)
 		worker.Add(1)
 		go func() {
 			defer worker.Done()
-			if err := source.ResumeLock(ctx); err != nil && ctx.Err() == nil {
+			if err := oldHost.ResumeLock(ctx); err != nil && ctx.Err() == nil {
 				log.Printf("migration: resume the lock: %v", err)
 			}
 		}()

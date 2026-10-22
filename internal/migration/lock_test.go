@@ -87,7 +87,7 @@ type sourceFixture struct {
 	*manifestFixture
 	store *Store
 	queue *fakeQueue
-	src   *Source
+	src   *OldHost
 	a, b  int64
 }
 
@@ -98,7 +98,7 @@ func newSourceFixture(t *testing.T, ds ...domains.Domain) *sourceFixture {
 	f.a = m.compose("api", "services: {}", `{"services":{"api":{"image":"nginx"}}}`, true)
 	f.b = m.compose("worker", "services: {}", `{"services":{"w":{"image":"nginx"}}}`, true)
 	m.docker.Running[fmt.Sprintf("relist-c%d", f.a)] = true
-	f.src = NewSource(SourceDeps{Store: f.store, Manifests: m.builder(), Queue: f.queue, Docker: m.docker,
+	f.src = NewOldHost(OldHostDeps{Store: f.store, Manifests: m.builder(), Queue: f.queue, Docker: m.docker,
 		Status: statusFromDocker{m.docker}, Composes: m.targets, Domains: fakeDomains(ds)})
 	return f
 }
@@ -172,7 +172,7 @@ func TestResumeLockAtBootRecreatesMaintenance(t *testing.T) {
 	}
 	f.docker.MaintenanceUp = false
 	f.docker.Running[fmt.Sprintf("relist-c%d", f.a)] = true // restart policy brought it back
-	booted := NewSource(SourceDeps{Store: f.store, Manifests: f.builder(), Queue: f.queue, Docker: f.docker,
+	booted := NewOldHost(OldHostDeps{Store: f.store, Manifests: f.builder(), Queue: f.queue, Docker: f.docker,
 		Status: statusFromDocker{f.docker}, Composes: f.targets, Domains: fakeDomains{httpsDomain}})
 	if err := booted.ResumeLock(context.Background()); err != nil {
 		t.Fatal(err)
@@ -365,7 +365,7 @@ func TestTheLockHoldsTheQueueUntilResume(t *testing.T) {
 
 	// After a reboot the queue is a new one: ResumeLock holds it again.
 	rebooted := &fakeQueue{}
-	src := NewSource(SourceDeps{Store: f.store, Manifests: f.builder(), Queue: rebooted, Docker: f.docker,
+	src := NewOldHost(OldHostDeps{Store: f.store, Manifests: f.builder(), Queue: rebooted, Docker: f.docker,
 		Status: statusFromDocker{f.docker}, Composes: f.targets, Domains: fakeDomains(nil)})
 	if err := src.ResumeLock(context.Background()); err != nil {
 		t.Fatal(err)

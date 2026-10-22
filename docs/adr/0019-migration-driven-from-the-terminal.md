@@ -11,7 +11,7 @@ database, the chosen host paths and `acme.json` to a host of the thief's choosin
 the panel container: `relist-panel migration serve` on the old host, `relist-panel migration
 pull` on the new one, plus `status` and `resume`.
 
-- **The TUI is a client, not the worker.** The panel keeps doing the work (`Source`, `Target`,
+- **The TUI is a client, not the worker.** The panel keeps doing the work (`OldHost`, `Target`,
   the Finalizer). The TUI talks to it over the **Control socket**, a Unix socket at
   `/run/relist-panel/control.sock` in the container, outside the data directory. It serves the
   same handlers as the web routes, without the cookie. Quitting the TUI or losing the SSH

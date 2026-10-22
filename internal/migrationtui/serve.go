@@ -13,7 +13,7 @@ import (
 )
 
 type statusMsg struct {
-	S   migration.SourceStatus
+	S   migration.OldHostStatus
 	A   migration.Activity
 	Err error
 }
@@ -40,7 +40,7 @@ var sourceSteps = []struct {
 
 type serveModel struct {
 	c      Controller
-	s      migration.SourceStatus
+	s      migration.OldHostStatus
 	a      migration.Activity
 	loaded bool
 
@@ -296,7 +296,7 @@ func (m *serveModel) View() tea.View {
 
 // sourceLines is the old host's Migration as lines: the claim, the lock
 // steps, what is being sent, and Migrated.
-func sourceLines(s migration.SourceStatus, a migration.Activity) []string {
+func sourceLines(s migration.OldHostStatus, a migration.Activity) []string {
 	var out []string
 	if s.ClaimedBy == "" && s.Step == migration.StepNone {
 		return append(out, "Waiting for the new server to connect…")
@@ -336,7 +336,7 @@ func sourceLines(s migration.SourceStatus, a migration.Activity) []string {
 }
 
 // MigratedTo says where a Migrated server went, and when.
-func MigratedTo(s migration.SourceStatus) string {
+func MigratedTo(s migration.OldHostStatus) string {
 	line := "Migrated to " + s.TargetURL
 	if s.MigratedAt != nil {
 		line += " on " + s.MigratedAt.Local().Format("2006-01-02 15:04")

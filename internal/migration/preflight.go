@@ -13,9 +13,9 @@ import (
 	"relist-panel/internal/database"
 )
 
-// SourceInfo is what the old host tells the new one before anything is
+// OldHostInfo is what the old host tells the new one before anything is
 // locked, so every blocking check runs first.
-type SourceInfo struct {
+type OldHostInfo struct {
 	Protocol          int                    `json:"protocol"`
 	SchemaVersion     int64                  `json:"schemaVersion"`
 	DataDir           string                 `json:"dataDir"`
@@ -32,20 +32,20 @@ type SourceInfo struct {
 
 // Info resolves every Compose the way Start will, so a resolution error
 // shows up here, before the old host is locked.
-func (s *Source) Info(ctx context.Context) (SourceInfo, error) {
+func (s *OldHost) Info(ctx context.Context) (OldHostInfo, error) {
 	version, err := database.SchemaVersion(ctx, s.d.DB)
 	if err != nil {
-		return SourceInfo{}, err
+		return OldHostInfo{}, err
 	}
 	paths, _, err := s.d.Manifests.HostPathCandidates(ctx)
 	if err != nil {
-		return SourceInfo{}, err
+		return OldHostInfo{}, err
 	}
 	m, err := s.d.Manifests.Build(ctx, nil, nil)
 	if err != nil {
-		return SourceInfo{}, err
+		return OldHostInfo{}, err
 	}
-	info := SourceInfo{
+	info := OldHostInfo{
 		Protocol: ProtocolVersion, SchemaVersion: version, DataDir: s.reportedDataDir(), Install: s.d.Install,
 		HostPaths: paths, Volumes: []Item{}, Images: []Item{}, Warnings: m.Warnings,
 	}
@@ -65,7 +65,7 @@ func (s *Source) Info(ctx context.Context) (SourceInfo, error) {
 		}
 	}
 	if err := s.d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM deployments WHERE status = 'queued'").Scan(&info.QueuedDeployments); err != nil {
-		return SourceInfo{}, fmt.Errorf("count queued deployments: %w", err)
+		return OldHostInfo{}, fmt.Errorf("count queued deployments: %w", err)
 	}
 	if id, number, ok := s.d.Queue.Running(); ok {
 		name := fmt.Sprintf("Compose %d", id)
@@ -77,7 +77,7 @@ func (s *Source) Info(ctx context.Context) (SourceInfo, error) {
 	return info, nil
 }
 
-func (s *Source) reportedDataDir() string {
+func (s *OldHost) reportedDataDir() string {
 	if s.d.ReportedDataDir != "" {
 		return s.d.ReportedDataDir
 	}
@@ -116,7 +116,7 @@ func (l LocalHost) free(path string) (int64, error) {
 
 // Evaluate checks the new host against what the source reported, for the
 // host paths the operator selected.
-func Evaluate(ctx context.Context, local LocalHost, src SourceInfo, selected []string) ([]Check, error) {
+func Evaluate(ctx context.Context, local LocalHost, src OldHostInfo, selected []string) ([]Check, error) {
 	var checks []Check
 	block := func(msg string) { checks = append(checks, Check{Blocking: true, Message: msg}) }
 	warn := func(msg string) { checks = append(checks, Check{Message: msg}) }

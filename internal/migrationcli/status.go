@@ -10,7 +10,7 @@ import (
 
 // FormatStatus is `relist-panel migration status` as plain text: the new
 // host's pull when there is one, else the old host's lock, else none.
-func FormatStatus(p migration.Progress, s migration.SourceStatus, a migration.Activity) string {
+func FormatStatus(p migration.Progress, s migration.OldHostStatus, a migration.Activity) string {
 	var out []string
 	switch {
 	case p.Phase != migration.PhaseIdle:

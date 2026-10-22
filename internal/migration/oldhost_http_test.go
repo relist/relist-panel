@@ -31,7 +31,7 @@ type sourceServer struct {
 func newSourceServer(t *testing.T) *sourceServer {
 	t.Helper()
 	f := newSourceFixture(t, httpsDomain)
-	f.src = NewSource(SourceDeps{Store: f.store, Manifests: f.builder(), Queue: f.queue, Docker: f.docker,
+	f.src = NewOldHost(OldHostDeps{Store: f.store, Manifests: f.builder(), Queue: f.queue, Docker: f.docker,
 		Status: statusFromDocker{f.docker}, Composes: f.targets, Domains: fakeDomains{httpsDomain},
 		DB: f.db, DataDir: f.dataDir, Install: config.InstallSettings{Domain: "panel.old.example.com"}})
 	mux, control := http.NewServeMux(), http.NewServeMux()
@@ -150,7 +150,7 @@ func TestSessionRoutesRejectMissingOrWrongBearer(t *testing.T) {
 		}
 	}
 	rec := s.do(t, "GET", "/api/migration/preflight", key, nil)
-	var info SourceInfo
+	var info OldHostInfo
 	json.Unmarshal(rec.Body.Bytes(), &info)
 	if rec.Code != http.StatusOK || info.Protocol != ProtocolVersion || info.DataDir != s.dataDir || info.Install.Domain != "panel.old.example.com" {
 		t.Fatalf("preflight = %d %+v", rec.Code, info)
@@ -163,7 +163,7 @@ func TestPreflightCountsQueuedDeployments(t *testing.T) {
 	if _, err := s.db.Exec(`INSERT INTO deployments (compose_id, number, mode, status, queued_at) VALUES (?, 1, 'deploy', 'queued', 1), (?, 1, 'deploy', 'succeeded', 1)`, s.a, s.b); err != nil {
 		t.Fatal(err)
 	}
-	var info SourceInfo
+	var info OldHostInfo
 	json.Unmarshal(s.do(t, "GET", "/api/migration/preflight", key, nil).Body.Bytes(), &info)
 	if info.QueuedDeployments != 1 {
 		t.Fatalf("queued deployments = %d, want 1", info.QueuedDeployments)
@@ -346,7 +346,7 @@ func TestItemsWaitForTheLockToSettleAfterARestart(t *testing.T) {
 	// The old host reboots: restart: always brings back a Compose that was
 	// stopped before the lock, so it is not in RunningComposeIDs.
 	s.docker.Running[fmt.Sprintf("relist-c%d", s.b)] = true
-	rebooted := NewSource(SourceDeps{Store: s.store, Manifests: s.builder(), Queue: s.queue, Docker: s.docker,
+	rebooted := NewOldHost(OldHostDeps{Store: s.store, Manifests: s.builder(), Queue: s.queue, Docker: s.docker,
 		Status: statusFromDocker{s.docker}, Composes: s.targets, Domains: fakeDomains{httpsDomain}, DB: s.db, DataDir: s.dataDir})
 	mux := http.NewServeMux()
 	rebooted.RegisterRoutes(mux)

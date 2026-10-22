@@ -19,7 +19,7 @@ var ErrUnknownItem = errors.New("no such migration item")
 
 // StreamItem writes one item and, when the whole stream was written,
 // records its SHA-256 for Digest. Items stream only once the manifest exists.
-func (s *Source) StreamItem(ctx context.Context, id string, w io.Writer) error {
+func (s *OldHost) StreamItem(ctx context.Context, id string, w io.Writer) error {
 	step, st, err := s.d.Store.Lock(ctx)
 	if err != nil {
 		return err
@@ -81,7 +81,7 @@ func (c *sendingItem) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (s *Source) Activity() Activity {
+func (s *OldHost) Activity() Activity {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a := Activity{Done: len(s.sent)}
@@ -93,14 +93,14 @@ func (s *Source) Activity() Activity {
 }
 
 // Digest is the SHA-256 of the last complete stream of id.
-func (s *Source) Digest(id string) (string, bool) {
+func (s *OldHost) Digest(id string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, ok := s.digests[id]
 	return d, ok
 }
 
-func (s *Source) writeItem(ctx context.Context, item Item, w io.Writer) error {
+func (s *OldHost) writeItem(ctx context.Context, item Item, w io.Writer) error {
 	switch item.Kind {
 	case KindDatabase:
 		return s.writeDatabase(ctx, w)
@@ -128,7 +128,7 @@ func (s *Source) writeItem(ctx context.Context, item Item, w io.Writer) error {
 // writeDatabase streams a consistent copy of panel.db made with VACUUM INTO,
 // into a directory of its own: a retried stream may overlap one still
 // running, and VACUUM INTO refuses a file that exists.
-func (s *Source) writeDatabase(ctx context.Context, w io.Writer) error {
+func (s *OldHost) writeDatabase(ctx context.Context, w io.Writer) error {
 	base := filepath.Join(s.d.DataDir, ".migration-out")
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return err

@@ -27,7 +27,7 @@ type fakeController struct {
 	aborted   int
 	startErr  error
 
-	status      migration.SourceStatus
+	status      migration.OldHostStatus
 	activity    migration.Activity
 	tokens      []string
 	revoked     int
@@ -93,7 +93,7 @@ func (f *fakeController) RevokeToken(context.Context) error {
 	return nil
 }
 
-func (f *fakeController) Status(context.Context) (migration.SourceStatus, error) {
+func (f *fakeController) Status(context.Context) (migration.OldHostStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.status, nil
@@ -198,7 +198,7 @@ func connected() migration.Progress {
 		Phase:     migration.PhaseConnected,
 		SourceURL: "https://old.example.com",
 		Selected:  []string{"/srv/up"},
-		Info: &migration.SourceInfo{
+		Info: &migration.OldHostInfo{
 			DataDir: "/var/lib/relist-panel",
 			HostPaths: []migration.HostPathCandidate{
 				{Path: "/srv/up", Size: 2048, Composes: []string{"store"}},

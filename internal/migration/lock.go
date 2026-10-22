@@ -30,7 +30,7 @@ func (e *UnstartedError) Error() string { return e.Err.Error() }
 func (e *UnstartedError) Unwrap() error { return e.Err }
 
 // ErrNotReady refuses an action that needs the manifest before it exists.
-var ErrNotReady = errors.New("the migration source is not ready yet")
+var ErrNotReady = errors.New("the old host is not ready for a migration yet")
 
 // QueueControl is the part of the deployment queue the lock drives.
 type QueueControl interface {
@@ -53,7 +53,7 @@ type DomainLister interface {
 	ListAll(ctx context.Context) ([]domains.Domain, error)
 }
 
-type SourceDeps struct {
+type OldHostDeps struct {
 	Store     *Store
 	Manifests ManifestBuilder
 	Queue     QueueControl
@@ -81,9 +81,9 @@ type TerminalCloser interface {
 	CloseAll(reason string)
 }
 
-// Source is the old host's side of a Migration.
-type Source struct {
-	d SourceDeps
+// OldHost is the old host's side of a Migration.
+type OldHost struct {
+	d OldHostDeps
 
 	// run serialises the lock sequence: Start, ResumeLock and Resume.
 	run sync.Mutex
@@ -114,14 +114,14 @@ type Source struct {
 	sent    map[string]bool
 }
 
-func NewSource(d SourceDeps) *Source {
+func NewOldHost(d OldHostDeps) *OldHost {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	return &Source{d: d, digests: map[string]string{}, sent: map[string]bool{}}
+	return &OldHost{d: d, digests: map[string]string{}, sent: map[string]bool{}}
 }
 
-func (s *Source) setLock(ctx context.Context, step Step, st LockState) error {
+func (s *OldHost) setLock(ctx context.Context, step Step, st LockState) error {
 	if err := s.d.Store.SetLock(ctx, step, st); err != nil {
 		return err
 	}
@@ -132,7 +132,7 @@ func (s *Source) setLock(ctx context.Context, step Step, st LockState) error {
 }
 
 // cached returns the lock step and target URL, reading the database once.
-func (s *Source) cached(ctx context.Context) (Step, string, error) {
+func (s *OldHost) cached(ctx context.Context) (Step, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.loaded {
@@ -148,7 +148,7 @@ func (s *Source) cached(ctx context.Context) (Step, string, error) {
 // Start locks the old host and returns the manifest. Every step is persisted
 // before it acts, so a second call, or ResumeLock after a restart, carries on
 // from where the last one stopped. hostPaths is used by the first call only.
-func (s *Source) Start(ctx context.Context, hostPaths []string) (Manifest, error) {
+func (s *OldHost) Start(ctx context.Context, hostPaths []string) (Manifest, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	s.mu.Lock()
@@ -162,7 +162,7 @@ func (s *Source) Start(ctx context.Context, hostPaths []string) (Manifest, error
 	return s.start(ctx, hostPaths)
 }
 
-func (s *Source) start(ctx context.Context, hostPaths []string) (Manifest, error) {
+func (s *OldHost) start(ctx context.Context, hostPaths []string) (Manifest, error) {
 	step, st, err := s.d.Store.Lock(ctx)
 	if err != nil {
 		return Manifest{}, err
@@ -240,7 +240,7 @@ func (s *Source) start(ctx context.Context, hostPaths []string) (Manifest, error
 
 // runningComposes lists the Composes with running Containers, never nil so
 // an empty list still records that the check ran.
-func (s *Source) runningComposes(ctx context.Context) ([]int64, error) {
+func (s *OldHost) runningComposes(ctx context.Context) ([]int64, error) {
 	ids, err := s.d.Manifests.composeIDs(ctx)
 	if err != nil {
 		return nil, err
@@ -263,7 +263,7 @@ func (s *Source) runningComposes(ctx context.Context) ([]int64, error) {
 	return running, nil
 }
 
-func (s *Source) stopComposes(ctx context.Context, ids []int64) error {
+func (s *OldHost) stopComposes(ctx context.Context, ids []int64) error {
 	for _, id := range ids {
 		target, err := s.d.Composes.Target(ctx, id)
 		if err != nil {
@@ -278,7 +278,7 @@ func (s *Source) stopComposes(ctx context.Context, ids []int64) error {
 
 // ensureMaintenance starts the maintenance container when there are Domains
 // to cover, replacing a running one when force is set.
-func (s *Source) ensureMaintenance(ctx context.Context, force bool) error {
+func (s *OldHost) ensureMaintenance(ctx context.Context, force bool) error {
 	ds, err := s.d.Domains.ListAll(ctx)
 	if err != nil {
 		return fmt.Errorf("list domains: %w", err)
@@ -300,7 +300,7 @@ func (s *Source) ensureMaintenance(ctx context.Context, force bool) error {
 
 // ResumeLock runs at boot. An interrupted Start carries on; a finished one
 // makes sure the maintenance page is up and nothing was restarted.
-func (s *Source) ResumeLock(ctx context.Context) error {
+func (s *OldHost) ResumeLock(ctx context.Context) error {
 	s.run.Lock()
 	defer s.run.Unlock()
 	step, st, err := s.d.Store.Lock(ctx)
@@ -339,7 +339,7 @@ func (s *Source) ResumeLock(ctx context.Context) error {
 // Resume is Cancel migration before finish and Resume this server after it:
 // the maintenance page goes, the Composes that were running start again, and
 // the lock, token and session are cleared.
-func (s *Source) Resume(ctx context.Context) error {
+func (s *OldHost) Resume(ctx context.Context) error {
 	s.mu.Lock()
 	if s.cancelStart != nil {
 		s.cancelStart()
@@ -384,7 +384,7 @@ func (s *Source) Resume(ctx context.Context) error {
 }
 
 // Finish records the new host's URL and leaves the old host Migrated.
-func (s *Source) Finish(ctx context.Context, targetURL string) error {
+func (s *OldHost) Finish(ctx context.Context, targetURL string) error {
 	s.run.Lock()
 	defer s.run.Unlock()
 	step, st, err := s.d.Store.Lock(ctx)
@@ -409,7 +409,7 @@ func (s *Source) Finish(ctx context.Context, targetURL string) error {
 // Middleware answers 503 for every route a locked panel must not serve. The
 // SPA shell stays reachable so it can render the lock page, and so do the
 // Migration's own routes and signing in.
-func (s *Source) Middleware(next http.Handler) http.Handler {
+func (s *OldHost) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if allowedWhileLocked(r.URL.Path) {
 			next.ServeHTTP(w, r)

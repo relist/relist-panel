@@ -18,7 +18,7 @@ type Controller interface {
 	Abort(ctx context.Context) error
 	CreateToken(ctx context.Context, lifetime string) (migrationctl.Token, error)
 	RevokeToken(ctx context.Context) error
-	Status(ctx context.Context) (migration.SourceStatus, error)
+	Status(ctx context.Context) (migration.OldHostStatus, error)
 	Resume(ctx context.Context) (warning string, err error)
 	Activity(ctx context.Context) (migration.Activity, error)
 }
