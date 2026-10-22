@@ -720,3 +720,41 @@ func TestOldServerInstructionsNameTheResumeCommand(t *testing.T) {
 		t.Fatalf("abort when done = %v, want it to name the resume command", err)
 	}
 }
+
+// The pull TUI offers Retry and Abort from these flags, so they must say
+// exactly what Retry and Abort accept.
+func TestProgressSaysWhenRetryAndAbortApply(t *testing.T) {
+	cases := []struct {
+		phase              Phase
+		running, marker    bool
+		canRetry, canAbort bool
+	}{
+		{phase: PhaseIdle},
+		{phase: PhaseConnected, canAbort: true},
+		{phase: PhaseLocking, running: true, canAbort: true},
+		{phase: PhaseLocking, canRetry: true, canAbort: true},
+		{phase: PhasePulling, running: true, canAbort: true},
+		{phase: PhasePulling, canRetry: true, canAbort: true},
+		{phase: PhasePaused, canRetry: true, canAbort: true},
+		{phase: PhaseFinalizing, running: true},
+		{phase: PhaseFinalizing, marker: true, canRetry: true},
+		{phase: PhaseFinalizing, canRetry: true, canAbort: true},
+		{phase: PhaseDone},
+	}
+	for _, c := range cases {
+		name := fmt.Sprintf("%s running=%v marker=%v", c.phase, c.running, c.marker)
+		t.Run(name, func(t *testing.T) {
+			target := newTargetFixture(t).target
+			target.st.Phase, target.running = c.phase, c.running
+			if c.marker {
+				if err := os.WriteFile(filepath.Join(target.d.StateDir, markerName), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			p := target.Progress()
+			if p.CanRetry != c.canRetry || p.CanAbort != c.canAbort {
+				t.Fatalf("CanRetry, CanAbort = %v, %v, want %v, %v", p.CanRetry, p.CanAbort, c.canRetry, c.canAbort)
+			}
+		})
+	}
+}

@@ -326,7 +326,7 @@ func TestPullAbortNeedsY(t *testing.T) {
 func TestPullPausedOffersRetryAndAbort(t *testing.T) {
 	c := &fakeController{}
 	p := connected()
-	p.Phase = migration.PhasePaused
+	p.Phase, p.CanRetry, p.CanAbort = migration.PhasePaused, true, true
 	p.Error = "volume-b failed 3 times: extract failed"
 	m := pull(c, p)
 	mustContain(t, m, "volume-b failed 3 times: extract failed", "r retry", "a abort")
@@ -541,7 +541,7 @@ func TestPullOffersRetryWhenALockOrFinalizeStepFails(t *testing.T) {
 	for _, phase := range []migration.Phase{migration.PhaseLocking, migration.PhasePulling, migration.PhaseFinalizing} {
 		c := &fakeController{}
 		p := connected()
-		p.Phase, p.Error = phase, "start traefik: no traefik service"
+		p.Phase, p.Error, p.CanRetry = phase, "start traefik: no traefik service", true
 		m := pull(c, p)
 		mustContain(t, m, "r retry")
 		m = send(t, m, key("r"))
@@ -702,5 +702,30 @@ func TestPullPreviewShowsStartUnavailableWhileACheckBlocks(t *testing.T) {
 	}
 	if !strings.Contains(got, "start blocked") {
 		t.Fatalf("does not say start is blocked:\n%s", got)
+	}
+}
+
+// Retry and Abort follow what the panel says it accepts, not a guess from
+// the error line.
+func TestPullOffersRetryAndAbortAsThePanelSays(t *testing.T) {
+	c := &fakeController{}
+	p := connected()
+	p.Phase, p.Error, p.CanAbort = migration.PhasePulling, "volume-a: connection reset", true
+	m := pull(c, p)
+	if strings.Contains(screen(m), "r retry") {
+		t.Fatal("retry offered while the panel still runs the pull")
+	}
+	mustContain(t, m, "a abort")
+	m = send(t, m, key("r"))
+	if c.retried != 0 {
+		t.Fatalf("retry calls = %d", c.retried)
+	}
+
+	p = connected()
+	p.Phase, p.CanRetry = migration.PhaseFinalizing, true
+	m = pull(c, p)
+	mustContain(t, m, "r retry")
+	if strings.Contains(screen(m), "a abort") {
+		t.Fatal("abort offered after finalize wrote its marker")
 	}
 }

@@ -96,6 +96,9 @@ type Progress struct {
 	// finalize is while finalizing.
 	Log          []LogEntry   `json:"log"`
 	FinalizeStep FinalizeStep `json:"finalizeStep,omitempty"`
+	// CanRetry and CanAbort say whether Retry and Abort would act now.
+	CanRetry bool `json:"canRetry"`
+	CanAbort bool `json:"canAbort"`
 }
 
 type TargetDeps struct {
@@ -649,8 +652,7 @@ func (t *Target) Retry(ctx context.Context) error {
 	defer t.op.Unlock()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	stalled := !t.running && (t.st.Phase == PhaseLocking || t.st.Phase == PhasePulling || t.st.Phase == PhaseFinalizing)
-	if t.st.Phase != PhasePaused && !stalled {
+	if !t.canRetry() {
 		return errors.New("nothing to retry")
 	}
 	t.record("info", "", "Retrying")
@@ -682,7 +684,7 @@ func (t *Target) Abort(ctx context.Context) error {
 	t.op.Lock()
 	defer t.op.Unlock()
 	t.mu.Lock()
-	if t.st.Phase == PhaseDone || (t.st.Phase == PhaseFinalizing && (t.running || t.markerWritten())) {
+	if t.pastAbort() {
 		t.mu.Unlock()
 		return errors.New("the migration is finalizing and can no longer be aborted here; on the old server run relist-panel migration resume instead")
 	}
@@ -747,6 +749,8 @@ func (t *Target) progress() Progress {
 		p.Selected = []string{}
 	}
 	p.Log, p.FinalizeStep = t.st.Log, t.st.FinalizeStep
+	p.CanRetry = t.canRetry()
+	p.CanAbort = t.st.Phase != PhaseIdle && !t.pastAbort()
 	if len(p.Log) == 0 && t.summary != nil {
 		p.Log = t.summary.Log
 	}
@@ -811,6 +815,19 @@ func (t *Target) ResumeIfPending(ctx context.Context) error {
 	}
 	t.mu.Unlock()
 	return nil
+}
+
+// canRetry is when Retry acts: a paused pull, or a lock, copy or finalize
+// step that stopped. Callers hold mu.
+func (t *Target) canRetry() bool {
+	stalled := !t.running && (t.st.Phase == PhaseLocking || t.st.Phase == PhasePulling || t.st.Phase == PhaseFinalizing)
+	return t.st.Phase == PhasePaused || stalled
+}
+
+// pastAbort is when Abort refuses: the Migration is done, or finalize is
+// running or has written its marker. Callers hold mu.
+func (t *Target) pastAbort() bool {
+	return t.st.Phase == PhaseDone || (t.st.Phase == PhaseFinalizing && (t.running || t.markerWritten()))
 }
 
 // markerWritten reports whether Begin wrote its marker, after which the
