@@ -112,8 +112,8 @@ func (p *panel) boot() {
 	opts.Restart = func() { p.exited <- struct{}{} }
 	p.control = http.NewServeMux()
 	opts.Control = p.control
-	handler, wait := httpapi.NewHandler(ctx, p.db, statusRunner{p.docker}, p.dataDir, nil, nil, nil,
-		volumes.NewResolver(configCLI{}, p.dataDir), nil, nil, &opts)
+	handler, wait := httpapi.NewHandler(ctx, httpapi.Deps{DB: p.db, Runner: statusRunner{p.docker}, DataDir: p.dataDir,
+		VolumeResolver: volumes.NewResolver(configCLI{}, p.dataDir), Migration: &opts})
 	var once sync.Once
 	db := p.db
 	p.stop = func() { once.Do(func() { cancel(); wait(); db.Close() }) }

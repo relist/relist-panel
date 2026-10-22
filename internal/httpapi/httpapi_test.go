@@ -2496,7 +2496,8 @@ func newTestServer(t *testing.T) *testServer {
 func startHandler(t *testing.T, db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, facts metrics.ServiceFacts, volumeRunner volumes.Runner, resolver *volumes.Resolver, options *terminal.Options, imageStore images.Images) (http.Handler, func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	handler, wait := httpapi.NewHandler(ctx, db, runner, dataDir, history, facts, volumeRunner, resolver, options, imageStore, nil)
+	handler, wait := httpapi.NewHandler(ctx, httpapi.Deps{DB: db, Runner: runner, DataDir: dataDir, History: history, Services: facts,
+		VolumeRunner: volumeRunner, VolumeResolver: resolver, Terminal: options, Images: imageStore})
 	var once sync.Once
 	stop := func() { once.Do(func() { cancel(); wait() }) }
 	t.Cleanup(stop)

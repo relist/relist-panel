@@ -143,16 +143,26 @@ func main() {
 	}
 
 	control := http.NewServeMux()
-	handler, waitDeployments := httpapi.NewHandler(ctx, db, dockerexec.New(), cfg.DataDir, sampler, collector, volumeRunner, volumeResolver, &terminal.Options{
-		Exec: terminalExec,
-	}, dockerexec.NewImages(dockerexec.DefaultSocketPath), &migration.Options{
-		Docker:      dockerexec.NewMigrationDocker(),
-		Install:     cfg.Install,
-		Insecure:    cfg.InsecureMigrationSource,
-		SeededAdmin: cfg.AdminEmail,
-		Restart:     restart,
-		Control:     control,
-	}, dockerexec.NewDockerHost(dockerexec.DefaultSocketPath))
+	handler, waitDeployments := httpapi.NewHandler(ctx, httpapi.Deps{
+		DB:             db,
+		Runner:         dockerexec.New(),
+		DataDir:        cfg.DataDir,
+		History:        sampler,
+		Services:       collector,
+		VolumeRunner:   volumeRunner,
+		VolumeResolver: volumeResolver,
+		Terminal:       &terminal.Options{Exec: terminalExec},
+		Images:         dockerexec.NewImages(dockerexec.DefaultSocketPath),
+		Migration: &migration.Options{
+			Docker:      dockerexec.NewMigrationDocker(),
+			Install:     cfg.Install,
+			Insecure:    cfg.InsecureMigrationSource,
+			SeededAdmin: cfg.AdminEmail,
+			Restart:     restart,
+			Control:     control,
+		},
+		Docker: dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
+	})
 	server := &http.Server{Addr: cfg.Address(), Handler: handler}
 	controlServer, err := serveControl(cfg.ControlSocket, control)
 	if err != nil {

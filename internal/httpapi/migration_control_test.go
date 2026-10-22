@@ -37,8 +37,8 @@ func (s *testServer) restartWithControl(t *testing.T) *http.Client {
 	s.stopWorker()
 	ctx, cancel := context.WithCancel(context.Background())
 	control := http.NewServeMux()
-	handler, wait := httpapi.NewHandler(ctx, s.db, s.runner, s.dataDir, nil, nil, s.volumeRunner, nil, nil, s.images,
-		&migration.Options{Restart: func() {}, Control: control})
+	handler, wait := httpapi.NewHandler(ctx, httpapi.Deps{DB: s.db, Runner: s.runner, DataDir: s.dataDir, VolumeRunner: s.volumeRunner,
+		Images: s.images, Migration: &migration.Options{Restart: func() {}, Control: control}})
 	var once sync.Once
 	s.stopWorker = func() { once.Do(func() { cancel(); wait() }) }
 	t.Cleanup(s.stopWorker)
@@ -135,9 +135,9 @@ func TestMigrationStartClosesTerminalSessions(t *testing.T) {
 	server.stopWorker()
 	ctx, cancel := context.WithCancel(context.Background())
 	control := http.NewServeMux()
-	handler, wait := httpapi.NewHandler(ctx, server.db, server.runner, server.dataDir, nil, nil, server.volumeRunner, nil,
-		&terminal.Options{Exec: server.terminal, MaxSessions: 10, PingInterval: time.Second, PingTimeout: time.Second, KillGrace: 50 * time.Millisecond},
-		server.images, &migration.Options{Restart: func() {}, Control: control})
+	handler, wait := httpapi.NewHandler(ctx, httpapi.Deps{DB: server.db, Runner: server.runner, DataDir: server.dataDir, VolumeRunner: server.volumeRunner,
+		Terminal: &terminal.Options{Exec: server.terminal, MaxSessions: 10, PingInterval: time.Second, PingTimeout: time.Second, KillGrace: 50 * time.Millisecond},
+		Images:   server.images, Migration: &migration.Options{Restart: func() {}, Control: control}})
 	var once sync.Once
 	server.stopWorker = func() { once.Do(func() { cancel(); wait() }) }
 	t.Cleanup(server.stopWorker)

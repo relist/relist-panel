@@ -31,26 +31,43 @@ import (
 	"relist-panel/internal/webassets"
 )
 
-// NewHandler builds the top-level HTTP handler for the panel. runner drives
-// Compose deploy lifecycle actions (ADR-0003); dataDir is the root directory
-// Compose files are resolved under (ADR-0002). history and services are the
-// running sampler's read sides (metrics.HostHistory and ServiceFacts —
-// *hostmetrics.Sampler and *hostmetrics.ServiceCollector in production,
-// fakes at the HTTP seam); they may be nil, in which case the metrics
-// endpoints stay unregistered (an unwired panel has nothing to serve).
-// volumeRunner and volumeResolver are the Volume Explorer's operation seam
-// and its read side (ADR-0010). terminalOptions, when non-nil, is the terminal
-// seam and settings; nil leaves the terminal routes unregistered. imageStore
-// is the Images page's Docker seam; nil leaves the image routes unregistered.
-// migrationOptions, when non-nil, adds a server Migration's routes and its
-// lock middleware (ADR-0018) and resumes an interrupted lock in the
-// background.
-// The optional dockerStores argument adds host reports and confirmed cleanup.
-// The first store is used; omission keeps those routes unregistered.
+// Deps is what NewHandler wires together. DB, Runner and DataDir are
+// required; every other field may be left zero, which leaves its routes
+// unregistered.
+type Deps struct {
+	DB *sql.DB
+	// Runner drives Compose deploy lifecycle actions (ADR-0003).
+	Runner composes.ComposeRunner
+	// DataDir is the root directory Compose files are resolved under
+	// (ADR-0002).
+	DataDir string
+	// History and Services are the running sampler's read sides
+	// (*hostmetrics.Sampler and *hostmetrics.ServiceCollector in production,
+	// fakes at the HTTP seam). The metrics endpoints need both.
+	History  metrics.HostHistory
+	Services metrics.ServiceFacts
+	// VolumeRunner and VolumeResolver are the Volume Explorer's operation
+	// seam and its read side (ADR-0010).
+	VolumeRunner   volumes.Runner
+	VolumeResolver *volumes.Resolver
+	// Terminal is the terminal seam and its settings.
+	Terminal *terminal.Options
+	// Images is the Images page's Docker seam.
+	Images images.Images
+	// Migration adds a server Migration's routes and its lock middleware
+	// (ADR-0018), and resumes an interrupted lock in the background.
+	Migration *migration.Options
+	// Docker adds host reports and confirmed cleanup.
+	Docker dockerhost.Engine
+}
+
+// NewHandler builds the top-level HTTP handler for the panel.
 //
 // The Deployment worker runs until ctx is done. The returned wait blocks until
 // it has returned, which is after a Deploy step in progress has finished.
-func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts, volumeRunner volumes.Runner, volumeResolver *volumes.Resolver, terminalOptions *terminal.Options, imageStore images.Images, migrationOptions *migration.Options, dockerStores ...dockerhost.Engine) (http.Handler, func()) {
+func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
+	db, runner, dataDir := d.DB, d.Runner, d.DataDir
+	migrationOptions := d.Migration
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
 	authService := auth.New(db)
@@ -89,26 +106,26 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 	domains.New(db).RegisterRoutes(mux)
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
-	volumeapi.New(composesService, volumeResolver, volumeRunner).RegisterRoutes(mux)
+	volumeapi.New(composesService, d.VolumeResolver, d.VolumeRunner).RegisterRoutes(mux)
 	var terminals migration.TerminalCloser
-	if terminalOptions != nil {
-		terminalService := terminal.New(composesService, *terminalOptions)
+	if d.Terminal != nil {
+		terminalService := terminal.New(composesService, *d.Terminal)
 		terminalService.RegisterRoutes(mux)
 		terminals = terminalService
 	}
-	if imageStore != nil {
-		images.New(imageStore).RegisterRoutes(mux)
+	if d.Images != nil {
+		images.New(d.Images).RegisterRoutes(mux)
 	}
-	if len(dockerStores) > 0 && dockerStores[0] != nil {
+	if d.Docker != nil {
 		pending := func(ctx context.Context) (bool, error) {
 			var count int
 			err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM deployments WHERE status IN ('queued', 'running')").Scan(&count)
 			return count > 0, err
 		}
-		dockerhost.NewAPI(dockerStores[0], hostGuard, pending).RegisterRoutes(mux)
+		dockerhost.NewAPI(d.Docker, hostGuard, pending).RegisterRoutes(mux)
 	}
-	if history != nil && services != nil {
-		metricsService := metrics.New(metrics.NewStore(db), history, services)
+	if d.History != nil && d.Services != nil {
+		metricsService := metrics.New(metrics.NewStore(db), d.History, d.Services)
 		metricsService.RegisterRoutes(mux)
 	}
 	var inner http.Handler = gate.middleware(mux)
@@ -116,7 +133,7 @@ func NewHandler(ctx context.Context, db *sql.DB, runner composes.ComposeRunner, 
 		domainStore := domains.NewStore(db)
 		oldHost := migration.NewOldHost(migration.OldHostDeps{
 			Store:           migration.NewStore(db, nil),
-			Manifests:       migration.ManifestBuilder{DB: db, Composes: composesService, Volumes: volumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir},
+			Manifests:       migration.ManifestBuilder{DB: db, Composes: composesService, Volumes: d.VolumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir},
 			Queue:           queue,
 			Docker:          migrationOptions.Docker,
 			Status:          runner,
