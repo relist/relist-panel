@@ -292,3 +292,32 @@ func TestUnpackUnderKeepsEveryEntryBeneathTop(t *testing.T) {
 		}
 	})
 }
+
+func TestUnpackUnderRefusesALinkWhereADirectoryWas(t *testing.T) {
+	cases := map[string]*bytes.Buffer{
+		"link replaces dir": tarOf(t,
+			&tar.Header{Name: "uploads/", Typeflag: tar.TypeDir, Mode: 0o777},
+			&tar.Header{Name: "uploads", Typeflag: tar.TypeSymlink, Linkname: "cron.d", Mode: 0o777}),
+		"dir over link": tarOf(t,
+			&tar.Header{Name: "uploads", Typeflag: tar.TypeSymlink, Linkname: "cron.d", Mode: 0o777},
+			&tar.Header{Name: "uploads/", Typeflag: tar.TypeDir, Mode: 0o777}),
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			sibling := filepath.Join(root, "cron.d")
+			os.Mkdir(sibling, 0o700)
+			err := openRoot(t, root).UnpackUnder("uploads", body)
+			if !errors.Is(err, ErrUnsafeArchive) {
+				t.Fatalf("UnpackUnder() error = %v, want ErrUnsafeArchive", err)
+			}
+			info, err := os.Stat(sibling)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Mode().Perm(); got != 0o700 {
+				t.Fatalf("sibling mode = %o, want 700", got)
+			}
+		})
+	}
+}

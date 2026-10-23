@@ -196,7 +196,16 @@ func (fs *FS) UnpackUnder(top string, src io.Reader) error {
 	}
 	// Deepest first, after every child exists: the owner, then the mode,
 	// because chown clears setuid and setgid, then the mtime the writes moved.
+	// Chmod and Chtimes follow a link, so a later entry that left a symlink
+	// where a directory entry was is refused rather than followed beside top.
 	for i := len(dirs) - 1; i >= 0; i-- {
+		info, err := fs.root.Lstat(dirs[i].name)
+		if err != nil {
+			return fmt.Errorf("unpack: %w", err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("unpack: %w: directory entry %q is no longer a directory", ErrUnsafeArchive, dirs[i].hdr.Name)
+		}
 		if err := fs.applyMeta(dirs[i].name, dirs[i].hdr); err != nil {
 			return fmt.Errorf("unpack: %w", err)
 		}
