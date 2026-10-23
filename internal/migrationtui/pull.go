@@ -525,8 +525,7 @@ func (m *pullModel) previewLines() ([]string, int) {
 	for _, it := range info.Images {
 		name, how := it.ID, "copied"
 		if img := it.Image; img != nil {
-			name = strings.TrimPrefix(img.ID, "sha256:")
-			name = name[:min(12, len(name))]
+			name = migration.ShortID(img.ID)
 			if len(img.Tags) > 0 {
 				name = img.Tags[0]
 			}

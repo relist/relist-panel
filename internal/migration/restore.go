@@ -118,7 +118,7 @@ func imageTags(img ImageInfo) []string {
 	return img.Tags
 }
 
-func migratedTag(img ImageInfo) string { return "relist-migrated/" + shortID(img.ID) }
+func migratedTag(img ImageInfo) string { return "relist-migrated/" + ShortID(img.ID) }
 
 // RestoreImage pulls an Image by digest and re-applies its tags; one without
 // digests, or whose pull fails or brings another Image, is loaded from the
@@ -151,7 +151,7 @@ func (r *restorer) RestoreImage(ctx context.Context, item Item, fetch func(conte
 	}
 	body.Close()
 	if err != nil {
-		return "", fmt.Errorf("load image %s: %w", shortID(img.ID), err)
+		return "", fmt.Errorf("load image %s: %w", ShortID(img.ID), err)
 	}
 	ref := img.ID
 	if len(img.Tags) == 0 {
@@ -164,7 +164,7 @@ func (r *restorer) RestoreImage(ctx context.Context, item Item, fetch func(conte
 			}
 		}
 		if err := docker.TagImage(ctx, source, migratedTag(img)); err != nil {
-			return "", fmt.Errorf("tag image %s: %w", shortID(img.ID), err)
+			return "", fmt.Errorf("tag image %s: %w", ShortID(img.ID), err)
 		}
 		ref = migratedTag(img)
 	} else {
@@ -177,7 +177,7 @@ func (r *restorer) RestoreImage(ctx context.Context, item Item, fetch func(conte
 	}
 	if len(img.Tags) == 0 {
 		// The Done screen lists it, so the operator can find it again.
-		return fmt.Sprintf("Image %s had no tag; it is tagged %s on this host", shortID(img.ID), ref), nil
+		return fmt.Sprintf("Image %s had no tag; it is tagged %s on this host", ShortID(img.ID), ref), nil
 	}
 	return "", nil
 }

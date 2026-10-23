@@ -275,7 +275,7 @@ func (b ManifestBuilder) Build(ctx context.Context, running []int64, hostPaths [
 		}
 		seen[img.ID] = true
 		info := img
-		m.Items = append(m.Items, Item{ID: "image-" + shortID(img.ID), Kind: KindImage, Size: img.Size, Image: &info})
+		m.Items = append(m.Items, Item{ID: "image-" + ShortID(img.ID), Kind: KindImage, Size: img.Size, Image: &info})
 	}
 	return m, nil
 }
@@ -363,7 +363,8 @@ func hostPathID(p string) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
-func shortID(id string) string {
+// ShortID is an Image ID as Docker shows it: 12 hex digits, no sha256: prefix.
+func ShortID(id string) string {
 	id = strings.TrimPrefix(id, "sha256:")
 	if len(id) > 12 {
 		return id[:12]
