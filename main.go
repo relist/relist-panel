@@ -32,6 +32,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "reset-2fa" {
 		os.Exit(runResetTwoFactor(os.Args[2:], os.Stdout, os.Stderr))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "create-admin" {
+		os.Exit(runCreateAdmin(os.Args[2:], os.Stdin, os.Stdout, os.Stderr, stdinConsole()))
+	}
 	// Drive a server migration from a terminal in the panel container,
 	// through the running panel's control socket (ADR-0019).
 	if len(os.Args) > 1 && os.Args[1] == "migration" {

@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"relist-panel/internal/config"
 	"relist-panel/internal/database"
@@ -78,4 +81,177 @@ func TestResetTwoFactorCommandRejectsStrayArgs(t *testing.T) {
 	if !strings.Contains(stderr.String(), "usage: relist-panel reset-2fa [--email ADDRESS]") {
 		t.Fatalf("stderr = %q, want the usage line", stderr.String())
 	}
+}
+
+// fakeTerminal answers hidden reads from a queue, as the real terminal would
+// one Enter at a time.
+func fakeTerminal(passwords ...string) console {
+	return console{
+		isTerminal: true,
+		readPassword: func() (string, error) {
+			if len(passwords) == 0 {
+				return "", io.EOF
+			}
+			next := passwords[0]
+			passwords = passwords[1:]
+			return next, nil
+		},
+	}
+}
+
+var noTerminal = console{readPassword: func() (string, error) { return "", io.EOF }}
+
+// storedAdmin reads back the single admin row.
+func storedAdmin(t *testing.T) (email, hash string, fromEnv bool) {
+	t.Helper()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	db, err := database.OpenAndMigrate(cfg.DatabasePath())
+	if err != nil {
+		t.Fatalf("OpenAndMigrate() error = %v", err)
+	}
+	defer db.Close()
+	if err := db.QueryRow("SELECT email, password_hash, password_from_env FROM admin_credentials").Scan(&email, &hash, &fromEnv); err != nil {
+		t.Fatalf("read admin: %v", err)
+	}
+	return email, hash, fromEnv
+}
+
+func runCreate(t *testing.T, args []string, stdin string, term console) (int, string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := runCreateAdmin(args, strings.NewReader(stdin), &stdout, &stderr, term)
+	return code, stdout.String(), stderr.String()
+}
+
+func TestCreateAdminFromPasswordStdin(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+
+	code, stdout, stderr := runCreate(t, []string{"--email", "a@example.com", "--password-stdin"}, "long enough pw\r\n", noTerminal)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if stdout != "Created admin a@example.com.\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	email, hash, fromEnv := storedAdmin(t)
+	if email != "a@example.com" || fromEnv {
+		t.Fatalf("admin = %q, password_from_env = %v", email, fromEnv)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte("long enough pw")) != nil {
+		t.Fatal("stored hash does not match the password from stdin")
+	}
+}
+
+func TestCreateAdminGenerated(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+
+	code, stdout, stderr := runCreate(t, []string{"--email", "A@Example.com", "--generate"}, "", noTerminal)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %q", code, stderr)
+	}
+	lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
+	if len(lines) != 2 || lines[0] != "Created admin a@example.com." || !strings.HasPrefix(lines[1], "Password: ") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	password := strings.TrimPrefix(lines[1], "Password: ")
+	if len(password) != 24 {
+		t.Fatalf("generated password %q has %d characters, want 24", password, len(password))
+	}
+	if !strings.Contains(stderr, "change it in Account") {
+		t.Fatalf("stderr = %q, want the hint", stderr)
+	}
+	email, hash, _ := storedAdmin(t)
+	if email != "a@example.com" || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
+		t.Fatalf("admin = %q, or the hash does not match the printed password", email)
+	}
+}
+
+func TestCreateAdminRefusesWhenOneExists(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+	seedCLIAdmin(t)
+
+	code, _, stderr := runCreate(t, []string{"--email", "b@example.com", "--password-stdin"}, "long enough pw\n", noTerminal)
+	if code != 1 || !strings.Contains(stderr, "create-admin: an admin account already exists") {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr)
+	}
+	if email, hash, _ := storedAdmin(t); email != "admin@example.com" || hash != "hash" {
+		t.Fatalf("admin changed to %q", email)
+	}
+}
+
+func TestCreateAdminUsageErrors(t *testing.T) {
+	cases := map[string]struct {
+		args []string
+		want string
+	}{
+		"both password flags":            {[]string{"--email", "a@example.com", "--generate", "--password-stdin"}, "usage: relist-panel create-admin"},
+		"password-stdin without email":   {[]string{"--password-stdin"}, "usage: relist-panel create-admin"},
+		"stray argument":                 {[]string{"extra"}, "usage: relist-panel create-admin"},
+		"no terminal and no flag":        {[]string{"--email", "a@example.com"}, "create-admin: stdin is not a terminal; pass --password-stdin or --generate"},
+		"no terminal, generate no email": {[]string{"--generate"}, "create-admin: stdin is not a terminal; pass --password-stdin or --generate"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("RELIST_DATA_DIR", t.TempDir())
+			code, _, stderr := runCreate(t, c.args, "", noTerminal)
+			if code != 2 || !strings.Contains(stderr, c.want) {
+				t.Fatalf("exit code = %d, stderr = %q; want 2 and %q", code, stderr, c.want)
+			}
+		})
+	}
+}
+
+func TestCreateAdminRejectsShortPassword(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+
+	code, _, stderr := runCreate(t, []string{"--email", "a@example.com", "--password-stdin"}, "short\n", noTerminal)
+	if code != 1 || !strings.Contains(stderr, "create-admin: password must be at least 8 characters") {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr)
+	}
+}
+
+func TestCreateAdminInteractive(t *testing.T) {
+	t.Run("typed and confirmed", func(t *testing.T) {
+		t.Setenv("RELIST_DATA_DIR", t.TempDir())
+		code, stdout, stderr := runCreate(t, nil, "a@example.com\n", fakeTerminal("long enough pw", "long enough pw"))
+		if code != 0 || stdout != "Created admin a@example.com.\n" {
+			t.Fatalf("exit code = %d, stdout = %q, stderr = %q", code, stdout, stderr)
+		}
+		for _, prompt := range []string{"Email: ", "Password (leave empty to generate one): ", "Confirm password: "} {
+			if !strings.Contains(stderr, prompt) {
+				t.Fatalf("stderr = %q, want the prompt %q", stderr, prompt)
+			}
+		}
+		if _, hash, _ := storedAdmin(t); bcrypt.CompareHashAndPassword([]byte(hash), []byte("long enough pw")) != nil {
+			t.Fatal("stored hash does not match the typed password")
+		}
+	})
+	t.Run("mismatched confirmation", func(t *testing.T) {
+		t.Setenv("RELIST_DATA_DIR", t.TempDir())
+		code, _, stderr := runCreate(t, nil, "a@example.com\n", fakeTerminal("long enough pw", "something else"))
+		if code != 1 || !strings.Contains(stderr, "create-admin: passwords do not match") {
+			t.Fatalf("exit code = %d, stderr = %q", code, stderr)
+		}
+	})
+	t.Run("empty password generates one", func(t *testing.T) {
+		t.Setenv("RELIST_DATA_DIR", t.TempDir())
+		code, stdout, stderr := runCreate(t, []string{"--email", "a@example.com"}, "", fakeTerminal(""))
+		if code != 0 || !strings.Contains(stdout, "\nPassword: ") {
+			t.Fatalf("exit code = %d, stdout = %q, stderr = %q", code, stdout, stderr)
+		}
+		if strings.Contains(stderr, "Email: ") || strings.Contains(stderr, "Confirm password: ") {
+			t.Fatalf("stderr = %q, want neither the email nor the confirm prompt", stderr)
+		}
+	})
+	t.Run("an existing admin is reported before any prompt", func(t *testing.T) {
+		t.Setenv("RELIST_DATA_DIR", t.TempDir())
+		seedCLIAdmin(t)
+		code, _, stderr := runCreate(t, nil, "", fakeTerminal())
+		if code != 1 || strings.Contains(stderr, "Email: ") {
+			t.Fatalf("exit code = %d, stderr = %q", code, stderr)
+		}
+	})
 }

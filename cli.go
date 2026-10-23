@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/x/term"
 
 	"relist-panel/internal/auth"
 	"relist-panel/internal/config"
@@ -65,4 +71,146 @@ func runResetTwoFactor(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "Reset two-factor for %s (%s); revoked %d sessions.\n",
 		result.Email, state, result.SessionsRevoked)
 	return 0
+}
+
+const createAdminUsage = "usage: relist-panel create-admin [--email ADDRESS] [--generate | --password-stdin]"
+
+// console is what create-admin needs of the terminal on stdin: whether there
+// is one, and a read that does not echo.
+type console struct {
+	isTerminal   bool
+	readPassword func() (string, error)
+}
+
+// stdinConsole is the real terminal on os.Stdin.
+func stdinConsole() console {
+	fd := os.Stdin.Fd()
+	return console{
+		isTerminal: term.IsTerminal(fd),
+		readPassword: func() (string, error) {
+			password, err := term.ReadPassword(fd)
+			return string(password), err
+		},
+	}
+}
+
+// runCreateAdmin implements `relist-panel create-admin`, the only way to make
+// the first admin. Prompts and hints go to stderr, so stdout holds only the
+// result and, when generated, the password. It returns the exit code: 0 on
+// success, 1 for a refused or failed create, 2 for a usage error.
+func runCreateAdmin(args []string, stdin io.Reader, stdout, stderr io.Writer, tty console) int {
+	flags := flag.NewFlagSet("create-admin", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.Usage = func() {
+		fmt.Fprintln(stderr, createAdminUsage)
+	}
+	email := flags.String("email", "", "email of the admin account")
+	generate := flags.Bool("generate", false, "generate the password and print it once")
+	passwordStdin := flags.Bool("password-stdin", false, "read the password from the first line of stdin")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() > 0 || (*generate && *passwordStdin) || (*passwordStdin && *email == "") {
+		fmt.Fprintln(stderr, createAdminUsage)
+		return 2
+	}
+	if !tty.isTerminal && !*passwordStdin && (!*generate || *email == "") {
+		fmt.Fprintln(stderr, "create-admin: stdin is not a terminal; pass --password-stdin or --generate")
+		return 2
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(stderr, "create-admin: %v\n", err)
+		return 1
+	}
+	db, err := database.OpenAndMigrate(cfg.DatabasePath())
+	if err != nil {
+		fmt.Fprintf(stderr, "create-admin: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	// Say so before asking for anything that would be thrown away.
+	if exists, err := auth.AdminExists(ctx, db); err != nil {
+		fmt.Fprintf(stderr, "create-admin: %v\n", err)
+		return 1
+	} else if exists {
+		fmt.Fprintln(stderr, "create-admin: an admin account already exists")
+		return 1
+	}
+
+	lines := bufio.NewReader(stdin)
+	if *email == "" {
+		fmt.Fprint(stderr, "Email: ")
+		if *email, err = readLine(lines); err != nil {
+			fmt.Fprintf(stderr, "create-admin: read the email: %v\n", err)
+			return 1
+		}
+	}
+
+	var password string
+	switch {
+	case *passwordStdin:
+		if password, err = readLine(lines); err != nil {
+			fmt.Fprintf(stderr, "create-admin: read the password: %v\n", err)
+			return 1
+		}
+	case !*generate:
+		fmt.Fprint(stderr, "Password (leave empty to generate one): ")
+		password, err = tty.readPassword()
+		fmt.Fprintln(stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "create-admin: read the password: %v\n", err)
+			return 1
+		}
+		if password != "" {
+			fmt.Fprint(stderr, "Confirm password: ")
+			confirm, err := tty.readPassword()
+			fmt.Fprintln(stderr)
+			if err != nil {
+				fmt.Fprintf(stderr, "create-admin: read the password: %v\n", err)
+				return 1
+			}
+			if confirm != password {
+				fmt.Fprintln(stderr, "create-admin: passwords do not match")
+				return 1
+			}
+		}
+	}
+	generated := password == ""
+	if generated {
+		if password, err = auth.GeneratePassword(); err != nil {
+			fmt.Fprintf(stderr, "create-admin: %v\n", err)
+			return 1
+		}
+	}
+
+	created, err := auth.CreateAdmin(ctx, db, *email, password, time.Now)
+	if err != nil {
+		if errors.Is(err, auth.ErrAdminAlreadyExists) {
+			fmt.Fprintln(stderr, "create-admin: an admin account already exists")
+		} else {
+			fmt.Fprintf(stderr, "create-admin: %v\n", err)
+		}
+		return 1
+	}
+	fmt.Fprintf(stdout, "Created admin %s.\n", created)
+	if generated {
+		fmt.Fprintf(stdout, "Password: %s\n", password)
+		fmt.Fprintln(stderr, "Sign in, then change it in Account.")
+	}
+	return 0
+}
+
+// readLine reads one line, without its line ending; a last line with no
+// newline counts.
+func readLine(r *bufio.Reader) (string, error) {
+	line, err := r.ReadString('\n')
+	if err != nil && (err != io.EOF || line == "") {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
 }

@@ -64,6 +64,34 @@ func SeedAdmin(ctx context.Context, db *sql.DB, email, password string, now func
 	return err == nil, err
 }
 
+// CreateAdmin creates the first admin from email and password, as
+// relist-panel create-admin does, and returns the stored (normalized) email.
+// With an admin already present it returns ErrAdminAlreadyExists.
+func CreateAdmin(ctx context.Context, db *sql.DB, email, password string, now func() time.Time) (string, error) {
+	normalized, err := validateEmail(email)
+	if err != nil {
+		return "", err
+	}
+	if err := validatePassword(password); err != nil {
+		return "", err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	if err := insertAdmin(ctx, db, normalized, string(hash), now()); err != nil {
+		return "", err
+	}
+	return normalized, nil
+}
+
+// AdminExists reports whether the panel has its admin account yet.
+func AdminExists(ctx context.Context, db *sql.DB) (bool, error) {
+	var exists int
+	err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM admin_credentials)").Scan(&exists)
+	return exists == 1, err
+}
+
 // markPasswordFromEnv records an existing admin whose password is still the
 // env's, such as one seeded before the flag was kept.
 func markPasswordFromEnv(ctx context.Context, db *sql.DB, password string) error {

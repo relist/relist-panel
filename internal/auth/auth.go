@@ -508,6 +508,16 @@ func validatePassword(value string) error {
 	return nil
 }
 
+// GeneratePassword returns a random 24-character password for create-admin
+// --generate: 18 bytes from crypto/rand, base64url without padding.
+func GeneratePassword() (string, error) {
+	bytes := make([]byte, 18)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate password: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
 func newSessionToken() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
