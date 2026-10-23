@@ -296,7 +296,7 @@ func TestConnectRefusesHTTP(t *testing.T) {
 	f.deps.Insecure = false
 	target := NewTarget(f.deps)
 	_, err := target.Connect(context.Background(), f.src.srv.URL, "tok", "https://new")
-	if err == nil || err.Error() != "The source must use https://" {
+	if err == nil || !errors.Is(err, errInsecureOldHost) {
 		t.Fatalf("Connect(http) error = %v", err)
 	}
 }

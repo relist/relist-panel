@@ -197,12 +197,15 @@ func (t *Target) client() *client {
 // errBusy refuses an action while another one talks to the source.
 var errBusy = errors.New("another migration action is in progress; try again in a moment")
 
+// errInsecureOldHost refuses an old host URL that is not https://.
+var errInsecureOldHost = errors.New("The source must use https://")
+
 // Connect claims the token and runs preflight with every non-system host
 // path selected. The session is kept as soon as the claim succeeds, so a
 // preflight that fails can be retried without a new token.
 func (t *Target) Connect(ctx context.Context, oldHostURL, token, selfURL string) (Progress, error) {
 	if !strings.HasPrefix(oldHostURL, "https://") && !(t.d.Insecure && strings.HasPrefix(oldHostURL, "http://")) {
-		return Progress{}, errors.New("The source must use https://")
+		return Progress{}, errInsecureOldHost
 	}
 	if !webURL(selfURL) {
 		return Progress{}, fmt.Errorf("this panel's own URL %q is not an http:// or https:// URL", selfURL)

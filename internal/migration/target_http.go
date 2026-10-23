@@ -56,7 +56,7 @@ func (t *Target) connectRoute(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusConflict, err.Error())
 			return
 		}
-		if err.Error() == "The source must use https://" {
+		if errors.Is(err, errInsecureOldHost) {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
