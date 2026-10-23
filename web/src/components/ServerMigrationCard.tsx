@@ -12,7 +12,7 @@ const { Paragraph, Text } = Typography;
 export function ServerMigrationCard() {
   return (
     <Card title="Server migration">
-      <Flex gap={12} vertical>
+      <Flex gap={16} vertical>
         <Paragraph style={{ margin: 0 }} type="secondary">
           To move everything this panel manages to another server, install an empty panel there with the same
           RELIST_DATA_DIR. Then run the first command on this server to create a migration token, and the second on the
