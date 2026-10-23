@@ -15,7 +15,7 @@ vi.mock('../data/api', async (importOriginal) => {
 });
 vi.mock('../data/store', () => ({
   usePanel: () => ({
-    auth: { checked: true, setupRequired: false, authenticated: true },
+    auth: { checked: true, authenticated: true },
     isPending: () => false,
     loadAuthStatus: mocks.loadAuthStatus,
   }),

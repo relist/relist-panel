@@ -1,13 +1,12 @@
 import { CloudServerOutlined, LockOutlined, SafetyCertificateOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Flex, Form, Input, Layout, Result, Spin, Steps, Tag, Typography, theme } from 'antd';
+import { Alert, Button, Card, Flex, Form, Input, Layout, Spin, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';
-import { Navigate, useLocation, useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 
-import { entryScreen, signInTarget } from '../app/entry';
+import { signInTarget } from '../app/entry';
 import { paths } from '../app/paths';
 import { CenteredScreen } from '../app/CenteredScreen';
 import type { LoginResult } from '../data/api';
-import { migrationCommand } from '../data/migration';
 import { usePanel } from '../data/store';
 import { backToPassword, nextStep, rateLimitMessage } from './signin-view';
 import type { SignInStep } from './signin-view';
@@ -22,12 +21,10 @@ const { Text, Title, Paragraph } = Typography;
  */
 function AuthLayout({
   children,
-  footer,
   subtitle,
   title,
 }: {
   children: React.ReactNode;
-  footer?: React.ReactNode;
   subtitle: React.ReactNode;
   title: string;
 }) {
@@ -104,7 +101,6 @@ function AuthLayout({
             </Title>
             <Text type="secondary">{subtitle}</Text>
             <div style={{ marginTop: 24 }}>{children}</div>
-            {footer && <div style={{ marginTop: 16 }}>{footer}</div>}
           </Card>
         </Flex>
       </Flex>
@@ -151,12 +147,6 @@ export function SignInPage() {
         <Spin aria-label="Loading" size="large" />
       </CenteredScreen>
     );
-  }
-
-  // First run has no account to sign in with: the monolith routed straight to
-  // setup, so /signin does the same while the API reports setupRequired.
-  if (entryScreen(auth) === 'setup') {
-    return <Navigate replace to={paths.setup} />;
   }
 
   // A result is an answer, not necessarily a failure: the code prompt advances
@@ -210,16 +200,6 @@ export function SignInPage() {
 
   return (
     <AuthLayout
-      footer={
-        !onCodeStep && auth.setupRequired ? (
-          <Flex gap={8} wrap>
-            <Text type="secondary">First run?</Text>
-            <Button onClick={() => navigate(paths.setup)} size="small" type="link">
-              Create the admin account
-            </Button>
-          </Flex>
-        ) : undefined
-      }
       subtitle={onCodeStep ? 'Enter the six-digit code from your authenticator app.' : 'Use the admin account for this host.'}
       title={onCodeStep ? 'Two-factor code' : 'Sign in'}
     >
@@ -271,126 +251,6 @@ export function SignInPage() {
             type="info"
           />
         </>
-      )}
-    </AuthLayout>
-  );
-}
-
-export function SetupPage() {
-  const { auth, isPending, signUp } = usePanel();
-  const { message } = App.useApp();
-  const navigate = useNavigate();
-  const [step, setStep] = useState(0);
-  const [error, setError] = useState<string>();
-  const [form] = Form.useForm<{ confirmPassword: string; email: string; password: string }>();
-
-  // Setup exists only until the admin account does. (The check is skipped once
-  // the account has been created — the Result below must survive the store
-  // flipping `setupRequired` off.)
-  if (step === 0 && auth.checked && entryScreen(auth) !== 'setup') {
-    return <Navigate replace to={entryScreen(auth) === 'app' ? paths.overview : paths.signIn} />;
-  }
-
-  if (!auth.checked) {
-    return (
-      <CenteredScreen>
-        <Spin aria-label="Loading" size="large" />
-      </CenteredScreen>
-    );
-  }
-
-  const submit = async (values: { email: string; password: string }) => {
-    setError(undefined);
-    try {
-      await signUp(values.email, values.password);
-      message.success('Admin account created');
-      setStep(1);
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : 'Setup failed');
-    }
-  };
-
-  return (
-    <AuthLayout subtitle="This is the only account the panel will ever create." title="Set up your admin account">
-      <Steps current={step} items={[{ title: 'Account' }, { title: 'Ready' }]} size="small" style={{ marginBottom: 24 }} />
-      {step === 0 ? (
-        <>
-          {error && <AuthError message={error} />}
-          <Form
-            form={form}
-            layout="vertical"
-            onFinish={(values) => {
-              void submit(values);
-            }}
-            requiredMark={false}
-          >
-            <Form.Item
-              label="Email"
-              name="email"
-              rules={[
-                { message: 'Enter your email address', required: true },
-                { message: 'Enter a valid email address', type: 'email' },
-              ]}
-            >
-              <Input autoComplete="email" autoFocus placeholder="admin@relist.local" size="large" />
-            </Form.Item>
-            <Form.Item
-              label="Password"
-              name="password"
-              rules={[
-                { message: 'Enter a password', required: true },
-                { message: 'Use at least 8 characters', min: 8 },
-              ]}
-            >
-              <Input.Password autoComplete="new-password" size="large" />
-            </Form.Item>
-            <Form.Item
-              dependencies={['password']}
-              label="Confirm password"
-              name="confirmPassword"
-              rules={[
-                { message: 'Confirm your password', required: true },
-                ({ getFieldValue }) => ({
-                  validator(_rule, value) {
-                    if (!value || getFieldValue('password') === value) return Promise.resolve();
-                    return Promise.reject(new Error('Passwords do not match'));
-                  },
-                }),
-              ]}
-            >
-              <Input.Password autoComplete="new-password" size="large" />
-            </Form.Item>
-            <Button block htmlType="submit" loading={isPending('signup')} size="large" type="primary">
-              Create admin account
-            </Button>
-          </Form>
-          <Paragraph style={{ marginBottom: 0, marginTop: 16 }} type="secondary">
-            Moving a panel here? Don&apos;t create an admin. Run this on this server instead:{' '}
-            <Text code copyable>
-              {migrationCommand('pull')}
-            </Text>
-          </Paragraph>
-        </>
-      ) : (
-        <Result
-          extra={
-            <Button onClick={() => navigate(paths.signIn, { replace: true })} type="primary">
-              Open the panel
-            </Button>
-          }
-          status="success"
-          subTitle={
-            <Flex gap={4} vertical>
-              <Text type="secondary">Sign in with the account you just created. Next: create a Project and add its first Environment.</Text>
-              <Flex gap={8} style={{ marginTop: 8 }}>
-                <Tag>1 · Project</Tag>
-                <Tag>2 · Environment</Tag>
-                <Tag>3 · Compose</Tag>
-              </Flex>
-            </Flex>
-          }
-          title="You're set up"
-        />
       )}
     </AuthLayout>
   );

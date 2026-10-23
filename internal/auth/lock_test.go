@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -51,13 +52,8 @@ func TestLockExpiresAfterOneMinute(t *testing.T) {
 		return response
 	}
 
-	setup := post("/api/auth/setup", map[string]string{
-		"email":    "admin@example.com",
-		"password": "correct horse battery staple",
-	})
-	setup.Body.Close()
-	if setup.StatusCode != http.StatusCreated {
-		t.Fatalf("setup status = %d, want %d", setup.StatusCode, http.StatusCreated)
+	if _, err := CreateAdmin(context.Background(), db, "admin@example.com", "correct horse battery staple", time.Now); err != nil {
+		t.Fatalf("create admin: %v", err)
 	}
 
 	for attempt := 1; attempt <= maxFailedAttempts; attempt++ {

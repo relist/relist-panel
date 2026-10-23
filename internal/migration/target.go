@@ -865,19 +865,6 @@ func (t *Target) loadSummary() error {
 	return nil
 }
 
-// InProgress reports a Migration connected and not yet done, during which
-// first-admin setup is refused: once connected, the panel holds a session key
-// that streams the old host, which a stranger who set it up could read.
-func (t *Target) InProgress() bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	switch t.st.Phase {
-	case PhaseConnected, PhaseLocking, PhasePulling, PhasePaused, PhaseFinalizing:
-		return true
-	}
-	return false
-}
-
 // completeAsync runs complete in the background. The caller holds t.mu.
 func (t *Target) completeAsync() {
 	if t.running {

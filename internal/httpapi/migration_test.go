@@ -72,28 +72,6 @@ func TestPullRoutesAreNotOnTheWeb(t *testing.T) {
 	}
 }
 
-func TestSetupBlockedDuringMigration(t *testing.T) {
-	s := newTestServer(t)
-	writeMigrationFile(t, s, "state.json", `{"phase":"paused","sourceUrl":"https://old","manifest":{"items":[]},"items":{}}`)
-	s.restartWithMigration(t)
-	response := postJSON(t, s, "/api/auth/setup", map[string]string{"email": "admin@example.com", "password": "correct horse battery staple"})
-	body := readBody(t, response)
-	if response.StatusCode != http.StatusConflict || !strings.Contains(body, "A migration is in progress") {
-		t.Fatalf("setup during a migration = %d %s", response.StatusCode, body)
-	}
-}
-
-func TestSetupBlockedWhileConnected(t *testing.T) {
-	s := newTestServer(t)
-	writeMigrationFile(t, s, "state.json", `{"phase":"connected","sourceUrl":"https://old","sessionKey":"k"}`)
-	s.restartWithMigration(t)
-	response := postJSON(t, s, "/api/auth/setup", map[string]string{"email": "admin@example.com", "password": "correct horse battery staple"})
-	body := readBody(t, response)
-	if response.StatusCode != http.StatusConflict || !strings.Contains(body, "abort it") {
-		t.Fatalf("setup while connected = %d %s", response.StatusCode, body)
-	}
-}
-
 func TestStartConflictCarriesBlockingMessage(t *testing.T) {
 	_, control := newControlServer(t)
 	code, body := controlDo(t, control, http.MethodPost, "/api/migration/pull/start", `{"hostPaths":[]}`)

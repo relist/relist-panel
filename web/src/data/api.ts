@@ -48,7 +48,6 @@ import type { MetricWindow } from './types';
 import type { MigrationStatus } from './migration';
 
 export type AuthStatus = {
-  setupRequired: boolean;
   authenticated: boolean;
 };
 
@@ -56,7 +55,7 @@ export type AuthStatus = {
 export type Account = {
   email: string;
   twoFactorEnabled: boolean;
-  /** The password is still the one RELIST_ADMIN_PASSWORD seeded. */
+  /** The password is still the one RELIST_ADMIN_PASSWORD seeded, on installs from before create-admin. */
   passwordFromEnv: boolean;
 };
 
@@ -219,7 +218,6 @@ export const api = {
   dockerReport: (refresh = false) => request<DockerReport>(`/api/docker${refresh ? '?refresh=1' : ''}`),
   pruneDocker: (kind: DockerPruneKind, confirm: string) => request<DockerPruneResult>('/api/docker/prune', jsonInit('POST', { kind, confirm })),
   authStatus: () => request<AuthStatus>('/api/auth/status'),
-  setup: (credentials: Credentials) => request<unknown>('/api/auth/setup', jsonInit('POST', credentials)),
   /**
    * Sign-in, with its own `fetch` rather than `request`: a `401` asking for the
    * two-factor code and a `429` announcing the lock are results, not failures.

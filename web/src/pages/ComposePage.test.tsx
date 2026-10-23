@@ -75,7 +75,7 @@ function renderPage(composeId = 7) {
 }
 
 beforeEach(() => {
-  vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, setupRequired: false });
+  vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true });
   vi.spyOn(api, 'listProjects').mockResolvedValue([{
     createdAt: '2026-10-12T00:00:00Z', description: '', environmentCount: 1, environments: [], id: 1,
     lastUpdated: '2026-10-12T00:00:00Z', name: 'Project',

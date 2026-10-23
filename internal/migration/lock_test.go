@@ -241,7 +241,6 @@ func TestMiddlewareAllowlist(t *testing.T) {
 		{"GET", "/api/projects", http.StatusServiceUnavailable},
 		{"POST", "/api/projects/1/environments/1/composes/1/deployments", http.StatusServiceUnavailable},
 		{"PUT", "/api/images", http.StatusServiceUnavailable},
-		{"POST", "/api/auth/setup", http.StatusServiceUnavailable},
 		{"GET", "/api", http.StatusServiceUnavailable},
 	}
 	for _, c := range cases {

@@ -80,9 +80,14 @@ func TestChangePasswordSwapsItAndEndsOtherSessions(t *testing.T) {
 	}
 }
 
+// An admin seeded from RELIST_ADMIN_PASSWORD before create-admin keeps its
+// flag until the password is changed.
 func TestAccountSaysWhenThePasswordIsStillTheOneFromEnv(t *testing.T) {
 	server := newTestServer(t)
-	if _, err := auth.SeedAdmin(context.Background(), server.db, "admin@example.com", "correct horse battery staple", time.Now); err != nil {
+	if _, err := auth.CreateAdmin(context.Background(), server.db, "admin@example.com", "correct horse battery staple", time.Now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.db.Exec("UPDATE admin_credentials SET password_from_env = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if code := loginAs(t, server, "correct horse battery staple"); code != http.StatusOK {

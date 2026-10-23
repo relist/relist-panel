@@ -36,13 +36,7 @@ type Service struct {
 	// selfAuthenticated names further paths the cookie check skips because
 	// their handlers authenticate on their own.
 	selfAuthenticated func(path string) bool
-	// setupBlocked refuses first-admin setup while a server migration is
-	// running into this panel, whose admin comes from the old host.
-	setupBlocked func() bool
 }
-
-// SetSetupBlocker makes setup answer 409 while blocked reports true.
-func (s *Service) SetSetupBlocker(blocked func() bool) { s.setupBlocked = blocked }
 
 // AllowSelfAuthenticated lets requests to the paths allow reports true for
 // past the cookie check: a server migration's session-key routes
@@ -78,7 +72,6 @@ func New(db *sql.DB) *Service {
 // and two-factor routes are not public: Middleware keeps them behind a session.
 func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/auth/status", s.status)
-	mux.HandleFunc("POST /api/auth/setup", s.setup)
 	mux.HandleFunc("POST /api/auth/login", s.login)
 	mux.HandleFunc("POST /api/auth/logout", s.logout)
 	mux.HandleFunc("GET /api/auth/account", s.account)
@@ -118,7 +111,7 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exists, err := s.adminExists(r)
+	exists, err := AdminExists(r.Context(), s.db)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
@@ -136,54 +129,7 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 		clearSessionCookieIfPresent(w, r)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]bool{
-		"setupRequired": !exists,
-		"authenticated": authenticated,
-	})
-}
-
-func (s *Service) setup(w http.ResponseWriter, r *http.Request) {
-	if s.setupBlocked != nil && s.setupBlocked() {
-		writeError(w, http.StatusConflict, "A migration is in progress; finish or abort it before setting up this panel")
-		return
-	}
-	if err := s.requireDatabase(); err != nil {
-		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
-		return
-	}
-
-	input, err := decodeCredentials(w, r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	email, err := validateEmail(input.Email)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := validatePassword(input.Password); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not secure the password")
-		return
-	}
-
-	if err := s.createAdmin(r, email, string(hash)); err != nil {
-		if errors.Is(err, ErrAdminAlreadyExists) {
-			writeError(w, http.StatusConflict, "admin account already exists")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "could not create the admin account")
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, map[string]string{"email": email})
+	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": authenticated})
 }
 
 func (s *Service) login(w http.ResponseWriter, r *http.Request) {
@@ -218,19 +164,6 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 
 	account, err := s.findAdmin(r.Context(), tx, email)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Release the connection before the fallback read: the pool holds a
-		// single connection, and adminExists would block behind this open
-		// transaction.
-		tx.Rollback()
-		exists, existsErr := s.adminExists(r)
-		if existsErr != nil {
-			writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
-			return
-		}
-		if !exists {
-			writeError(w, http.StatusConflict, "admin account setup is required")
-			return
-		}
 		writeError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
@@ -389,16 +322,6 @@ func (s *Service) authenticated(r *http.Request) (bool, error) {
 	return true, nil
 }
 
-func (s *Service) adminExists(r *http.Request) (bool, error) {
-	var exists int
-	err := s.db.QueryRowContext(r.Context(), "SELECT EXISTS (SELECT 1 FROM admin_credentials)").Scan(&exists)
-	return exists == 1, err
-}
-
-func (s *Service) createAdmin(r *http.Request, email, passwordHash string) error {
-	return insertAdmin(r.Context(), s.db, email, passwordHash, s.now())
-}
-
 // insertAdmin adds the single admin row, or returns ErrAdminAlreadyExists.
 func insertAdmin(ctx context.Context, db *sql.DB, email, passwordHash string, now time.Time) error {
 	tx, err := db.BeginTx(ctx, nil)
@@ -528,7 +451,7 @@ func newSessionToken() (string, error) {
 
 func publicPath(path string) bool {
 	switch path {
-	case "/healthz", "/api/auth/status", "/api/auth/setup", "/api/auth/login", "/api/auth/logout":
+	case "/healthz", "/api/auth/status", "/api/auth/login", "/api/auth/logout":
 		return true
 	}
 

@@ -19,8 +19,8 @@ JAR=probe-mig-cookies
 IMAGE=relist-panel:probe
 DATA=/var/lib/relist-panel
 CREDS='{"email":"admin@example.com","password":"correct horse battery staple"}'
-# The new host is installed with its admin in the env, the way the README
-# recommends; the migrated database replaces that admin with the old one.
+# The new host gets its own admin from create-admin before the migration; the
+# migrated database replaces that admin with the old one.
 SEED='{"email":"seed@example.com","password":"seeded password 123"}'
 
 ACME_SEED='{"letsencrypt":{"Account":null,"Certificates":null},"probe-marker":{"Account":null,"Certificates":null}}'
@@ -87,9 +87,7 @@ services:
     command: $flags
 EOF
 	docker exec "$host" docker network create relist-network >/dev/null
-	admin=()
-	[ "$host" = "$NEW" ] && admin=(-e RELIST_ADMIN_EMAIL=seed@example.com -e "RELIST_ADMIN_PASSWORD=seeded password 123")
-	docker exec -w /install -e RELIST_DATA_DIR="$DATA" "${admin[@]}" "$host" docker compose up -d --no-build --quiet-pull >/dev/null
+	docker exec -w /install -e RELIST_DATA_DIR="$DATA" "$host" docker compose up -d --no-build --quiet-pull >/dev/null
 done
 OLD_IP=$(ip "$OLD")
 NEW_IP=$(ip "$NEW")
@@ -97,8 +95,12 @@ for host in "$OLD_IP" "$NEW_IP"; do
 	for _ in $(seq 60); do [ "$(api "$host" x GET /healthz | code)" = 200 ] && break; sleep 1; done
 done
 
+# mkadmin HOST EMAIL PASSWORD creates the admin the way an operator does.
+mkadmin() { printf '%s\n' "$3" | docker exec -i "$1" docker exec -i install-panel-1 relist-panel create-admin --email "$2" --password-stdin >/dev/null; }
+mkadmin "$NEW" seed@example.com 'seeded password 123' || fail "create-admin on the new host"
+
 say "seeding the old host"
-[ "$(api "$OLD_IP" old POST /api/auth/setup "$CREDS" | code)" = 201 ] || fail "setup on the old host"
+mkadmin "$OLD" admin@example.com 'correct horse battery staple' || fail "create-admin on the old host"
 [ "$(api "$OLD_IP" old POST /api/auth/login "$CREDS" | code)" = 200 ] || fail "login on the old host"
 P=$(create /api/projects '{"name":"probe"}')
 E=$(create "/api/projects/$P/environments" '{"name":"prod"}')
@@ -137,9 +139,9 @@ say "migrating"
 oldctl() { docker exec "$OLD" docker exec install-panel-1 relist-panel migration api "$@"; }
 ctl() { docker exec "$NEW" docker exec install-panel-1 relist-panel migration api "$@"; }
 TOKEN=$(oldctl POST /api/migration/tokens '{"lifetime":"1h"}' | json 'd["token"]') || fail "token over the old host's socket"
-# The env admin closes setup on the new host.
-[ "$(api "$NEW_IP" new POST /api/auth/setup "$CREDS" | code)" = 409 ] || fail "setup is still open on the new host"
-[ "$(api "$NEW_IP" new POST /api/auth/login "$SEED" | code)" = 200 ] || fail "sign-in with the env admin"
+# The web has no setup: only create-admin made the new host's admin.
+[ "$(api "$NEW_IP" new POST /api/auth/setup "$CREDS" | code)" != 201 ] || fail "setup is still open on the new host"
+[ "$(api "$NEW_IP" new POST /api/auth/login "$SEED" | code)" = 200 ] || fail "sign-in with the new host's own admin"
 # A signed-in web session can neither pull nor create a token.
 [ "$(api "$NEW_IP" new GET /api/migration/pull/progress | code)" = 404 ] || fail "the new host still serves the pull routes on the web"
 [ "$(api "$OLD_IP" old POST /api/migration/tokens '{"lifetime":"1h"}' | code)" = 404 ] || fail "the old host still creates tokens on the web"
@@ -189,7 +191,7 @@ if [ "$(docker exec "$NEW" sh -c "cat $DATA/.traefik/acme.json 2>/dev/null | sha
 	echo "new acme.json:"; docker exec "$NEW" cat "$DATA/.traefik/acme.json" || true
 	fail "acme.json differs"
 fi
-[ "$(api "$NEW_IP" fresh POST /api/auth/login "$SEED" | code)" = 401 ] || fail "the env admin survived the migration"
+[ "$(api "$NEW_IP" fresh POST /api/auth/login "$SEED" | code)" = 401 ] || fail "the new host's own admin survived the migration"
 for svc in db local files; do
 	state=$(docker exec "$NEW" docker inspect -f '{{.State.Status}}' "relist-c$C-$svc-1" 2>/dev/null || true)
 	[ "$state" = running ] || fail "service $svc on the new host is $state"

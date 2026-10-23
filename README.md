@@ -49,6 +49,25 @@ This builds the panel image (Go binary + embedded frontend, per the
   loopback on most systems without any DNS setup; plain HTTP redirects to it) —
   override the hostname with `RELIST_DOMAIN` for a real domain
 
+Then create the admin account from a terminal on the host. The panel has no
+setup screen: until an admin exists, its sign-in page refuses everyone, and its
+log says to run this.
+
+```sh
+docker compose exec panel relist-panel create-admin
+```
+
+It asks for the email and the password; leave the password empty to have one
+generated and printed once. For scripts, pass the password on stdin or have it
+generated:
+
+```sh
+printf '%s\n' "$PASSWORD" | docker compose exec -T panel relist-panel create-admin --email admin@example.com --password-stdin
+docker compose exec -T panel relist-panel create-admin --email admin@example.com --generate
+```
+
+The command refuses when an admin already exists.
+
 Override the defaults via environment variables (or a `.env` file next to
 `docker-compose.yml`):
 
@@ -68,14 +87,6 @@ Override the defaults via environment variables (or a `.env` file next to
   as required, but an empty value registers an account anyway (ADR-0013). Set
   it so Let's Encrypt can reach you about expiring certificates and so you can
   recover the account, and in case a later Traefik enforces it
-- `RELIST_ADMIN_EMAIL` and `RELIST_ADMIN_PASSWORD` (unset by default;
-  recommended) — create the admin account at boot, so the setup screen is
-  never open to whoever reaches a fresh panel first. They are used only while
-  no admin exists, and an invalid or half-set pair stops the panel from
-  starting. The password stays readable in `.env` and `docker inspect`:
-  change it in **Account** after the first sign-in, then remove both. A panel
-  with only this admin can still take a Migration; the old host's admin
-  replaces it
 - `RELIST_IMAGE` (unset by default) — the panel image that Volume file
   operations run from; set it only when the panel cannot name its own image
   (`docker inspect $(hostname)` fails, e.g. a custom `hostname:` on the panel
@@ -129,6 +140,10 @@ Traefik's log says why. To upgrade:
 4. Run `docker compose up -d`.
 
 Composes with hand-written Traefik labels keep routing as before.
+
+`RELIST_ADMIN_EMAIL` and `RELIST_ADMIN_PASSWORD` are no longer read; the
+admin they created stays. Remove them from `.env`, and if **Account** still
+says the password is the one from the env, change it there.
 
 ### Networks and internal hostnames
 
@@ -191,8 +206,8 @@ server's Resume.
    (1 hour, 24 hours or 7 days). It is shown once.
 3. On the new host, run `migration pull`. Enter the old panel's `https://`
    URL, the token and the new panel's own URL, which the old panel shows as
-   where it moved. Don't create an admin on the new panel first; one set by
-   `RELIST_ADMIN_EMAIL` is fine, and the old host's admin replaces it.
+   where it moved. An admin made with `create-admin` on the new panel is
+   fine; the old host's admin replaces it.
 4. Check the preview: sizes, which Images are pulled and which are copied,
    the host paths to include (system paths such as `/etc/localtime` and the
    Docker socket are unticked) and every warning. Start stays disabled while a

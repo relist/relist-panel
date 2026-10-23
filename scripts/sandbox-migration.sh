@@ -9,7 +9,7 @@
 # migration.
 #
 #   old panel  http://localhost:18881   admin@example.com / correct horse battery staple
-#   new panel  http://127.0.0.1:18882   seed@example.com  / seeded password 123 (from the env)
+#   new panel  http://127.0.0.1:18882   seed@example.com  / seeded password 123 (from create-admin)
 #
 # The two use different hostnames so their session cookies do not overwrite
 # each other. The migration itself runs from a terminal on each host
@@ -59,9 +59,7 @@ if [ "${1:-}" = reload ]; then
 			continue
 		fi
 		docker save "$IMAGE" | docker exec -i "$host" docker load -q >/dev/null
-		admin=()
-		[ "$host" = "$NEW" ] && admin=(-e RELIST_ADMIN_EMAIL=seed@example.com -e "RELIST_ADMIN_PASSWORD=seeded password 123")
-		docker exec -w /install -e RELIST_DATA_DIR="$DATA" "${admin[@]}" "$host" docker compose up -d --no-build panel >/dev/null 2>&1
+		docker exec -w /install -e RELIST_DATA_DIR="$DATA" "$host" docker compose up -d --no-build panel >/dev/null 2>&1
 		say "$host: panel reloaded"
 	done
 	exit 0
@@ -176,16 +174,18 @@ services:
     extra_hosts: $hosts
 EOF
 	docker exec "$host" sh -c 'docker network inspect relist-network >/dev/null 2>&1 || docker network create relist-network >/dev/null'
-	admin=()
-	[ "$host" = "$NEW" ] && admin=(-e RELIST_ADMIN_EMAIL=seed@example.com -e "RELIST_ADMIN_PASSWORD=seeded password 123")
-	docker exec -w /install -e RELIST_DATA_DIR="$DATA" "${admin[@]}" "$host" docker compose up -d --no-build --quiet-pull >/dev/null
+	docker exec -w /install -e RELIST_DATA_DIR="$DATA" "$host" docker compose up -d --no-build --quiet-pull >/dev/null
 done
 for host in "$OLD" "$NEW"; do
 	for _ in $(seq 60); do [ "$(api "$host" GET /healthz | code)" = 200 ] && break; sleep 1; done
 done
 
+# mkadmin HOST EMAIL PASSWORD creates the admin the way an operator does.
+mkadmin() { printf '%s\n' "$3" | docker exec -i "$1" docker exec -i install-panel-1 relist-panel create-admin --email "$2" --password-stdin >/dev/null; }
+mkadmin "$NEW" seed@example.com 'seeded password 123' || fail "create-admin on the new panel"
+
 say "seeding the old panel"
-[ "$(api "$OLD" POST /api/auth/setup "$CREDS" | code)" = 201 ] || fail "setup on the old panel"
+mkadmin "$OLD" admin@example.com 'correct horse battery staple' || fail "create-admin on the old panel"
 [ "$(api "$OLD" POST /api/auth/login "$CREDS" | code)" = 200 ] || fail "login on the old panel"
 # mkcompose PROJECT ENV NAME, the YAML on stdin, prints the new Compose's id.
 mkcompose() {

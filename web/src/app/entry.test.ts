@@ -5,24 +5,17 @@ import { entryScreen, signInTarget } from './entry';
 
 const auth = (overrides: Partial<AuthState> = {}): AuthState => ({
   checked: true,
-  setupRequired: false,
   authenticated: false,
   ...overrides,
 });
 
 describe('entryScreen', () => {
-  it('sends an authenticated visitor to the app whatever the setup state is', () => {
+  it('sends an authenticated visitor to the app', () => {
     expect(entryScreen(auth({ authenticated: true }))).toBe('app');
-    expect(entryScreen(auth({ authenticated: true, setupRequired: true }))).toBe('app');
   });
 
-  it('lands a first-run visitor on setup, as the monolith did', () => {
-    expect(entryScreen(auth({ setupRequired: true }))).toBe('setup');
-  });
-
-  it('lands a visitor with an account on sign-in', () => {
+  it('lands everyone else on sign-in, even a panel with no admin yet', () => {
     expect(entryScreen(auth())).toBe('signin');
-    expect(entryScreen(auth({ setupRequired: false }))).toBe('signin');
   });
 });
 
