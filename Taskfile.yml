@@ -48,6 +48,11 @@ tasks:
     cmds:
       - ./scripts/sandbox-migration.sh reload
 
+  sandbox:migration:check:
+    desc: Check that the new host of the migration sandbox has everything the seed made on the old one
+    cmds:
+      - ./scripts/sandbox-migration.sh check
+
   sandbox:migration:reset:
     desc: Wipe the migration sandbox back to the start, the old panel reseeded and the new one empty
     cmds:
