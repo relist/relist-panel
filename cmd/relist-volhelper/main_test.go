@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -908,5 +909,89 @@ func TestCreateCreatesAnEmptyFileAndNeverTruncates(t *testing.T) {
 	}
 	if string(content) != "keep me" {
 		t.Errorf("notes.txt = %q, want the original content intact", content)
+	}
+}
+
+func TestRunPackUnpackSizeFree(t *testing.T) {
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "d"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "d", "f"), make([]byte, 7), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	code, packed, stderr := runHelper(t, src, nil, "pack", "--", ".")
+	if code != exitOK {
+		t.Fatalf("pack exit = %d, stderr %q", code, stderr)
+	}
+	dst := t.TempDir()
+	if code, _, stderr := runHelper(t, dst, packed, "unpack", "--", "."); code != exitOK {
+		t.Fatalf("unpack exit = %d, stderr %q", code, stderr)
+	}
+	if info, err := os.Stat(filepath.Join(dst, "d", "f")); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("unpacked file = %v, %v", info, err)
+	}
+
+	code, out, stderr := runHelper(t, src, nil, "size", "--", "d")
+	if code != exitOK || strings.TrimSpace(string(out)) != `{"bytes":7}` {
+		t.Fatalf("size = %d %q %q", code, out, stderr)
+	}
+	code, out, _ = runHelperWith(t, src, nil, func(*volfs.FS) (uint64, error) { return 99, nil }, "free", "--", ".")
+	if code != exitOK || strings.TrimSpace(string(out)) != `{"bytes":99}` {
+		t.Fatalf("free = %d %q", code, out)
+	}
+
+	if code, _, _ := runHelper(t, dst, []byte("not a tar at all, definitely"), "unpack", "--", "."); code != exitArchiveRefused {
+		t.Fatalf("unpack of garbage exit = %d, want %d", code, exitArchiveRefused)
+	}
+	for _, bad := range []string{"a/b", "..", "/abs"} {
+		if code, _, _ := runHelper(t, dst, nil, "unpack", "--", bad); code != exitUsage {
+			t.Fatalf("unpack -- %s exit = %d, want %d", bad, code, exitUsage)
+		}
+	}
+	// unpack -- <name> takes only name and what is beneath it: d's stream
+	// fits, the whole root's does not.
+	code, packedD, _ := runHelper(t, src, nil, "pack", "--", "d")
+	if code != exitOK {
+		t.Fatal("pack d failed")
+	}
+	if code, _, stderr := runHelper(t, t.TempDir(), packedD, "unpack", "--", "d"); code != exitOK {
+		t.Fatalf("unpack -- d exit = %d, stderr %q", code, stderr)
+	}
+	if code, _, _ := runHelper(t, t.TempDir(), packed, "unpack", "--", "d"); code != exitArchiveRefused {
+		t.Fatalf("unpack -- d of a whole-root stream exit = %d, want %d", code, exitArchiveRefused)
+	}
+}
+
+func TestProbeTellsMissingEmptyAndOccupiedApart(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"empty", "zeros"} {
+		if err := os.Mkdir(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "zeros", "z"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "file"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sock, err := net.Listen("unix", filepath.Join(root, "sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sock.Close()
+	for name, want := range map[string]string{
+		"missing": `{"exists":false,"empty":false,"special":false}`,
+		"empty":   `{"exists":true,"empty":true,"special":false}`,
+		"zeros":   `{"exists":true,"empty":false,"special":false}`,
+		"file":    `{"exists":true,"empty":false,"special":false}`,
+		"sock":    `{"exists":true,"empty":false,"special":true}`,
+	} {
+		code, out, stderr := runHelper(t, root, nil, "probe", "--", name)
+		if code != exitOK || strings.TrimSpace(string(out)) != want {
+			t.Errorf("probe %s = %d %q %q, want %s", name, code, out, stderr, want)
+		}
 	}
 }

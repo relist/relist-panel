@@ -1,0 +1,78 @@
+<h2>Source card ในแถบขวาของแท็บ Editor (แทน wizard)</h2>
+<p class="subtitle">ทุก Compose สร้างแบบเดิม. Source เป็น "ของเสริม" — ไม่มี Source = image อย่างเดียวเหมือนวันนี้. Code จะอยู่ใน <code>./src/</code> ของ Compose เสมอ ไม่ว่ามาจาก Git หรือ Zip</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Card — ยังไม่มี Source</div>
+    <div class="mockup-body" style="padding:12px">
+      <div style="display:flex;justify-content:space-between"><b>Source</b></div>
+      <p style="font-size:12px;opacity:.75">ยังไม่มี source code — Services ใช้ image ที่ระบุใน YAML</p>
+      <button class="mock-button">+ Add source</button>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">Card — Git</div>
+    <div class="mockup-body" style="padding:12px;font-size:12px">
+      <div style="display:flex;justify-content:space-between"><b style="font-size:14px">Source</b><a>Configure</a></div>
+      <p>⎇ <b>acme/shop</b> · main <span style="color:green">● connected</span></p>
+      <p>Latest: <code>f00ba12</code> fix checkout · 2h<br>Built: <code>a1b2c3d</code> add cart · 1d <span style="background:#fde68a;padding:0 6px;border-radius:8px">2 new</span></p>
+      <p>Build targets in YAML: <code>api</code> <code>web</code></p>
+      <a>View builds →</a>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">Card — Zip</div>
+    <div class="mockup-body" style="padding:12px;font-size:12px">
+      <div style="display:flex;justify-content:space-between"><b style="font-size:14px">Source</b><a>Configure</a></div>
+      <p>🗜 <b>shop-v1.4.zip</b> · 3.2 MB<br>Uploaded 3h ago · 214 files</p>
+      <p>Built: from this upload · 2h ago</p>
+      <p>Build targets in YAML: <code>api</code> <code>web</code></p>
+      <button class="mock-button">Upload new zip</button> <a>View builds →</a>
+    </div>
+  </div>
+</div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Configure source (modal) — Git</div>
+    <div class="mockup-body" style="padding:12px">
+      <div style="display:inline-flex;border:1px solid #ccc;border-radius:6px;overflow:hidden;margin-bottom:10px"><span style="padding:4px 12px;background:#3b82f6;color:#fff">Git repository</span><span style="padding:4px 12px">Upload zip</span></div>
+      <div class="label">SSH URL</div>
+      <input class="mock-input" value="git@github.com:acme/shop.git" style="width:100%">
+      <div class="label" style="margin-top:8px">Deploy key — เพิ่มที่ repo → Settings → Deploy keys (read-only)</div>
+      <div class="placeholder" style="font-family:monospace;font-size:11px;text-align:left">ssh-ed25519 AAAAC3Nza…k9Q relist-c42</div>
+      <div style="margin-top:6px"><button class="mock-button">Copy</button> <button class="mock-button">Test connection</button> <span style="color:green;font-size:12px">✓</span></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <div style="flex:1"><div class="label">Branch</div><div class="mock-input">main ▾</div></div>
+        <div style="flex:1;padding-top:18px">◯━ Submodules</div>
+      </div>
+      <div style="text-align:right;margin-top:10px"><button class="mock-button">Cancel</button> <button class="mock-button">Save</button></div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">Configure source (modal) — Upload zip</div>
+    <div class="mockup-body" style="padding:12px">
+      <div style="display:inline-flex;border:1px solid #ccc;border-radius:6px;overflow:hidden;margin-bottom:10px"><span style="padding:4px 12px">Git repository</span><span style="padding:4px 12px;background:#3b82f6;color:#fff">Upload zip</span></div>
+      <div class="placeholder" style="padding:30px 10px">⬆ ลาก .zip มาวาง หรือคลิกเลือกไฟล์<br><span style="font-size:11px">สูงสุด 500 MB · ถ้า zip มีโฟลเดอร์ชั้นเดียวครอบ (เช่น shop-main/) จะตัดออกให้</span></div>
+      <p style="font-size:12px">อัปโหลดใหม่ = แทนที่ ./src ทั้งหมด (ไม่ merge)</p>
+      <div style="text-align:right;margin-top:10px"><button class="mock-button">Cancel</button> <button class="mock-button">Upload</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">หลัง Save/Upload ครั้งแรก — เสนอ build blocks ให้ (แทนขั้น 4 ของ wizard)</div>
+  <div class="mockup-body" style="padding:12px;font-size:13px">
+    <b>เจอ Dockerfile 2 ไฟล์ — เพิ่มเป็น Services ใน editor ไหม?</b>
+    <table style="width:100%;font-size:12px;margin-top:6px">
+      <tr style="text-align:left"><th></th><th>Service</th><th>Dockerfile</th><th>Context</th><th>Stage</th><th></th></tr>
+      <tr><td>☑</td><td>api</td><td>api/Dockerfile</td><td>./src/api</td><td>—</td><td style="font-size:11px;opacity:.7">ใหม่</td></tr>
+      <tr><td>☑</td><td>web</td><td>web/Dockerfile</td><td>./src/web</td><td>production</td><td style="font-size:11px;color:#b45309">มี service "web" อยู่แล้ว → แทน image: ด้วย build:</td></tr>
+    </table>
+    <p style="font-size:12px">กด Insert → แก้ <b>draft</b> ใน editor (ยังไม่ save) ให้ดู diff/Preview ก่อน แล้วค่อย Save หรือ Build &amp; Deploy. เปิดหน้านี้ซ้ำได้จาก "Detect Dockerfiles" ใน Configure</p>
+    <div style="text-align:right"><button class="mock-button">Skip</button> <button class="mock-button">Insert into editor</button></div>
+  </div>
+</div>

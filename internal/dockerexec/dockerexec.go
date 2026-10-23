@@ -12,9 +12,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"relist-panel/internal/composes"
 )
@@ -27,35 +30,55 @@ func New() Runner {
 	return Runner{}
 }
 
-// upArgs is the argv for a deploy. --remove-orphans removes containers of
-// services no longer in the compose file; it never touches volumes. run has no
-// injection seam, so the argv is tested through this helper.
-func upArgs() []string {
-	return []string{"up", "-d", "--build", "--remove-orphans"}
+// upArgs is the argv for a deploy. build chooses --build or --no-build (a
+// Source's Services are built beforehand by Build). --remove-orphans removes
+// containers of services no longer in the compose file; it never touches
+// volumes. The argv is tested through this helper.
+func upArgs(build bool) []string {
+	flag := "--no-build"
+	if build {
+		flag = "--build"
+	}
+	return []string{"up", "-d", flag, "--remove-orphans"}
 }
 
-func (Runner) Up(ctx context.Context, req composes.RunRequest) error {
-	_, err := run(ctx, req, upArgs()...)
+// buildArgs is the argv for building one Service with plain progress output.
+// --progress is a global compose flag; Compose v5 rejects it after build.
+func buildArgs(service string, noCache bool) []string {
+	args := []string{"--progress", "plain", "build"}
+	if noCache {
+		args = append(args, "--no-cache")
+	}
+	return append(args, service)
+}
+
+func (Runner) Up(ctx context.Context, req composes.RunRequest, opts composes.UpOptions) error {
+	_, err := run(ctx, req, opts.Out, upArgs(opts.Build)...)
+	return err
+}
+
+func (Runner) Build(ctx context.Context, req composes.RunRequest, opts composes.BuildOptions) error {
+	_, err := run(ctx, req, opts.Out, buildArgs(opts.Service, opts.NoCache)...)
 	return err
 }
 
 func (Runner) Down(ctx context.Context, req composes.RunRequest) error {
-	_, err := run(ctx, req, "down")
+	_, err := run(ctx, req, nil, "down")
 	return err
 }
 
 func (Runner) DownWithVolumes(ctx context.Context, req composes.RunRequest) error {
-	_, err := run(ctx, req, "down", "-v")
+	_, err := run(ctx, req, nil, "down", "-v")
 	return err
 }
 
 func (Runner) Restart(ctx context.Context, req composes.RunRequest) error {
-	_, err := run(ctx, req, "restart")
+	_, err := run(ctx, req, nil, "restart")
 	return err
 }
 
 func (Runner) Status(ctx context.Context, req composes.RunRequest) (composes.ComposeStatus, error) {
-	output, err := run(ctx, req, "ps", "--all", "--format", "json")
+	output, err := run(ctx, req, nil, "ps", "--all", "--format", "json")
 	if err != nil {
 		return composes.ComposeStatus{}, err
 	}
@@ -63,10 +86,49 @@ func (Runner) Status(ctx context.Context, req composes.RunRequest) (composes.Com
 }
 
 func (Runner) Logs(ctx context.Context, req composes.RunRequest) (string, error) {
-	return run(ctx, req, "logs", "--no-color", "--tail=200")
+	return run(ctx, req, nil, "logs", "--no-color", "--tail=200")
 }
 
-func run(ctx context.Context, req composes.RunRequest, args ...string) (string, error) {
+// command builds the docker invocation; tests replace it to run a stand-in.
+var command = func(ctx context.Context, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, "docker", args...)
+}
+
+// waitDelay bounds how long Wait lingers for output pipes after the CLI exits
+// or is killed.
+var waitDelay = 5 * time.Second
+
+// stderrTailSize is how much of stderr an error message keeps when output is
+// streamed to out.
+const stderrTailSize = 4 << 10
+
+// tailWriter keeps the last stderrTailSize bytes written to it.
+type tailWriter struct{ buf []byte }
+
+func (w *tailWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	if len(w.buf) > stderrTailSize {
+		w.buf = append(w.buf[:0], w.buf[len(w.buf)-stderrTailSize:]...)
+	}
+	return len(p), nil
+}
+
+// lockedWriter serializes writes to w.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+// run executes `docker compose` for req. With out set, stdout and stderr both
+// stream to it and the error carries the last 4 KiB of stderr; with out nil the
+// output is captured and stdout returned.
+func run(ctx context.Context, req composes.RunRequest, out io.Writer, args ...string) (string, error) {
 	fullArgs := append([]string{
 		"compose",
 		"-p", req.ProjectName,
@@ -74,12 +136,28 @@ func run(ctx context.Context, req composes.RunRequest, args ...string) (string, 
 		"--env-file", req.EnvFilePath,
 	}, args...)
 
-	cmd := exec.CommandContext(ctx, "docker", fullArgs...)
+	cmd := command(ctx, fullArgs...)
+	// A killed docker CLI can leave a grandchild holding the output pipes;
+	// without a WaitDelay, Wait would block on them and hang Cancel and Delete.
+	cmd.WaitDelay = waitDelay
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	tail := &tailWriter{}
+	if out != nil {
+		// exec copies stdout and stderr on separate goroutines; serialize
+		// their writes so out need not be safe for concurrent use.
+		shared := &lockedWriter{w: out}
+		cmd.Stdout = shared
+		cmd.Stderr = io.MultiWriter(shared, tail)
+	} else {
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+	}
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("docker %s: %w: %s", strings.Join(fullArgs, " "), err, strings.TrimSpace(stderr.String()))
+		detail := stderr.String()
+		if out != nil {
+			detail = string(tail.buf)
+		}
+		return "", fmt.Errorf("docker %s: %w: %s", strings.Join(fullArgs, " "), err, strings.TrimSpace(detail))
 	}
 	return stdout.String(), nil
 }

@@ -19,7 +19,7 @@ export function RedeployBanner({ compose, deploying, onDeploy }: { compose: Comp
     <Alert
       action={
         <Button icon={<RocketOutlined />} loading={deploying} onClick={onDeploy} size="small" type="primary">
-          Deploy
+          Deploy now
         </Button>
       }
       title={notice}

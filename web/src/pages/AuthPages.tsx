@@ -5,8 +5,9 @@ import { Navigate, useLocation, useNavigate } from 'react-router';
 
 import { entryScreen, signInTarget } from '../app/entry';
 import { paths } from '../app/paths';
-import { CenteredScreen } from '../app/RequireAuth';
+import { CenteredScreen } from '../app/CenteredScreen';
 import type { LoginResult } from '../data/api';
+import { migrationCommand } from '../data/migration';
 import { usePanel } from '../data/store';
 import { backToPassword, nextStep, rateLimitMessage } from './signin-view';
 import type { SignInStep } from './signin-view';
@@ -363,6 +364,12 @@ export function SetupPage() {
               Create admin account
             </Button>
           </Form>
+          <Paragraph style={{ marginBottom: 0, marginTop: 16 }} type="secondary">
+            Moving a panel here? Don&apos;t create an admin. Run this on this server instead:{' '}
+            <Text code copyable>
+              {migrationCommand('pull')}
+            </Text>
+          </Paragraph>
         </>
       ) : (
         <Result

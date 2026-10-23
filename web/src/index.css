@@ -51,3 +51,20 @@ body {
 .rp-logs > div:hover {
   background: rgba(0, 0, 0, 0.03);
 }
+
+/* The host history's two calendars need a viewport rather than input alignment
+ * on phones. Keep both months available without clipping the earlier month. */
+@media (max-width: 575px) {
+  .rp-deployments-date-popup {
+    position: fixed !important;
+    top: var(--ant-padding-xs, 8px) !important;
+    left: var(--ant-padding-xs, 8px) !important;
+    max-width: calc(100vw - 2 * var(--ant-padding-xs, 8px));
+    max-height: calc(100dvh - 2 * var(--ant-padding-xs, 8px));
+    overflow-y: auto;
+  }
+
+  .rp-deployments-date-popup .ant-picker-panels {
+    flex-direction: column;
+  }
+}

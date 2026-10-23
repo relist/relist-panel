@@ -260,6 +260,11 @@ has deployed before and `domainsChangedAt >= lastDeployedAt`. Above the tabs, a 
 - **Activity**: this Compose's recent actions.
 - **Logs tab** (read on open, not a drawer): service filter, line count, copy; `Follow` is visible but disabled, with a tooltip
   explaining that streaming is out of v1 scope.
+- **Deploy with fresh volumes**: the typed-name confirmation displays a warning
+  that named volume data is permanently deleted before deployment and is not
+  restored if deployment fails. It directs the operator to back up first. A
+  failed Deployment retains a warning in its log Drawer when the backend confirms
+  named volumes were actually removed; the option alone is not evidence of removal.
 
 #### Monitor tab (`…/compose/:composeId/monitor`)
 
@@ -346,7 +351,17 @@ Split layout: what the panel is on the left (in `colorPrimaryBg`), the form on t
 two-step flow (Account → Ready) ending in a `Result` with the Project → Environment → Compose
 mental model restated. When the account has two-factor on, sign-in asks for the code as a second
 step: an autofocused six-digit `Input.OTP` replaces the password form, a complete code submits, and
-**Back** returns to the password step and clears it.
+**Back** returns to the password step and clears it. Under the setup form, a secondary line tells an
+operator moving a panel here not to create an admin and names
+`docker compose exec panel relist-panel migration pull` as copyable code: a server Migration is
+started from a terminal only (ADR-0019).
+
+**Migration lock.** While an old host is locked for a Migration, a signed-in admin sees one centred
+card instead of the app. Locked, it shows *This server is being migrated*, who is copying it, and the
+lock's steps as vertical `Steps`; Migrated, a success `Result` titled *Migrated to* the target (a link
+only when it is `http(s)://`) with when, and what is left to do. It has no action buttons: it names
+`docker compose exec panel relist-panel migration resume` as copyable code with what resuming does,
+and leaves by itself once the lock is lifted.
 
 ### 4.9 Design system (`#/design/flow`, `#/design/board`, `#/design/map`, `#/design/guidelines`, `#/design/states`)
 
@@ -383,8 +398,11 @@ for "does every state have a way in?", in the only terms the registry can honest
 
 ### 4.10 Account (`/account`)
 
-The single admin account, reached from the header's account dropdown. One `PageHeader` over two
-cards: *Sign-in* shows the email read-only, and *Two-factor authentication* carries an `On`/`Off`
+The single admin account, reached from the header's account dropdown. One `PageHeader` over three
+cards: *Sign-in* shows the email read-only; *Password* has a default **Change password** button
+opening a modal (current password, the new one twice, and a code when two-factor is on), with a
+warning while the password is still the one in `RELIST_ADMIN_PASSWORD`, which the app shell also
+flags in a banner; and *Two-factor authentication* carries an `On`/`Off`
 tag, the action button, and a permanent note with the `reset-2fa` command for a lost authenticator.
 Turning on is a three-step modal (Password → Scan → Verify): the QR code comes from the setup URI
 with the secret copyable beside it for manual entry, and a complete six-digit code confirms it.
@@ -403,6 +421,57 @@ client refuses a wrong extension or a file over 10 GiB before sending. The list 
 (every tag copyable, `<none>` when untagged), ID (12 hex characters), Size, Created (relative, absolute
 in a tooltip) and In use; a search box filters by tag, and the rows of the last load are highlighted.
 Uploads can run for up to one hour through Traefik; a longer one needs the direct-port fallback.
+
+### 4.12 Deployments (`/deployments`)
+
+Host-wide deployment activity, available below Projects in the side menu. Its badge
+counts queued Deployments; the running Deployment is shown in the page's Queue.
+
+- **Queue** remains unfiltered: running first, followed by all waiting Deployments
+  in FIFO order, with their Project / Environment / Compose and current step.
+- **History** queries all retained Deployments, newest queued time first, with
+  Project, Environment, Compose, status and date filters and server pagination.
+  Clearing a parent filter clears its dependent children and starts at page 1.
+- Numbers belong to a Compose, so every row includes its context; `#1` alone does
+  not identify a Deployment across the host.
+- **View logs** opens the same right Drawer as the Compose tab. It follows the
+  selected Deployment's steps, status and log, supports Cancel, and stops reading
+  when closed or when leaving the page. Text stays within the available width.
+- The page states the existing retention policy: the latest 20 Deployments per
+  Compose. Deleted Composes and pruned records are not presented as available.
+- Queue errors and History errors each offer Retry. Filters affect History only;
+  no queue items disappear when an operator narrows the History.
+
+### 4.13 Docker (`/docker`)
+
+Host-level Docker reports and explicit cleanup. Purpose: inspect Docker storage and
+remove eligible resources without opening a terminal.
+
+- Keep Images at `/images`; Docker links to it with **Manage images**.
+- Header offers **Refresh**; show Engine/API versions, host, storage driver/data directory,
+  running/paused/stopped counts and the report's checked time.
+- A storage table lists images, writable container layers, volumes, default-builder cache
+  and networks. Sizes may overlap; reclaimable values are estimates. An unknown size or
+  reference count is **Unavailable**, never zero. Volume estimates include named volumes.
+- Inventories use Containers / Volumes / Networks tabs with pagination and table-local
+  horizontal scrolling. Long names and paths wrap; they never expand the page.
+- Cleanup buttons identify their scope: dangling images, stopped containers, unused custom
+  networks, default-builder cache, anonymous volumes. **Advanced cleanup** contains all
+  unused images (including tags) and all unused volumes (including names).
+- Use `DangerModal` with `PRUNE`, or `DELETE VOLUMES` for volumes. State that cleanup affects
+  the whole host, including resources outside Relist. Volume confirmations say deletion is
+  permanent and a later failed deployment cannot restore data.
+- Pruning is disabled while queue work, a mutation, unavailable queue/report data, a report
+  refresh, or stale data is present. Backend independently excludes conflicting operations.
+- Keep mutation errors and actual reclaimed bytes on screen. Refresh after either outcome;
+  refresh failure keeps prior data labelled and disables further pruning. Never automatically
+  retry a destructive request.
+- Unknown prune completion pauses panel Docker work. Show **Resume Docker operations** with
+  a typed `RESUME DOCKER` confirmation requiring the operator to verify daemon deletion has
+  finished. This is an acknowledgement, not a cancellation or daemon completion probe.
+- A *Server migration* card closes the page. It explains a server Migration and names the two
+  commands as copyable code, `… relist-panel migration serve` on this server and
+  `… relist-panel migration pull` on the new one. It calls no API and offers no token (ADR-0019).
 
 ## 5. Status vocabulary
 
@@ -425,6 +494,14 @@ One vocabulary, everywhere a Compose state appears. Derived entirely from the AP
 
 - Two bars: 56px header (`Layout.headerHeight`) and a 248px sider. Content is a 24px-padded,
   1280px-max column.
+- The sider stays at viewport height; navigation scrolls independently so its
+  Docker host footer remains visible. The footer warns at **80% or more** used on
+  the filesystem containing Panel/SQLite data, shows percentage and free space,
+  and links to Monitoring. It refreshes every 10 seconds while signed in. Missing
+  readings are unavailable; readings older than 30 seconds or from a failed
+  refresh are labelled stale, with the last reading identified explicitly.
+  Below the `lg` breakpoint navigation opens as an overlay, preserving the page
+  width; its trigger, backdrop or a navigation selection can close it.
 - The header's right cluster (search / refresh / theme / account) is pushed out by
   `marginInlineStart: 'auto'`, not by `justify="space-between"` alone. The breadcrumb is hidden on
   routes with a single crumb, and the cluster would then be that Flex's only child — which

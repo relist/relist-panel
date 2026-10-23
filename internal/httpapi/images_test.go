@@ -8,12 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"relist-panel/internal/volumes"
 	"strings"
 	"testing"
 	"time"
 
-	"relist-panel/internal/httpapi"
 	"relist-panel/internal/images"
 )
 
@@ -210,7 +208,7 @@ func TestImagesRoutesRequireAuth(t *testing.T) {
 
 func TestImagesRoutesAbsentWithoutStore(t *testing.T) {
 	server := newTestServer(t)
-	server.handler = httpapi.NewHandler(server.db, server.runner, server.dataDir, nil, nil, server.volumeRunner, volumes.NewResolver(server.volumeCLI, server.dataDir), nil, nil)
+	server.useRunner(t, server.runner)
 	setupAndLogin(t, server)
 	response := server.request(t, http.MethodGet, "/api/images", nil)
 	defer response.Body.Close()

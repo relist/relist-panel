@@ -68,6 +68,14 @@ Override the defaults via environment variables (or a `.env` file next to
   as required, but an empty value registers an account anyway (ADR-0013). Set
   it so Let's Encrypt can reach you about expiring certificates and so you can
   recover the account, and in case a later Traefik enforces it
+- `RELIST_ADMIN_EMAIL` and `RELIST_ADMIN_PASSWORD` (unset by default;
+  recommended) — create the admin account at boot, so the setup screen is
+  never open to whoever reaches a fresh panel first. They are used only while
+  no admin exists, and an invalid or half-set pair stops the panel from
+  starting. The password stays readable in `.env` and `docker inspect`:
+  change it in **Account** after the first sign-in, then remove both. A panel
+  with only this admin can still take a Migration; the old host's admin
+  replaces it
 - `RELIST_IMAGE` (unset by default) — the panel image that Volume file
   operations run from; set it only when the panel cannot name its own image
   (`docker inspect $(hostname)` fails, e.g. a custom `hostname:` on the panel
@@ -146,14 +154,86 @@ Domain, no Traefik labels and no `relist-network` in its YAML leaves the shared
 network. If another Compose calls it, add `relist-network` to that Service's
 `networks:` and switch the caller to its alias.
 
+## Moving to a new server
+
+A **Migration** moves everything this panel manages to an empty panel on
+another host (ADR-0018): the database (admin account, Two-factor, Projects,
+Environments, Composes, Variables, Domains, Deploy keys and Deployment
+history), the whole data directory with Traefik's certificates, every named
+Volume, the host paths you pick and every Image the Composes need. The new
+panel pulls it over HTTPS, item by item; no SSH and no archive file are
+involved.
+
+Drive it from a terminal on each host (ADR-0019), in the install directory:
+
+```bash
+# on the old server
+docker compose exec panel relist-panel migration serve
+# on the new server
+docker compose exec panel relist-panel migration pull
+```
+
+This is the only way to migrate: the web has no route that creates a token
+or starts a pull, so a stolen web session cannot copy the server. The
+terminal follows every step to the end, including the panel restarting to
+swap in the migrated database. Quitting either one does not stop the
+migration: run the command again to see where it is.
+`relist-panel migration status` prints the same without a terminal UI
+(`--watch` to follow it), and `relist-panel migration resume` is the old
+server's Resume.
+
+1. On the new host, install the panel with the **same `RELIST_DATA_DIR`** as
+   the old one. Containers mount the data directory by absolute path, so the
+   migration refuses a different one. Copy the old install's `.env` too:
+   `RELIST_DOMAIN`, `RELIST_ACME_EMAIL` and the Traefik ports live there, not
+   in the data directory.
+2. On the old host, run `migration serve` and create a migration token
+   (1 hour, 24 hours or 7 days). It is shown once.
+3. On the new host, run `migration pull`. Enter the old panel's `https://`
+   URL, the token and the new panel's own URL, which the old panel shows as
+   where it moved. Don't create an admin on the new panel first; one set by
+   `RELIST_ADMIN_EMAIL` is fine, and the old host's admin replaces it.
+4. Check the preview: sizes, which Images are pulled and which are copied,
+   the host paths to include (system paths such as `/etc/localtime` and the
+   Docker socket are unticked) and every warning. Start stays disabled while a
+   check blocks, such as a full disk or a Volume that already exists.
+5. **Start migration.** The old panel locks: queued Deployments are canceled,
+   a running one finishes, every Compose stops, and its panel-managed Domains
+   show a maintenance page. Apps are down from here until DNS moves.
+6. The new panel copies each item, retrying a failed one on its own, then
+   re-executes itself in place (the container keeps running), starts Traefik with the old certificates and deploys the
+   Composes that were running. Sign in with the old admin account.
+7. Point DNS at the new host, then turn the old one off.
+
+The old panel stays locked as **Migrated** and refuses every change, including
+after a restart; its web page only shows where it went. `relist-panel
+migration resume` on it (type `RESUME`) starts its Composes again, which is
+also how to cancel a migration or fall back to the old host.
+Data written on the new host after the migration is not on the old one.
+
+Not moved: the install's `.env`, Volumes with a driver other than `local` or
+with driver options, and host paths you leave unticked. Domains routed by
+hand-written Traefik labels get no maintenance page; they answer with
+Traefik's error until DNS moves.
+
+Traefik's certificates move with `acme.json`. If `RELIST_ACME_EMAIL` is empty, the
+probe saw Traefik on the new host register a new Let's Encrypt account even though the
+copied file arrived intact; the certificates still came across. Set the email so the
+account stays the same.
+
+`task probe:migration` runs a whole migration between two `docker:dind` hosts
+with real Docker. It needs privileged containers and about 12 GB of disk.
+
 ## Volume files
 
 Each Compose page has a **Volumes** tab listing the Volumes that Compose
 mounts, with a **Volume Explorer** behind each one for browsing, editing,
 uploading, deleting, and downloading or restoring a tar.gz.
 
-Deploy runs `docker compose up -d --build --remove-orphans`, so the containers of
-Services you removed from the YAML are removed with the next deploy. Volumes are
+Deploy runs `docker compose up -d --remove-orphans`, with `--build` for a Compose
+without a Source and `--no-build` for one with a Source, whose images are built
+first (see "Building from a Source"). Either way, the containers of Services you
+removed from the YAML are removed with the next deploy. Volumes are
 left alone. The Compose page also offers **Deploy with fresh volumes**, which
 removes the Compose's named volumes (`down -v`) before redeploying, and the
 Volumes tab lists **orphan volumes** — named volumes Compose created for this
@@ -189,3 +269,93 @@ down its child stacks before removing their records.
 Before a Volume operation, select its mounting Service or a numeric uid:gid
 override. UID 0 and unverifiable bind paths require separate acknowledgements,
 including downloads started directly from the Volumes tab.
+
+## Building from a Source
+
+A Compose can build its own images from code in a Git repository or from an
+uploaded zip. The code lives in the Compose's `src/` directory, and the YAML
+refers to it with Compose's standard `build:` key. Paths are relative to the
+Compose directory, so `./src/api` is the `api` folder of the Source:
+
+```yaml
+services:
+  api:
+    build:
+      context: ./src/api
+      dockerfile: Dockerfile
+      target: production   # optional build stage
+```
+
+The panel never injects `build:` or `image:` into the YAML, so the file still
+runs outside the panel. A wrong path fails the build with Docker's own error in
+the Deployment log.
+
+A hand-written `env_file: .env` on a Compose that has never been deployed fails
+its first build, because `.env` does not exist yet (the panel writes `.env`
+itself on deploy). Leave `env_file` out and use Variables instead.
+
+### Git over SSH
+
+Each Compose has its own SSH deploy key, generated by the panel the first time
+you configure a Git Source. The Source card, on the Editor tab below the
+Environment card, is titled `owner/repo · branch`.
+
+1. Enter the repository's SSH URL: `git@host:owner/repo.git` or
+   `ssh://git@host[:port]/owner/repo.git`.
+2. Add the Compose's public key to the repository as a read-only deploy key.
+   Each Compose needs its own key, because Git hosts refuse one key on two
+   repositories.
+3. Test the connection, pick a branch, then Detect the Dockerfiles and Insert
+   the matching `build:` entries into the editor. Save, then Build & Deploy.
+
+The first connection trusts the host key it sees and stores it for that
+Compose. If the host key later changes, the fetch fails; **Reset host key**
+clears the stored key so the next fetch trusts the new one. **Regenerate key**
+replaces the pair at once, so remove the old key from the Git host.
+
+### Zip uploads
+
+Upload a zip instead of configuring Git when you do not want a deploy key. A
+GitHub "Download ZIP" works as is: when every entry sits under one top-level
+directory, that directory is stripped. An archive may hold up to 500 MiB
+compressed, 10,000 entries and 4 GiB uncompressed. Symlinks are kept only when
+they are relative and stay inside `src/`.
+
+An upload replaces the code and never merges with it. A failed upload leaves
+the previous code in place. An upload does not deploy, so the card shows
+"Not built yet" until you Build & Deploy.
+
+### Deployments
+
+Build & Deploy queues a Deployment and returns at once. The page follows its
+log until the Deployment ends. A Deployment fetches the Source (Git only),
+builds each Service that has `build:` one at a time in YAML order, then takes
+the Project's lock and runs `docker compose up`. A failed build stops the
+Deployment with status `failed` at `build:<service>`, and the containers that
+were running stay up. Each Deployment's log is kept at
+`<compose dir>/.deployments/<n>.log`.
+
+Deployments run one at a time on the host, shared by every Compose, so a long
+build delays the deploy of another Compose. A Compose has at most one queued
+Deployment; pressing Build & Deploy again returns the queued one.
+
+Each build leaves its previous image as a dangling image. Run
+`docker image prune` to remove them.
+
+### Build args and secrets
+
+`build.args` can interpolate `${VAR}` from the Environment and Compose
+Variables. An arg's value stays visible in the image's history, so keep tokens
+out of args and pass them as build secrets. A secret is a Compose Variable
+flagged secret:
+
+```yaml
+services:
+  api:
+    build:
+      context: ./src/api
+      secrets: [npm_token]     # Dockerfile: RUN --mount=type=secret,id=npm_token ...
+secrets:
+  npm_token:
+    environment: NPM_TOKEN     # a Compose Variable, flagged secret
+```

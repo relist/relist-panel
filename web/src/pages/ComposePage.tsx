@@ -6,6 +6,7 @@ import {
   EyeOutlined,
   FileTextOutlined,
   FullscreenOutlined,
+  LoadingOutlined,
   MoreOutlined,
   ReloadOutlined,
   RedoOutlined,
@@ -44,12 +45,15 @@ import { useNavigate, useParams } from 'react-router';
 
 import { paths } from '../app/paths';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
+import { ComposeDeploymentsTab } from '../components/ComposeDeploymentsTab';
 import { ComposeDomainsTab } from '../components/ComposeDomainsTab';
 import { ComposePreviewModal } from '../components/ComposePreviewModal';
+import { BuildSnippetsModal, snippetComment } from '../components/BuildSnippetsModal';
 import { ComposeTerminalTab } from '../components/ComposeTerminalTab';
 import { ComposeVariablesTab } from '../components/ComposeVariablesTab';
 import { ComposeVolumesTab } from '../components/ComposeVolumesTab';
 import { DangerModal } from '../components/DangerModal';
+import { DetectDockerfilesModal } from '../components/DetectDockerfilesModal';
 import { FullscreenEditor } from '../components/FullscreenEditor';
 import {
   CodeValue,
@@ -61,13 +65,20 @@ import {
   ServiceStateTag,
 } from '../components/primitives';
 import { ServiceMonitor } from '../components/ServiceMonitor';
+import { SourceCard } from '../components/SourceCard';
+import { SourceModal } from '../components/SourceModal';
 import { YamlEditor } from '../components/YamlEditor';
-import { ApiError } from '../data/api';
+import { ApiError, api } from '../data/api';
+import { insertBuildBlocks } from '../data/build-insert';
+import { yamlServices } from '../data/source-view';
+import { deploymentButtonLabel, isActive } from '../data/deployments-view';
 import { usePanel } from '../data/store';
-import type { ComposeVariable, ComposeVolumes, OrphanVolume } from '../data/types';
+import type { BuildTarget, ComposeVariable, DetectedDockerfile, ComposeVolumes, DeploymentRequest, OrphanVolume } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
 import { effectiveVariableCount } from '../components/variables-view';
 import { activeComposeTab, composeDeployIdentity, internalHostnamePattern, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
+import { useComposeSource } from './useComposeSource';
+import { useDeploymentHistory } from './useDeploymentHistory';
 
 const { Text, Paragraph, Title } = Typography;
 
@@ -97,7 +108,6 @@ export function ComposePage() {
     deleteCompose,
     deleteOrphanVolume,
     deployCompose,
-    deployComposeFresh,
     isPending,
     loadLogs,
     loadOrphanVolumes,
@@ -138,10 +148,50 @@ export function ComposePage() {
   // Action failures stay on this screen as an Alert (GUIDELINES §8) — the
   // control that retries them is right there.
   const [actionError, setActionError] = useState<string>();
-  // The deploy whose warnings were closed, by its lastDeployedAt: a newer deploy shows its own.
-  const [dismissedWarnings, setDismissedWarnings] = useState<string | null>();
   const fail = (reason: unknown) =>
     setActionError(reason instanceof Error ? reason.message : 'Something went wrong');
+
+  // The Source decides what the header button does (Build & Deploy or Deploy).
+  // Loading and failed are not "none": deploying then would pick the wrong mode,
+  // so the deploy actions wait for a successful load.
+  const sourceProjectId = project?.id;
+  const sourceEnvironmentId = environment?.id;
+  const { source: currentSource, state: sourceState, error: sourceError, refresh: refreshSource } = useComposeSource(
+    sourceProjectId !== undefined && sourceEnvironmentId !== undefined
+      ? { composeId, environmentId: sourceEnvironmentId, projectId: sourceProjectId }
+      : undefined,
+    (text) => { void message.error(`Could not load the Source: ${text}`); },
+  );
+  const sourceReady = sourceState === 'none' || sourceState === 'present';
+  const hasSource = sourceState === 'present';
+  const [sourceModal, setSourceModal] = useState<{ mode?: 'git' | 'zip' }>();
+  const [detected, setDetected] = useState<DetectedDockerfile[]>();
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
+  useEffect(() => {
+    setSourceModal(undefined);
+    setDetected(undefined);
+    setSnippetsOpen(false);
+  }, [composeId]);
+
+  // The Deployments tab shows `selectedDeployment`, or the newest when unset.
+  const [selectedDeployment, setSelectedDeployment] = useState<number>();
+  useEffect(() => {
+    setSelectedDeployment(undefined);
+  }, [composeId]);
+  // The one poll of this Compose's Deployments: the header button and the tab
+  // both read it, and it runs the post-deploy refresh when one finishes. The
+  // callback is read at fire time, so it may close over later declarations.
+  const {
+    history: deploymentHistory,
+    latest: latestDeployment,
+    refresh: refreshLatestDeployment,
+    running: runningDeployment,
+  } = useDeploymentHistory(
+    sourceProjectId !== undefined && sourceEnvironmentId !== undefined
+      ? { composeId, environmentId: sourceEnvironmentId, projectId: sourceProjectId }
+      : undefined,
+    () => onDeploymentFinished(),
+  );
 
   // The Volumes tab's resolution is fetched once here: the tab is hidden when
   // the feature cannot run at all (`available: false`), and that is a
@@ -357,6 +407,30 @@ export function ComposePage() {
   const deployIdentity = composeDeployIdentity(compose);
   const checked = checkedAt[compose.id];
 
+  const sourcePath = { composeId: compose.id, environmentId: environment.id, projectId: project.id };
+  const lastBuilt = deploymentHistory?.find((d) => d.status === 'succeeded' && d.sourceRef !== '');
+
+  const openDetect = () => {
+    api
+      .detectDockerfiles(sourcePath)
+      .then(setDetected)
+      .catch(fail);
+  };
+
+  const insertTargets = (targets: BuildTarget[]) => {
+    try {
+      setDraft(insertBuildBlocks(draft, targets));
+      setDetected(undefined);
+    } catch {
+      message.error('Fix the YAML in the editor before inserting build blocks');
+    }
+  };
+
+  const insertSnippet = (snippet: 'args' | 'secrets') => {
+    setDraft(`${draft.trimEnd()}\n\n${snippetComment(snippet)}\n`);
+    setSnippetsOpen(false);
+  };
+
   const save = async () => {
     try {
       await saveCompose(compose.id, draft);
@@ -375,9 +449,18 @@ export function ComposePage() {
     void fetchOrphans();
   };
 
-  // `fresh` removes the Compose's named volumes before the same deploy; the
-  // save-first steps are identical, so unsaved YAML is what gets deployed.
-  const runDeploy = async (fresh: boolean) => {
+  // Queues a Deployment, then shows it on the Deployments tab. `fresh` removes
+  // the Compose's named volumes first; the save-first steps are identical, so
+  // unsaved YAML is what gets deployed. With a Source the default is a build.
+  const runDeploy = async (options: { fresh?: boolean; mode?: DeploymentRequest['mode']; noCache?: boolean } = {}) => {
+    const { fresh = false, noCache } = options;
+    if (!sourceReady) {
+      message.warning(
+        sourceState === 'failed' ? 'The Source could not be loaded — retry loading it first' : 'Still loading the Source — try again in a moment',
+      );
+      return;
+    }
+    const mode = options.mode ?? (hasSource ? 'build' : 'deploy');
     if (fresh) {
       if (freshRunningRef.current) {
         return;
@@ -389,21 +472,21 @@ export function ComposePage() {
       for (const step of deploySteps(dirty)) {
         if (step === 'save') {
           await saveCompose(compose.id, draft);
-        } else if (fresh) {
-          await deployComposeFresh(compose.id);
         } else {
-          await deployCompose(compose.id);
+          const request: DeploymentRequest = fresh
+            ? { confirmName: compose.name, freshVolumes: true, mode }
+            : noCache
+              ? { mode, noCache: true }
+              : { mode };
+          const number = await deployCompose(compose.id, request);
+          message.info(`Deployment #${number} queued`);
+          setSelectedDeployment(number);
+          refreshLatestDeployment();
+          navigate(paths.compose(project.id, environment.id, compose.id, 'deployments'));
         }
       }
-      message.success(fresh ? `Deployed ${compose.name} with fresh volumes` : `Deployed ${compose.name}`);
-      refreshAfterDeploy();
     } catch (reason: unknown) {
       fail(reason);
-      // A fresh deploy that failed after the wipe has already removed the
-      // volumes (the API says so), so the page follows the host.
-      if (fresh) {
-        refreshAfterDeploy();
-      }
     } finally {
       if (fresh) {
         freshRunningRef.current = false;
@@ -412,7 +495,14 @@ export function ComposePage() {
       }
     }
   };
-  const deploy = () => runDeploy(false);
+  const deploy = () => runDeploy();
+
+  // The shown Deployment ended: the containers, the env file and the deploy
+  // time may all have changed.
+  const onDeploymentFinished = () => {
+    refreshAfterDeploy();
+    refreshStatus(compose.id).catch(fail);
+  };
 
   // Rejections go to the delete dialog, which shows the message itself (an
   // Alert behind the modal mask would be invisible). A 404 means the list was
@@ -460,6 +550,22 @@ export function ComposePage() {
   // and says why (GUIDELINES §9).
   const { volumes: freshVolumes, refusal: freshRefusal } = freshDeployView(volumesPayload, volumesError);
   const deployMenu: MenuProps['items'] = [
+    ...(hasSource
+      ? [
+          {
+            icon: <RocketOutlined />,
+            key: 'skip-build',
+            label: 'Deploy without building',
+            onClick: () => void runDeploy({ mode: 'skip-build' }),
+          },
+          {
+            icon: <RedoOutlined />,
+            key: 'no-cache',
+            label: 'Build without cache',
+            onClick: () => void runDeploy({ mode: 'build', noCache: true }),
+          },
+        ]
+      : []),
     {
       disabled: freshRefusal !== undefined,
       icon: <DeleteOutlined />,
@@ -528,16 +634,27 @@ export function ComposePage() {
               Save
             </Button>
             <Space.Compact>
-              <Button
-                icon={<RocketOutlined />}
-                loading={isPending(`deploy:${compose.id}`)}
-                onClick={() => void deploy()}
-                type="primary"
-              >
-                {dirty ? 'Save & Deploy' : 'Deploy'}
-              </Button>
+              {latestDeployment && isActive(latestDeployment) ? (
+                <Button
+                  icon={<LoadingOutlined />}
+                  onClick={() => navigate(paths.compose(project.id, environment.id, compose.id, 'deployments'))}
+                  type="primary"
+                >
+                  {deploymentButtonLabel(latestDeployment, runningDeployment)}
+                </Button>
+              ) : (
+                <Button
+                  icon={<RocketOutlined />}
+                  disabled={!sourceReady}
+                  loading={isPending(`deploy:${compose.id}`)}
+                  onClick={() => void deploy()}
+                  type="primary"
+                >
+                  {hasSource ? 'Build & Deploy' : dirty ? 'Save & Deploy' : 'Deploy'}
+                </Button>
+              )}
               <Dropdown menu={{ items: deployMenu }} placement="bottomRight" trigger={['click']}>
-                <Button aria-label="More deploy options" icon={<DownOutlined />} type="primary" />
+                <Button aria-label="More deploy options" disabled={!sourceReady} icon={<DownOutlined />} type="primary" />
               </Dropdown>
             </Space.Compact>
           </>
@@ -565,17 +682,14 @@ export function ComposePage() {
         />
       )}
 
-      {compose.warnings && compose.warnings.length > 0 && dismissedWarnings !== compose.lastDeployedAt && (
+      {sourceState === 'failed' && (
         <Alert
-          closable={{ onClose: () => setDismissedWarnings(compose.lastDeployedAt ?? null) }}
-          description={
-            <ul style={{ margin: 0, paddingLeft: 20 }}>
-              {compose.warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
+          action={
+            <Button onClick={refreshSource} size="small">
+              Retry
+            </Button>
           }
-          title="The last deploy produced warnings"
+          title={`The Source could not be loaded: ${sourceError ?? ''}. Deploying is disabled until it loads.`}
           showIcon
           style={{ marginBottom: LAYOUT.gutterSmall }}
           type="warning"
@@ -732,6 +846,7 @@ export function ComposePage() {
                           styles={{ image: { height: 40 } }}
                         >
                           <Button
+                            disabled={!sourceReady}
                             icon={<RocketOutlined />}
                             loading={isPending(`deploy:${compose.id}`)}
                             onClick={() => void deploy()}
@@ -833,6 +948,16 @@ export function ComposePage() {
                         size="small"
                       />
                     </Card>
+
+                    <SourceCard
+                      draft={draft}
+                      lastBuilt={lastBuilt}
+                      onConfigure={() => setSourceModal({})}
+                      onShowSnippets={() => setSnippetsOpen(true)}
+                      onUploadNew={() => setSourceModal({ mode: 'zip' })}
+                      onViewDeployments={() => navigate(paths.compose(project.id, environment.id, compose.id, 'deployments'))}
+                      source={currentSource}
+                    />
                   </Flex>
                 </Col>
               </Row>
@@ -866,6 +991,21 @@ export function ComposePage() {
             ),
             key: 'domains',
             label: 'Domains',
+          },
+          {
+            children: (
+              <ComposeDeploymentsTab
+                active={activeTab === 'deployments'}
+                compose={compose}
+                history={deploymentHistory}
+                location={{ composeId: compose.id, environmentId: environment.id, projectId: project.id }}
+                onSelect={setSelectedDeployment}
+                running={runningDeployment}
+                selected={selectedDeployment}
+              />
+            ),
+            key: 'deployments',
+            label: 'Deployments',
           },
           {
             children: (
@@ -1029,6 +1169,31 @@ export function ComposePage() {
         }
       />
 
+      <SourceModal
+        initialMode={sourceModal?.mode}
+        location={sourcePath}
+        onClose={() => setSourceModal(undefined)}
+        onChanged={refreshSource}
+        onRemoved={refreshSource}
+        onSaved={(_saved, firstTime) => {
+          refreshSource();
+          if (firstTime) {
+            openDetect();
+          }
+        }}
+        open={sourceModal !== undefined}
+        source={currentSource}
+      />
+      <DetectDockerfilesModal
+        existingServices={yamlServices(draft)}
+        items={detected ?? []}
+        onClose={() => setDetected(undefined)}
+        onInsert={insertTargets}
+        onShowSnippets={() => setSnippetsOpen(true)}
+        open={detected !== undefined}
+      />
+      <BuildSnippetsModal onClose={() => setSnippetsOpen(false)} onInsert={insertSnippet} open={snippetsOpen} />
+
       <ComposePreviewModal
         composeId={compose.id}
         dirty={dirty}
@@ -1055,6 +1220,13 @@ export function ComposePage() {
         confirmWord={compose.name}
         consequences={
           <>
+            <Alert
+              showIcon
+              type="warning"
+              title="Named volume data is permanently deleted before deployment."
+              description="If deployment fails, the deleted data is not restored. Back up the volumes before continuing."
+              style={{ marginBottom: LAYOUT.gutterSmall }}
+            />
             {freshVolumes.length > 0 ? (
               <>
                 <Paragraph style={{ marginBottom: 8 }}>
@@ -1086,7 +1258,7 @@ export function ComposePage() {
         loading={freshRunning || isPending(`deploy:${compose.id}`)}
         okText="Deploy with fresh volumes"
         onCancel={() => setFreshOpen(false)}
-        onConfirm={() => void runDeploy(true)}
+        onConfirm={() => void runDeploy({ fresh: true })}
         open={freshOpen}
         title="Deploy with fresh volumes?"
       />

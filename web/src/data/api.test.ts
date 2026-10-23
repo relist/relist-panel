@@ -209,19 +209,69 @@ describe('domain errors', () => {
   });
 });
 
-describe('fresh deploy and orphan volumes', () => {
+describe('deployments, sources and orphan volumes', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('POSTs the confirmation name to deploy-fresh as JSON', async () => {
-    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{}', { status: 200 }));
+  it('requests paginated global history with encoded filters and omits unset values', async () => {
+    const page = { items: [], total: 0, page: 2, pageSize: 50 };
+    const fetch = vi.fn(async (_url: string) => new Response(JSON.stringify(page)));
+    vi.stubGlobal('fetch', fetch);
+    await expect(api.listGlobalDeployments({ page: 2, pageSize: 50, projectId: 5, status: 'failed', from: '2026-10-13T00:00:00+07:00' })).resolves.toEqual(page);
+    const url = new URL(fetch.mock.calls[0][0], 'http://panel.localhost');
+    expect(url.pathname).toBe('/api/deployments');
+    expect(Object.fromEntries(url.searchParams)).toEqual({ page: '2', pageSize: '50', projectId: '5', status: 'failed', from: '2026-10-13T00:00:00+07:00' });
+    await api.listGlobalDeployments({});
+    expect(fetch.mock.calls[1][0]).toBe('/api/deployments');
+  });
+
+  it('POSTs the deployment request to deployments as JSON', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{"number":4}', { status: 202 }));
     vi.stubGlobal('fetch', fetch);
 
-    await api.deployComposeFresh(location, 'web');
+    await expect(
+      api.enqueueDeployment(location, { mode: 'deploy', freshVolumes: true, confirmName: 'web' }),
+    ).resolves.toEqual({ number: 4 });
 
     const [url, init] = fetch.mock.calls[0];
-    expect(url).toBe('/api/projects/1/environments/2/composes/3/deploy-fresh');
+    expect(url).toBe('/api/projects/1/environments/2/composes/3/deployments');
     expect(init?.method).toBe('POST');
-    expect(JSON.parse(String(init?.body))).toEqual({ confirmName: 'web' });
+    expect(JSON.parse(String(init?.body))).toEqual({ mode: 'deploy', freshVolumes: true, confirmName: 'web' });
+  });
+
+  it('accepts a cancel answered 202 with an empty body', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(null, { status: 202 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.cancelDeployment(location, 4)).resolves.toBeUndefined();
+    expect(fetch.mock.calls[0][0]).toBe('/api/projects/1/environments/2/composes/3/deployments/4/cancel');
+  });
+
+  it('uploads a zip as multipart FormData under the file field', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{"kind":"zip"}', { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await api.uploadSource(location, new File(['x'], 'code.zip'));
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/projects/1/environments/2/composes/3/source/upload');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBeInstanceOf(FormData);
+    expect((init?.body as FormData).get('file')).toBeInstanceOf(File);
+  });
+
+  it('reads a missing Source as null', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"no source"}', { status: 404 })));
+    await expect(api.getSource(location)).resolves.toBeNull();
+  });
+
+  it('derives the Dockerfile name from each detected path', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('[{"path":"api/Dockerfile.prod","service":"api","context":"api"}]', { status: 200 })),
+    );
+    await expect(api.detectDockerfiles(location)).resolves.toEqual([
+      { path: 'api/Dockerfile.prod', service: 'api', context: 'api', dockerfile: 'Dockerfile.prod' },
+    ]);
   });
 
   it('lists orphans from the orphans endpoint', async () => {

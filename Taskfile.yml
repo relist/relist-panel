@@ -27,3 +27,33 @@ tasks:
     desc: Typecheck the web frontend
     cmds:
       - pnpm --dir web typecheck
+
+  probe:migration:
+    desc: Migrate between two docker:dind hosts with real Docker (manual, needs privileged containers and ~12 GB)
+    cmds:
+      - ./scripts/probe-migration.sh
+
+  sandbox:migration:
+    desc: Start two docker:dind panels, the old one seeded, to try a migration by hand
+    cmds:
+      - ./scripts/sandbox-migration.sh
+
+  sandbox:migration:down:
+    desc: Remove the migration sandbox
+    cmds:
+      - ./scripts/sandbox-migration.sh down
+
+  sandbox:migration:reload:
+    desc: Rebuild the panel and put it into the running migration sandbox, keeping its data
+    cmds:
+      - ./scripts/sandbox-migration.sh reload
+
+  sandbox:migration:check:
+    desc: Check that the new host of the migration sandbox has everything the seed made on the old one
+    cmds:
+      - ./scripts/sandbox-migration.sh check
+
+  sandbox:migration:reset:
+    desc: Wipe the migration sandbox back to the start, the old panel reseeded and the new one empty
+    cmds:
+      - ./scripts/sandbox-migration.sh reset

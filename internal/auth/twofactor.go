@@ -111,10 +111,11 @@ func (s *Service) account(w http.ResponseWriter, r *http.Request) {
 
 	var email string
 	var secret sql.NullString
+	var fromEnv bool
 	err = s.db.QueryRowContext(r.Context(),
-		"SELECT email, totp_secret FROM admin_credentials WHERE id = ?",
+		"SELECT email, totp_secret, password_from_env FROM admin_credentials WHERE id = ?",
 		adminID,
-	).Scan(&email, &secret)
+	).Scan(&email, &secret, &fromEnv)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
@@ -127,6 +128,8 @@ func (s *Service) account(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"email":            email,
 		"twoFactorEnabled": secret.Valid,
+		// The password is still the one RELIST_ADMIN_PASSWORD seeded.
+		"passwordFromEnv": fromEnv,
 	})
 }
 

@@ -77,6 +77,25 @@ func (s *Store) ListForCompose(ctx context.Context, composeID int64) ([]Domain, 
 	return list, rows.Err()
 }
 
+// ListAll returns every Compose's domains in ID order, for the maintenance
+// page a Migration puts up (ADR-0018).
+func (s *Store) ListAll(ctx context.Context) ([]Domain, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+domainColumns+` FROM domains ORDER BY id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list := []Domain{}
+	for rows.Next() {
+		d, err := scanDomain(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, d)
+	}
+	return list, rows.Err()
+}
+
 // composeYAML returns the saved YAML of a Compose that lives under the given
 // Project and Environment, or ErrNotFound.
 func (s *Store) composeYAML(ctx context.Context, projectID, environmentID, composeID int64) (string, error) {

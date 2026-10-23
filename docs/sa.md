@@ -100,7 +100,7 @@ Full flows are in the spec's User Stories (`.scratch/compose-panel/spec.md`) —
 | UC6 | Manage Environment Variables | Environment exists | Variable set added/edited/removed | 14, 15 |
 | UC7 | Delete Environment | Environment exists | Environment removed, its Composes torn down | 16 |
 | UC8 | Create / Edit Compose | Environment exists | Compose YAML saved | 17–20 |
-| UC9 | Deploy Compose | Compose exists with YAML | Containers running, network joined, status updated | 22–25, 29 |
+| UC9 | Deploy Compose | Compose exists with YAML | Deployment queued, then (when the worker reaches it) containers running, network joined, status updated | 22–25, 29 |
 | UC10 | Stop Compose | Compose is deployed | Containers stopped, YAML retained | 26 |
 | UC11 | Restart Compose | Compose is deployed | Containers cycled | 27 |
 | UC12 | Delete Compose | Compose exists | Containers/network/volumes removed, files deleted | 28 |
@@ -181,30 +181,46 @@ flowchart TB
 
 ## 6. Sequence Diagram — Deploy Compose
 
+A deploy only enqueues a Deployment. One worker runs Deployments one at a time for the whole host, and the UI polls the log until the Deployment ends (ADR-0016).
+
 ```mermaid
 sequenceDiagram
     actor Op as Operator
     participant UI as React SPA
     participant API as Go API (compose package)
-    participant Runner as dockerexec.ComposeRunner
+    participant Worker as Deployment worker (host-wide queue)
+    participant Git as git over ssh
     participant FS as Data directory (disk)
+    participant Build as docker compose build
     participant CLI as docker compose CLI
     participant DE as Docker Engine
 
-    Op->>UI: Click "Deploy"
-    UI->>API: POST /composes/{id}/deploy
-    API->>API: Load Compose YAML + Environment's variables
-    API->>API: Inject relist-network network into every service
-    API->>FS: Write resolved docker-compose.yml
-    API->>FS: Write .env file with Environment Variables
-    API->>Runner: Up(projectName, composeFilePath, envFilePath)
-    Runner->>CLI: docker compose -p <name> -f <file> --env-file <env> up -d --build
+    Op->>UI: Click "Build & Deploy"
+    UI->>API: POST /composes/{id}/deployments
+    API->>API: Enqueue Deployment (one queued per Compose)
+    API-->>UI: 202 Accepted {number}
+    loop Every second, until the Deployment ends
+        UI->>API: GET /deployments/{n}/log?offset=N
+        API-->>UI: New log lines + status
+    end
+    Worker->>Worker: Take the oldest queued Deployment
+    opt Compose has a Git Source
+        Worker->>Git: fetch --depth 1 origin, checkout, clean
+    end
+    Worker->>FS: Write .build-compose.yml and .build.env (staging)
+    loop Each Service with build, in YAML order
+        Worker->>Build: docker compose build service
+        Build->>DE: build image
+        DE-->>Build: image built
+    end
+    Note over Worker: Stops at the first failed build
+    Worker->>Worker: Take the Project gate (Deploy step only)
+    Worker->>FS: Write resolved docker-compose.yml and .env
+    Worker->>CLI: docker compose up -d --no-build --remove-orphans
     CLI->>DE: create/start containers, join network
     DE-->>CLI: containers running
-    CLI-->>Runner: exit code 0
-    Runner-->>API: success
-    API-->>UI: 200 OK + status
-    UI-->>Op: Show "Deployed" + status badge
+    CLI-->>Worker: exit code 0
+    Worker->>API: Mark Deployment succeeded, stamp deployed_at
 ```
 
 ## 7. Data Dictionary

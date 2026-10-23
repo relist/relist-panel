@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("RELIST_PORT", "")
@@ -45,5 +48,52 @@ func TestLoadRejectsInvalidPort(t *testing.T) {
 				t.Fatal("Load() error = nil, want an invalid-port error")
 			}
 		})
+	}
+}
+
+func TestLoadInstallSettings(t *testing.T) {
+	t.Setenv("RELIST_DOMAIN", "panel.example.com")
+	t.Setenv("RELIST_ACME_EMAIL", "ops@example.com")
+	t.Setenv("TRAEFIK_HTTP_PORT", "8000")
+	t.Setenv("TRAEFIK_HTTPS_PORT", "8443")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := InstallSettings{Domain: "panel.example.com", ACMEEmail: "ops@example.com", HTTPPort: "8000", HTTPSPort: "8443"}
+	if cfg.Install != want {
+		t.Fatalf("Install = %+v, want %+v", cfg.Install, want)
+	}
+}
+
+func TestLoadAdminSeedAndMigrationSettings(t *testing.T) {
+	t.Setenv("RELIST_ADMIN_EMAIL", "seed@example.com")
+	t.Setenv("RELIST_ADMIN_PASSWORD", "seeded password 123")
+	t.Setenv("RELIST_CONTROL_SOCKET", "/tmp/relist.sock")
+	args := os.Args
+	t.Cleanup(func() { os.Args = args })
+	os.Args = []string{"relist-panel", "--insecure-migration-source"}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AdminEmail != "seed@example.com" || cfg.AdminPassword != "seeded password 123" {
+		t.Fatalf("admin seed = %q / %q", cfg.AdminEmail, cfg.AdminPassword)
+	}
+	if cfg.ControlSocket != "/tmp/relist.sock" || !cfg.InsecureOldHost {
+		t.Fatalf("ControlSocket = %q, InsecureOldHost = %v", cfg.ControlSocket, cfg.InsecureOldHost)
+	}
+}
+
+func TestLoadControlSocketDefault(t *testing.T) {
+	t.Setenv("RELIST_CONTROL_SOCKET", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ControlSocket != "/run/relist-panel/control.sock" {
+		t.Fatalf("ControlSocket = %q", cfg.ControlSocket)
 	}
 }

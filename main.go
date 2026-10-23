@@ -4,13 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"relist-panel/internal/auth"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/config"
 	"relist-panel/internal/database"
@@ -19,6 +22,8 @@ import (
 	"relist-panel/internal/hostmetrics"
 	"relist-panel/internal/httpapi"
 	"relist-panel/internal/metrics"
+	"relist-panel/internal/migration"
+	"relist-panel/internal/migrationcli"
 	"relist-panel/internal/terminal"
 	"relist-panel/internal/volumes"
 )
@@ -26,6 +31,26 @@ import (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "reset-2fa" {
 		os.Exit(runResetTwoFactor(os.Args[2:], os.Stdout, os.Stderr))
+	}
+	// Drive a server migration from a terminal in the panel container,
+	// through the running panel's control socket (ADR-0019).
+	if len(os.Args) > 1 && os.Args[1] == "migration" {
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		os.Exit(migrationcli.Run(os.Args[2:], migrationcli.DefaultEnv(cfg)))
+	}
+	// The maintenance container a server migration runs from this image
+	// (ADR-0018): it only answers 503 with the maintenance page.
+	if len(os.Args) > 1 && os.Args[1] == "maintenance-page" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := migration.ServeMaintenancePage(ctx, ":8080"); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 
 	cfg, err := config.Load()
@@ -47,11 +72,33 @@ func main() {
 		log.Printf("warning: could not ensure docker network %q exists: %v", dockernet.NetworkName, err)
 	}
 
+	// A server migration that finished pulling re-executed the panel to swap
+	// in the migrated database, which must happen before it is opened
+	// (ADR-0018, ADR-0019); the old host's lock and queue are then cleared
+	// from it.
+	migrationPending, err := migration.PrepareFinalize(cfg.DataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	db, err := database.OpenAndMigrate(cfg.DatabasePath())
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
+
+	if migrationPending {
+		if err := migration.ClearCopiedState(ctx, db, time.Now()); err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	// An admin from the install's .env closes the setup screen before the
+	// panel listens, so nobody else can claim a fresh install. After a
+	// migration the old host's admin exists and the env is ignored.
+	if _, err := auth.SeedAdmin(ctx, db, cfg.AdminEmail, cfg.AdminPassword, time.Now); err != nil {
+		log.Fatal(err)
+	}
 
 	// Rows created before identity was stored (ADR-0005) must be frozen to
 	// the identity their stacks run under before any action addresses them.
@@ -85,11 +132,41 @@ func main() {
 	volumeResolver := volumes.NewResolver(dockerexec.NewVolumeResolver(), cfg.DataDir)
 	terminalExec := dockerexec.NewTerminalExec(dockerexec.DefaultSocketPath, hostmetrics.DefaultProcRoot)
 
-	server := &http.Server{
-		Addr: cfg.Address(),
-		Handler: httpapi.NewHandler(db, dockerexec.New(), cfg.DataDir, sampler, collector, volumeRunner, volumeResolver, &terminal.Options{
-			Exec: terminalExec,
-		}, dockerexec.NewImages(dockerexec.DefaultSocketPath)),
+	// Finalize asks for a restart once the copied data is in place; main
+	// shuts down and re-executes the panel (ADR-0019), while the finalize
+	// goroutine waits to be replaced with the process.
+	restartCh := make(chan struct{})
+	var restartOnce sync.Once
+	restart := func() {
+		restartOnce.Do(func() { close(restartCh) })
+		select {}
+	}
+
+	control := http.NewServeMux()
+	handler, waitDeployments := httpapi.NewHandler(ctx, httpapi.Deps{
+		DB:             db,
+		Runner:         dockerexec.New(),
+		DataDir:        cfg.DataDir,
+		History:        sampler,
+		Services:       collector,
+		VolumeRunner:   volumeRunner,
+		VolumeResolver: volumeResolver,
+		Terminal:       &terminal.Options{Exec: terminalExec},
+		Images:         dockerexec.NewImages(dockerexec.DefaultSocketPath),
+		Migration: &migration.Options{
+			Docker:      dockerexec.NewMigrationDocker(),
+			Install:     cfg.Install,
+			Insecure:    cfg.InsecureOldHost,
+			SeededAdmin: cfg.AdminEmail,
+			Restart:     restart,
+			Control:     control,
+		},
+		Docker: dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
+	})
+	server := &http.Server{Addr: cfg.Address(), Handler: handler}
+	controlServer, err := serveControl(cfg.ControlSocket, control)
+	if err != nil {
+		log.Printf("warning: no migration control socket, so this panel cannot migrate or resume a migration lock; set RELIST_CONTROL_SOCKET to a writable path and restart: %v", err)
 	}
 
 	log.Printf("relist-panel listening on %s", cfg.Address())
@@ -118,28 +195,63 @@ func main() {
 		terminal.Sweep(sweepCtx, terminalExec, names, 2*time.Second, log.Printf)
 	}()
 
-	select {
-	case err := <-serveErr:
-		// The server exited on its own (a listen failure, say): cancel the
-		// sampler's context and drain its loop before reporting.
-		stop()
-		sampler.Wait()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal(err)
-		}
-	case <-ctx.Done():
-		// A signal: stop accepting requests, then let the sampler's loop
-		// finish its tick and any in-flight sweep before exiting.
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
+	// shutdown stops accepting requests, then lets the sampler's loop finish
+	// its tick and any in-flight sweep, and an in-progress Deploy step
+	// finish, within ctx's deadline.
+	shutdown := func(ctx context.Context) {
+		if err := server.Shutdown(ctx); err != nil {
 			log.Printf("shutdown: %v", err)
+		}
+		if controlServer != nil {
+			if err := controlServer.Shutdown(ctx); err != nil {
+				log.Printf("shutdown the control socket: %v", err)
+			}
 		}
 		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("serve: %v", err)
 		}
 		stop()
 		sampler.Wait()
+		deploymentsDone := make(chan struct{})
+		go func() {
+			waitDeployments()
+			close(deploymentsDone)
+		}()
+		select {
+		case <-deploymentsDone:
+		case <-ctx.Done():
+			log.Printf("shutdown: a deployment was still running at the deadline")
+		}
+	}
+
+	select {
+	case err := <-serveErr:
+		// The server exited on its own (a listen failure, say): cancel the
+		// sampler's context and drain its loop before reporting.
+		stop()
+		sampler.Wait()
+		waitDeployments()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		shutdown(shutdownCtx)
+	case <-restartCh:
+		// The shutdown's own deadline is 5 s; the watchdog gives it 10.
+		restartAfter(10*time.Second, func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			shutdown(shutdownCtx)
+		}, db.Close, func() {
+			exe, err := os.Executable()
+			if err != nil {
+				log.Printf("migration: find the panel binary: %v; exiting for the restart policy", err)
+				os.Exit(1)
+			}
+			reexec(exe, os.Args, os.Environ(), syscall.Exec, os.Exit)
+		})
 	}
 }
 

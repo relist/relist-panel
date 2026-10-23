@@ -13,7 +13,9 @@ export const paths = {
   account: '/account',
   compose: (projectId: number | string, environmentId: number | string, composeId: number | string, tab?: string) =>
     `/projects/${projectId}/env/${environmentId}/compose/${composeId}${tab ? `/${tab}` : ''}`,
+  deployments: '/deployments',
   images: '/images',
+  docker: '/docker',
   environment: (projectId: number | string, environmentId: number | string, tab = 'composes') =>
     `/projects/${projectId}/env/${environmentId}/${tab}`,
   monitoring: '/monitoring',
@@ -52,6 +54,8 @@ export const routePaths = [
   { path: paths.overview },
   { path: 'monitoring' },
   { path: 'images' },
+  { path: 'docker' },
+  { path: 'deployments' },
   { path: 'account' },
   { path: 'projects' },
   { path: 'projects/:projectId' },

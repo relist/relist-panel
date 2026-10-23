@@ -11,8 +11,6 @@ import (
 	"github.com/pressly/goose/v3"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/database"
-	"relist-panel/internal/httpapi"
-	"relist-panel/internal/volumes"
 )
 
 // Direct insertion is an old database fixture; all behavioral assertions use
@@ -67,12 +65,12 @@ func TestLegacyUpgradeKeepsDeploymentAndReusedParentNameGetsIndependentIdentity(
 		t.Fatalf("upgrade altered legacy deployed files: %q, %v", oldContent, err)
 	}
 	legacyStatus(t, server, http.MethodPost, composeStopPath(p.ID, e.ID, id), http.StatusOK)
-	if req := server.runner.calls[0].request; req.ProjectName != "alpha-production-web" || req.ComposeFilePath != oldPath {
+	if req := server.runner.snapshotCalls()[0].request; req.ProjectName != "alpha-production-web" || req.ComposeFilePath != oldPath {
 		t.Fatalf("upgraded stack no longer addressed its old deployment: %+v", req)
 	}
-	server.runner.calls = nil
-	legacyStatus(t, server, http.MethodPost, composeDeployPath(p.ID, e.ID, id), http.StatusOK)
-	old := server.runner.calls[0].request
+	server.runner.resetCalls()
+	server.deployOK(t, composePath(p.ID, e.ID, id), nil)
+	old := server.runner.snapshotCalls()[0].request
 	if old.ProjectName != "alpha-production-web" || old.ComposeFilePath != oldPath {
 		t.Fatalf("upgraded legacy deployment moved: %+v", old)
 	}
@@ -84,16 +82,16 @@ func TestLegacyUpgradeKeepsDeploymentAndReusedParentNameGetsIndependentIdentity(
 	if err := composes.BackfillLegacyIdentities(context.Background(), server.db); err != nil {
 		t.Fatal(err)
 	}
-	server.runner.calls = nil
+	server.runner.resetCalls()
 	legacyStatus(t, server, http.MethodPost, composeStopPath(p.ID, e.ID, id), http.StatusOK)
-	if stopped := server.runner.calls[0].request; stopped != old {
+	if stopped := server.runner.snapshotCalls()[0].request; stopped != old {
 		t.Fatalf("legacy identity changed after rename/backfill: %+v, want %+v", stopped, old)
 	}
 	freshParent := createProject(t, server, "alpha", "")
 	freshEnv := productionEnvironment(t, server, freshParent)
-	server.runner.calls = nil
+	server.runner.resetCalls()
 	fresh := deployFixture(t, server, freshParent.ID, freshEnv.ID, "web")
-	newReq := server.runner.calls[0].request
+	newReq := server.runner.snapshotCalls()[0].request
 	if newReq.ProjectName != "relist-c"+lifecycleID(fresh.ID) || newReq.ComposeFilePath != filepath.Join(server.dataDir, ".composes", lifecycleID(fresh.ID), "docker-compose.yml") {
 		t.Fatalf("fresh deployment did not get independent ID identity: %+v", newReq)
 	}
@@ -115,14 +113,18 @@ func TestAmbiguousLegacyIdentitiesRefuseLifecycleAndParentDeletionBeforeDocker(t
 		t.Fatal(err)
 	}
 	for _, id := range []int64{one, two} {
-		legacyStatus(t, server, http.MethodPost, composeDeployPath(p.ID, e.ID, id), http.StatusConflict)
+		deploy := server.request(t, http.MethodPost, composeDeploymentsPath(p.ID, e.ID, id), map[string]any{"mode": "deploy"})
+		deploy.Body.Close()
+		if deploy.StatusCode != http.StatusConflict {
+			t.Fatalf("deploy of ambiguous legacy compose %d = %d, want %d", id, deploy.StatusCode, http.StatusConflict)
+		}
 		legacyStatus(t, server, http.MethodPost, composeStopPath(p.ID, e.ID, id), http.StatusConflict)
 		legacyStatus(t, server, http.MethodDelete, composePath(p.ID, e.ID, id), http.StatusConflict)
 	}
 	legacyStatus(t, server, http.MethodDelete, environmentPath(p.ID, e.ID), http.StatusBadGateway)
 	legacyStatus(t, server, http.MethodDelete, "/api/projects/"+lifecycleID(p.ID), http.StatusBadGateway)
-	if len(server.runner.calls) != 0 {
-		t.Fatalf("ambiguous legacy identity reached Docker: %+v", server.runner.calls)
+	if len(server.runner.snapshotCalls()) != 0 {
+		t.Fatalf("ambiguous legacy identity reached Docker: %+v", server.runner.snapshotCalls())
 	}
 	legacyStatus(t, server, http.MethodGet, "/api/projects/"+lifecycleID(p.ID), http.StatusOK)
 	legacyStatus(t, server, http.MethodGet, projectEnvironmentsPath(p.ID), http.StatusOK)
@@ -142,11 +144,11 @@ func TestParentTeardownFailurePreservesMetadataForRetry(t *testing.T) {
 			if kind == "project" {
 				parentPath = "/api/projects/" + lifecycleID(p.ID)
 			}
-			server.runner.downWithVolumesErr = errors.New("Docker unavailable")
+			server.runner.setDownWithVolumesErr(errors.New("Docker unavailable"))
 			legacyStatus(t, server, http.MethodDelete, parentPath, http.StatusBadGateway)
 			legacyStatus(t, server, http.MethodGet, "/api/projects/"+lifecycleID(p.ID), http.StatusOK)
 			legacyStatus(t, server, http.MethodGet, composePath(p.ID, e.ID, c.ID), http.StatusOK)
-			server.runner.downWithVolumesErr = nil
+			server.runner.setDownWithVolumesErr(nil)
 			legacyStatus(t, server, http.MethodDelete, parentPath, http.StatusNoContent)
 			legacyStatus(t, server, http.MethodGet, composePath(p.ID, e.ID, c.ID), http.StatusNotFound)
 		})
@@ -161,7 +163,7 @@ type partialTeardownRunner struct {
 
 func (r *partialTeardownRunner) DownWithVolumes(ctx context.Context, req composes.RunRequest) error {
 	if r.fail && req.ProjectName == r.failedProject {
-		r.calls = append(r.calls, fakeComposeRun{method: "down-with-volumes", request: req})
+		r.recordCall(fakeComposeRun{method: "down-with-volumes", request: req})
 		return errors.New("second stack unavailable")
 	}
 	return r.fakeComposeRunner.DownWithVolumes(ctx, req)
@@ -175,18 +177,18 @@ func TestPartialParentTeardownCanRetryWithoutRepeatingCompletedChild(t *testing.
 	one := deployFixture(t, server, p.ID, e.ID, "first")
 	two := deployFixture(t, server, p.ID, e.ID, "second")
 	runner := &partialTeardownRunner{fakeComposeRunner: server.runner, failedProject: "relist-c" + lifecycleID(two.ID), fail: true}
-	server.handler = httpapi.NewHandler(server.db, runner, server.dataDir, nil, nil, server.volumeRunner, volumes.NewResolver(server.volumeCLI, server.dataDir), nil, nil)
-	runner.calls = nil
+	server.useRunner(t, runner)
+	runner.resetCalls()
 	parentPath := "/api/projects/" + lifecycleID(p.ID)
 	legacyStatus(t, server, http.MethodDelete, parentPath, http.StatusBadGateway)
 	for _, id := range []int64{one.ID, two.ID} {
 		legacyStatus(t, server, http.MethodGet, composePath(p.ID, e.ID, id), http.StatusOK)
 	}
-	runner.calls = nil
+	runner.resetCalls()
 	runner.fail = false
 	legacyStatus(t, server, http.MethodDelete, parentPath, http.StatusNoContent)
-	if len(runner.calls) != 1 || runner.calls[0].method != "down-with-volumes" || runner.calls[0].request.ProjectName != runner.failedProject {
-		t.Fatalf("retry reprocessed completed child or skipped failed child: %+v", runner.calls)
+	if len(runner.snapshotCalls()) != 1 || runner.snapshotCalls()[0].method != "down-with-volumes" || runner.snapshotCalls()[0].request.ProjectName != runner.failedProject {
+		t.Fatalf("retry reprocessed completed child or skipped failed child: %+v", runner.snapshotCalls())
 	}
 	legacyStatus(t, server, http.MethodGet, parentPath, http.StatusNotFound)
 }
@@ -206,14 +208,14 @@ func TestComposeDeployFreshRefusesAmbiguousLegacyIdentity(t *testing.T) {
 		if id == two {
 			name = "c-web"
 		}
-		r := server.request(t, http.MethodPost, composeDeployFreshPath(p.ID, e.ID, id), map[string]string{"confirmName": name})
+		r := server.request(t, http.MethodPost, composeDeploymentsPath(p.ID, e.ID, id), freshBody(name))
 		r.Body.Close()
 		if r.StatusCode != http.StatusConflict {
 			t.Fatalf("deploy-fresh of ambiguous legacy compose %d = %d, want %d", id, r.StatusCode, http.StatusConflict)
 		}
 	}
-	if len(server.runner.calls) != 0 {
-		t.Fatalf("ambiguous legacy identity reached Docker: %+v", server.runner.calls)
+	if len(server.runner.snapshotCalls()) != 0 {
+		t.Fatalf("ambiguous legacy identity reached Docker: %+v", server.runner.snapshotCalls())
 	}
 }
 

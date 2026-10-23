@@ -33,6 +33,22 @@ var (
 type Service struct {
 	db  *sql.DB
 	now func() time.Time
+	// selfAuthenticated names further paths the cookie check skips because
+	// their handlers authenticate on their own.
+	selfAuthenticated func(path string) bool
+	// setupBlocked refuses first-admin setup while a server migration is
+	// running into this panel, whose admin comes from the old host.
+	setupBlocked func() bool
+}
+
+// SetSetupBlocker makes setup answer 409 while blocked reports true.
+func (s *Service) SetSetupBlocker(blocked func() bool) { s.setupBlocked = blocked }
+
+// AllowSelfAuthenticated lets requests to the paths allow reports true for
+// past the cookie check: a server migration's session-key routes
+// (ADR-0018). Their handlers authenticate themselves.
+func (s *Service) AllowSelfAuthenticated(allow func(path string) bool) {
+	s.selfAuthenticated = allow
 }
 
 type credentials struct {
@@ -66,6 +82,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/login", s.login)
 	mux.HandleFunc("POST /api/auth/logout", s.logout)
 	mux.HandleFunc("GET /api/auth/account", s.account)
+	mux.HandleFunc("POST /api/auth/password", s.changePassword)
 	mux.HandleFunc("POST /api/auth/2fa/setup", s.twoFactorSetup)
 	mux.HandleFunc("POST /api/auth/2fa/enable", s.twoFactorEnable)
 	mux.HandleFunc("POST /api/auth/2fa/disable", s.twoFactorDisable)
@@ -75,7 +92,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 // and the frontend files needed to render the auth screens.
 func (s *Service) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if publicPath(r.URL.Path) {
+		if publicPath(r.URL.Path) || (s.selfAuthenticated != nil && s.selfAuthenticated(r.URL.Path)) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -126,6 +143,10 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) setup(w http.ResponseWriter, r *http.Request) {
+	if s.setupBlocked != nil && s.setupBlocked() {
+		writeError(w, http.StatusConflict, "A migration is in progress; finish or abort it before setting up this panel")
+		return
+	}
 	if err := s.requireDatabase(); err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
@@ -375,14 +396,19 @@ func (s *Service) adminExists(r *http.Request) (bool, error) {
 }
 
 func (s *Service) createAdmin(r *http.Request, email, passwordHash string) error {
-	tx, err := s.db.BeginTx(r.Context(), nil)
+	return insertAdmin(r.Context(), s.db, email, passwordHash, s.now())
+}
+
+// insertAdmin adds the single admin row, or returns ErrAdminAlreadyExists.
+func insertAdmin(ctx context.Context, db *sql.DB, email, passwordHash string, now time.Time) error {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
 	var id int64
-	err = tx.QueryRowContext(r.Context(), "SELECT id FROM admin_credentials LIMIT 1").Scan(&id)
+	err = tx.QueryRowContext(ctx, "SELECT id FROM admin_credentials LIMIT 1").Scan(&id)
 	if err == nil {
 		return ErrAdminAlreadyExists
 	}
@@ -390,10 +416,10 @@ func (s *Service) createAdmin(r *http.Request, email, passwordHash string) error
 		return err
 	}
 
-	if _, err := tx.ExecContext(r.Context(), `
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO admin_credentials (id, email, password_hash, created_at)
 		VALUES (1, ?, ?, ?)
-	`, email, passwordHash, s.now().UTC().Unix()); err != nil {
+	`, email, passwordHash, now.UTC().Unix()); err != nil {
 		if isUniqueConstraint(err) {
 			return ErrAdminAlreadyExists
 		}
@@ -454,8 +480,14 @@ func decodeCredentials(w http.ResponseWriter, r *http.Request) (credentials, err
 	return input, nil
 }
 
+// NormalizeEmail is how an admin email is stored, so a lookup by another
+// spelling of it finds the same admin.
+func NormalizeEmail(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
 func validateEmail(value string) (string, error) {
-	email := strings.ToLower(strings.TrimSpace(value))
+	email := NormalizeEmail(value)
 	if email == "" || utf8.RuneCountInString(email) > 254 {
 		return "", errors.New("email is required and must be valid")
 	}
@@ -489,6 +521,7 @@ func publicPath(path string) bool {
 	case "/healthz", "/api/auth/status", "/api/auth/setup", "/api/auth/login", "/api/auth/logout":
 		return true
 	}
+
 	// The HTML shell is public wherever it is served: the frontend routes with
 	// history URLs (`/projects/1/env/1/compose/1`), so the shell answers under
 	// any non-API path. The API namespace itself stays authenticated — `/api`

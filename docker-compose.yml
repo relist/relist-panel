@@ -4,6 +4,17 @@ services:
     environment:
       RELIST_PORT: ${RELIST_PORT:-8080}
       RELIST_DATA_DIR: ${RELIST_DATA_DIR:-/var/lib/relist-panel}
+      # Read by a server migration's preflight (ADR-0018): these live in the
+      # install's .env, not the data directory, so the operator copies them.
+      RELIST_DOMAIN: ${RELIST_DOMAIN:-panel.localhost}
+      RELIST_ACME_EMAIL: ${RELIST_ACME_EMAIL:-}
+      # The first admin, created at boot so the setup screen is never open
+      # to whoever reaches the panel first. Change the password in Account,
+      # then remove both.
+      RELIST_ADMIN_EMAIL: ${RELIST_ADMIN_EMAIL:-}
+      RELIST_ADMIN_PASSWORD: ${RELIST_ADMIN_PASSWORD:-}
+      TRAEFIK_HTTP_PORT: ${TRAEFIK_HTTP_PORT:-80}
+      TRAEFIK_HTTPS_PORT: ${TRAEFIK_HTTPS_PORT:-443}
     ports:
       - "${RELIST_PORT:-8888}:${RELIST_PORT:-8080}"
     volumes:

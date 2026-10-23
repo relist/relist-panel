@@ -122,18 +122,10 @@ type deployed struct {
 
 func (f setsFixture) deploy(t *testing.T) deployed {
 	t.Helper()
-	f.server.runner.calls = nil
-	status, raw := f.call(t, http.MethodPost, composeDeployPath(f.projectID, f.environmentID, f.composeID), nil)
-	if status != http.StatusOK {
-		t.Fatalf("deploy status = %d, body %s", status, raw)
-	}
-	var body struct {
-		Warnings []string `json:"warnings"`
-	}
-	if err := json.Unmarshal(raw, &body); err != nil {
-		t.Fatal(err)
-	}
-	for _, call := range f.server.runner.calls {
+	f.server.runner.resetCalls()
+	finished := f.server.deployOK(t, composePath(f.projectID, f.environmentID, f.composeID), map[string]any{"mode": "deploy"})
+	body := struct{ Warnings []string }{finished.Warnings}
+	for _, call := range f.server.runner.snapshotCalls() {
 		if call.method != "up" {
 			continue
 		}
@@ -153,7 +145,7 @@ func (f setsFixture) deploy(t *testing.T) deployed {
 		for name, service := range doc.Services {
 			files[name] = service.EnvFile
 		}
-		return deployed{envFiles: files, composeFile: call.request.ComposeFilePath, envFile: call.request.EnvFilePath, warnings: body.Warnings, status: status}
+		return deployed{envFiles: files, composeFile: call.request.ComposeFilePath, envFile: call.request.EnvFilePath, warnings: body.Warnings, status: http.StatusOK}
 	}
 	t.Fatal("deploy never reached runner")
 	return deployed{}
@@ -649,10 +641,7 @@ func TestDeployFreshRewritesSetFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(d.setPath(set)), "999.env"), []byte("OLD=1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	status, raw := f.call(t, http.MethodPost, composeDeployFreshPath(f.projectID, f.environmentID, f.composeID), map[string]any{"confirmName": "web"})
-	if status != http.StatusOK {
-		t.Fatalf("deploy-fresh status = %d, body %s", status, raw)
-	}
+	f.server.deployOK(t, composePath(f.projectID, f.environmentID, f.composeID), map[string]any{"mode": "deploy", "freshVolumes": true, "confirmName": "web"})
 	entries, err := os.ReadDir(filepath.Dir(d.setPath(set)))
 	if err != nil || len(entries) != 1 || entries[0].Name() != idString(set.ID)+".env" {
 		t.Fatalf("sets dir after deploy-fresh = %v (%v)", entries, err)

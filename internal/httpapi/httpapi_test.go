@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +25,9 @@ import (
 	"relist-panel/internal/composes"
 	"relist-panel/internal/database"
 	"relist-panel/internal/httpapi"
+	"relist-panel/internal/images"
 	imagesfake "relist-panel/internal/images/faketest"
+	"relist-panel/internal/metrics"
 	"relist-panel/internal/terminal"
 	terminalfake "relist-panel/internal/terminal/faketest"
 	"relist-panel/internal/volumes"
@@ -1134,24 +1137,26 @@ func TestAuthenticatedAdminCanDeployCompose(t *testing.T) {
 		t.Fatalf("status before deploy = %+v, want zero value", compose.Status)
 	}
 
-	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
-	defer deployResponse.Body.Close()
-	if deployResponse.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(deployResponse.Body)
-		t.Fatalf("deploy status = %d, want %d, body = %s", deployResponse.StatusCode, http.StatusOK, body)
+	finished := server.deployOK(t, composePath(project.ID, production.ID, compose.ID), map[string]any{"mode": "deploy"})
+	if finished.Mode != "deploy" || finished.Number != 1 {
+		t.Fatalf("deployment = mode %q number %d, want deploy #1", finished.Mode, finished.Number)
 	}
+	if len(server.runner.snapshotCalls()) != 1 {
+		t.Fatalf("runner calls = %+v, want exactly one up", server.runner.snapshotCalls())
+	}
+	deployedResponse := server.request(t, http.MethodGet, composePath(project.ID, production.ID, compose.ID), nil)
+	defer deployedResponse.Body.Close()
 	var deployed composeResponse
-	if err := json.NewDecoder(deployResponse.Body).Decode(&deployed); err != nil {
+	if err := json.NewDecoder(deployedResponse.Body).Decode(&deployed); err != nil {
 		t.Fatalf("decode deployed compose: %v", err)
 	}
 	if deployed.Status.Total == 0 {
 		t.Fatalf("status after deploy = %+v, want a non-zero total", deployed.Status)
 	}
-
-	if len(server.runner.calls) != 2 {
-		t.Fatalf("runner calls = %+v, want exactly an up followed by a status call", server.runner.calls)
+	if len(server.runner.snapshotCalls()) != 2 {
+		t.Fatalf("runner calls = %+v, want an up followed by a status call", server.runner.snapshotCalls())
 	}
-	upCall := server.runner.calls[0]
+	upCall := server.runner.snapshotCalls()[0]
 	if upCall.method != "up" {
 		t.Fatalf("first runner call = %q, want %q", upCall.method, "up")
 	}
@@ -1204,8 +1209,8 @@ func TestAuthenticatedAdminCanDeployCompose(t *testing.T) {
 	if fetched.Status != deployed.Status {
 		t.Fatalf("fetched status = %+v, want %+v", fetched.Status, deployed.Status)
 	}
-	if len(server.runner.calls) != 3 || server.runner.calls[2].method != "status" {
-		t.Fatalf("runner calls after GET = %+v, want a third status call", server.runner.calls)
+	if len(server.runner.snapshotCalls()) != 3 || server.runner.snapshotCalls()[2].method != "status" {
+		t.Fatalf("runner calls after GET = %+v, want a third status call", server.runner.snapshotCalls())
 	}
 }
 
@@ -1229,7 +1234,7 @@ func TestComposeDeployValidatesInputAndPropagatesRunnerErrors(t *testing.T) {
 		t.Fatalf("decode empty compose: %v", err)
 	}
 
-	deployEmptyResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, empty.ID), nil)
+	deployEmptyResponse := server.request(t, http.MethodPost, composeDeploymentsPath(project.ID, production.ID, empty.ID), map[string]any{"mode": "deploy"})
 	defer deployEmptyResponse.Body.Close()
 	if deployEmptyResponse.StatusCode != http.StatusBadRequest {
 		t.Fatalf("deploy with no yaml status = %d, want %d", deployEmptyResponse.StatusCode, http.StatusBadRequest)
@@ -1245,17 +1250,13 @@ func TestComposeDeployValidatesInputAndPropagatesRunnerErrors(t *testing.T) {
 		t.Fatalf("decode broken compose: %v", err)
 	}
 
-	deployInvalidResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, broken.ID), nil)
-	defer deployInvalidResponse.Body.Close()
-	if deployInvalidResponse.StatusCode != http.StatusBadRequest {
-		t.Fatalf("deploy with invalid yaml status = %d, want %d", deployInvalidResponse.StatusCode, http.StatusBadRequest)
+	wantCaptureRejected(t, server, composePath(project.ID, production.ID, broken.ID), nil, "compose yaml is invalid")
+
+	if len(server.runner.snapshotCalls()) != 0 {
+		t.Fatalf("runner should not have been called for invalid deploys, got %+v", server.runner.snapshotCalls())
 	}
 
-	if len(server.runner.calls) != 0 {
-		t.Fatalf("runner should not have been called for invalid deploys, got %+v", server.runner.calls)
-	}
-
-	missingComposeResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, 999), nil)
+	missingComposeResponse := server.request(t, http.MethodPost, composeDeploymentsPath(project.ID, production.ID, 999), map[string]any{"mode": "deploy"})
 	defer missingComposeResponse.Body.Close()
 	if missingComposeResponse.StatusCode != http.StatusNotFound {
 		t.Fatalf("deploy missing compose status = %d, want %d", missingComposeResponse.StatusCode, http.StatusNotFound)
@@ -1271,12 +1272,8 @@ func TestComposeDeployValidatesInputAndPropagatesRunnerErrors(t *testing.T) {
 		t.Fatalf("decode working compose: %v", err)
 	}
 
-	server.runner.upErr = errors.New("docker daemon unreachable")
-	deployFailureResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, working.ID), nil)
-	defer deployFailureResponse.Body.Close()
-	if deployFailureResponse.StatusCode != http.StatusBadGateway {
-		t.Fatalf("deploy with failing runner status = %d, want %d", deployFailureResponse.StatusCode, http.StatusBadGateway)
-	}
+	server.runner.setUpErr(errors.New("docker daemon unreachable"))
+	wantFailed(t, server.deployAndWait(t, composePath(project.ID, production.ID, working.ID), nil), "docker daemon unreachable")
 }
 
 // The deploy timestamp lands on success only: a Compose starts (and a failed
@@ -1334,29 +1331,17 @@ func TestComposeDeployRecordsDeployedAtOnSuccessOnly(t *testing.T) {
 	}
 
 	// A failed deploy never reaches the write.
-	server.runner.upErr = errors.New("docker daemon unreachable")
-	failureResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
-	defer failureResponse.Body.Close()
-	if failureResponse.StatusCode != http.StatusBadGateway {
-		t.Fatalf("failed deploy status = %d, want %d", failureResponse.StatusCode, http.StatusBadGateway)
-	}
+	server.runner.setUpErr(errors.New("docker daemon unreachable"))
+	wantFailed(t, server.deployAndWait(t, composePath(project.ID, production.ID, compose.ID), nil), "docker daemon unreachable")
 	getAndCheck("after a failed deploy", true)
 	if rowDeployedAt().Valid {
 		t.Fatal("deployed_at after a failed deploy = a value, want NULL")
 	}
 
 	// A successful deploy stamps it — response, GET and row agree.
-	server.runner.upErr = nil
+	server.runner.setUpErr(nil)
 	before := time.Now().UTC()
-	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
-	defer deployResponse.Body.Close()
-	if deployResponse.StatusCode != http.StatusOK {
-		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
-	}
-	var deployed composeResponse
-	if err := json.NewDecoder(deployResponse.Body).Decode(&deployed); err != nil {
-		t.Fatalf("decode deployed compose: %v", err)
-	}
+	deployed := server.deployedCompose(t, composePath(project.ID, production.ID, compose.ID))
 	if deployed.LastDeployedAt == nil {
 		t.Fatal("deploy response lastDeployedAt = null, want a timestamp")
 	}
@@ -1410,8 +1395,11 @@ func TestComposeDeployRecordsDeployedAtOnSuccessOnly(t *testing.T) {
 	restartedRunner := newFakeComposeRunner()
 	restartedVolumeCLI := &faketest.CLI{}
 	restartedVolumeRunner := &faketest.Runner{}
+	server.stopWorker()
+	restartedHandler, restartedStop := startHandler(t, server.db, restartedRunner, server.dataDir, newFakeHostHistory(), newFakeServiceFacts(), restartedVolumeRunner, volumes.NewResolver(restartedVolumeCLI, server.dataDir), nil, nil)
 	restarted := &testServer{
-		handler:      httpapi.NewHandler(server.db, restartedRunner, server.dataDir, newFakeHostHistory(), newFakeServiceFacts(), restartedVolumeRunner, volumes.NewResolver(restartedVolumeCLI, server.dataDir), nil, nil),
+		handler:      restartedHandler,
+		stopWorker:   restartedStop,
 		db:           server.db,
 		dataDir:      server.dataDir,
 		runner:       restartedRunner,
@@ -1456,15 +1444,7 @@ func TestAuthenticatedAdminCanStopCompose(t *testing.T) {
 		t.Fatalf("decode created compose: %v", err)
 	}
 
-	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
-	defer deployResponse.Body.Close()
-	if deployResponse.StatusCode != http.StatusOK {
-		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
-	}
-	var deployed composeResponse
-	if err := json.NewDecoder(deployResponse.Body).Decode(&deployed); err != nil {
-		t.Fatalf("decode deployed compose: %v", err)
-	}
+	deployed := server.deployedCompose(t, composePath(project.ID, production.ID, compose.ID))
 	if deployed.Status.Total == 0 {
 		t.Fatalf("status after deploy = %+v, want a non-zero total", deployed.Status)
 	}
@@ -1483,12 +1463,12 @@ func TestAuthenticatedAdminCanStopCompose(t *testing.T) {
 		t.Fatalf("status after stop = %+v, want zero value (stopped)", stopped.Status)
 	}
 
-	lastCall := server.runner.calls[len(server.runner.calls)-1]
-	if lastCall.method != "status" || server.runner.calls[len(server.runner.calls)-2].method != "down" {
-		t.Fatalf("runner calls = %+v, want a down followed by a status call", server.runner.calls)
+	lastCall := server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-1]
+	if lastCall.method != "status" || server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-2].method != "down" {
+		t.Fatalf("runner calls = %+v, want a down followed by a status call", server.runner.snapshotCalls())
 	}
-	if server.runner.calls[len(server.runner.calls)-2].request.ProjectName != "relist-c"+strconv.FormatInt(compose.ID, 10) {
-		t.Fatalf("stop project name = %q, want %q", server.runner.calls[len(server.runner.calls)-2].request.ProjectName, "relist-c"+strconv.FormatInt(compose.ID, 10))
+	if server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-2].request.ProjectName != "relist-c"+strconv.FormatInt(compose.ID, 10) {
+		t.Fatalf("stop project name = %q, want %q", server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-2].request.ProjectName, "relist-c"+strconv.FormatInt(compose.ID, 10))
 	}
 
 	// A subsequent GET reflects the stopped status without redeploying.
@@ -1531,8 +1511,8 @@ func TestComposeStopValidatesInputAndPropagatesRunnerErrors(t *testing.T) {
 	if stopUndeployedResponse.StatusCode != http.StatusBadRequest {
 		t.Fatalf("stop undeployed compose status = %d, want %d", stopUndeployedResponse.StatusCode, http.StatusBadRequest)
 	}
-	if len(server.runner.calls) != 0 {
-		t.Fatalf("runner should not have been called for an undeployed compose, got %+v", server.runner.calls)
+	if len(server.runner.snapshotCalls()) != 0 {
+		t.Fatalf("runner should not have been called for an undeployed compose, got %+v", server.runner.snapshotCalls())
 	}
 
 	missingComposeResponse := server.request(t, http.MethodPost, composeStopPath(project.ID, production.ID, 999), nil)
@@ -1550,11 +1530,7 @@ func TestComposeStopValidatesInputAndPropagatesRunnerErrors(t *testing.T) {
 	if err := json.NewDecoder(workingResponse.Body).Decode(&working); err != nil {
 		t.Fatalf("decode working compose: %v", err)
 	}
-	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, working.ID), nil)
-	deployResponse.Body.Close()
-	if deployResponse.StatusCode != http.StatusOK {
-		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
-	}
+	server.deployOK(t, composePath(project.ID, production.ID, working.ID), nil)
 
 	server.runner.downErr = errors.New("docker daemon unreachable")
 	stopFailureResponse := server.request(t, http.MethodPost, composeStopPath(project.ID, production.ID, working.ID), nil)
@@ -1587,11 +1563,7 @@ func TestAuthenticatedAdminCanRestartCompose(t *testing.T) {
 		t.Fatalf("decode created compose: %v", err)
 	}
 
-	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
-	defer deployResponse.Body.Close()
-	if deployResponse.StatusCode != http.StatusOK {
-		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
-	}
+	server.deployOK(t, composePath(project.ID, production.ID, compose.ID), nil)
 
 	restartResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, compose.ID), nil)
 	defer restartResponse.Body.Close()
@@ -1607,12 +1579,12 @@ func TestAuthenticatedAdminCanRestartCompose(t *testing.T) {
 		t.Fatalf("status after restart = %+v, want a non-zero total (containers still up)", restarted.Status)
 	}
 
-	lastCall := server.runner.calls[len(server.runner.calls)-1]
-	if lastCall.method != "status" || server.runner.calls[len(server.runner.calls)-2].method != "restart" {
-		t.Fatalf("runner calls = %+v, want a restart followed by a status call", server.runner.calls)
+	lastCall := server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-1]
+	if lastCall.method != "status" || server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-2].method != "restart" {
+		t.Fatalf("runner calls = %+v, want a restart followed by a status call", server.runner.snapshotCalls())
 	}
-	if server.runner.calls[len(server.runner.calls)-2].request.ProjectName != "relist-c"+strconv.FormatInt(compose.ID, 10) {
-		t.Fatalf("restart project name = %q, want %q", server.runner.calls[len(server.runner.calls)-2].request.ProjectName, "relist-c"+strconv.FormatInt(compose.ID, 10))
+	if server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-2].request.ProjectName != "relist-c"+strconv.FormatInt(compose.ID, 10) {
+		t.Fatalf("restart project name = %q, want %q", server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-2].request.ProjectName, "relist-c"+strconv.FormatInt(compose.ID, 10))
 	}
 }
 
@@ -1644,8 +1616,8 @@ func TestComposeRestartValidatesInputAndPropagatesRunnerErrors(t *testing.T) {
 	if restartUndeployedResponse.StatusCode != http.StatusBadRequest {
 		t.Fatalf("restart undeployed compose status = %d, want %d", restartUndeployedResponse.StatusCode, http.StatusBadRequest)
 	}
-	if len(server.runner.calls) != 0 {
-		t.Fatalf("runner should not have been called for an undeployed compose, got %+v", server.runner.calls)
+	if len(server.runner.snapshotCalls()) != 0 {
+		t.Fatalf("runner should not have been called for an undeployed compose, got %+v", server.runner.snapshotCalls())
 	}
 
 	missingComposeResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, 999), nil)
@@ -1663,11 +1635,7 @@ func TestComposeRestartValidatesInputAndPropagatesRunnerErrors(t *testing.T) {
 	if err := json.NewDecoder(workingResponse.Body).Decode(&working); err != nil {
 		t.Fatalf("decode working compose: %v", err)
 	}
-	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, working.ID), nil)
-	deployResponse.Body.Close()
-	if deployResponse.StatusCode != http.StatusOK {
-		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
-	}
+	server.deployOK(t, composePath(project.ID, production.ID, working.ID), nil)
 
 	server.runner.restartErr = errors.New("docker daemon unreachable")
 	restartFailureResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, working.ID), nil)
@@ -1700,15 +1668,11 @@ func TestAuthenticatedAdminCanDeleteDeployedCompose(t *testing.T) {
 		t.Fatalf("decode created compose: %v", err)
 	}
 
-	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
-	deployResponse.Body.Close()
-	if deployResponse.StatusCode != http.StatusOK {
-		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
+	server.deployOK(t, composePath(project.ID, production.ID, compose.ID), nil)
+	if len(server.runner.snapshotCalls()) != 1 || server.runner.snapshotCalls()[0].method != "up" {
+		t.Fatalf("runner calls after deploy = %+v, want a single up", server.runner.snapshotCalls())
 	}
-	if len(server.runner.calls) != 2 || server.runner.calls[0].method != "up" || server.runner.calls[1].method != "status" {
-		t.Fatalf("runner calls after deploy = %+v, want up followed by status", server.runner.calls)
-	}
-	composeDir := filepath.Dir(server.runner.calls[0].request.ComposeFilePath)
+	composeDir := filepath.Dir(server.runner.snapshotCalls()[0].request.ComposeFilePath)
 	if _, err := os.Stat(filepath.Join(composeDir, "docker-compose.yml")); err != nil {
 		t.Fatalf("deployed compose file: %v", err)
 	}
@@ -1724,11 +1688,11 @@ func TestAuthenticatedAdminCanDeleteDeployedCompose(t *testing.T) {
 		t.Fatalf("delete response body = %q, want empty", body)
 	}
 
-	if len(server.runner.calls) != 3 || server.runner.calls[2].method != "down-with-volumes" {
-		t.Fatalf("runner calls after delete = %+v, want down-with-volumes only", server.runner.calls)
+	if len(server.runner.snapshotCalls()) != 2 || server.runner.snapshotCalls()[1].method != "down-with-volumes" {
+		t.Fatalf("runner calls after delete = %+v, want down-with-volumes only", server.runner.snapshotCalls())
 	}
-	if server.runner.calls[2].request.ProjectName != "relist-c"+strconv.FormatInt(compose.ID, 10) {
-		t.Fatalf("delete project name = %q, want %q", server.runner.calls[2].request.ProjectName, "relist-c"+strconv.FormatInt(compose.ID, 10))
+	if server.runner.snapshotCalls()[1].request.ProjectName != "relist-c"+strconv.FormatInt(compose.ID, 10) {
+		t.Fatalf("delete project name = %q, want %q", server.runner.snapshotCalls()[1].request.ProjectName, "relist-c"+strconv.FormatInt(compose.ID, 10))
 	}
 	if _, err := os.Stat(composeDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("compose directory still exists or returned unexpected error: %v", err)
@@ -1777,8 +1741,8 @@ func TestAuthenticatedAdminCanDeleteUndeployedCompose(t *testing.T) {
 	if deleteResponse.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete status = %d, want %d", deleteResponse.StatusCode, http.StatusNoContent)
 	}
-	if len(server.runner.calls) != 0 {
-		t.Fatalf("runner calls for undeployed delete = %+v, want none", server.runner.calls)
+	if len(server.runner.snapshotCalls()) != 0 {
+		t.Fatalf("runner calls for undeployed delete = %+v, want none", server.runner.snapshotCalls())
 	}
 	if _, err := os.Stat(composeDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("undeployed compose directory still exists or returned unexpected error: %v", err)
@@ -1814,14 +1778,10 @@ func TestComposeDeletePreservesComposeWhenRunnerFails(t *testing.T) {
 		t.Fatalf("decode created compose: %v", err)
 	}
 
-	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
-	deployResponse.Body.Close()
-	if deployResponse.StatusCode != http.StatusOK {
-		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
-	}
-	composeDir := filepath.Dir(server.runner.calls[0].request.ComposeFilePath)
+	server.deployOK(t, composePath(project.ID, production.ID, compose.ID), nil)
+	composeDir := filepath.Dir(server.runner.snapshotCalls()[0].request.ComposeFilePath)
 
-	server.runner.downWithVolumesErr = errors.New("docker daemon unreachable")
+	server.runner.setDownWithVolumesErr(errors.New("docker daemon unreachable"))
 	deleteResponse := server.request(t, http.MethodDelete, composePath(project.ID, production.ID, compose.ID), nil)
 	defer deleteResponse.Body.Close()
 	if deleteResponse.StatusCode != http.StatusBadGateway {
@@ -1834,8 +1794,8 @@ func TestComposeDeletePreservesComposeWhenRunnerFails(t *testing.T) {
 	if failure["error"] != "delete failed: docker daemon unreachable" {
 		t.Fatalf("delete failure = %+v, want the runner error", failure)
 	}
-	if len(server.runner.calls) != 3 || server.runner.calls[2].method != "down-with-volumes" {
-		t.Fatalf("runner calls after failed delete = %+v, want down-with-volumes", server.runner.calls)
+	if len(server.runner.snapshotCalls()) != 2 || server.runner.snapshotCalls()[1].method != "down-with-volumes" {
+		t.Fatalf("runner calls after failed delete = %+v, want down-with-volumes", server.runner.snapshotCalls())
 	}
 	if _, err := os.Stat(filepath.Join(composeDir, "docker-compose.yml")); err != nil {
 		t.Fatalf("compose file after failed delete: %v", err)
@@ -1871,11 +1831,7 @@ func TestAuthenticatedAdminCanViewComposeLogs(t *testing.T) {
 		t.Fatalf("decode created compose: %v", err)
 	}
 
-	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
-	deployResponse.Body.Close()
-	if deployResponse.StatusCode != http.StatusOK {
-		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
-	}
+	server.deployOK(t, composePath(project.ID, production.ID, compose.ID), nil)
 
 	const wantLogs = "web | ready\nweb | listening\n"
 	server.runner.logsOutput = wantLogs
@@ -1894,11 +1850,11 @@ func TestAuthenticatedAdminCanViewComposeLogs(t *testing.T) {
 		t.Fatalf("logs = %q, want %q", logs.Logs, wantLogs)
 	}
 
-	if len(server.runner.calls) != 3 || server.runner.calls[2].method != "logs" {
-		t.Fatalf("runner calls = %+v, want deploy calls followed by logs", server.runner.calls)
+	if len(server.runner.snapshotCalls()) != 2 || server.runner.snapshotCalls()[1].method != "logs" {
+		t.Fatalf("runner calls = %+v, want deploy calls followed by logs", server.runner.snapshotCalls())
 	}
-	if server.runner.calls[2].request.ProjectName != "relist-c"+strconv.FormatInt(compose.ID, 10) {
-		t.Fatalf("logs project name = %q, want %q", server.runner.calls[2].request.ProjectName, "relist-c"+strconv.FormatInt(compose.ID, 10))
+	if server.runner.snapshotCalls()[1].request.ProjectName != "relist-c"+strconv.FormatInt(compose.ID, 10) {
+		t.Fatalf("logs project name = %q, want %q", server.runner.snapshotCalls()[1].request.ProjectName, "relist-c"+strconv.FormatInt(compose.ID, 10))
 	}
 }
 
@@ -1930,8 +1886,8 @@ func TestComposeLogsValidatesDeploymentAndPropagatesRunnerErrors(t *testing.T) {
 	if undeployedLogsResponse.StatusCode != http.StatusBadRequest {
 		t.Fatalf("undeployed logs status = %d, want %d", undeployedLogsResponse.StatusCode, http.StatusBadRequest)
 	}
-	if len(server.runner.calls) != 0 {
-		t.Fatalf("runner calls for undeployed logs = %+v, want none", server.runner.calls)
+	if len(server.runner.snapshotCalls()) != 0 {
+		t.Fatalf("runner calls for undeployed logs = %+v, want none", server.runner.snapshotCalls())
 	}
 
 	workingResponse := postJSON(t, server, composesPath(project.ID, production.ID), map[string]string{
@@ -1943,11 +1899,7 @@ func TestComposeLogsValidatesDeploymentAndPropagatesRunnerErrors(t *testing.T) {
 	if err := json.NewDecoder(workingResponse.Body).Decode(&working); err != nil {
 		t.Fatalf("decode working compose: %v", err)
 	}
-	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, working.ID), nil)
-	deployResponse.Body.Close()
-	if deployResponse.StatusCode != http.StatusOK {
-		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
-	}
+	server.deployOK(t, composePath(project.ID, production.ID, working.ID), nil)
 
 	server.runner.logsErr = errors.New("docker daemon unreachable")
 	logsFailureResponse := server.request(t, http.MethodGet, composeLogsPath(project.ID, production.ID, working.ID), nil)
@@ -1962,8 +1914,8 @@ func TestComposeLogsValidatesDeploymentAndPropagatesRunnerErrors(t *testing.T) {
 	if failure["error"] != "logs failed: docker daemon unreachable" {
 		t.Fatalf("logs failure = %+v, want the runner error", failure)
 	}
-	if len(server.runner.calls) != 3 || server.runner.calls[2].method != "logs" {
-		t.Fatalf("runner calls after failed logs = %+v, want logs", server.runner.calls)
+	if len(server.runner.snapshotCalls()) != 2 || server.runner.snapshotCalls()[1].method != "logs" {
+		t.Fatalf("runner calls after failed logs = %+v, want logs", server.runner.snapshotCalls())
 	}
 }
 
@@ -1983,13 +1935,8 @@ func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
 		t.Fatalf("decode created compose: %v", err)
 	}
 
-	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
-	defer deployResponse.Body.Close()
-	if deployResponse.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(deployResponse.Body)
-		t.Fatalf("deploy status = %d, want %d, body = %s", deployResponse.StatusCode, http.StatusOK, body)
-	}
-	assertRunIdentity(t, "deploy", server.runner.calls[0].request, server.dataDir, compose.ID)
+	server.deployOK(t, composePath(project.ID, production.ID, compose.ID), nil)
+	assertRunIdentity(t, "deploy", server.runner.snapshotCalls()[0].request, server.dataDir, compose.ID)
 
 	renameResponse := server.request(t, http.MethodPut, "/api/projects/"+strconv.FormatInt(project.ID, 10), map[string]string{
 		"name":        "Renamed Co",
@@ -2011,7 +1958,7 @@ func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
 	if len(composesList) != 1 || composesList[0].Status != (composeStatusResponse{Running: 1, Total: 1}) {
 		t.Fatalf("composes list after rename = %+v, want the running stack found at its original path", composesList)
 	}
-	lastCall := server.runner.calls[len(server.runner.calls)-1]
+	lastCall := server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-1]
 	if lastCall.method != "status" {
 		t.Fatalf("last runner call after rename = %q, want %q", lastCall.method, "status")
 	}
@@ -2023,7 +1970,7 @@ func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
 		body, _ := io.ReadAll(stopResponse.Body)
 		t.Fatalf("stop after project rename status = %d, want %d, body = %s", stopResponse.StatusCode, http.StatusOK, body)
 	}
-	assertRunIdentity(t, "stop", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, compose.ID)
+	assertRunIdentity(t, "stop", server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-2].request, server.dataDir, compose.ID)
 
 	restartResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, compose.ID), nil)
 	defer restartResponse.Body.Close()
@@ -2031,7 +1978,7 @@ func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
 		body, _ := io.ReadAll(restartResponse.Body)
 		t.Fatalf("restart after project rename status = %d, want %d, body = %s", restartResponse.StatusCode, http.StatusOK, body)
 	}
-	assertRunIdentity(t, "restart", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, compose.ID)
+	assertRunIdentity(t, "restart", server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-2].request, server.dataDir, compose.ID)
 
 	logsResponse := server.request(t, http.MethodGet, composeLogsPath(project.ID, production.ID, compose.ID), nil)
 	defer logsResponse.Body.Close()
@@ -2039,7 +1986,7 @@ func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
 		body, _ := io.ReadAll(logsResponse.Body)
 		t.Fatalf("logs after project rename status = %d, want %d, body = %s", logsResponse.StatusCode, http.StatusOK, body)
 	}
-	assertRunIdentity(t, "logs", server.runner.calls[len(server.runner.calls)-1].request, server.dataDir, compose.ID)
+	assertRunIdentity(t, "logs", server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-1].request, server.dataDir, compose.ID)
 
 	deleteResponse := server.request(t, http.MethodDelete, composePath(project.ID, production.ID, compose.ID), nil)
 	defer deleteResponse.Body.Close()
@@ -2047,7 +1994,7 @@ func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
 		body, _ := io.ReadAll(deleteResponse.Body)
 		t.Fatalf("delete after project rename status = %d, want %d, body = %s", deleteResponse.StatusCode, http.StatusNoContent, body)
 	}
-	lastCall = server.runner.calls[len(server.runner.calls)-1]
+	lastCall = server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-1]
 	if lastCall.method != "down-with-volumes" {
 		t.Fatalf("last runner call after delete = %q, want %q (no orphaned teardown skip)", lastCall.method, "down-with-volumes")
 	}
@@ -2070,11 +2017,7 @@ func TestComposeActionsKeepOriginalIdentityAfterEnvironmentRename(t *testing.T) 
 		t.Fatalf("decode created compose: %v", err)
 	}
 
-	deployResponse := server.request(t, http.MethodPost, composeDeployPath(project.ID, production.ID, compose.ID), nil)
-	defer deployResponse.Body.Close()
-	if deployResponse.StatusCode != http.StatusOK {
-		t.Fatalf("deploy status = %d, want %d", deployResponse.StatusCode, http.StatusOK)
-	}
+	server.deployOK(t, composePath(project.ID, production.ID, compose.ID), nil)
 
 	// Environments have no rename endpoint yet, so the rename is written
 	// directly; the invariant under test is that stored identity does not
@@ -2099,7 +2042,7 @@ func TestComposeActionsKeepOriginalIdentityAfterEnvironmentRename(t *testing.T) 
 		body, _ := io.ReadAll(stopResponse.Body)
 		t.Fatalf("stop after environment rename status = %d, want %d, body = %s", stopResponse.StatusCode, http.StatusOK, body)
 	}
-	assertRunIdentity(t, "stop", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, compose.ID)
+	assertRunIdentity(t, "stop", server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-2].request, server.dataDir, compose.ID)
 
 	restartResponse := server.request(t, http.MethodPost, composeRestartPath(project.ID, production.ID, compose.ID), nil)
 	defer restartResponse.Body.Close()
@@ -2107,7 +2050,7 @@ func TestComposeActionsKeepOriginalIdentityAfterEnvironmentRename(t *testing.T) 
 		body, _ := io.ReadAll(restartResponse.Body)
 		t.Fatalf("restart after environment rename status = %d, want %d, body = %s", restartResponse.StatusCode, http.StatusOK, body)
 	}
-	assertRunIdentity(t, "restart", server.runner.calls[len(server.runner.calls)-2].request, server.dataDir, compose.ID)
+	assertRunIdentity(t, "restart", server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-2].request, server.dataDir, compose.ID)
 
 	logsResponse := server.request(t, http.MethodGet, composeLogsPath(project.ID, production.ID, compose.ID), nil)
 	defer logsResponse.Body.Close()
@@ -2115,7 +2058,7 @@ func TestComposeActionsKeepOriginalIdentityAfterEnvironmentRename(t *testing.T) 
 		body, _ := io.ReadAll(logsResponse.Body)
 		t.Fatalf("logs after environment rename status = %d, want %d, body = %s", logsResponse.StatusCode, http.StatusOK, body)
 	}
-	assertRunIdentity(t, "logs", server.runner.calls[len(server.runner.calls)-1].request, server.dataDir, compose.ID)
+	assertRunIdentity(t, "logs", server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-1].request, server.dataDir, compose.ID)
 
 	deleteResponse := server.request(t, http.MethodDelete, composePath(project.ID, production.ID, compose.ID), nil)
 	defer deleteResponse.Body.Close()
@@ -2123,7 +2066,7 @@ func TestComposeActionsKeepOriginalIdentityAfterEnvironmentRename(t *testing.T) 
 		body, _ := io.ReadAll(deleteResponse.Body)
 		t.Fatalf("delete after environment rename status = %d, want %d, body = %s", deleteResponse.StatusCode, http.StatusNoContent, body)
 	}
-	lastCall := server.runner.calls[len(server.runner.calls)-1]
+	lastCall := server.runner.snapshotCalls()[len(server.runner.snapshotCalls())-1]
 	if lastCall.method != "down-with-volumes" {
 		t.Fatalf("last runner call after delete = %q, want %q (no orphaned teardown skip)", lastCall.method, "down-with-volumes")
 	}
@@ -2503,6 +2446,7 @@ type testServer struct {
 	terminal     *terminalfake.Exec
 	images       *imagesfake.Images
 	cookies      map[string]*http.Cookie
+	stopWorker   func()
 }
 
 func newTestServer(t *testing.T) *testServer {
@@ -2520,14 +2464,17 @@ func newTestServer(t *testing.T) *testServer {
 	volumeCLI := &faketest.CLI{}
 	terminalExec := &terminalfake.Exec{}
 	imagesStore := &imagesfake.Images{}
+	options := &terminal.Options{
+		Exec:         terminalExec,
+		MaxSessions:  10,
+		PingInterval: 50 * time.Millisecond,
+		PingTimeout:  50 * time.Millisecond,
+		KillGrace:    50 * time.Millisecond,
+	}
+	handler, stop := startHandler(t, db, runner, dataDir, history, facts, volumeRunner, volumes.NewResolver(volumeCLI, dataDir), options, imagesStore)
 	return &testServer{
-		handler: httpapi.NewHandler(db, runner, dataDir, history, facts, volumeRunner, volumes.NewResolver(volumeCLI, dataDir), &terminal.Options{
-			Exec:         terminalExec,
-			MaxSessions:  10,
-			PingInterval: 50 * time.Millisecond,
-			PingTimeout:  50 * time.Millisecond,
-			KillGrace:    50 * time.Millisecond,
-		}, imagesStore),
+		handler:      handler,
+		stopWorker:   stop,
 		db:           db,
 		dataDir:      dataDir,
 		runner:       runner,
@@ -2541,15 +2488,44 @@ func newTestServer(t *testing.T) *testServer {
 	}
 }
 
+// startHandler builds the panel's handler with its own deployment worker and
+// stops the worker when the test ends. Call it after registering the database
+// cleanup: cleanups run last-in first-out, so the worker is stopped before the
+// database closes and the temp dirs are removed. t.Context() would not do: it
+// is canceled before cleanups run, and nothing would wait for the worker.
+func startHandler(t *testing.T, db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, facts metrics.ServiceFacts, volumeRunner volumes.Runner, resolver *volumes.Resolver, options *terminal.Options, imageStore images.Images) (http.Handler, func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	handler, wait := httpapi.NewHandler(ctx, httpapi.Deps{DB: db, Runner: runner, DataDir: dataDir, History: history, Services: facts,
+		VolumeRunner: volumeRunner, VolumeResolver: resolver, Terminal: options, Images: imageStore})
+	var once sync.Once
+	stop := func() { once.Do(func() { cancel(); wait() }) }
+	t.Cleanup(stop)
+	return handler, stop
+}
+
+// useRunner swaps the server's handler for one over runner, stopping the old
+// deployment worker first so two workers never share the queue.
+func (s *testServer) useRunner(t *testing.T, runner composes.ComposeRunner) {
+	t.Helper()
+	s.stopWorker()
+	s.handler, s.stopWorker = startHandler(t, s.db, runner, s.dataDir, nil, nil, s.volumeRunner, volumes.NewResolver(s.volumeCLI, s.dataDir), nil, nil)
+}
+
 // fakeComposeRunner is the ComposeRunner fake described by the spec's
 // Testing Decisions: it records what it was asked to do instead of touching
 // a real Docker daemon.
 type fakeComposeRunner struct {
+	// mu guards calls and statuses: the deployment worker calls the runner
+	// from its own goroutine.
+	mu                 sync.Mutex
+	buildErr           map[string]error
 	calls              []fakeComposeRun
 	statuses           map[string]composes.ComposeStatus
 	upErr              error
 	downErr            error
 	downWithVolumesErr error
+	volumesRemoved     bool
 	restartErr         error
 	logsOutput         string
 	logsErr            error
@@ -2561,18 +2537,74 @@ type fakeComposeRunner struct {
 type fakeComposeRun struct {
 	method  string
 	request composes.RunRequest
+	build   bool // UpOptions.Build of an "up" call
+}
+
+// snapshotCalls copies the recorded calls. The deployment worker records its
+// calls from its own goroutine, so tests never read f.calls directly.
+func (f *fakeComposeRunner) snapshotCalls() []fakeComposeRun {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeComposeRun(nil), f.calls...)
+}
+
+func (f *fakeComposeRunner) resetCalls() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = nil
+}
+
+func (f *fakeComposeRunner) recordCall(call fakeComposeRun) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, call)
+}
+
+func (f *fakeComposeRunner) setUpErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.upErr = err
+}
+
+func (f *fakeComposeRunner) setDownWithVolumesErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.downWithVolumesErr = err
+}
+
+func (f *fakeComposeRunner) setOnDownWithVolumes(hook func(req composes.RunRequest)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onDownWithVolumes = hook
+}
+
+func (f *fakeComposeRunner) setStatus(project string, status composes.ComposeStatus) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statuses[project] = status
 }
 
 func newFakeComposeRunner() *fakeComposeRunner {
 	return &fakeComposeRunner{statuses: make(map[string]composes.ComposeStatus)}
 }
 
-func (f *fakeComposeRunner) Up(_ context.Context, req composes.RunRequest) error {
-	f.calls = append(f.calls, fakeComposeRun{method: "up", request: req})
+func (f *fakeComposeRunner) Up(_ context.Context, req composes.RunRequest, opts composes.UpOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fakeComposeRun{method: "up", request: req, build: opts.Build})
 	return f.upErr
 }
 
+func (f *fakeComposeRunner) Build(_ context.Context, req composes.RunRequest, opts composes.BuildOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fakeComposeRun{method: "build:" + opts.Service, request: req})
+	return f.buildErr[opts.Service]
+}
+
 func (f *fakeComposeRunner) Down(_ context.Context, req composes.RunRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeComposeRun{method: "down", request: req})
 	if f.downErr != nil {
 		return f.downErr
@@ -2582,9 +2614,14 @@ func (f *fakeComposeRunner) Down(_ context.Context, req composes.RunRequest) err
 }
 
 func (f *fakeComposeRunner) DownWithVolumes(_ context.Context, req composes.RunRequest) error {
-	if f.onDownWithVolumes != nil {
-		f.onDownWithVolumes(req)
+	f.mu.Lock()
+	hook := f.onDownWithVolumes
+	f.mu.Unlock()
+	if hook != nil {
+		hook(req)
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeComposeRun{method: "down-with-volumes", request: req})
 	if f.downWithVolumesErr != nil {
 		return f.downWithVolumesErr
@@ -2593,12 +2630,29 @@ func (f *fakeComposeRunner) DownWithVolumes(_ context.Context, req composes.RunR
 	return nil
 }
 
+func (f *fakeComposeRunner) DownWithVolumesTracked(ctx context.Context, req composes.RunRequest) (bool, error) {
+	err := f.DownWithVolumes(ctx, req)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.volumesRemoved, err
+}
+
+func (f *fakeComposeRunner) setVolumesRemoved(removed bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumesRemoved = removed
+}
+
 func (f *fakeComposeRunner) Restart(_ context.Context, req composes.RunRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeComposeRun{method: "restart", request: req})
 	return f.restartErr
 }
 
 func (f *fakeComposeRunner) Status(_ context.Context, req composes.RunRequest) (composes.ComposeStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeComposeRun{method: "status", request: req})
 	if status, ok := f.statuses[req.ProjectName]; ok {
 		return status, nil
@@ -2607,6 +2661,8 @@ func (f *fakeComposeRunner) Status(_ context.Context, req composes.RunRequest) (
 }
 
 func (f *fakeComposeRunner) Logs(_ context.Context, req composes.RunRequest) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeComposeRun{method: "logs", request: req})
 	if f.logsErr != nil {
 		return "", f.logsErr
@@ -2762,12 +2818,111 @@ func composePath(projectID, environmentID, composeID int64) string {
 	return composesPath(projectID, environmentID) + "/" + strconv.FormatInt(composeID, 10)
 }
 
-func composeDeployPath(projectID, environmentID, composeID int64) string {
-	return composePath(projectID, environmentID, composeID) + "/deploy"
+func composeDeploymentsPath(projectID, environmentID, composeID int64) string {
+	return composePath(projectID, environmentID, composeID) + "/deployments"
 }
 
-func composeDeployFreshPath(projectID, environmentID, composeID int64) string {
-	return composePath(projectID, environmentID, composeID) + "/deploy-fresh"
+// deploymentResponse mirrors the Deployment JSON.
+type deploymentResponse struct {
+	ID            int64    `json:"id"`
+	ComposeID     int64    `json:"composeId"`
+	Number        int      `json:"number"`
+	Mode          string   `json:"mode"`
+	NoCache       bool     `json:"noCache"`
+	FreshVolumes  bool     `json:"freshVolumes"`
+	Status        string   `json:"status"`
+	Step          string   `json:"step"`
+	Steps         []string `json:"steps"`
+	FailedStep    string   `json:"failedStep"`
+	Reason        string   `json:"reason"`
+	SourceRef     string   `json:"sourceRef"`
+	SourceSubject string   `json:"sourceSubject"`
+	Warnings      []string `json:"warnings"`
+	QueuedAt      string   `json:"queuedAt"`
+	StartedAt     *string  `json:"startedAt"`
+	FinishedAt    *string  `json:"finishedAt"`
+	Ahead         *int     `json:"ahead"`
+}
+
+// deploymentSettled reports whether the Deployment reached a final status.
+func (d deploymentResponse) settled() bool {
+	return d.Status == "succeeded" || d.Status == "failed" || d.Status == "canceled"
+}
+
+// enqueue posts a Deployment and returns the HTTP status and its number.
+func (s *testServer) enqueue(t *testing.T, composePath string, body any) (int, int) {
+	t.Helper()
+	response := s.request(t, http.MethodPost, composePath+"/deployments", body)
+	defer response.Body.Close()
+	raw, _ := io.ReadAll(response.Body)
+	var out struct {
+		Number int `json:"number"`
+	}
+	if response.StatusCode == http.StatusAccepted || response.StatusCode == http.StatusOK {
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("decode enqueue response %s: %v", raw, err)
+		}
+	}
+	return response.StatusCode, out.Number
+}
+
+// waitDeployment polls until the Deployment settles.
+func (s *testServer) waitDeployment(t *testing.T, composePath string, number int) deploymentResponse {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		response := s.request(t, http.MethodGet, composePath+"/deployments/"+strconv.Itoa(number), nil)
+		var d deploymentResponse
+		err := json.NewDecoder(response.Body).Decode(&d)
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK || err != nil {
+			t.Fatalf("get deployment %d = %d (%v)", number, response.StatusCode, err)
+		}
+		if d.settled() {
+			return d
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("deployment %d still %q after 30s", number, d.Status)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// deployAndWait enqueues a Deployment of the Compose at composePath and waits
+// for it to settle. A nil body is a plain deploy.
+func (s *testServer) deployAndWait(t *testing.T, composePath string, body any) deploymentResponse {
+	t.Helper()
+	if body == nil {
+		body = map[string]any{"mode": "deploy"}
+	}
+	status, number := s.enqueue(t, composePath, body)
+	if status != http.StatusAccepted && status != http.StatusOK {
+		t.Fatalf("POST %s/deployments = %d, want 202", composePath, status)
+	}
+	return s.waitDeployment(t, composePath, number)
+}
+
+// deployedCompose deploys the Compose and returns it as the API shows it afterwards.
+func (s *testServer) deployedCompose(t *testing.T, path string) composeResponse {
+	t.Helper()
+	s.deployOK(t, path, nil)
+	response := s.request(t, http.MethodGet, path, nil)
+	defer response.Body.Close()
+	var deployed composeResponse
+	if err := json.NewDecoder(response.Body).Decode(&deployed); err != nil {
+		t.Fatalf("decode deployed compose: %v", err)
+	}
+	return deployed
+}
+
+// deployOK is deployAndWait for a Deployment that must succeed.
+func (s *testServer) deployOK(t *testing.T, composePath string, body any) deploymentResponse {
+	t.Helper()
+	d := s.deployAndWait(t, composePath, body)
+	if d.Status != "succeeded" {
+		t.Fatalf("deployment %d = %s (step %q, reason %q), want succeeded", d.Number, d.Status, d.FailedStep, d.Reason)
+	}
+	return d
 }
 
 func composeStopPath(projectID, environmentID, composeID int64) string {
@@ -2817,13 +2972,16 @@ func newFreshDeployFixture(t *testing.T) freshDeployFixture {
 	return freshDeployFixture{server: server, project: project, env: env, compose: compose}
 }
 
+func (f freshDeployFixture) path() string {
+	return composePath(f.project.ID, f.env.ID, f.compose.ID)
+}
+
+// deploy deploys the Compose and returns it as the API shows it afterwards.
 func (f freshDeployFixture) deploy(t *testing.T) composeResponse {
 	t.Helper()
-	response := f.server.request(t, http.MethodPost, composeDeployPath(f.project.ID, f.env.ID, f.compose.ID), nil)
+	f.server.deployOK(t, f.path(), map[string]any{"mode": "deploy"})
+	response := f.server.request(t, http.MethodGet, f.path(), nil)
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("deploy status = %d, want %d", response.StatusCode, http.StatusOK)
-	}
 	var deployed composeResponse
 	if err := json.NewDecoder(response.Body).Decode(&deployed); err != nil {
 		t.Fatalf("decode deployed compose: %v", err)
@@ -2840,22 +2998,37 @@ func (f freshDeployFixture) saveYAML(t *testing.T, yaml string) {
 	}
 }
 
-func (f freshDeployFixture) deployFresh(t *testing.T, body any) (int, map[string]string) {
+// freshBody is the request that deploys after deleting the Compose's volumes.
+func freshBody(confirmName string) map[string]any {
+	return map[string]any{"mode": "deploy", "freshVolumes": true, "confirmName": confirmName}
+}
+
+// deployFresh queues a fresh-volumes deploy and returns the settled Deployment.
+func (f freshDeployFixture) deployFresh(t *testing.T, confirmName string) deploymentResponse {
 	t.Helper()
-	response := f.server.request(t, http.MethodPost, composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), body)
-	defer response.Body.Close()
-	var decoded map[string]string
-	_ = json.NewDecoder(response.Body).Decode(&decoded)
-	return response.StatusCode, decoded
+	return f.server.deployAndWait(t, f.path(), freshBody(confirmName))
+}
+
+// wantFailed fails the test unless d failed with a reason containing every want.
+func wantFailed(t *testing.T, d deploymentResponse, want ...string) {
+	t.Helper()
+	if d.Status != "failed" {
+		t.Fatalf("deployment status = %q (reason %q), want failed", d.Status, d.Reason)
+	}
+	for _, w := range want {
+		if !strings.Contains(d.Reason, w) {
+			t.Errorf("reason = %q, want it to contain %q", d.Reason, w)
+		}
+	}
 }
 
 // deployedRequest is the run request of the most recent up call: where the
 // deployed files live on disk.
 func (f freshDeployFixture) deployedRequest(t *testing.T) composes.RunRequest {
 	t.Helper()
-	for i := len(f.server.runner.calls) - 1; i >= 0; i-- {
-		if f.server.runner.calls[i].method == "up" {
-			return f.server.runner.calls[i].request
+	for i := len(f.server.runner.snapshotCalls()) - 1; i >= 0; i-- {
+		if f.server.runner.snapshotCalls()[i].method == "up" {
+			return f.server.runner.snapshotCalls()[i].request
 		}
 	}
 	t.Fatal("no up call recorded")
@@ -2875,7 +3048,7 @@ func readFileString(t *testing.T, path string) string {
 // status probes that responses trigger.
 func (f freshDeployFixture) methodsAfter(n int) []string {
 	var methods []string
-	for _, call := range f.server.runner.calls[n:] {
+	for _, call := range f.server.runner.snapshotCalls()[n:] {
 		if call.method != "status" {
 			methods = append(methods, call.method)
 		}
@@ -2891,11 +3064,10 @@ func TestComposeDeployFreshRunsDownWithVolumesThenUp(t *testing.T) {
 	if _, err := f.server.db.Exec("UPDATE composes SET deployed_at = ? WHERE id = ?", old, f.compose.ID); err != nil {
 		t.Fatalf("set deployed_at: %v", err)
 	}
-	before := len(f.server.runner.calls)
+	before := len(f.server.runner.snapshotCalls())
 
-	status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"})
-	if status != http.StatusOK {
-		t.Fatalf("deploy-fresh status = %d (%v), want %d", status, body, http.StatusOK)
+	if d := f.deployFresh(t, "Web"); d.Status != "succeeded" {
+		t.Fatalf("deploy-fresh = %s (%s), want succeeded", d.Status, d.Reason)
 	}
 	if got := f.methodsAfter(before); !reflect.DeepEqual(got, []string{"down-with-volumes", "up"}) {
 		t.Fatalf("calls = %v, want [down-with-volumes up]", got)
@@ -2924,17 +3096,23 @@ func TestComposeDeployFreshDownRunsAgainstTheFilesAlreadyOnDisk(t *testing.T) {
 	req := f.deployedRequest(t)
 	f.saveYAML(t, freshNewYAML)
 
+	// The hook runs on the deployment worker's goroutine.
+	var atDownMu sync.Mutex
 	var atDown string
-	f.server.runner.onDownWithVolumes = func(req composes.RunRequest) {
+	f.server.runner.setOnDownWithVolumes(func(req composes.RunRequest) {
 		content, err := os.ReadFile(req.ComposeFilePath)
 		if err != nil {
 			t.Errorf("read compose file during down: %v", err)
 		}
+		atDownMu.Lock()
+		defer atDownMu.Unlock()
 		atDown = string(content)
+	})
+	if d := f.deployFresh(t, "Web"); d.Status != "succeeded" {
+		t.Fatalf("deploy-fresh = %s (%s), want succeeded", d.Status, d.Reason)
 	}
-	if status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"}); status != http.StatusOK {
-		t.Fatalf("deploy-fresh status = %d (%v), want %d", status, body, http.StatusOK)
-	}
+	atDownMu.Lock()
+	defer atDownMu.Unlock()
 	if !strings.Contains(atDown, "nginx:old") || strings.Contains(atDown, "nginx:new") {
 		t.Fatalf("compose file at down -v = %q, want the old YAML", atDown)
 	}
@@ -2945,8 +3123,8 @@ func TestComposeDeployFreshDownRunsAgainstTheFilesAlreadyOnDisk(t *testing.T) {
 
 func TestComposeDeployFreshOnANeverDeployedComposeSkipsDown(t *testing.T) {
 	f := newFreshDeployFixture(t)
-	if status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"}); status != http.StatusOK {
-		t.Fatalf("deploy-fresh status = %d (%v), want %d", status, body, http.StatusOK)
+	if d := f.deployFresh(t, "Web"); d.Status != "succeeded" {
+		t.Fatalf("deploy-fresh = %s (%s), want succeeded", d.Status, d.Reason)
 	}
 	if got := f.methodsAfter(0); !reflect.DeepEqual(got, []string{"up"}) {
 		t.Fatalf("calls = %v, want [up]", got)
@@ -2960,26 +3138,26 @@ func TestComposeDeployFreshRefusesWrongConfirmName(t *testing.T) {
 	f.saveYAML(t, freshNewYAML)
 	composeBefore := readFileString(t, req.ComposeFilePath)
 	envBefore := readFileString(t, req.EnvFilePath)
-	calls := len(f.server.runner.calls)
+	calls := len(f.server.runner.snapshotCalls())
 
 	tests := []struct {
 		name string
 		do   func() *http.Response
 	}{
 		{"empty", func() *http.Response {
-			return f.server.request(t, http.MethodPost, composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), map[string]string{"confirmName": ""})
+			return f.server.request(t, http.MethodPost, f.path()+"/deployments", freshBody(""))
 		}},
 		{"trailing space", func() *http.Response {
-			return f.server.request(t, http.MethodPost, composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), map[string]string{"confirmName": "Web "})
+			return f.server.request(t, http.MethodPost, f.path()+"/deployments", freshBody("Web "))
 		}},
 		{"wrong case", func() *http.Response {
-			return f.server.request(t, http.MethodPost, composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), map[string]string{"confirmName": "WEB"})
+			return f.server.request(t, http.MethodPost, f.path()+"/deployments", freshBody("WEB"))
 		}},
 		{"missing body", func() *http.Response {
-			return f.server.request(t, http.MethodPost, composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), nil)
+			return f.server.request(t, http.MethodPost, f.path()+"/deployments", nil)
 		}},
 		{"malformed JSON", func() *http.Response {
-			request := httptest.NewRequest(http.MethodPost, "http://relist-panel.test"+composeDeployFreshPath(f.project.ID, f.env.ID, f.compose.ID), strings.NewReader("{"))
+			request := httptest.NewRequest(http.MethodPost, "http://relist-panel.test"+f.path()+"/deployments", strings.NewReader("{"))
 			request.Header.Set("Content-Type", "application/json")
 			return f.server.serve(request)
 		}},
@@ -2991,8 +3169,8 @@ func TestComposeDeployFreshRefusesWrongConfirmName(t *testing.T) {
 			if response.StatusCode != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusBadRequest)
 			}
-			if len(f.server.runner.calls) != calls {
-				t.Fatalf("runner calls = %+v, want none", f.server.runner.calls[calls:])
+			if len(f.server.runner.snapshotCalls()) != calls {
+				t.Fatalf("runner calls = %+v, want none", f.server.runner.snapshotCalls()[calls:])
 			}
 			if got := readFileString(t, req.ComposeFilePath); got != composeBefore {
 				t.Fatalf("compose file changed: %q, want %q", got, composeBefore)
@@ -3010,16 +3188,10 @@ func TestComposeDeployFreshDoesNotUpWhenDownFails(t *testing.T) {
 	req := f.deployedRequest(t)
 	f.saveYAML(t, freshNewYAML)
 	composeBefore := readFileString(t, req.ComposeFilePath)
-	before := len(f.server.runner.calls)
+	before := len(f.server.runner.snapshotCalls())
 
-	f.server.runner.downWithVolumesErr = errors.New("daemon unreachable")
-	status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"})
-	if status != http.StatusBadGateway {
-		t.Fatalf("status = %d, want %d", status, http.StatusBadGateway)
-	}
-	if !strings.Contains(body["error"], "delete volumes failed") {
-		t.Fatalf("error = %q, want it to contain %q", body["error"], "delete volumes failed")
-	}
+	f.server.runner.setDownWithVolumesErr(errors.New("daemon unreachable"))
+	wantFailed(t, f.deployFresh(t, "Web"), "delete volumes failed")
 	if got := f.methodsAfter(before); !reflect.DeepEqual(got, []string{"down-with-volumes"}) {
 		t.Fatalf("calls = %v, want only [down-with-volumes]", got)
 	}
@@ -3052,15 +3224,12 @@ func TestComposeDeployFreshReportsRemovedVolumesWhenUpFails(t *testing.T) {
 	f := newFreshDeployFixture(t)
 	first := f.deploy(t)
 
-	f.server.runner.upErr = errors.New("port already allocated")
-	status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"})
-	if status != http.StatusBadGateway {
-		t.Fatalf("status = %d, want %d", status, http.StatusBadGateway)
-	}
-	for _, want := range []string{"volumes were removed", "stopped", "port already allocated"} {
-		if !strings.Contains(body["error"], want) {
-			t.Errorf("error = %q, want it to contain %q", body["error"], want)
-		}
+	f.server.runner.setUpErr(errors.New("port already allocated"))
+	f.server.runner.setVolumesRemoved(true)
+	failed := f.deployFresh(t, "Web")
+	wantFailed(t, failed, "volumes were removed", "stopped", "port already allocated")
+	if len(failed.Warnings) != 1 || !strings.Contains(failed.Warnings[0], "will not be restored automatically") {
+		t.Fatalf("removal warning not retained: %+v", failed)
 	}
 	f.assertLastDeployedAt(t, first.LastDeployedAt)
 }
@@ -3069,28 +3238,20 @@ func TestComposeDeployFreshReportsRemovedVolumesWhenWritingFilesFails(t *testing
 	f := newFreshDeployFixture(t)
 	first := f.deploy(t)
 	f.saveYAML(t, freshNewYAML)
+	f.server.runner.setVolumesRemoved(true)
 
 	// Replacing the env file with a directory makes the write fail whoever
 	// runs the tests; chmod would not stop root.
-	f.server.runner.onDownWithVolumes = func(req composes.RunRequest) {
+	f.server.runner.setOnDownWithVolumes(func(req composes.RunRequest) {
 		if err := os.Remove(req.EnvFilePath); err != nil {
 			t.Errorf("remove env file: %v", err)
 		}
 		if err := os.Mkdir(req.EnvFilePath, 0o750); err != nil {
 			t.Errorf("replace env file with a directory: %v", err)
 		}
-	}
-	before := len(f.server.runner.calls)
-	status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"})
-	if status != http.StatusBadGateway {
-		t.Fatalf("status = %d (%v), want %d", status, body, http.StatusBadGateway)
-	}
-	if !strings.Contains(body["error"], "volumes were removed") {
-		t.Fatalf("error = %q, want it to contain %q", body["error"], "volumes were removed")
-	}
-	if !strings.Contains(body["error"], "stopped") {
-		t.Fatalf("error = %q, want it to say the Compose is stopped", body["error"])
-	}
+	})
+	before := len(f.server.runner.snapshotCalls())
+	wantFailed(t, f.deployFresh(t, "Web"), "volumes were removed", "stopped")
 	if got := f.methodsAfter(before); !reflect.DeepEqual(got, []string{"down-with-volumes"}) {
 		t.Fatalf("calls = %v, want only [down-with-volumes]", got)
 	}
@@ -3103,16 +3264,45 @@ func TestComposeDeployFreshRefusesUnresolvableYAMLBeforeDown(t *testing.T) {
 	req := f.deployedRequest(t)
 	f.saveYAML(t, "- not\n- a mapping\n")
 	composeBefore := readFileString(t, req.ComposeFilePath)
-	before := len(f.server.runner.calls)
+	before := len(f.server.runner.snapshotCalls())
 
-	status, body := f.deployFresh(t, map[string]string{"confirmName": "Web"})
-	if status != http.StatusBadRequest {
-		t.Fatalf("status = %d (%v), want %d", status, body, http.StatusBadRequest)
-	}
+	wantCaptureRejected(t, f.server, f.path(), freshBody("Web"), "compose yaml is invalid")
 	if got := f.methodsAfter(before); len(got) != 0 {
 		t.Fatalf("calls = %v, want none: volumes must survive an unresolvable YAML", got)
 	}
 	if got := readFileString(t, req.ComposeFilePath); got != composeBefore {
 		t.Fatalf("compose file changed: %q", got)
+	}
+}
+
+func wantCaptureRejected(t *testing.T, server *testServer, path string, body any, fragments ...string) {
+	t.Helper()
+	if body == nil {
+		body = map[string]any{"mode": "deploy"}
+	}
+	var before int
+	if err := server.db.QueryRow(`SELECT count(*) FROM deployments`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	response := server.request(t, http.MethodPost, path+"/deployments", body)
+	defer response.Body.Close()
+	var failure map[string]string
+	if err := json.NewDecoder(response.Body).Decode(&failure); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("capture status=%d body=%v, want400", response.StatusCode, failure)
+	}
+	for _, fragment := range fragments {
+		if !strings.Contains(failure["error"], fragment) {
+			t.Fatalf("capture error=%q, want %q", failure["error"], fragment)
+		}
+	}
+	var after int
+	if err := server.db.QueryRow(`SELECT count(*) FROM deployments`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("capture failure created deployment: rows%d ->%d", before, after)
 	}
 }

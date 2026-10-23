@@ -2,20 +2,28 @@
 package httpapi
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
+	"path/filepath"
+	"sync"
+	"time"
 
 	"relist-panel/internal/auth"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/composevariables"
+	"relist-panel/internal/deployments"
+	"relist-panel/internal/dockerhost"
 	"relist-panel/internal/domains"
 	"relist-panel/internal/environments"
 	"relist-panel/internal/environmentvariables"
 	"relist-panel/internal/images"
 	"relist-panel/internal/metrics"
+	"relist-panel/internal/migration"
 	"relist-panel/internal/projects"
+	"relist-panel/internal/sources"
 	"relist-panel/internal/terminal"
 	"relist-panel/internal/variablesets"
 	"relist-panel/internal/volumeapi"
@@ -23,18 +31,43 @@ import (
 	"relist-panel/internal/webassets"
 )
 
-// NewHandler builds the top-level HTTP handler for the panel. runner drives
-// Compose deploy lifecycle actions (ADR-0003); dataDir is the root directory
-// Compose files are resolved under (ADR-0002). history and services are the
-// running sampler's read sides (metrics.HostHistory and ServiceFacts —
-// *hostmetrics.Sampler and *hostmetrics.ServiceCollector in production,
-// fakes at the HTTP seam); they may be nil, in which case the metrics
-// endpoints stay unregistered (an unwired panel has nothing to serve).
-// volumeRunner and volumeResolver are the Volume Explorer's operation seam
-// and its read side (ADR-0010). terminalOptions, when non-nil, is the terminal
-// seam and settings; nil leaves the terminal routes unregistered. imageStore
-// is the Images page's Docker seam; nil leaves the image routes unregistered.
-func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, services metrics.ServiceFacts, volumeRunner volumes.Runner, volumeResolver *volumes.Resolver, terminalOptions *terminal.Options, imageStore images.Images) http.Handler {
+// Deps is what NewHandler wires together. DB, Runner and DataDir are
+// required; every other field may be left zero, which leaves its routes
+// unregistered.
+type Deps struct {
+	DB *sql.DB
+	// Runner drives Compose deploy lifecycle actions (ADR-0003).
+	Runner composes.ComposeRunner
+	// DataDir is the root directory Compose files are resolved under
+	// (ADR-0002).
+	DataDir string
+	// History and Services are the running sampler's read sides
+	// (*hostmetrics.Sampler and *hostmetrics.ServiceCollector in production,
+	// fakes at the HTTP seam). The metrics endpoints need both.
+	History  metrics.HostHistory
+	Services metrics.ServiceFacts
+	// VolumeRunner and VolumeResolver are the Volume Explorer's operation
+	// seam and its read side (ADR-0010).
+	VolumeRunner   volumes.Runner
+	VolumeResolver *volumes.Resolver
+	// Terminal is the terminal seam and its settings.
+	Terminal *terminal.Options
+	// Images is the Images page's Docker seam.
+	Images images.Images
+	// Migration adds a server Migration's routes and its lock middleware
+	// (ADR-0018), and resumes an interrupted lock in the background.
+	Migration *migration.Options
+	// Docker adds host reports and confirmed cleanup.
+	Docker dockerhost.Engine
+}
+
+// NewHandler builds the top-level HTTP handler for the panel.
+//
+// The Deployment worker runs until ctx is done. The returned wait blocks until
+// it has returned, which is after a Deploy step in progress has finished.
+func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
+	db, runner, dataDir := d.DB, d.Runner, d.DataDir
+	migrationOptions := d.Migration
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
 	authService := auth.New(db)
@@ -47,22 +80,107 @@ func NewHandler(db *sql.DB, runner composes.ComposeRunner, dataDir string, histo
 	environmentVariablesService := environmentvariables.New(db)
 	environmentVariablesService.RegisterRoutes(mux)
 	composesService.RegisterRoutes(mux)
+	gate := newCoordinator()
+	hostGuard := dockerhost.NewGuard()
+	gate.host = hostGuard
+	queue := deployments.NewQueue(deployments.Deps{
+		Maintenance: hostGuard,
+		Store:       deployments.NewStore(db),
+		Sources:     sources.NewStore(db),
+		Composes:    composesService,
+		Fetcher:     sources.Git{},
+		Builder:     runner,
+		Gate:        gate,
+		Timeout:     60 * time.Minute,
+		Keep:        20,
+	})
+	composesService.SetDeploymentCanceler(queue)
+	deployments.NewAPI(queue, composesService).RegisterRoutes(mux)
+	var worker sync.WaitGroup
+	worker.Add(1)
+	go func() {
+		defer worker.Done()
+		queue.Run(ctx)
+	}()
+	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
 	domains.New(db).RegisterRoutes(mux)
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
-	volumeapi.New(composesService, volumeResolver, volumeRunner).RegisterRoutes(mux)
-	if terminalOptions != nil {
-		terminal.New(composesService, *terminalOptions).RegisterRoutes(mux)
+	volumeapi.New(composesService, d.VolumeResolver, d.VolumeRunner).RegisterRoutes(mux)
+	var terminals migration.TerminalCloser
+	if d.Terminal != nil {
+		terminalService := terminal.New(composesService, *d.Terminal)
+		terminalService.RegisterRoutes(mux)
+		terminals = terminalService
 	}
-	if imageStore != nil {
-		images.New(imageStore).RegisterRoutes(mux)
+	if d.Images != nil {
+		images.New(d.Images).RegisterRoutes(mux)
 	}
-	if history != nil && services != nil {
-		metricsService := metrics.New(metrics.NewStore(db), history, services)
+	if d.Docker != nil {
+		pending := func(ctx context.Context) (bool, error) {
+			var count int
+			err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM deployments WHERE status IN ('queued', 'running')").Scan(&count)
+			return count > 0, err
+		}
+		dockerhost.NewAPI(d.Docker, hostGuard, pending).RegisterRoutes(mux)
+	}
+	if d.History != nil && d.Services != nil {
+		metricsService := metrics.New(metrics.NewStore(db), d.History, d.Services)
 		metricsService.RegisterRoutes(mux)
 	}
+	var inner http.Handler = gate.middleware(mux)
+	if migrationOptions != nil {
+		domainStore := domains.NewStore(db)
+		oldHost := migration.NewOldHost(migration.OldHostDeps{
+			Store:           migration.NewStore(db, nil),
+			Manifests:       migration.ManifestBuilder{DB: db, Composes: composesService, Volumes: d.VolumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir},
+			Queue:           queue,
+			Docker:          migrationOptions.Docker,
+			Status:          runner,
+			Composes:        composesService,
+			Domains:         domainStore,
+			Terminals:       terminals,
+			DB:              db,
+			DataDir:         dataDir,
+			ReportedDataDir: migrationOptions.ReportedDataDir,
+			Install:         migrationOptions.Install,
+		})
+		oldHost.RegisterRoutes(mux)
+		local := migration.LocalHost{DB: db, Docker: migrationOptions.Docker, DataDir: dataDir, Install: migrationOptions.Install,
+			SeededAdmin: migrationOptions.SeededAdmin}
+		stateDir := filepath.Join(dataDir, ".migration")
+		target := migration.NewTarget(migration.TargetDeps{
+			Local:    local,
+			HTTP:     migrationOptions.HTTP,
+			Insecure: migrationOptions.Insecure,
+			StateDir: stateDir,
+			Restore:  migration.NewRestorer(local, filepath.Join(stateDir, "staging")),
+			Finalizer: migration.NewFinalizer(migration.FinalizeDeps{
+				Local: local, Restart: migrationOptions.Restart, Queue: queue, Sources: sources.NewStore(db), Domains: domainStore,
+			}),
+			Backoff: migrationOptions.Backoff,
+			Context: ctx,
+		})
+		if migrationOptions.Control != nil {
+			oldHost.RegisterControlRoutes(migrationOptions.Control)
+			target.RegisterControlRoutes(migrationOptions.Control)
+		}
+		authService.SetSetupBlocker(target.InProgress)
+		authService.AllowSelfAuthenticated(migration.SessionPath)
+		inner = oldHost.Middleware(inner)
+		worker.Add(1)
+		go func() {
+			defer worker.Done()
+			if err := oldHost.ResumeLock(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("migration: resume the lock: %v", err)
+			}
+		}()
+		if err := target.ResumeIfPending(ctx); err != nil {
+			log.Printf("migration: resume the pull: %v", err)
+		}
+	}
 	mux.Handle("/", webassets.Handler())
-	return authService.Middleware(newCoordinator().middleware(mux))
+	return authService.Middleware(inner), worker.Wait
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
