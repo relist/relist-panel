@@ -246,3 +246,36 @@ func TestMigratedToNamesTheTargetAndWhen(t *testing.T) {
 		t.Fatalf("MigratedTo without a time = %q", got)
 	}
 }
+
+func TestServeScrollsInAShortWindow(t *testing.T) {
+	c := &fakeController{createdTok: migrationctl.Token{Token: "tok-123", ExpiresAt: time.Now().Add(time.Hour)}}
+	m := serveWith(c, migration.OldHostStatus{}, migration.Activity{})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	m = send(t, m, key("enter"))
+	mustContain(t, m, "Migration token")
+	if strings.Contains(screen(m), "and enter this panel's URL") {
+		t.Fatal("everything fit; the test needs a shorter window")
+	}
+	m = send(t, m, key("end"))
+	mustContain(t, m, "and enter this panel's URL")
+	m = send(t, m, key("home"))
+	mustContain(t, m, "Migration token")
+	for range 20 {
+		m = send(t, m, key("down"))
+	}
+	mustContain(t, m, "and enter this panel's URL")
+}
+
+func TestResumeKeepsTheInputInAShortWindow(t *testing.T) {
+	m := NewResume(&fakeController{})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 8})
+	m, _ = m.Update(statusMsg{S: migration.OldHostStatus{Step: migration.StepMigrated, TargetURL: "https://new.example.com"}})
+	lines := strings.Split(screen(m), "\n")
+	if len(lines) > 8 {
+		t.Fatalf("%d lines in an 8-line window:\n%s", len(lines), screen(m))
+	}
+	mustContain(t, m, "enter confirm")
+	m = send(t, m, key("pgdown"))
+	m = send(t, m, key("pgup"))
+	mustContain(t, m, "Migrated to https://new.example.com")
+}

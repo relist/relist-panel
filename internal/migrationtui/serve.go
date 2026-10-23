@@ -54,6 +54,9 @@ type serveModel struct {
 	gone    bool
 
 	width, height int
+	// offset is the first middle line shown and rows how many show, as the
+	// last View laid them out.
+	offset, rows int
 }
 
 // NewServe is `relist-panel migration serve`: it creates a Migration token,
@@ -160,6 +163,22 @@ func (m *serveModel) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	}
+	if !(m.resume.active && (k == "home" || k == "end")) {
+		if off, ok := scrollKey(k, m.offset, m.rows); ok {
+			m.offset = off
+			return m, nil
+		}
+	}
+	// ↑ and ↓ choose a lifetime until there is a token; after that they
+	// scroll, which leaves j and k to a RESUME being typed.
+	if choosing := m.token == nil && !m.following(); !choosing && (k == "up" || k == "down") {
+		if k == "up" {
+			m.offset--
+		} else {
+			m.offset++
+		}
+		return m, nil
+	}
 	if m.pending {
 		return m, nil
 	}
@@ -223,6 +242,10 @@ func (m *serveModel) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.cancellable() {
 			return m, m.resume.open()
 		}
+	case "k":
+		m.offset--
+	case "j":
+		m.offset++
 	}
 	return m, nil
 }
@@ -290,7 +313,8 @@ func (m *serveModel) View() tea.View {
 	default:
 		bottom = append(bottom, dimStyle.Render("q quit"))
 	}
-	content, _ := layout(m.width, m.height, top, middle, bottom, 0)
+	content, off, rows := layout(m.width, m.height, top, middle, bottom, m.offset)
+	m.offset, m.rows = off, rows
 	return view(content)
 }
 

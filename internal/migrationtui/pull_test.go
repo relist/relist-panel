@@ -132,6 +132,14 @@ func key(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	case "ctrl+u":
 		return tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}
+	case "pgup":
+		return tea.KeyPressMsg{Code: tea.KeyPgUp}
+	case "pgdown":
+		return tea.KeyPressMsg{Code: tea.KeyPgDown}
+	case "home":
+		return tea.KeyPressMsg{Code: tea.KeyHome}
+	case "end":
+		return tea.KeyPressMsg{Code: tea.KeyEnd}
 	}
 	r := []rune(s)[0]
 	return tea.KeyPressMsg{Code: r, Text: s}
@@ -727,5 +735,97 @@ func TestPullOffersRetryAndAbortAsThePanelSays(t *testing.T) {
 	mustContain(t, m, "r retry")
 	if strings.Contains(screen(m), "a abort") {
 		t.Fatal("abort offered after finalize wrote its marker")
+	}
+}
+
+// press sends key n times and renders after each, as the program does: the
+// views settle their scrolling when they render.
+func press(t *testing.T, m tea.Model, k string, n int) tea.Model {
+	t.Helper()
+	for range n {
+		m = send(t, m, key(k))
+		screen(m)
+	}
+	return m
+}
+
+// pressUntil presses k until the screen shows want.
+func pressUntil(t *testing.T, m tea.Model, k, want string) tea.Model {
+	t.Helper()
+	for range 60 {
+		if strings.Contains(screen(m), want) {
+			return m
+		}
+		m = press(t, m, k, 1)
+	}
+	t.Fatalf("%q never showed after pressing %s:\n%s", want, k, screen(m))
+	return m
+}
+
+// tallPreview is a preview whose checks and host paths overflow a short window.
+func tallPreview() migration.Progress {
+	p := connected()
+	p.Checks = []migration.Check{{Message: "first check line\nline two\nline three\nline four\nline five\nline six"}}
+	for i := range 20 {
+		p.Info.HostPaths = append(p.Info.HostPaths, migration.HostPathCandidate{Path: fmt.Sprintf("/srv/p%02d", i)})
+	}
+	return p
+}
+
+func TestPullPreviewScrollsAboveTheFirstHostPath(t *testing.T) {
+	m := NewPull(&fakeController{}, "https://new.example.com")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
+	m, _ = m.Update(ProgressMsg{P: tallPreview()})
+	m = press(t, m, "down", 30)
+	mustContain(t, m, "> [ ] /srv/p19")
+	if strings.Contains(screen(m), "first check line") {
+		t.Fatal("the checks still show with the cursor at the last host path")
+	}
+	// ↑ walks the cursor back to the first host path, then scrolls on up.
+	m = press(t, m, "up", 50)
+	mustContain(t, m, "first check line")
+	// ↓ scrolls back to the cursor before it moves it.
+	m = pressUntil(t, m, "down", "> ")
+	mustContain(t, m, "> [x] /srv/up")
+}
+
+func TestPullPreviewPagesWithoutMovingTheCursor(t *testing.T) {
+	m := NewPull(&fakeController{}, "https://new.example.com")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
+	m, _ = m.Update(ProgressMsg{P: tallPreview()})
+	m = press(t, m, "end", 1)
+	if strings.Contains(screen(m), "first check line") {
+		t.Fatal("end did not scroll")
+	}
+	m = press(t, m, "pgup", 1)
+	if strings.Contains(screen(m), "first check line") {
+		t.Fatal("one page up reached the top of a preview several pages long")
+	}
+	m = press(t, m, "pgup", 10)
+	mustContain(t, m, "first check line")
+	// The cursor did not move while paging.
+	m = pressUntil(t, m, "down", "> ")
+	mustContain(t, m, "> [x] /srv/up")
+}
+
+func TestLayoutSaysWhatIsHidden(t *testing.T) {
+	var middle []string
+	for i := range 30 {
+		middle = append(middle, fmt.Sprintf("row %02d", i))
+	}
+	content, _, _ := layout(80, 10, []string{"title"}, middle, []string{"keys"}, 0)
+	if strings.Contains(content, "more (pgup)") || !strings.Contains(content, "more (pgdn)") {
+		t.Fatalf("at the top:\n%s", content)
+	}
+	content, _, _ = layout(80, 10, []string{"title"}, middle, []string{"keys"}, 10)
+	if !strings.Contains(content, "more (pgup)") || !strings.Contains(content, "more (pgdn)") {
+		t.Fatalf("in the middle:\n%s", content)
+	}
+	if lines := strings.Split(content, "\n"); len(lines) != 10 || lines[len(lines)-1] != "keys" {
+		t.Fatalf("%d lines, last %q:\n%s", len(lines), lines[len(lines)-1], content)
+	}
+	content, _, _ = layout(80, 40, []string{"title"}, middle, []string{"keys"}, 0)
+	if strings.Contains(content, "more") {
+		t.Fatalf("marks shown when everything fits:\n%s", content)
 	}
 }

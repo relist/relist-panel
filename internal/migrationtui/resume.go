@@ -70,6 +70,11 @@ type resumeModel struct {
 	resumed bool
 	warning string
 	message string
+
+	width, height int
+	// offset is the first middle line shown and rows how many show, as the
+	// last View laid them out.
+	offset, rows int
 }
 
 // NewResume is `relist-panel migration resume`: Cancel migration before
@@ -82,6 +87,9 @@ func (m *resumeModel) Init() tea.Cmd { return fetchStatus(m.c) }
 
 func (m *resumeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		return m, nil
 	case statusMsg:
 		if msg.Err != nil {
 			m.message = msg.Err.Error()
@@ -104,6 +112,21 @@ func (m *resumeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		k := msg.String()
 		if k == "ctrl+c" || ((!m.in.active || m.resumed) && (k == "q" || k == "esc" || k == "enter")) {
 			return m, tea.Quit
+		}
+		// The input keeps home and end to move along what is typed.
+		if !(m.in.active && (k == "home" || k == "end")) {
+			if off, ok := scrollKey(k, m.offset, m.rows); ok {
+				m.offset = off
+				return m, nil
+			}
+		}
+		switch k {
+		case "up":
+			m.offset--
+			return m, nil
+		case "down":
+			m.offset++
+			return m, nil
 		}
 		if m.pending || !m.in.active {
 			return m, nil
@@ -134,40 +157,36 @@ type resumeDoneMsg struct {
 }
 
 func (m *resumeModel) View() tea.View {
-	out := []string{titleStyle.Render("Resume this server"), ""}
+	top := []string{titleStyle.Render("Resume this server"), ""}
+	var middle []string
+	bottom := []string{"", dimStyle.Render("q quit")}
 	switch {
 	case m.message != "":
-		out = append(out, dangerStyle.Render(m.message))
+		middle = append(middle, dangerStyle.Render(m.message))
 	case !m.loaded:
-		out = append(out, "Reading the migration state…")
+		middle = append(middle, "Reading the migration state…")
 	case m.resumed:
-		out = append(out, okStyle.Render("Resumed. This server's Composes are starting again."))
+		middle = append(middle, okStyle.Render("Resumed. This server's Composes are starting again."))
 		if m.warning != "" {
-			out = append(out, warnStyle.Render("! "+m.warning))
+			middle = append(middle, warnStyle.Render("! "+m.warning))
 		}
 	case m.s.Step == migration.StepNone && m.s.ClaimedBy != "":
-		out = append(out, "Claimed by "+m.s.ClaimedBy+", not started yet.",
-			"Resuming ends its session, so it can no longer lock this server.", "")
-		out = append(out, m.in.lines()...)
-		return view(joinLines(out))
+		middle = append(middle, "Claimed by "+m.s.ClaimedBy+", not started yet.",
+			"Resuming ends its session, so it can no longer lock this server.")
+		bottom = append([]string{""}, m.in.lines()...)
 	case m.s.Step == migration.StepNone:
-		out = append(out, "This server is not locked for a migration.")
+		middle = append(middle, "This server is not locked for a migration.")
 	default:
 		if m.s.Step == migration.StepMigrated {
-			out = append(out, MigratedTo(m.s)+".")
+			middle = append(middle, MigratedTo(m.s)+".")
 		} else {
-			out = append(out, "A migration is under way: "+string(m.s.Step)+".")
+			middle = append(middle, "A migration is under way: "+string(m.s.Step)+".")
 		}
-		out = append(out, "Resuming removes the maintenance page and starts this server's Composes again.",
-			"Data written on the new server since is not here.", "")
-		out = append(out, m.in.lines()...)
-		return view(joinLines(out))
+		middle = append(middle, "Resuming removes the maintenance page and starts this server's Composes again.",
+			"Data written on the new server since is not here.")
+		bottom = append([]string{""}, m.in.lines()...)
 	}
-	out = append(out, "", dimStyle.Render("q quit"))
-	return view(joinLines(out))
-}
-
-func joinLines(lines []string) string {
-	content, _ := layout(0, 0, nil, lines, nil, 0)
-	return content
+	content, off, rows := layout(m.width, m.height, top, middle, bottom, m.offset)
+	m.offset, m.rows = off, rows
+	return view(content)
 }

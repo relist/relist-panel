@@ -5,6 +5,8 @@
 package migrationtui
 
 import (
+	"fmt"
+	"math"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -43,27 +45,70 @@ func journey(stages []string, current int, failed bool) string {
 }
 
 // layout fits top, a scrolling window of middle starting at offset, and
-// bottom into width×height, and returns the content with the offset clamped.
-// A zero height (no window size yet) shows everything.
+// bottom into width×height, and returns the content with the offset clamped
+// and how many middle lines the window shows. A zero height (no window size
+// yet) shows everything.
 //
-// Elements holding newlines, or wider than width, count as the lines they
-// render or wrap into. When top and bottom alone overflow, the last line
-// (the keys) is kept and the lines above it are cut.
-func layout(width, height int, top, middle, bottom []string, offset int) (string, int) {
+// When middle overflows, a line above and below the window says how many
+// lines it hides there. Elements holding newlines, or wider than width,
+// count as the lines they render or wrap into. When top and bottom alone
+// overflow, the last line (the keys) is kept and the lines above it are cut.
+func layout(width, height int, top, middle, bottom []string, offset int) (string, int, int) {
 	top, middle, bottom = wrap(width, top), wrap(width, middle), wrap(width, bottom)
 	avail := len(middle)
 	if height > 0 {
 		avail = max(1, height-len(top)-len(bottom))
 	}
-	offset = max(0, min(offset, len(middle)-avail))
-	end := min(len(middle), offset+avail)
-	lines := append(append(append([]string{}, top...), middle[offset:end]...), bottom...)
+	rows := pageRows(avail, len(middle))
+	offset = max(0, min(offset, len(middle)-rows))
+	end := min(len(middle), offset+rows)
+	window := middle[offset:end]
+	if rows < len(middle) && rows < avail {
+		window = append(append([]string{hidden("↑", offset, "pgup")}, window...), hidden("↓", len(middle)-end, "pgdn"))
+	}
+	lines := append(append(append([]string{}, top...), window...), bottom...)
 	if height > 1 && len(lines) > height {
 		lines = append(lines[:height-1], lines[len(lines)-1])
 	} else if height == 1 && len(lines) > 1 {
 		lines = lines[len(lines)-1:]
 	}
-	return strings.Join(lines, "\n"), offset
+	return strings.Join(lines, "\n"), offset, rows
+}
+
+// pageRows is how many of n middle lines fit in avail rows: two fewer when
+// they overflow, for the lines saying what is hidden, unless that leaves none.
+func pageRows(avail, n int) int {
+	if n <= avail || avail < 3 {
+		return min(n, avail)
+	}
+	return avail - 2
+}
+
+// hidden says how many lines are scrolled away in one direction, or is
+// blank when none are.
+func hidden(arrow string, n int, key string) string {
+	if n == 0 {
+		return ""
+	}
+	return dimStyle.Render(fmt.Sprintf("  %s %d more (%s)", arrow, n, key))
+}
+
+// scrollKey moves offset for the keys every TUI pages with: pgup and pgdown
+// by a window of rows, home and end to either end, where layout clamps it.
+// It reports false for any other key.
+func scrollKey(k string, offset, rows int) (int, bool) {
+	page := max(1, rows-1)
+	switch k {
+	case "pgup":
+		return offset - page, true
+	case "pgdown":
+		return offset + page, true
+	case "home":
+		return 0, true
+	case "end":
+		return math.MaxInt / 2, true
+	}
+	return offset, false
 }
 
 // split turns rendered blocks into lines.

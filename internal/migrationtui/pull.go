@@ -69,10 +69,15 @@ type pullModel struct {
 	gaveUp     bool
 
 	width, height int
-	offset        int
-	showLog       bool
-	logOffset     int
-	bar           progress.Model
+	// offset is the first middle line shown, rows how many show and
+	// cursorLine where the preview's cursor is (-1 without one), as the last
+	// View laid them out. follow keeps the cursor in view; it is set when the
+	// cursor moves and cleared when the operator scrolls.
+	offset, rows, cursorLine int
+	follow                   bool
+	showLog                  bool
+	logOffset, logRows       int
+	bar                      progress.Model
 }
 
 // NewPull is `relist-panel migration pull`: it connects, previews, starts
@@ -252,6 +257,8 @@ func (m *pullModel) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.logOffset++
 		case "k", "up":
 			m.logOffset--
+		default:
+			m.logOffset, _ = scrollKey(k, m.logOffset, m.logRows)
 		}
 		return m, nil
 	}
@@ -284,8 +291,16 @@ func (m *pullModel) onKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.p.CanAbort && m.pending == "" {
 			m.confirm = "abort"
 		}
+	default:
+		m.offset, _ = scrollKey(k, m.offset, m.rows)
 	}
 	return m, nil
+}
+
+// cursorShown reports whether the last View showed the preview's cursor.
+// Before any View, or without a window size, it counts as shown.
+func (m *pullModel) cursorShown() bool {
+	return m.height == 0 || m.rows == 0 || (m.cursorLine >= m.offset && m.cursorLine < m.offset+m.rows)
 }
 
 func (m *pullModel) onFormKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -347,10 +362,22 @@ func (m *pullModel) onPreviewKey(k string) (tea.Model, tea.Cmd) {
 	switch k {
 	case "q", "esc":
 		return m, tea.Quit
+	// ↑ and ↓ move the cursor while it is in view. Past either end of the
+	// host paths they scroll the preview on, so what is above and below the
+	// list can be read, and with the cursor scrolled away they scroll until
+	// it is back before moving it.
 	case "up", "k":
-		m.cursor = max(0, m.cursor-1)
+		if m.cursorShown() && m.cursor > 0 {
+			m.cursor, m.follow = m.cursor-1, true
+		} else {
+			m.offset, m.follow = m.offset-1, false
+		}
 	case "down", "j":
-		m.cursor = max(0, min(len(paths)-1, m.cursor+1))
+		if m.cursorShown() && m.cursor < len(paths)-1 {
+			m.cursor, m.follow = m.cursor+1, true
+		} else {
+			m.offset, m.follow = m.offset+1, false
+		}
 	case "space":
 		if m.cursor < len(paths) && m.pending == "" {
 			path := paths[m.cursor].Path
@@ -378,6 +405,10 @@ func (m *pullModel) onPreviewKey(k string) (tea.Model, tea.Cmd) {
 		if m.pending == "" {
 			m.confirm = "abort"
 		}
+	default:
+		if off, ok := scrollKey(k, m.offset, m.rows); ok {
+			m.offset, m.follow = off, false
+		}
 	}
 	return m, nil
 }
@@ -401,8 +432,8 @@ func (m *pullModel) stage() int {
 func (m *pullModel) View() tea.View {
 	if m.showLog {
 		lines := logLines(m.p.Log)
-		content, off := layout(m.width, m.height, []string{titleStyle.Render("Activity log"), ""}, lines, []string{"", dimStyle.Render("j/k scroll · l back")}, m.logOffset)
-		m.logOffset = off
+		content, off, rows := layout(m.width, m.height, []string{titleStyle.Render("Activity log"), ""}, lines, []string{"", dimStyle.Render("j/k scroll · l back")}, m.logOffset)
+		m.logOffset, m.logRows = off, rows
 		return view(content)
 	}
 	failed := m.p.Phase == migration.PhasePaused || (m.p.Error != "" && m.p.Phase != migration.PhaseConnected)
@@ -433,16 +464,16 @@ func (m *pullModel) View() tea.View {
 		cursorLine = len(wrap(m.width, middle[:cursorLine]))
 	}
 
-	if cursorLine >= 0 && m.height > 0 {
-		avail := max(1, m.height-len(top)-len(bottom))
+	if cursorLine >= 0 && m.height > 0 && m.follow {
+		rows := pageRows(max(1, m.height-len(top)-len(bottom)), len(wrap(m.width, middle)))
 		if cursorLine < m.offset {
 			m.offset = cursorLine
-		} else if cursorLine >= m.offset+avail {
-			m.offset = cursorLine - avail + 1
+		} else if cursorLine >= m.offset+rows {
+			m.offset = cursorLine - rows + 1
 		}
 	}
-	content, off := layout(m.width, m.height, top, middle, bottom, m.offset)
-	m.offset = off
+	content, off, rows := layout(m.width, m.height, top, middle, bottom, m.offset)
+	m.offset, m.rows, m.cursorLine = off, rows, cursorLine
 	return view(content)
 }
 
