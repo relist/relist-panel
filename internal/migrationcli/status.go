@@ -42,7 +42,7 @@ func FormatStatus(p migration.Progress, s migration.OldHostStatus, a migration.A
 			out = append(out[1:], out[0])
 		}
 	case s.Step == migration.StepMigrated:
-		out = append(out, "This server: "+migrationtui.MigratedTo(s)+". Run relist-panel migration resume to use it again.")
+		out = append(out, "This server: "+migrationtui.MigratedTo(s)+". Run "+migration.TerminalCommand("resume")+" to use it again.")
 	case s.Step != migration.StepNone:
 		out = append(out, "This server is locked for a migration: "+string(s.Step))
 		if s.ClaimedBy != "" {

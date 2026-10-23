@@ -263,7 +263,7 @@ func (m *serveModel) View() tea.View {
 		if m.token != nil && !m.underWay() {
 			middle = append(middle, split(boxStyle.Render(fmt.Sprintf("Migration token\n\n%s\n\nExpires %s. It is shown once: copy it now.",
 				m.token.Token, m.token.ExpiresAt.Local().Format("2006-01-02 15:04"))))...)
-			middle = append(middle, "", "On the new server, run:", "  docker compose exec panel relist-panel migration pull",
+			middle = append(middle, "", "On the new server, run:", "  "+migration.TerminalCommand("pull"),
 				"and enter this panel's URL and the token.", "")
 		}
 		middle = append(middle, oldHostLines(m.s, m.a)...)

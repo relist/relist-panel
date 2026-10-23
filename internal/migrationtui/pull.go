@@ -789,19 +789,19 @@ func QuitNote(m tea.Model) string {
 	if s, ok := m.(*serveModel); ok {
 		switch {
 		case s.unclaimed():
-			return fmt.Sprintf("The migration token stays live until %s. Run relist-panel migration serve to follow it.",
-				s.token.ExpiresAt.Local().Format("2006-01-02 15:04"))
+			return fmt.Sprintf("The migration token stays live until %s. Run %s to follow it.",
+				s.token.ExpiresAt.Local().Format("2006-01-02 15:04"), migration.TerminalCommand("serve"))
 		case s.following() && s.s.Step != migration.StepMigrated:
-			return "The migration goes on. Run relist-panel migration serve to follow it again."
+			return "The migration goes on. Run " + migration.TerminalCommand("serve") + " to follow it again."
 		}
 		return ""
 	}
 	if p, ok := m.(*pullModel); ok {
 		switch p.p.Phase {
 		case migration.PhaseLocking, migration.PhasePulling, migration.PhasePaused, migration.PhaseFinalizing:
-			return "The migration goes on. Run relist-panel migration pull to follow it again."
+			return "The migration goes on. Run " + migration.TerminalCommand("pull") + " to follow it again."
 		case migration.PhaseConnected:
-			return fmt.Sprintf("Connected to %s; nothing is locked yet. Run relist-panel migration pull to start, or to abort.", p.p.SourceURL)
+			return fmt.Sprintf("Connected to %s; nothing is locked yet. Run %s to start, or to abort.", p.p.SourceURL, migration.TerminalCommand("pull"))
 		}
 	}
 	return ""

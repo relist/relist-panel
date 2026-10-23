@@ -9,6 +9,12 @@ import (
 	"path/filepath"
 )
 
+// TerminalCommand is the command an operator runs on a host for a
+// `relist-panel migration` subcommand, in the panel container (ADR-0019).
+func TerminalCommand(subcommand string) string {
+	return "docker compose exec panel relist-panel migration " + subcommand
+}
+
 // ListenControl listens on the control socket at path. A missing directory
 // is created 0700; an existing one is left as it is. A stale socket file from
 // a previous run, or the run this one re-executed, is replaced. The socket
