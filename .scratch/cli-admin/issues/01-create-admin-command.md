@@ -1,6 +1,6 @@
 # 01 — Add `relist-panel create-admin`
 
-Status: ready-for-agent
+Status: closed
 
 Spec: [../spec.md](../spec.md) — section "The command" is the contract.
 
@@ -63,3 +63,16 @@ config/DB, and follow them).
   `feat: create the admin from a terminal with relist-panel create-admin, prompting for the password or generating one`.
 
 ## Comments
+
+Implemented on `feat/cli-admin` in `2aa020f`. `runCreateAdmin` in `cli.go`
+takes a `console` (`isTerminal`, `readPassword`), not a type named
+`terminal`, because `main.go` already imports `internal/terminal`. It checks
+`auth.AdminExists` before prompting, so an install that already has an admin
+fails before anyone types a password; `auth.CreateAdmin` still returns
+`ErrAdminAlreadyExists` if another create gets in first. `GeneratePassword`
+lives in `auth.go` beside `newSessionToken`. Goose's migration log lines go to
+stderr on a fresh database, the same as `reset-2fa`; stdout holds only the
+result. Verified with `go test -race . ./internal/auth`, `go test ./...`,
+`go vet ./...`, and the built binary: `--generate` (stdout only), a second
+run (exit 1), no terminal (exit 2), and interactive under a pty via
+`script` (password not echoed).
