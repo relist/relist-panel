@@ -200,8 +200,8 @@ var errBusy = errors.New("another migration action is in progress; try again in 
 // Connect claims the token and runs preflight with every non-system host
 // path selected. The session is kept as soon as the claim succeeds, so a
 // preflight that fails can be retried without a new token.
-func (t *Target) Connect(ctx context.Context, sourceURL, token, selfURL string) (Progress, error) {
-	if !strings.HasPrefix(sourceURL, "https://") && !(t.d.Insecure && strings.HasPrefix(sourceURL, "http://")) {
+func (t *Target) Connect(ctx context.Context, oldHostURL, token, selfURL string) (Progress, error) {
+	if !strings.HasPrefix(oldHostURL, "https://") && !(t.d.Insecure && strings.HasPrefix(oldHostURL, "http://")) {
 		return Progress{}, errors.New("The source must use https://")
 	}
 	if !webURL(selfURL) {
@@ -217,7 +217,7 @@ func (t *Target) Connect(ctx context.Context, sourceURL, token, selfURL string) 
 	if phase != PhaseIdle && phase != PhaseConnected {
 		return Progress{}, errors.New("a migration is already running")
 	}
-	c := &client{http: t.d.HTTP, base: strings.TrimRight(sourceURL, "/")}
+	c := &client{http: t.d.HTTP, base: strings.TrimRight(oldHostURL, "/")}
 	switch {
 	case key != "" && claimedFrom == c.base:
 		c.sessionKey = key

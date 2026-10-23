@@ -266,7 +266,7 @@ func (m *serveModel) View() tea.View {
 			middle = append(middle, "", "On the new server, run:", "  docker compose exec panel relist-panel migration pull",
 				"and enter this panel's URL and the token.", "")
 		}
-		middle = append(middle, sourceLines(m.s, m.a)...)
+		middle = append(middle, oldHostLines(m.s, m.a)...)
 	}
 	bottom := []string{""}
 	if m.gone {
@@ -294,9 +294,9 @@ func (m *serveModel) View() tea.View {
 	return view(content)
 }
 
-// sourceLines is the old host's Migration as lines: the claim, the lock
+// oldHostLines is the old host's Migration as lines: the claim, the lock
 // steps, what is being sent, and Migrated.
-func sourceLines(s migration.OldHostStatus, a migration.Activity) []string {
+func oldHostLines(s migration.OldHostStatus, a migration.Activity) []string {
 	var out []string
 	if s.ClaimedBy == "" && s.Step == migration.StepNone {
 		return append(out, "Waiting for the new server to connect…")

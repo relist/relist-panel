@@ -156,7 +156,7 @@ func main() {
 		Migration: &migration.Options{
 			Docker:      dockerexec.NewMigrationDocker(),
 			Install:     cfg.Install,
-			Insecure:    cfg.InsecureMigrationSource,
+			Insecure:    cfg.InsecureOldHost,
 			SeededAdmin: cfg.AdminEmail,
 			Restart:     restart,
 			Control:     control,

@@ -31,12 +31,12 @@ func checkSelfURL(given string) error {
 	return nil
 }
 
-// connectRoute connects to the source.
+// connectRoute connects to the old host.
 func (t *Target) connectRoute(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		SourceURL string `json:"sourceUrl"`
-		Token     string `json:"token"`
-		SelfURL   string `json:"selfUrl"`
+		OldHostURL string `json:"sourceUrl"`
+		Token      string `json:"token"`
+		SelfURL    string `json:"selfUrl"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -45,7 +45,7 @@ func (t *Target) connectRoute(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	p, err := t.Connect(r.Context(), in.SourceURL, in.Token, in.SelfURL)
+	p, err := t.Connect(r.Context(), in.OldHostURL, in.Token, in.SelfURL)
 	if err != nil {
 		var remote *remoteError
 		if errors.As(err, &remote) && remote.Status < 500 {

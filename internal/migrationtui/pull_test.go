@@ -44,11 +44,11 @@ func (f *fakeController) Progress(context.Context) (migration.Progress, error) {
 	return f.progress, f.progressErr
 }
 
-func (f *fakeController) Connect(_ context.Context, sourceURL, token, selfURL string) (migration.Progress, error) {
+func (f *fakeController) Connect(_ context.Context, oldHostURL, token, selfURL string) (migration.Progress, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.connected = append(f.connected, []string{sourceURL, token, selfURL})
-	return migration.Progress{Phase: migration.PhaseConnected, SourceURL: sourceURL}, nil
+	f.connected = append(f.connected, []string{oldHostURL, token, selfURL})
+	return migration.Progress{Phase: migration.PhaseConnected, SourceURL: oldHostURL}, nil
 }
 
 func (f *fakeController) Recheck(_ context.Context, paths []string) (migration.Progress, error) {

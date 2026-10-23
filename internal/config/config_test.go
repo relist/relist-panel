@@ -82,8 +82,8 @@ func TestLoadAdminSeedAndMigrationSettings(t *testing.T) {
 	if cfg.AdminEmail != "seed@example.com" || cfg.AdminPassword != "seeded password 123" {
 		t.Fatalf("admin seed = %q / %q", cfg.AdminEmail, cfg.AdminPassword)
 	}
-	if cfg.ControlSocket != "/tmp/relist.sock" || !cfg.InsecureMigrationSource {
-		t.Fatalf("ControlSocket = %q, InsecureMigrationSource = %v", cfg.ControlSocket, cfg.InsecureMigrationSource)
+	if cfg.ControlSocket != "/tmp/relist.sock" || !cfg.InsecureOldHost {
+		t.Fatalf("ControlSocket = %q, InsecureOldHost = %v", cfg.ControlSocket, cfg.InsecureOldHost)
 	}
 }
 

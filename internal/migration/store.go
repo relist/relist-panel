@@ -1,7 +1,7 @@
 // Package migration moves everything one panel manages to an empty panel on
-// another host (ADR-0018). The old host is the Source: it issues a Migration
-// token, holds the Migration lock and streams items. The new host is the
-// Target: it claims the token, pulls every item and finalizes.
+// another host (ADR-0018). The old host issues a Migration token, holds the
+// Migration lock and streams items. The new host is the Target: it claims
+// the token, pulls every item and finalizes.
 package migration
 
 import (

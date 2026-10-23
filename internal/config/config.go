@@ -26,9 +26,10 @@ type Config struct {
 	AdminPassword string
 	// ControlSocket is where the migration control socket listens
 	// (ADR-0019), RELIST_CONTROL_SOCKET for a bare binary that cannot write
-	// /run. InsecureMigrationSource is --insecure-migration-source.
-	ControlSocket           string
-	InsecureMigrationSource bool
+	// /run. InsecureOldHost is --insecure-migration-source, which lets the
+	// new host pull from an http:// old host.
+	ControlSocket   string
+	InsecureOldHost bool
 }
 
 // InstallSettings are the install `.env` values a Migration cannot copy,
@@ -64,7 +65,7 @@ func Load() (Config, error) {
 	}
 	return Config{Port: port, DataDir: dataDir, Install: install,
 		AdminEmail: os.Getenv("RELIST_ADMIN_EMAIL"), AdminPassword: os.Getenv("RELIST_ADMIN_PASSWORD"),
-		ControlSocket: controlSocket, InsecureMigrationSource: slices.Contains(os.Args[1:], "--insecure-migration-source")}, nil
+		ControlSocket: controlSocket, InsecureOldHost: slices.Contains(os.Args[1:], "--insecure-migration-source")}, nil
 }
 
 func (c Config) Address() string {

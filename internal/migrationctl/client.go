@@ -132,10 +132,10 @@ func (c *Client) Progress(ctx context.Context) (migration.Progress, error) {
 	return p, err
 }
 
-func (c *Client) Connect(ctx context.Context, sourceURL, token, selfURL string) (migration.Progress, error) {
+func (c *Client) Connect(ctx context.Context, oldHostURL, token, selfURL string) (migration.Progress, error) {
 	var p migration.Progress
 	err := c.call(ctx, requestTimeout, http.MethodPost, "/api/migration/pull/connect",
-		map[string]string{"sourceUrl": sourceURL, "token": token, "selfUrl": selfURL}, &p)
+		map[string]string{"sourceUrl": oldHostURL, "token": token, "selfUrl": selfURL}, &p)
 	return p, err
 }
 

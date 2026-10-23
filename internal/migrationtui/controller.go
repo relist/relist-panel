@@ -11,7 +11,7 @@ import (
 // the one over the control socket, and the tests fake it.
 type Controller interface {
 	Progress(ctx context.Context) (migration.Progress, error)
-	Connect(ctx context.Context, sourceURL, token, selfURL string) (migration.Progress, error)
+	Connect(ctx context.Context, oldHostURL, token, selfURL string) (migration.Progress, error)
 	Recheck(ctx context.Context, hostPaths []string) (migration.Progress, error)
 	Start(ctx context.Context, hostPaths []string) error
 	Retry(ctx context.Context) error
