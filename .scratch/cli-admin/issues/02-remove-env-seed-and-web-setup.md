@@ -1,6 +1,6 @@
 # 02 — Remove env seeding and the web setup screen
 
-Status: ready-for-agent
+Status: closed
 Blocked by: 01
 
 Spec: [../spec.md](../spec.md)
@@ -122,3 +122,29 @@ As listed in the spec's "Docs" section: README, `docker-compose.yml`,
   `feat: drop the web setup screen and RELIST_ADMIN_* seeding, so create-admin is the only way to make the first admin`.
 
 ## Comments
+
+Implemented on `feat/cli-admin` in `ba7a03c`.
+
+- `status` keeps the no-admin short-cut through the exported
+  `auth.AdminExists`; the private `adminExists` and `createAdmin` are gone.
+  `login` now answers 401 for an unknown email whether or not any admin
+  exists.
+- `main.go` logs the create-admin line only when no admin exists.
+  `RELIST_ADMIN_*` set in the env is ignored: checked against a live binary
+  where signing in with the env pair gave 401, `POST /api/auth/setup` gave
+  401 (no longer public), and after `create-admin` sign-in gave 200.
+- Deviation: two places still name `/api/auth/setup`, on purpose, to check
+  it is gone. They are `TestNoAdminRefusesSignInLikeAWrongPassword` in
+  `internal/httpapi/httpapi_test.go`, and a `!= 201` check in
+  `scripts/probe-migration.sh` in place of the old 409 one. So the ticket's
+  first grep matches those two files and nothing else.
+- Both migration scripts create their admins with `create-admin
+  --password-stdin` through a `mkadmin` helper. They pass `bash -n`, but I
+  did not run them; they need the Docker-in-Docker sandbox.
+- `AuthPages.test.tsx` now checks that `SignInPage` offers no way to create
+  an admin; the `AuthLayout` `footer` prop is gone with its only use.
+- Docs also cover `docs/GUIDELINES.md` (routes line, §4.8), and
+  `docs/design-states.md` drops the three `auth-setup*` states
+  (105 → 102).
+- Verified: `go vet ./...`, `go test ./...`, `pnpm typecheck`,
+  `pnpm test` (568 passed), `go generate ./internal/webassets`.
