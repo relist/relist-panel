@@ -60,7 +60,7 @@ func SeedAdmin(ctx context.Context, db *sql.DB, email, password string, now func
 		}
 		return false, err
 	}
-	_, err = db.ExecContext(ctx, "UPDATE admin_credentials SET password_from_env = 1")
+	err = flagPasswordFromEnv(ctx, db)
 	return err == nil, err
 }
 
@@ -73,7 +73,12 @@ func markPasswordFromEnv(ctx context.Context, db *sql.DB, password string) error
 	if err != nil || flagged || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		return err
 	}
-	_, err = db.ExecContext(ctx, "UPDATE admin_credentials SET password_from_env = 1")
+	return flagPasswordFromEnv(ctx, db)
+}
+
+// flagPasswordFromEnv records that the admin's password is still the env's.
+func flagPasswordFromEnv(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, "UPDATE admin_credentials SET password_from_env = 1")
 	return err
 }
 
