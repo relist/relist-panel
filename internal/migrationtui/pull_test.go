@@ -829,3 +829,44 @@ func TestLayoutSaysWhatIsHidden(t *testing.T) {
 		t.Fatalf("marks shown when everything fits:\n%s", content)
 	}
 }
+
+// With the cursor scrolled out of view, the first ↓ or space brings it back
+// instead of moving it, or ticking a path the operator cannot see.
+func TestPullPreviewBringsAHiddenCursorBackFirst(t *testing.T) {
+	c := &fakeController{}
+	m := NewPull(c, "https://new.example.com")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
+	m, _ = m.Update(ProgressMsg{P: tallPreview()})
+	screen(m)
+	if strings.Contains(screen(m), "> [") {
+		t.Fatal("the cursor shows at the top; the test needs a taller preview")
+	}
+	m = press(t, m, "down", 1)
+	mustContain(t, m, "> [x] /srv/up")
+
+	m = press(t, m, "home", 1)
+	m = press(t, m, "space", 1)
+	mustContain(t, m, "> [x] /srv/up")
+	if len(c.rechecked) != 0 {
+		t.Fatalf("space ticked a hidden path: recheck calls = %q", c.rechecked)
+	}
+}
+
+// While the old panel is read, the preview counts the seconds, and offers r
+// only once no connect is under way.
+func TestPullCountsWhileReadingTheOldPanel(t *testing.T) {
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	m := newPull(&fakeController{}, "https://new.example.com", func() time.Time { return now })
+	reading := connected()
+	reading.Info = nil
+	m.Update(ProgressMsg{P: reading})
+	m.pending = "connect"
+	now = now.Add(12 * time.Second)
+	m.Update(ProgressMsg{P: reading})
+	mustContain(t, m, "Reading the old panel", "12s")
+	if strings.Contains(screen(m), "r reads it again") {
+		t.Fatal("r offered while the connect is still under way")
+	}
+	m.pending = ""
+	mustContain(t, m, "r reads it again")
+}

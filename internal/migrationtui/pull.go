@@ -64,9 +64,12 @@ type pullModel struct {
 	message string // the last action's refusal, kept until the next action
 	pollErr string // the last poll's error, cleared by a good poll
 
-	goneSince  time.Time
-	restarting bool
-	gaveUp     bool
+	goneSince time.Time
+	// readingSince is when the preview started waiting for the old panel's
+	// sizes, Volumes, Images and host paths.
+	readingSince time.Time
+	restarting   bool
+	gaveUp       bool
 
 	width, height int
 	// offset is the first middle line shown, rows how many show and
@@ -165,6 +168,11 @@ func (m *pullModel) onProgress(msg ProgressMsg) {
 
 func (m *pullModel) setProgress(p migration.Progress) {
 	m.p, m.loaded = p, true
+	if p.Phase != migration.PhaseConnected || p.Info != nil {
+		m.readingSince = time.Time{}
+	} else if m.readingSince.IsZero() {
+		m.readingSince = m.now()
+	}
 	switch {
 	case p.Phase == migration.PhaseIdle:
 		m.selected, m.selectedFor = nil, ""
@@ -362,27 +370,32 @@ func (m *pullModel) onPreviewKey(k string) (tea.Model, tea.Cmd) {
 	switch k {
 	case "q", "esc":
 		return m, tea.Quit
-	// ↑ and ↓ move the cursor while it is in view. Past either end of the
-	// host paths they scroll the preview on, so what is above and below the
-	// list can be read, and with the cursor scrolled away they scroll until
-	// it is back before moving it.
-	case "up", "k":
-		if m.cursorShown() && m.cursor > 0 {
+	// In view, ↑ and ↓ move the cursor, and past either end of the host
+	// paths they scroll the preview on, so what is above and below the list
+	// can be read. With the cursor scrolled out of view, space, or a key
+	// toward it, first brings it back; a key away from it scrolls on.
+	case "up", "k", "down", "j", "space":
+		up := k == "up" || k == "k"
+		above, below := m.cursorLine < m.offset, m.cursorLine >= m.offset+m.rows
+		if len(paths) > 0 && !m.cursorShown() && (k == "space" || (up && above) || (!up && below)) {
+			m.follow = true
+			break
+		}
+		switch {
+		case k == "space":
+			if m.cursor < len(paths) && m.pending == "" {
+				path := paths[m.cursor].Path
+				m.selected[path] = !m.selected[path]
+				return m, m.act("recheck")
+			}
+		case up && m.cursor > 0 && m.cursorShown():
 			m.cursor, m.follow = m.cursor-1, true
-		} else {
+		case up:
 			m.offset, m.follow = m.offset-1, false
-		}
-	case "down", "j":
-		if m.cursorShown() && m.cursor < len(paths)-1 {
+		case m.cursor < len(paths)-1 && m.cursorShown():
 			m.cursor, m.follow = m.cursor+1, true
-		} else {
+		default:
 			m.offset, m.follow = m.offset+1, false
-		}
-	case "space":
-		if m.cursor < len(paths) && m.pending == "" {
-			path := paths[m.cursor].Path
-			m.selected[path] = !m.selected[path]
-			return m, m.act("recheck")
 		}
 	case "r":
 		if m.pending != "" {
@@ -503,8 +516,13 @@ func (m *pullModel) previewLines() ([]string, int) {
 		// Connect claims the token before it reads the old panel, so a
 		// poll can land between the two.
 		if p.Error == "" {
-			return append(out, "Reading the old panel: sizes, Volumes, Images and host paths…", "",
-				dimStyle.Render("r reads it again if this stays")), -1
+			out = append(out, fmt.Sprintf("Reading the old panel: sizes, Volumes, Images and host paths… %ds",
+				int(m.now().Sub(m.readingSince).Seconds())))
+			if m.pending == "" {
+				// Nothing here is reading it: a TUI started after the connect.
+				out = append(out, "", dimStyle.Render("r reads it again if this stays"))
+			}
+			return out, -1
 		}
 		return append(out, dangerStyle.Render(p.Error), "", "r retries on the same session"), -1
 	}
