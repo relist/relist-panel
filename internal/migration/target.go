@@ -684,7 +684,11 @@ func (t *Target) Abort(ctx context.Context) error {
 	t.op.Lock()
 	defer t.op.Unlock()
 	t.mu.Lock()
-	if t.pastAbort() {
+	if t.st.Phase == PhaseIdle {
+		t.mu.Unlock()
+		return nil
+	}
+	if !t.canAbort() {
 		t.mu.Unlock()
 		return errors.New("the migration is finalizing and can no longer be aborted here; on the old server run " + TerminalCommand("resume") + " instead")
 	}
@@ -750,7 +754,7 @@ func (t *Target) progress() Progress {
 	}
 	p.Log, p.FinalizeStep = t.st.Log, t.st.FinalizeStep
 	p.CanRetry = t.canRetry()
-	p.CanAbort = t.st.Phase != PhaseIdle && !t.pastAbort()
+	p.CanAbort = t.canAbort()
 	if len(p.Log) == 0 && t.summary != nil {
 		p.Log = t.summary.Log
 	}
@@ -824,10 +828,12 @@ func (t *Target) canRetry() bool {
 	return t.st.Phase == PhasePaused || stalled
 }
 
-// pastAbort is when Abort refuses: the Migration is done, or finalize is
-// running or has written its marker. Callers hold mu.
-func (t *Target) pastAbort() bool {
-	return t.st.Phase == PhaseDone || (t.st.Phase == PhaseFinalizing && (t.running || t.markerWritten()))
+// canAbort is when Abort acts: a Migration exists and is neither done nor
+// past the point where finalize is running or has written its marker.
+// Callers hold mu.
+func (t *Target) canAbort() bool {
+	pastAbort := t.st.Phase == PhaseDone || (t.st.Phase == PhaseFinalizing && (t.running || t.markerWritten()))
+	return t.st.Phase != PhaseIdle && !pastAbort
 }
 
 // markerWritten reports whether Begin wrote its marker, after which the

@@ -758,3 +758,14 @@ func TestProgressSaysWhenRetryAndAbortApply(t *testing.T) {
 		})
 	}
 }
+
+// With no Migration there is nothing to abort, as CanAbort says.
+func TestAbortWithNoMigrationDoesNothing(t *testing.T) {
+	target := newTargetFixture(t).target
+	if err := target.Abort(context.Background()); err != nil {
+		t.Fatalf("Abort() = %v", err)
+	}
+	if p := target.Progress(); p.Phase != PhaseIdle || p.CanAbort {
+		t.Fatalf("Phase, CanAbort = %s, %v, want idle, false", p.Phase, p.CanAbort)
+	}
+}
