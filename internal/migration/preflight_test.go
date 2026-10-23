@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -110,23 +111,27 @@ func TestEvaluate(t *testing.T) {
 		})
 	}
 
-	t.Run("an admin seeded from the env is not data", func(t *testing.T) {
-		db := openDB(t)
-		if _, err := db.Exec(`INSERT INTO admin_credentials (id, email, password_hash, created_at) VALUES (1, 'a@example.com', 'x', 1)`); err != nil {
-			t.Fatal(err)
-		}
-		local := LocalHost{DB: db, Docker: NewFakeDocker(), DataDir: "/var/lib/relist-panel", SeededAdmin: "A@example.com",
-			Install: config.InstallSettings{Domain: "panel.example.com"}, FreeBytes: func(string) (int64, error) { return 1 << 40, nil }}
-		checks, err := Evaluate(context.Background(), local, base(), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, c := range checks {
-			if c.Blocking {
-				t.Fatalf("an admin-only panel was blocked: %q", c.Message)
+	// SeedAdmin stores RELIST_ADMIN_EMAIL trimmed and lowercased, whatever
+	// the env value looks like.
+	for _, seeded := range []string{"A@example.com", " A@example.com\n"} {
+		t.Run(fmt.Sprintf("an admin seeded from the env as %q is not data", seeded), func(t *testing.T) {
+			db := openDB(t)
+			if _, err := db.Exec(`INSERT INTO admin_credentials (id, email, password_hash, created_at) VALUES (1, 'a@example.com', 'x', 1)`); err != nil {
+				t.Fatal(err)
 			}
-		}
-	})
+			local := LocalHost{DB: db, Docker: NewFakeDocker(), DataDir: "/var/lib/relist-panel", SeededAdmin: seeded,
+				Install: config.InstallSettings{Domain: "panel.example.com"}, FreeBytes: func(string) (int64, error) { return 1 << 40, nil }}
+			checks, err := Evaluate(context.Background(), local, base(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, c := range checks {
+				if c.Blocking {
+					t.Fatalf("an admin-only panel was blocked: %q", c.Message)
+				}
+			}
+		})
+	}
 
 	t.Run("clean", func(t *testing.T) {
 		local := LocalHost{DB: openDB(t), Docker: NewFakeDocker(), DataDir: "/var/lib/relist-panel",

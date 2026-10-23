@@ -480,8 +480,14 @@ func decodeCredentials(w http.ResponseWriter, r *http.Request) (credentials, err
 	return input, nil
 }
 
+// NormalizeEmail is how an admin email is stored, so a lookup by another
+// spelling of it finds the same admin.
+func NormalizeEmail(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
 func validateEmail(value string) (string, error) {
-	email := strings.ToLower(strings.TrimSpace(value))
+	email := NormalizeEmail(value)
 	if email == "" || utf8.RuneCountInString(email) > 254 {
 		return "", errors.New("email is required and must be valid")
 	}

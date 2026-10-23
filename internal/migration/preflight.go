@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"relist-panel/internal/auth"
 	"relist-panel/internal/config"
 	"relist-panel/internal/database"
 )
@@ -138,7 +139,7 @@ func Evaluate(ctx context.Context, local LocalHost, src OldHostInfo, selected []
 	// migrated database replaces it; any other admin means someone set this
 	// panel up by hand.
 	var other int
-	if err := local.DB.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM admin_credentials WHERE email <> ?)", local.SeededAdmin).Scan(&other); err != nil {
+	if err := local.DB.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM admin_credentials WHERE email <> ?)", auth.NormalizeEmail(local.SeededAdmin)).Scan(&other); err != nil {
 		return nil, err
 	}
 	if other == 1 {
