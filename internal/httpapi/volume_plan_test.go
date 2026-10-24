@@ -125,7 +125,6 @@ func TestDeleteRemovesOwnedVolumesWithDownV(t *testing.T) {
 	f, runner, _ := deployedWithInspector(t, func(project string) []composes.VolumeCandidate {
 		return []composes.VolumeCandidate{
 			{Name: "data", Exists: true, Project: project},
-			{Name: "unlabelled", Exists: true},
 			{Name: "gone", Exists: false, Project: "relist-c99"},
 		}
 	})
@@ -135,6 +134,19 @@ func TestDeleteRemovesOwnedVolumesWithDownV(t *testing.T) {
 	}
 	if got := runner.removals(); len(got) != 0 {
 		t.Fatalf("DownAndRemoveVolumes called: %v", got)
+	}
+}
+
+func TestDeleteKeepsUnlabelledVolume(t *testing.T) {
+	f, runner, _ := deployedWithInspector(t, func(project string) []composes.VolumeCandidate {
+		return []composes.VolumeCandidate{
+			{Name: "data", Exists: true, Project: project},
+			{Name: "unlabelled", Exists: true},
+		}
+	})
+	f.deleteCompose(t)
+	if got := runner.removals(); len(got) != 1 || !slices.Equal(got[0], []string{"data"}) {
+		t.Fatalf("DownAndRemoveVolumes args = %v, want [[data]]", got)
 	}
 }
 
