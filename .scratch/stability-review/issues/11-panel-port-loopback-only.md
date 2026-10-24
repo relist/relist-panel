@@ -7,7 +7,7 @@ Traefik or a Domain breaks routing.
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Port mapping becomes `127.0.0.1:${RELIST_PORT:-8888}:${RELIST_PORT:-8080}`
 - [ ] README: how to reach the panel through an SSH tunnel; existing installs must recreate the
