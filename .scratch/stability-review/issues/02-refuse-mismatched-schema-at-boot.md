@@ -8,7 +8,7 @@ branches on the live install makes both cases reachable. Make `OpenAndMigrate` r
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] After `goose.Up`, compare `SchemaVersion` with `KnownVersion` (both already in
       `internal/database/version.go`); a higher schema returns an error naming both versions and
