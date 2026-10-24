@@ -153,6 +153,42 @@ func TestVolumeOperationsRunTheHelperReadOnly(t *testing.T) {
 	}
 }
 
+// list passes the after cursor to the helper as one name; a cursor that is
+// not a single path segment is refused before any run.
+func TestVolumeListPassesTheAfterCursor(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+	server.volumeRunner.Stdout = "{}"
+
+	response := server.request(t, http.MethodGet, volumeOpPath(fixture, "list", url.Values{
+		"source": {"demoapp_pgdata"},
+		"after":  {"f09999"},
+	}), nil)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	want := []faketest.Call{{Request: volumes.Request{Source: "demoapp_pgdata", User: "999:998", Op: volumes.OpList, Path: ".", After: "f09999", ReadOnly: true}}}
+	if !reflect.DeepEqual(server.volumeRunner.Calls, want) {
+		t.Errorf("runner calls =\n\t%+v\nwant\n\t%+v", server.volumeRunner.Calls, want)
+	}
+
+	for _, after := range []string{"a/b", "..", "."} {
+		response := server.request(t, http.MethodGet, volumeOpPath(fixture, "list", url.Values{
+			"source": {"demoapp_pgdata"},
+			"after":  {after},
+		}), nil)
+		response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest {
+			t.Errorf("after %q status = %d, want %d", after, response.StatusCode, http.StatusBadRequest)
+		}
+	}
+	if len(server.volumeRunner.Calls) != 1 {
+		t.Errorf("runner calls = %d, want the refused cursors never to run", len(server.volumeRunner.Calls))
+	}
+}
+
 // read streams the helper's bytes through untouched — no JSON, no buffering
 // into a wrapper — with the bytes' own content type.
 func TestVolumeReadStreamsRawBytes(t *testing.T) {

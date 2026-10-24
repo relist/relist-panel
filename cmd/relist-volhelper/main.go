@@ -4,7 +4,7 @@
 // invokes it out of the panel's own image with exactly one Volume mounted at
 // /data (the spec's Run spec):
 //
-//	relist-volhelper list    -- <path>
+//	relist-volhelper list    [--after <name>] -- <path>
 //	relist-volhelper stat    -- <path>
 //	relist-volhelper read    -- <path>
 //	relist-volhelper write   [--expect <bytes>] -- <path>
@@ -49,7 +49,7 @@ const listLimit = 10000
 // usage is printed for every malformed invocation: an unknown op, a missing
 // argument, or anything that is not exactly the protocol's shape.
 const usage = `usage:
-  relist-volhelper list    -- <path>
+  relist-volhelper list    [--after <name>] -- <path>
   relist-volhelper stat    -- <path>
   relist-volhelper read    -- <path>
   relist-volhelper write   [--expect <bytes>] -- <path>
@@ -71,6 +71,8 @@ extract consumes a tar.gz on stdin and writes it into the existing directory <pa
 pack and unpack move a whole Volume for a server migration: an uncompressed tar that keeps
 owners and modes, with no size cap. size and free answer {"bytes":N}.
 probe answers {"exists":B,"empty":B}: empty only for a directory with no entries.
+list answers {"entries":[...],"truncated":B,"next":"<name>"}: at most 10000 entries by name; when truncated, next
+is the last name returned, and --after <name> (one path segment) lists the names that sort after it.
 `
 
 // The helper's exit codes: 0 for success, 1 when an operation failed and 2
@@ -125,14 +127,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, rootDir strin
 
 	switch cmd.op {
 	case "list":
-		entries, truncated, err := vol.ListFirst(cmd.name, listLimit)
+		entries, truncated, err := vol.ListFirst(cmd.name, cmd.after, listLimit)
 		if err != nil {
 			return fail(stderr, err)
 		}
 		listing := struct {
 			Entries   []volfs.Entry `json:"entries"`
 			Truncated bool          `json:"truncated"`
-		}{entries, truncated}
+			Next      string        `json:"next,omitempty"`
+		}{Entries: entries, Truncated: truncated}
+		if truncated {
+			listing.Next = entries[len(entries)-1].Name
+		}
 		if err := json.NewEncoder(stdout).Encode(listing); err != nil {
 			return fail(stderr, fmt.Errorf("write listing: %w", err))
 		}
@@ -207,10 +213,12 @@ type command struct {
 	name     string
 	expect   int64
 	declared bool
+	after    string
 }
 
 // parse accepts exactly one argv shape per op: `-- <path>` for every op,
-// `--expect <bytes> -- <path>` additionally for write, and `--format tar.gz --
+// `--expect <bytes> -- <path>` additionally for write, `--after <name> --
+// <path>` for list, and `--format tar.gz --
 // <path>` for archive. `--` is mandatory, so a name starting with `-` is
 // always a path and never a flag; the flag order is fixed because the panel is
 // the only caller and emits precisely these shapes.
@@ -222,7 +230,17 @@ func parse(args []string) (command, error) {
 	rest := args[1:]
 
 	switch cmd.op {
-	case "list", "stat", "read", "delete", "extract", "mkdir", "create", "pack", "size", "probe":
+	case "list":
+		// An optional name cursor: the listing resumes after it.
+		if len(rest) >= 2 && rest[0] == "--after" {
+			after := rest[1]
+			if after == "" || after == "." || after == ".." || strings.ContainsAny(after, "/\x00") {
+				return command{}, fmt.Errorf("--after takes one name, got %q", after)
+			}
+			cmd.after = after
+			rest = rest[2:]
+		}
+	case "stat", "read", "delete", "extract", "mkdir", "create", "pack", "size", "probe":
 		// No extra flags: the path follows immediately after `--`.
 	case "free":
 		// A whole-Volume operation: the path must be the root.

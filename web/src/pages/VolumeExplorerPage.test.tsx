@@ -93,14 +93,42 @@ describe('VolumeExplorerPage listing', () => {
 
     expect(await screen.findByText('a.txt')).toBeTruthy();
     expect(screen.getByText('b.txt')).toBeTruthy();
-    expect(screen.queryByText('Showing the first 10,000 entries.')).toBeNull();
+    expect(screen.queryByText(/Showing entries/)).toBeNull();
   });
 
-  it('says only the first 10,000 entries are shown when the listing is truncated', async () => {
-    mocks.listVolumeEntries.mockResolvedValue({ entries: [entry('a.txt')], truncated: true });
+  it('shows the range and a Next 10,000 button when the listing is truncated', async () => {
+    mocks.listVolumeEntries.mockResolvedValue({ entries: [entry('a.txt')], truncated: true, next: 'a.txt' });
     await openListing();
 
     expect(await screen.findByText('a.txt')).toBeTruthy();
-    expect(screen.getByText('Showing the first 10,000 entries.')).toBeTruthy();
+    expect(screen.getByText('Showing entries 1–10,000.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Next 10,000' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Back to the start' })).toBeNull();
+  });
+
+  it('pages by the name cursor and can go back to the start', async () => {
+    mocks.listVolumeEntries.mockResolvedValueOnce({ entries: [entry('a.txt')], truncated: true, next: 'a.txt' });
+    await openListing();
+    await screen.findByText('a.txt');
+
+    mocks.listVolumeEntries.mockResolvedValueOnce({ entries: [entry('b.txt')], truncated: true, next: 'b.txt' });
+    fireEvent.click(screen.getByRole('button', { name: 'Next 10,000' }));
+    expect(await screen.findByText('b.txt')).toBeTruthy();
+    expect(mocks.listVolumeEntries.mock.calls.at(-1)?.[4]).toBe('a.txt');
+    expect(screen.getByText('Showing entries 10,001–20,000.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Back to the start' })).toBeTruthy();
+
+    mocks.listVolumeEntries.mockResolvedValueOnce({ entries: [entry('c.txt')], truncated: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Next 10,000' }));
+    expect(await screen.findByText('c.txt')).toBeTruthy();
+    expect(mocks.listVolumeEntries.mock.calls.at(-1)?.[4]).toBe('b.txt');
+    expect(screen.getByText('Showing entries 20,001–20,001.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Next 10,000' })).toBeNull();
+
+    mocks.listVolumeEntries.mockResolvedValueOnce({ entries: [entry('a.txt')], truncated: true, next: 'a.txt' });
+    fireEvent.click(screen.getByRole('button', { name: 'Back to the start' }));
+    expect(await screen.findByText('a.txt')).toBeTruthy();
+    expect(mocks.listVolumeEntries.mock.calls.at(-1)?.[4]).toBeUndefined();
+    expect(screen.getByText('Showing entries 1–10,000.')).toBeTruthy();
   });
 });

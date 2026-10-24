@@ -117,12 +117,14 @@ func (fs *FS) List(name string) ([]Entry, error) {
 }
 
 // ListFirst is List for the Explorer: the first limit entries by name, and
-// whether more were cut off. Only the names of the whole directory are held —
+// whether more were cut off. A non-empty after is a name cursor: only the
+// names sorting strictly after it are listed, so a caller chains pages by
+// passing the last name of the previous one. Only the names of the whole directory are held —
 // a short string each — and only the first limit are Lstat'd, so a directory
 // of a million entries costs a million names, not a million Entry values and
 // their syscalls. List stays whole for the callers that need every child
 // (pack, archive and recursive remove).
-func (fs *FS) ListFirst(name string, limit int) (entries []Entry, truncated bool, err error) {
+func (fs *FS) ListFirst(name, after string, limit int) (entries []Entry, truncated bool, err error) {
 	dir, err := fs.root.Open(name)
 	if err != nil {
 		return nil, false, fmt.Errorf("list %q: %w", name, err)
@@ -134,6 +136,13 @@ func (fs *FS) ListFirst(name string, limit int) (entries []Entry, truncated bool
 		return nil, false, fmt.Errorf("list %q: %w", name, err)
 	}
 	slices.Sort(names)
+	if after != "" {
+		start, _ := slices.BinarySearch(names, after)
+		if start < len(names) && names[start] == after {
+			start++
+		}
+		names = names[start:]
+	}
 	if len(names) > limit {
 		names, truncated = names[:limit], true
 	}

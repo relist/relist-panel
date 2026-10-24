@@ -26,10 +26,12 @@ func TestVolumeArgvForEveryOp(t *testing.T) {
 		op            volumes.Op
 		readOnly      bool
 		declaredBytes int64
+		after         string
 		wantMount     string
 		wantOpArgs    []string
 	}{
 		{name: "list", op: volumes.OpList, readOnly: true, wantMount: "demo_pgdata:/data:ro", wantOpArgs: []string{"list"}},
+		{name: "list after a cursor", op: volumes.OpList, readOnly: true, after: "f09999", wantMount: "demo_pgdata:/data:ro", wantOpArgs: []string{"list", "--after", "f09999"}},
 		{name: "stat", op: volumes.OpStat, readOnly: true, wantMount: "demo_pgdata:/data:ro", wantOpArgs: []string{"stat"}},
 		{name: "read", op: volumes.OpRead, readOnly: true, wantMount: "demo_pgdata:/data:ro", wantOpArgs: []string{"read"}},
 		{name: "archive", op: volumes.OpArchive, readOnly: true, wantMount: "demo_pgdata:/data:ro", wantOpArgs: []string{"archive", "--format", "tar.gz"}},
@@ -49,6 +51,7 @@ func TestVolumeArgvForEveryOp(t *testing.T) {
 				Op:            tt.op,
 				Path:          "uploads/notes.txt",
 				DeclaredBytes: tt.declaredBytes,
+				After:         tt.after,
 				ReadOnly:      tt.readOnly,
 			}
 

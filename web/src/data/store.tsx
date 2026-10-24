@@ -96,7 +96,7 @@ type PanelValue = {
   /** The Compose's resolved Volumes and pre-flight statuses, from the Compose CLI. */
   loadVolumes: (composeId: number) => Promise<ComposeVolumes>;
   /** One directory inside a resolved Volume, for the Explorer's current path. */
-  listVolumeEntries: (composeId: number, source: string, path: string, access?: VolumeAccess) => Promise<VolumeListing>;
+  listVolumeEntries: (composeId: number, source: string, path: string, access?: VolumeAccess, after?: string) => Promise<VolumeListing>;
   /** One file's bytes inside a resolved Volume, for the editor (the caller applies the 1 MB gate). */
   readVolumeFile: (composeId: number, source: string, path: string, access?: VolumeAccess) => Promise<Uint8Array>;
   /** Uploads or overwrites one file inside a resolved Volume. Rejects with the API's message. */
@@ -860,7 +860,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   // names the exact listing (`volume-list:<compose>:<source>:<path>`) so a
   // refresh spins only the directory it re-reads.
   const listVolumeEntries = useCallback(
-    (composeId: number, source: string, path: string, access?: VolumeAccess) =>
+    (composeId: number, source: string, path: string, access?: VolumeAccess, after?: string) =>
       track(`volume-list:${composeId}:${source}:${path}`, async () => {
         const location = findComposeLocation(projectsRef.current, composeId);
         if (!location) {
@@ -871,6 +871,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           source,
           path,
           access,
+          after,
         );
       }),
     [track],

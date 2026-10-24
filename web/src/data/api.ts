@@ -436,9 +436,9 @@ export const api = {
    * root (`''` is the root); a refusal — a symlink that escapes, a directory
    * the operation uid cannot read — arrives as the API's own message.
    */
-  listVolumeEntries: (location: ComposePath, source: string, path: string, access?: VolumeAccess) =>
+  listVolumeEntries: (location: ComposePath, source: string, path: string, access?: VolumeAccess, after?: string) =>
     request<VolumeListing>(
-      `${composePath(location)}/volumes/list?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}${volumeAccessQuery(access)}`,
+      `${composePath(location)}/volumes/list?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}${volumeAccessQuery(access)}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
     ),
   /**
    * One file's bytes, for the editor: `read` without the `download` marker,

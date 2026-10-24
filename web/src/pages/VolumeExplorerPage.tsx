@@ -24,6 +24,7 @@ import {
   Popconfirm,
   Result,
   Skeleton,
+  Space,
   Select,
   Input,
   Checkbox,
@@ -85,6 +86,17 @@ type Row = { entry: VolumeEntry; facts: EntryFacts };
 
 /** What every operation sends until the Operation user card is confirmed: nothing. */
 const UNCONFIRMED_ACCESS: VolumeAccess = {};
+
+/** The helper's page size: a listing past this many names is cut and continued by cursor. */
+const LISTING_PAGE_SIZE = 10000;
+const NO_CURSORS: string[] = [];
+
+/** The range of entries a page shows; a truncated page is by definition a full one. */
+function listingRange(page: number, count: number, truncated: boolean): string {
+  const first = page * LISTING_PAGE_SIZE + 1;
+  const last = page * LISTING_PAGE_SIZE + (truncated ? LISTING_PAGE_SIZE : count);
+  return `Showing entries ${first.toLocaleString('en-US')}–${last.toLocaleString('en-US')}.`;
+}
 
 /**
  * The Volume Explorer (GUIDELINES §4.7): a Compose's Volume opened as its own
@@ -279,7 +291,11 @@ export function VolumeExplorerPage() {
   const confirmedQuery = applied?.query ?? '';
   const listingKey = `${confirmedQuery}\u0000${path}`;
   const listPendingKey = `volume-list:${composeId}:${source}:${path}`;
-  const [listing, setListing] = useState<{ key: string; entries?: VolumeEntry[]; truncated?: boolean; error?: string }>();
+  const [listing, setListing] = useState<{ key: string; entries?: VolumeEntry[]; truncated?: boolean; next?: string; page?: number; error?: string }>();
+  // The name cursors of the pages opened past the first, for this directory
+  // only: the key drops them the moment the path or the confirmed source changes.
+  const [paging, setPaging] = useState<{ key: string; cursors: string[] }>();
+  const cursors = paging?.key === listingKey ? paging.cursors : NO_CURSORS;
   const [selected, setSelected] = useState<string>();
   const [openError, setOpenError] = useState<{ entry: VolumeEntry; error: string }>();
   // A refused or failed write stays on this screen as an Alert (GUIDELINES §8),
@@ -322,20 +338,31 @@ export function VolumeExplorerPage() {
   const restoreInput = useRef<HTMLInputElement>(null);
   const listRequest = useRef(0);
 
-  const loadList = useCallback(async () => {
+  const loadList = useCallback(async (pageCursors: string[] = cursors) => {
     const request = ++listRequest.current;
     const key = listingKey;
     try {
-      const { entries, truncated } = await listVolumeEntries(composeId, source, path, access);
+      const { entries, truncated, next } = await listVolumeEntries(composeId, source, path, access, pageCursors.at(-1));
       if (listRequest.current === request) {
-        setListing({ key, entries, truncated });
+        setListing({ key, entries, truncated, next, page: pageCursors.length });
       }
     } catch (reason: unknown) {
       if (listRequest.current === request) {
         setListing({ key, error: failureMessage(reason) });
       }
     }
-  }, [access, composeId, listVolumeEntries, listingKey, path, source]);
+  }, [access, composeId, cursors, listVolumeEntries, listingKey, path, source]);
+
+  // Next and Back to the start move the cursor stack first, then read that
+  // page; a refresh after a write re-reads the page the operator is on.
+  const goToPage = useCallback(
+    (pageCursors: string[]) => {
+      setPaging({ key: listingKey, cursors: pageCursors });
+      setSelected(undefined);
+      void loadList(pageCursors);
+    },
+    [listingKey, loadList],
+  );
 
   const currentListing = listing?.key === listingKey ? listing : undefined;
   const canList = view.status === 'ready' && confirmed;
@@ -396,11 +423,12 @@ export function VolumeExplorerPage() {
         return;
       }
       try {
-        const { entries, truncated } = await listVolumeEntries(composeId, source, next, access);
+        const listed = await listVolumeEntries(composeId, source, next, access);
+        const { entries, truncated } = listed;
         // The listing is already in hand: stash it so following the symlink
         // does not pay for the same read twice.
         listRequest.current += 1;
-        setListing({ key: `${confirmedQuery}\u0000${next}`, entries, truncated });
+        setListing({ key: `${confirmedQuery}\u0000${next}`, entries, truncated, next: listed.next, page: 0 });
         navigate(paths.volumeExplorer(projectId, environmentId, composeId, source, next));
       } catch (reason: unknown) {
         const refusal = failureMessage(reason);
@@ -1091,11 +1119,29 @@ export function VolumeExplorerPage() {
             />
           ) : (
             <>
-              {currentListing.truncated && (
+              {(currentListing.truncated || (currentListing.page ?? 0) > 0) && (
                 <Alert
+                  action={
+                    <Space>
+                      {(currentListing.page ?? 0) > 0 && (
+                        <Button disabled={isPending(listPendingKey)} onClick={() => goToPage(NO_CURSORS)} size="small">
+                          Back to the start
+                        </Button>
+                      )}
+                      {currentListing.truncated && currentListing.next !== undefined && (
+                        <Button
+                          disabled={isPending(listPendingKey)}
+                          onClick={() => goToPage([...cursors, currentListing.next!])}
+                          size="small"
+                        >
+                          Next 10,000
+                        </Button>
+                      )}
+                    </Space>
+                  }
                   showIcon
                   style={{ marginBottom: LAYOUT.gutterSmall }}
-                  title="Showing the first 10,000 entries."
+                  title={listingRange(currentListing.page ?? 0, currentListing.entries?.length ?? 0, currentListing.truncated === true)}
                   type="info"
                 />
               )}

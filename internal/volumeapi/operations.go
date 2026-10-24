@@ -129,11 +129,21 @@ func (s *Service) operationOf(w http.ResponseWriter, r *http.Request, op volumes
 		return volumes.Request{}, volumes.Volume{}, false
 	}
 
+	after := ""
+	if op == volumes.OpList {
+		after = r.URL.Query().Get("after")
+		if after != "" && (after == "." || after == ".." || strings.Contains(after, "/") || strings.ContainsRune(after, 0)) {
+			writeError(w, http.StatusBadRequest, "after must be one entry name")
+			return volumes.Request{}, volumes.Volume{}, false
+		}
+	}
+
 	return volumes.Request{
 		Source:   volume.Source,
 		User:     user,
 		Op:       op,
 		Path:     path,
+		After:    after,
 		ReadOnly: readOnly,
 	}, volume, true
 }

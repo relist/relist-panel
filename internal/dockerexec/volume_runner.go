@@ -148,6 +148,9 @@ func volumeArgv(image string, req volumes.Request) []string {
 	case req.Op == volumes.OpArchive:
 		// archive's pinned format, before the path.
 		argv = append(argv, "--format", "tar.gz")
+	case req.Op == volumes.OpList && req.After != "":
+		// list resumes after a name cursor, before the path.
+		argv = append(argv, "--after", req.After)
 	case req.Op == volumes.OpWrite && req.DeclaredBytes > 0:
 		// write accepts the upload's declared size, so the helper can refuse
 		// it before reading a byte of stdin (the spec's Caps).
