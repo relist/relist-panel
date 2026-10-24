@@ -12,7 +12,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Warning texts suggest the fix: "use a named volume" for (1), "declare it `external: true`" for (2)
 - [ ] `:ro` binds under `./src` and binds outside `src/` give no warning
