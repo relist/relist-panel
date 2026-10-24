@@ -53,7 +53,7 @@ func Migrate(db *sql.DB) error {
 	if err := goose.Up(db, "."); err != nil {
 		return fmt.Errorf("run goose migrations: %w", err)
 	}
-	return nil
+	return checkSchema(db)
 }
 
 // ForeignKeyViolations counts the rows that reference a parent that no longer
