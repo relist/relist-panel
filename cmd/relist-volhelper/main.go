@@ -59,7 +59,8 @@ const usage = `usage:
   relist-volhelper free    -- .
   relist-volhelper probe   -- <path>
 <path> is relative to the Volume root mounted at /data.
---expect is a write's declared size in bytes, checked against the Volume's free space before stdin is read.
+--expect is a write's declared size in bytes, checked against the Volume's free space before stdin is read;
+a stream that ends at another length fails the write and leaves the original file untouched.
 mkdir creates one directory; create creates one empty file. Neither replaces an existing entry.
 extract consumes a tar.gz on stdin and writes it into the existing directory <path>.
 pack and unpack move a whole Volume for a server migration: an uncompressed tar that keeps
@@ -257,17 +258,17 @@ func parse(args []string) (command, error) {
 }
 
 // errNoSpace is the guard's own refusal, a sentinel so runWrite can tell a
-// mid-stream overflow — which removes the partial file and exits 3 — from any
-// other io failure, which stays exit 1.
+// mid-stream overflow — which exits 3 — from any other io failure, which stays
+// exit 1.
 var errNoSpace = errors.New("stream exceeds the Volume's free space")
 
 // runWrite is the protocol's only consuming operation. It measures the
 // Volume's free space once, refuses a declared size that cannot fit before
 // stdin or the target is touched (the spec's Caps), then guards the stream
-// against the same measurement. volfs.Write creates and truncates the target
-// before the copy, so the original is already replaced once the copy begins: a
-// guarded abort removes the partial file rather than leaving a truncated one,
-// the removal is best-effort, and the refusal still exits 3.
+// against the same measurement. volfs.Write streams into a temp file and
+// renames it over the target only when the stream completes, so a guarded
+// abort, a stream shorter than --expect or any other failure has already
+// cleaned up its temp and left the original alone; the abort still exits 3.
 func runWrite(stderr io.Writer, vol *volfs.FS, stdin io.Reader, cmd command, freeSpace func(*volfs.FS) (uint64, error)) int {
 	free, err := freeSpace(vol)
 	if err != nil {
@@ -278,9 +279,12 @@ func runWrite(stderr io.Writer, vol *volfs.FS, stdin io.Reader, cmd command, fre
 		return exitRefused
 	}
 
-	if err := vol.Write(cmd.name, &spaceGuard{src: stdin, free: free}); err != nil {
+	expect := int64(-1)
+	if cmd.declared {
+		expect = cmd.expect
+	}
+	if err := vol.Write(cmd.name, &spaceGuard{src: stdin, free: free}, expect); err != nil {
 		if errors.Is(err, errNoSpace) {
-			_ = vol.Delete(cmd.name)
 			fmt.Fprintf(stderr, "relist-volhelper: write %q exceeded the Volume's free space (only %d bytes free when it began)\n", cmd.name, free)
 			return exitRefused
 		}

@@ -19,6 +19,9 @@
 package volfs
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -51,6 +54,10 @@ func Open(rootDir string) (*FS, error) {
 func (fs *FS) Close() error {
 	return fs.root.Close()
 }
+
+// ErrIncompleteWrite is Write's report that the stream ended before (or ran
+// past) the size the caller declared: a cut-off upload, not a smaller file.
+var ErrIncompleteWrite = errors.New("stream ended before the declared size")
 
 // Kind is what an entry is, derived from the metadata call's own mode bits.
 type Kind string
@@ -203,22 +210,84 @@ func (fs *FS) Read(name string, dst io.Writer) error {
 	return nil
 }
 
-// Write streams src into one file, creating it or truncating it first, and
-// never buffers the stream here. A symlink out of the root is refused exactly
-// as Read refuses it: Create resolves the final component through the root
-// too.
-func (fs *FS) Write(name string, src io.Reader) error {
-	f, err := fs.root.Create(name)
+// Write streams src into one file and never buffers the stream here. A
+// regular target, or a missing one, is written atomically: the bytes go to a
+// `.relist-write-*` temp beside it and only a complete stream is renamed over
+// the target, so a failed or cut-off write leaves the original untouched and
+// the target is never opened (ticket 19). expect is the declared size, or
+// negative when unknown; a stream that ends at a different length is
+// ErrIncompleteWrite. A symlink target keeps the truncate-and-stream path —
+// resolving a chain through os.Root is not worth it in v1 — so the atomicity
+// does not cover it. A symlink out of the root is refused exactly as Read
+// refuses it: both resolve the final component through the root.
+func (fs *FS) Write(name string, src io.Reader, expect int64) error {
+	info, err := fs.root.Lstat(name)
+	switch {
+	case err == nil && info.Mode()&os.ModeSymlink != 0:
+		return fs.writeInPlace(name, src, expect)
+	case err == nil && !info.Mode().IsRegular():
+		// A directory or special file: let the open report what it is.
+		return fs.writeInPlace(name, src, expect)
+	case err != nil && !errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("write %q: %w", name, err)
+	}
+
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return fmt.Errorf("write %q: %w", name, err)
+	}
+	tmp := path.Join(path.Dir(name), ".relist-write-"+hex.EncodeToString(suffix[:]))
+	f, err := fs.root.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o666)
 	if err != nil {
 		return fmt.Errorf("write %q: %w", name, err)
 	}
 
-	if _, err := io.Copy(f, src); err != nil {
-		f.Close()
+	err = copyExpecting(f, src, name, expect)
+	if cerr := f.Close(); err == nil && cerr != nil {
+		err = fmt.Errorf("write %q: %w", name, cerr)
+	}
+	if err == nil && info != nil {
+		// The temp is created with the umask-derived mode; an existing target
+		// keeps the mode it had.
+		if cerr := fs.root.Chmod(tmp, info.Mode().Perm()); cerr != nil {
+			err = fmt.Errorf("write %q: %w", name, cerr)
+		}
+	}
+	if err == nil {
+		if rerr := fs.root.Rename(tmp, name); rerr != nil {
+			err = fmt.Errorf("write %q: %w", name, rerr)
+		}
+	}
+	if err != nil {
+		_ = fs.root.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// writeInPlace is Write's truncate-and-stream path, for a target the temp-and-
+// rename cannot stand in for.
+func (fs *FS) writeInPlace(name string, src io.Reader, expect int64) error {
+	f, err := fs.root.Create(name)
+	if err != nil {
 		return fmt.Errorf("write %q: %w", name, err)
 	}
-	if err := f.Close(); err != nil {
+	err = copyExpecting(f, src, name, expect)
+	if cerr := f.Close(); err == nil && cerr != nil {
+		err = fmt.Errorf("write %q: %w", name, cerr)
+	}
+	return err
+}
+
+// copyExpecting copies src into dst and, when expect is not negative, reports
+// a stream of any other length as ErrIncompleteWrite.
+func copyExpecting(dst io.Writer, src io.Reader, name string, expect int64) error {
+	written, err := io.Copy(dst, src)
+	if err != nil {
 		return fmt.Errorf("write %q: %w", name, err)
+	}
+	if expect >= 0 && written != expect {
+		return fmt.Errorf("write %q: %w (%d of %d bytes)", name, ErrIncompleteWrite, written, expect)
 	}
 	return nil
 }

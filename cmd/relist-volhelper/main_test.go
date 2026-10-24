@@ -335,12 +335,12 @@ func TestWriteAcceptsADeclaredSizeThatFits(t *testing.T) {
 	}
 }
 
-// TestWriteAbortsWhenTheStreamOverrunsTheFreeSpace: the guard delivers at
+// TestWriteOverflowKeepsOriginal: the guard delivers at
 // most the budget measured at the start. A stream that runs past it aborts
-// with exit 3 and the partial file is removed — for a declared upload whose
-// declared size lied, and without --expect too, where the guard is the only
-// protection.
-func TestWriteAbortsWhenTheStreamOverrunsTheFreeSpace(t *testing.T) {
+// with exit 3, the temp file is removed and the original is left untouched —
+// for a declared upload whose declared size lied, and without --expect too,
+// where the guard is the only protection.
+func TestWriteOverflowKeepsOriginal(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
@@ -364,10 +364,36 @@ func TestWriteAbortsWhenTheStreamOverrunsTheFreeSpace(t *testing.T) {
 			if !strings.Contains(stderr, "free space") {
 				t.Errorf("overrunning write stderr = %q, want the free-space refusal", stderr)
 			}
-			if _, err := os.Stat(filepath.Join(root, "upload.bin")); !errors.Is(err, os.ErrNotExist) {
-				t.Errorf("the partial file survived the abort: %v", err)
+			if got, err := os.ReadFile(filepath.Join(root, "upload.bin")); err != nil || string(got) != "original" {
+				t.Errorf("upload.bin after the abort = %q, %v; want the original, never deleted", got, err)
+			}
+			if matches, _ := filepath.Glob(filepath.Join(root, ".relist-write-*")); len(matches) != 0 {
+				t.Errorf("the abort left temp files behind: %v", matches)
 			}
 		})
+	}
+}
+
+// TestWriteShortStdinKeepsOriginal: a stream that ends before --expect's
+// declared size is a cut-off upload. The helper fails it (neither the success
+// exit nor the space refusal) and the original file is left intact.
+func TestWriteShortStdinKeepsOriginal(t *testing.T) {
+	root := t.TempDir()
+	original := bytes.Repeat([]byte("o"), 14000)
+	target := plant(t, root, "config.db", original)
+
+	code, stdout, stderr := runHelper(t, root, bytes.Repeat([]byte("n"), 100), "write", "--expect", "40000", "--", "config.db")
+	if code == exitOK || code == exitRefused {
+		t.Fatalf("short write exit = %d, stderr = %q; want a failure other than %d or %d", code, stderr, exitOK, exitRefused)
+	}
+	if len(stdout) != 0 {
+		t.Errorf("short write stdout = %q, want nothing", stdout)
+	}
+	if got, err := os.ReadFile(target); err != nil || !bytes.Equal(got, original) {
+		t.Errorf("config.db after the short write = %d bytes, %v; want the original", len(got), err)
+	}
+	if matches, _ := filepath.Glob(filepath.Join(root, ".relist-write-*")); len(matches) != 0 {
+		t.Errorf("the short write left temp files behind: %v", matches)
 	}
 }
 

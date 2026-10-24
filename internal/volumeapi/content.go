@@ -20,10 +20,11 @@ const uploadCap = 1 << 30
 // buffered. The declared Content-Length is required, because it becomes
 // DeclaredBytes: the helper runs `write --expect <n>` and refuses a size that
 // cannot fit the Volume before it reads any stdin (exit 3, answered 507).
-// The helper's own stream guard catches an overrunning body the same way; its
-// clean-up — it truncates the target, so an aborted write removes the partial
-// file best-effort — is the helper's behaviour, and this handler only reports
-// the message.
+// The helper's own stream guard catches an overrunning body the same way. It
+// writes a temp file and renames it over the target only when the declared
+// size arrived, so an aborted or cut-off write leaves the original untouched;
+// that clean-up is the helper's behaviour, and this handler only reports the
+// message.
 func (s *Service) writeFile(w http.ResponseWriter, r *http.Request) {
 	req, _, ok := s.contentOperation(w, r, volumes.OpWrite)
 	if !ok {

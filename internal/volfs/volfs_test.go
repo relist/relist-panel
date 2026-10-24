@@ -100,8 +100,8 @@ func TestEscapingPathsFailWithGoRootsOwnError(t *testing.T) {
 		{"Read ..", func() error { return f.Read("../secret.txt", io.Discard) }},
 		{"Read absolute", func() error { return f.Read("/etc/passwd", io.Discard) }},
 		{"Read dir/../../x", func() error { return f.Read("dir/../../secret.txt", io.Discard) }},
-		{"Write ..", func() error { return f.Write("../escaped.txt", strings.NewReader("x")) }},
-		{"Write absolute", func() error { return f.Write(absoluteTarget, strings.NewReader("x")) }},
+		{"Write ..", func() error { return f.Write("../escaped.txt", strings.NewReader("x"), -1) }},
+		{"Write absolute", func() error { return f.Write(absoluteTarget, strings.NewReader("x"), -1) }},
 		{"Delete absolute", func() error { return f.Delete("/etc/passwd") }},
 	}
 	for _, op := range ops {
@@ -317,7 +317,7 @@ func TestSymlinksAreListedAndOnlyFollowedInsideTheRoot(t *testing.T) {
 			if err := f.Read(name, io.Discard); err == nil || !strings.Contains(err.Error(), "path escapes from parent") {
 				t.Errorf("Read(%q) error = %v, want %q", name, err, "path escapes from parent")
 			}
-			if err := f.Write(name, strings.NewReader("x")); err == nil || !strings.Contains(err.Error(), "path escapes from parent") {
+			if err := f.Write(name, strings.NewReader("x"), -1); err == nil || !strings.Contains(err.Error(), "path escapes from parent") {
 				t.Errorf("Write(%q) error = %v, want %q", name, err, "path escapes from parent")
 			}
 		})
@@ -339,7 +339,7 @@ func TestWriteAndReadStreamRoundTrip(t *testing.T) {
 	if _, err := rand.Read(payload); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.Write("big.bin", bytes.NewReader(payload)); err != nil {
+	if err := f.Write("big.bin", bytes.NewReader(payload), -1); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -352,7 +352,7 @@ func TestWriteAndReadStreamRoundTrip(t *testing.T) {
 	}
 
 	// Overwriting truncates: the old tail must not survive a shorter write.
-	if err := f.Write("big.bin", strings.NewReader("short")); err != nil {
+	if err := f.Write("big.bin", strings.NewReader("short"), -1); err != nil {
 		t.Fatalf("second Write() error = %v", err)
 	}
 	got.Reset()
@@ -371,7 +371,7 @@ func TestWriteAndReadStreamRoundTrip(t *testing.T) {
 		t.Errorf("Stat().Size = %d, want %d", entry.Size, len("short"))
 	}
 
-	if err := f.Write("failed.bin", errorReader{}); err == nil || !strings.Contains(err.Error(), "boom") {
+	if err := f.Write("failed.bin", errorReader{}, -1); err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Errorf("Write(failing reader) error = %v, want the reader's failure", err)
 	}
 }
@@ -379,6 +379,141 @@ func TestWriteAndReadStreamRoundTrip(t *testing.T) {
 type errorReader struct{}
 
 func (errorReader) Read([]byte) (int, error) { return 0, errors.New("boom") }
+
+// randomBytes is n bytes that cannot be mistaken for each other.
+func randomBytes(t *testing.T, n int) []byte {
+	t.Helper()
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// noTempLeft fails if a write left a `.relist-write-*` temp in dir.
+func noTempLeft(t *testing.T, dir string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, ".relist-write-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("a failed write left temp files behind: %v", matches)
+	}
+}
+
+// A write that fails partway must leave the original byte-identical: the
+// stream goes to a temp file beside the target and only a complete one is
+// renamed over it (ticket 19).
+func TestWriteFailingMidStreamKeepsOriginal(t *testing.T) {
+	f := newFixture(t)
+	original := randomBytes(t, 14000)
+	f.plant(t, "config.db", string(original))
+
+	src := io.MultiReader(bytes.NewReader(randomBytes(t, 100)), failingReader{errors.New("connection reset")})
+	err := f.Write("config.db", src, -1)
+	if err == nil || !strings.Contains(err.Error(), "connection reset") {
+		t.Fatalf("Write() error = %v, want the stream's failure", err)
+	}
+
+	got, err := os.ReadFile(f.path("config.db"))
+	if err != nil || !bytes.Equal(got, original) {
+		t.Errorf("config.db after the failed write = %d bytes, %v; want the original %d bytes", len(got), err, len(original))
+	}
+	noTempLeft(t, f.root)
+}
+
+type failingReader struct{ err error }
+
+func (r failingReader) Read([]byte) (int, error) { return 0, r.err }
+
+// A stream that ends before the declared size is a cut-off upload, not a
+// smaller file: the original stays and the error names ErrIncompleteWrite.
+func TestWriteShortStreamWithExpectKeepsOriginal(t *testing.T) {
+	f := newFixture(t)
+	original := randomBytes(t, 14000)
+	f.plant(t, "config.db", string(original))
+
+	err := f.Write("config.db", io.LimitReader(bytes.NewReader(randomBytes(t, 40000)), 100), 40000)
+	if !errors.Is(err, ErrIncompleteWrite) {
+		t.Fatalf("Write() error = %v, want ErrIncompleteWrite", err)
+	}
+
+	got, err := os.ReadFile(f.path("config.db"))
+	if err != nil || !bytes.Equal(got, original) {
+		t.Errorf("config.db after the short write = %d bytes, %v; want the original %d bytes", len(got), err, len(original))
+	}
+	noTempLeft(t, f.root)
+}
+
+// A successful replacement carries the new bytes and the old file's mode,
+// not the umask-derived mode of the temp file.
+func TestWriteReplacesAndKeepsMode(t *testing.T) {
+	f := newFixture(t)
+	f.plant(t, "secret.key", "old and longer than the new content")
+	if err := os.Chmod(f.path("secret.key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.Write("secret.key", strings.NewReader("new"), 3); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := os.ReadFile(f.path("secret.key"))
+	if err != nil || string(got) != "new" {
+		t.Errorf("secret.key = %q, %v; want %q", got, err, "new")
+	}
+	info, err := os.Stat(f.path("secret.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
+	}
+	noTempLeft(t, f.root)
+}
+
+// An empty stream with no declared size is a valid empty file, replacing an
+// existing one or creating a new one.
+func TestWriteEmptyFileWithoutExpect(t *testing.T) {
+	f := newFixture(t)
+	f.plant(t, "existing.txt", "content")
+
+	for _, name := range []string{"existing.txt", "new.txt"} {
+		if err := f.Write(name, strings.NewReader(""), -1); err != nil {
+			t.Fatalf("Write(%q) error = %v", name, err)
+		}
+		info, err := os.Stat(f.path(name))
+		if err != nil || info.Size() != 0 {
+			t.Errorf("%s after an empty write = %v, %v; want an empty file", name, info, err)
+		}
+	}
+	noTempLeft(t, f.root)
+}
+
+// A symlink target keeps the truncate-and-stream path: the content lands in
+// the file the link points at and the link itself stays a link.
+func TestWriteThroughSymlinkFollowsLink(t *testing.T) {
+	f := newFixture(t)
+	f.plant(t, "real.txt", "old")
+	if err := os.Symlink("real.txt", f.path("link.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.Write("link.txt", strings.NewReader("through the link"), -1); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := os.ReadFile(f.path("real.txt"))
+	if err != nil || string(got) != "through the link" {
+		t.Errorf("real.txt = %q, %v; want the new content", got, err)
+	}
+	info, err := os.Lstat(f.path("link.txt"))
+	if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		t.Errorf("link.txt = %v, %v; want it to stay a symlink", info, err)
+	}
+	noTempLeft(t, f.root)
+}
 
 // FreeBytes answers with the root's own filesystem: a real temp directory has
 // room, and a zero would mean the helper had nothing to compare an upload
