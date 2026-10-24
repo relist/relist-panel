@@ -83,6 +83,9 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	gate := newCoordinator()
 	hostGuard := dockerhost.NewGuard()
 	gate.host = hostGuard
+	// Without a Runner that can list container mounts, source snapshots are
+	// never collected.
+	mounts, _ := runner.(deployments.MountLister)
 	queue := deployments.NewQueue(deployments.Deps{
 		Maintenance: hostGuard,
 		Store:       deployments.NewStore(db),
@@ -91,6 +94,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		Fetcher:     sources.Git{},
 		Builder:     runner,
 		Gate:        gate,
+		Mounts:      mounts,
 		Timeout:     60 * time.Minute,
 		Keep:        20,
 	})

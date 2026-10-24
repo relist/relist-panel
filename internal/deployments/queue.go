@@ -51,6 +51,7 @@ type Deps struct {
 	Fetcher     Fetcher
 	Builder     Builder
 	Gate        Gate
+	Mounts      MountLister   // nil turns off snapshot collection
 	Timeout     time.Duration // 60 * time.Minute in production
 	Keep        int           // 20
 	Now         func() time.Time
@@ -187,6 +188,7 @@ func (q *Queue) Run(ctx context.Context) {
 	if _, err := q.d.Store.FailRunning(bg, reasonRestarted, q.d.Now()); err != nil {
 		logf("fail running deployments: %v", err)
 	}
+	q.collectAllSnapshots(ctx)
 	for ctx.Err() == nil {
 		d, ok, err := q.d.Store.NextQueued(ctx)
 		if err != nil {
@@ -207,6 +209,36 @@ func (q *Queue) Run(ctx context.Context) {
 			logf("deployment %d of compose %d: %v", d.Number, d.ComposeID, err)
 			sleep(ctx, retryDelay)
 		}
+	}
+}
+
+// collectAllSnapshots clears the source snapshots earlier runs left behind.
+func (q *Queue) collectAllSnapshots(ctx context.Context) {
+	if q.d.Mounts == nil {
+		return
+	}
+	rows, err := q.d.Store.db.QueryContext(ctx, `SELECT id FROM composes`)
+	if err != nil {
+		logf("list composes for snapshot collection: %v", err)
+		return
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			break
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		logf("list composes for snapshot collection: %v", err)
+	}
+	rows.Close()
+	for _, id := range ids {
+		if ctx.Err() != nil {
+			return
+		}
+		q.collectSnapshots(ctx, id)
 	}
 }
 
@@ -513,7 +545,13 @@ func (q *Queue) process(ctx context.Context, d Deployment) error {
 	if d.Mode == ModeSkipBuild && snapshot.Source == nil {
 		j.pre = &outcome{status: StatusFailed, reason: reasonNoSource}
 	}
-	return j.execute()
+	err = j.execute()
+	if j.settled {
+		// After execute returns, so a Cancel or Delete that holds the Project
+		// gate while waiting for this Deployment is not left waiting on it.
+		q.collectSnapshots(bg, d.ComposeID)
+	}
+	return err
 }
 
 // settleUnstarted settles a Deployment that never got to run its steps.
@@ -551,6 +589,7 @@ type job struct {
 	rs       *activeRun
 	out      io.Writer
 	step     string
+	settled  bool // the final outcome is recorded
 }
 
 func (j *job) execute() error {
@@ -615,6 +654,7 @@ func (j *job) execute() error {
 		logf("prune compose %d: %v", j.d.ComposeID, err)
 	}
 	removeLogs(dir, removed)
+	j.settled = true
 	return finishErr
 }
 

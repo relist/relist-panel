@@ -25,10 +25,17 @@ The host queue still runs one Deployment at a time and deduplicates one queued
 successor per Compose. Repeating enqueue preserves the first snapshot and options.
 Queued records predating snapshots cannot recover their original inputs. The
 worker captures and persists current inputs once and records a legacy warning.
-Per-deployment source files survive restart. Materialized trees are retained until
-Compose teardown, including after history pruning, because Containers can still
-mount them. This trades extra disk usage for stable mounts; the sidebar disk
-warning exposes storage pressure without deleting live files automatically.
+Per-deployment source files survive restart. Containers can still mount a
+Deployment's tree after history pruning, so trees are not deleted with their
+Deployment. Instead each Compose's snapshot directories are garbage-collected
+once a Deployment settles and once at boot, under the Project gate. A directory
+is kept while a queued or running Deployment will use it, while the Source's
+materialized tree lives in it, or while it holds a path mounted by any container
+of the Compose's Docker project, stopped ones included. Everything else under
+`.deployment-sources` is removed. If Docker or the database cannot say what is
+referenced, nothing is deleted that round; the remainder is collected by a later
+one. Compose teardown still removes whatever is left. This bounds disk use to the
+trees in use rather than one per Deploy.
 
 A known final outcome is retried on database write failure before advancing the
 worker, without running Docker again. Shutdown bounds that wait; this does not
