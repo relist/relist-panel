@@ -122,16 +122,20 @@ type volumeComposeFields struct {
 	} `yaml:"volumes"`
 }
 
-// declaredVolumeNames returns the literal name: of each non-external top-level
-// volume. A name with interpolation ("$") cannot be resolved without the
-// Compose's variables, so it is skipped, as is YAML that does not parse.
-func declaredVolumeNames(yamlContent string) []string {
+// declaredVolume is one non-external top-level volume with a literal name:.
+type declaredVolume struct{ Key, Name string }
+
+// declaredVolumes returns each non-external top-level volume that sets a
+// literal name:, ordered by its key. A name with interpolation ("$") cannot be
+// resolved without the Compose's variables, so it is skipped, as is YAML that
+// does not parse.
+func declaredVolumes(yamlContent string) []declaredVolume {
 	var doc volumeComposeFields
 	if err := yaml.Unmarshal([]byte(yamlContent), &doc); err != nil {
 		return nil
 	}
-	var names []string
-	for _, volume := range doc.Volumes {
+	var volumes []declaredVolume
+	for key, volume := range doc.Volumes {
 		if volume == nil || volume.Name == "" || strings.Contains(volume.Name, "$") {
 			continue
 		}
@@ -147,6 +151,17 @@ func declaredVolumeNames(yamlContent string) []string {
 				continue
 			}
 		}
+		volumes = append(volumes, declaredVolume{Key: key, Name: volume.Name})
+	}
+	sort.Slice(volumes, func(i, j int) bool { return volumes[i].Key < volumes[j].Key })
+	return volumes
+}
+
+// declaredVolumeNames returns the literal name: of each volume declaredVolumes
+// finds, sorted.
+func declaredVolumeNames(yamlContent string) []string {
+	var names []string
+	for _, volume := range declaredVolumes(yamlContent) {
 		names = append(names, volume.Name)
 	}
 	sort.Strings(names)

@@ -554,3 +554,19 @@ func TestSourceUploadWithoutAFileNameDefaultsIt(t *testing.T) {
 		t.Fatalf("upload = %d %v, want name upload.zip", status, body)
 	}
 }
+
+func TestPreviewIncludesVolumeWarnings(t *testing.T) {
+	f := newSourceFixture(t)
+	if status, body := f.upload(t, "site.zip", zipBytes(t, map[string]string{"Dockerfile": "FROM scratch\n"})); status != http.StatusOK {
+		t.Fatalf("upload = %d %v", status, body)
+	}
+	draft := "services:\n  web:\n    image: nginx\n    volumes:\n      - ./src:/app\n"
+	status, body := f.do(t, http.MethodPost, f.path()+"/preview", map[string]any{"yamlContent": draft})
+	if status != http.StatusOK {
+		t.Fatalf("preview = %d %v", status, body)
+	}
+	want := `Service "web" mounts ./src writable at /app: files the container writes there are not kept between deployments. Use a named volume for data, or mount it :ro.`
+	if warnings, _ := body["warnings"].([]any); len(warnings) != 1 || warnings[0] != want {
+		t.Fatalf("warnings = %v, want [%q]", body["warnings"], want)
+	}
+}

@@ -185,6 +185,15 @@ func (s *Service) resolveForDeploy(ctx context.Context, projectID int64, compose
 	} else if err != nil {
 		return "", nil, nil, failure(FailureInvalid, "compose yaml is invalid: "+err.Error(), err)
 	}
+	hasSource, err := s.repository.hasSource(ctx, compose.ID)
+	if err != nil {
+		return "", nil, nil, failure(FailureInternal, "could not load source", err)
+	}
+	elsewhere, err := s.volumeNamesElsewhere(ctx, []int64{compose.ID})
+	if err != nil {
+		return "", nil, nil, failure(FailureInternal, "could not load compose volumes", err)
+	}
+	warnings = append(warnings, volumeWarnings(yamlContent, filepath.Dir(envFilePath), hasSource, elsewhere)...)
 	if warnings == nil {
 		warnings = []string{}
 	}
