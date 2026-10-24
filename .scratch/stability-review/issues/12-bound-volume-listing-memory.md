@@ -7,7 +7,7 @@ restarts the panel and fails a running Deployment as "panel restarted".
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] The helper's `list` stops at a cap (e.g. 10,000 entries, sorted by name) and returns
       `{"entries": [...], "truncated": true}`; the Explorer says only the first N are shown
