@@ -468,6 +468,24 @@ export type ComposeVolumes = {
   services: VolumeServiceUser[];
 };
 
+/** A volume a delete keeps, and why (e.g. another Compose declares or owns it). */
+export type KeptVolume = { name: string; reason: string };
+
+/**
+ * What deleting one Compose removes: its directory (relative bind mounts such
+ * as `./data` live inside it) and the named volumes a destructive down takes,
+ * plus the shared ones it keeps. `error` is set when the volumes could not be
+ * worked out; the delete then still runs with the server's own plan.
+ */
+export type RemovalPlanEntry = {
+  composeId: number;
+  name: string;
+  directory: string;
+  removeVolumes: string[];
+  keepVolumes: KeptVolume[];
+  error?: string;
+};
+
 /** A named Volume Docker holds under this Compose's project label that its file no longer declares. */
 export type OrphanVolume = { name: string; createdAt: string };
 

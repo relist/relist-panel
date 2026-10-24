@@ -52,22 +52,29 @@ func (s *Service) TeardownProject(ctx context.Context, projectID int64) error {
 func (s *Service) TeardownEnvironment(ctx context.Context, projectID, environmentID int64) error {
 	return s.teardownChildren(ctx, projectID, environmentID)
 }
-func (s *Service) teardownChildren(ctx context.Context, projectID, environmentID int64) error {
+
+// childComposes lists the Composes of a Project, or of one Environment when
+// environmentID is not 0, in id order.
+func (s *Service) childComposes(ctx context.Context, projectID, environmentID int64) ([]Compose, error) {
 	rows, err := s.repository.db.QueryContext(ctx, `SELECT c.id,c.environment_id,c.name,c.project_slug,c.env_slug,c.yaml_content,c.created_at,c.updated_at,c.deployed_at,c.identity_version,c.domains_changed_at,c.variables_changed_at FROM composes c JOIN environments e ON e.id=c.environment_id WHERE e.project_id=? AND (?=0 OR e.id=?) ORDER BY c.id`, projectID, environmentID, environmentID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var children []Compose
 	for rows.Next() {
 		c, err := scanComposeValues(rows.Scan)
 		if err != nil {
 			rows.Close()
-			return err
+			return nil, err
 		}
 		children = append(children, c)
 	}
 	err = rows.Err()
 	rows.Close()
+	return children, err
+}
+func (s *Service) teardownChildren(ctx context.Context, projectID, environmentID int64) error {
+	children, err := s.childComposes(ctx, projectID, environmentID)
 	if err != nil {
 		return err
 	}

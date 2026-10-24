@@ -19,12 +19,17 @@ type scriptedVolumeRunner struct {
 	*fakeComposeRunner
 	vmu        sync.Mutex
 	candidates []composes.VolumeCandidate
-	removeArgs [][]string
+	// candidatesErr, when set, is what CandidateVolumes fails with.
+	candidatesErr error
+	removeArgs    [][]string
 }
 
 func (r *scriptedVolumeRunner) CandidateVolumes(context.Context, composes.RunRequest) ([]composes.VolumeCandidate, error) {
 	r.vmu.Lock()
 	defer r.vmu.Unlock()
+	if r.candidatesErr != nil {
+		return nil, r.candidatesErr
+	}
 	return slices.Clone(r.candidates), nil
 }
 

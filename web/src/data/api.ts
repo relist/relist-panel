@@ -34,6 +34,7 @@ import type {
   HostMetrics,
   OrphanVolume,
   Project,
+  RemovalPlanEntry,
   ServiceBindings,
   SetEntry,
   VariableSet,
@@ -291,6 +292,8 @@ export const api = {
   updateCompose: (location: ComposePath, input: ComposeUpdateInput) =>
     request<Compose>(composePath(location), jsonInit('PUT', input)),
   deleteCompose: (location: ComposePath) => request<void>(composePath(location), { method: 'DELETE' }),
+  /** The plan behind a Delete: one of the `removalPlanPath` URLs. Reads only; deletes nothing. */
+  removalPlan: (path: string) => request<{ composes: RemovalPlanEntry[] }>(path),
   /**
    * Queues a Deployment: 202 for a new one, 200 when the same request is already
    * queued. No client timeout: the POST waits behind a same-Project deploy step.
@@ -514,6 +517,14 @@ function composesPath(projectId: number, environmentId: number): string {
 function composePath(location: ComposePath): string {
   return `${composesPath(location.projectId, location.environmentId)}/${location.composeId}`;
 }
+
+/** The URLs of the removal plan a Delete of a Project, an Environment or a Compose shows first. */
+export const removalPlanPath = {
+  compose: (location: ComposePath) => `${composePath(location)}/removal-plan`,
+  environment: (projectId: number, environmentId: number) =>
+    `/api/projects/${projectId}/environments/${environmentId}/removal-plan`,
+  project: (projectId: number) => `/api/projects/${projectId}/removal-plan`,
+};
 
 function setsPath(location: ComposePath): string {
   return `${composePath(location)}/variable-sets`;

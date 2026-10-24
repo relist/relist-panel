@@ -64,11 +64,13 @@ import {
   RelativeTime,
   ServiceStateTag,
 } from '../components/primitives';
+import { RemovalPlanList } from '../components/RemovalPlanList';
 import { ServiceMonitor } from '../components/ServiceMonitor';
 import { SourceCard } from '../components/SourceCard';
 import { SourceModal } from '../components/SourceModal';
 import { YamlEditor } from '../components/YamlEditor';
-import { ApiError, api } from '../data/api';
+import { ApiError, api, removalPlanPath } from '../data/api';
+import { useRemovalPlan } from '../data/useRemovalPlan';
 import { insertBuildBlocks } from '../data/build-insert';
 import { yamlServices } from '../data/source-view';
 import { deploymentButtonLabel, isActive } from '../data/deployments-view';
@@ -372,6 +374,12 @@ export function ComposePage() {
       void fetchOrphans();
     }
   }, [fetchOrphans, knownComposeId]);
+
+  const deletePlan = useRemovalPlan(
+    deleteOpen && compose && environment && project
+      ? removalPlanPath.compose({ composeId: compose.id, environmentId: environment.id, projectId: project.id })
+      : undefined,
+  );
 
   const logsLoading = isPending(`logs:${composeId}`);
   const logLineCount = logsText ? logsText.split('\n').length : 0;
@@ -1266,14 +1274,13 @@ export function ComposePage() {
       <DangerModal
         confirmWord={compose.name}
         consequences={
-          <Paragraph type="secondary">
-            This stops and removes containers, networks and volumes created by <Text code>{compose.name}</Text>, then
-            deletes its files from{' '}
-            <Text code>
-              {deployIdentity.directory}
-            </Text>
-            .
-          </Paragraph>
+          <>
+            <Paragraph type="secondary">
+              This stops and removes the containers and networks created by <Text code>{compose.name}</Text>, then
+              deletes its volumes and files as listed here.
+            </Paragraph>
+            <RemovalPlanList {...deletePlan} fallbackDirectories={[deployIdentity.directory]} />
+          </>
         }
         description="Deleting a Compose tears down everything it created on the host."
         loading={isPending(`delete-compose:${compose.id}`)}

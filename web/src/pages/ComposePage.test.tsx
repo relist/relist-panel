@@ -138,3 +138,46 @@ describe('Fresh volumes confirmation', () => {
     expect((within(dialog).getByRole('button', { name: 'Deploy with fresh volumes' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+describe('Delete confirmation', () => {
+  async function openDelete() {
+    vi.spyOn(api, 'getSource').mockResolvedValue(null);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole('heading', { name: 'Compose 7' });
+    await user.click(screen.getByRole('button', { name: 'more' }));
+    await user.click(await screen.findByRole('menuitem', { name: /Delete Compose/ }));
+    return { dialog: await screen.findByRole('dialog', { name: 'Delete this Compose?' }), user };
+  }
+
+  it('lists the volumes removed, the shared volumes kept and the directory before the typed confirmation', async () => {
+    const plan = vi.spyOn(api, 'removalPlan').mockResolvedValue({
+      composes: [{
+        composeId: 7,
+        directory: '/data/.composes/7',
+        keepVolumes: [{ name: 'shared-db', reason: 'declared by Compose Other' }],
+        name: 'Compose 7',
+        removeVolumes: ['app-data'],
+      }],
+    });
+    const { dialog } = await openDelete();
+    expect(await within(dialog).findByText('app-data')).toBeTruthy();
+    expect(within(dialog).getByText('shared-db')).toBeTruthy();
+    expect(within(dialog).getByText('declared by Compose Other')).toBeTruthy();
+    expect(within(dialog).getByText('/data/.composes/7')).toBeTruthy();
+    expect(plan).toHaveBeenCalledWith('/api/projects/1/environments/2/composes/7/removal-plan');
+  });
+
+  it('keeps the typed confirmation usable when the plan cannot be loaded', async () => {
+    vi.spyOn(api, 'removalPlan').mockRejectedValue(new Error('Request failed (500)'));
+    const deleteCompose = vi.spyOn(api, 'deleteCompose').mockResolvedValue(undefined);
+    const { dialog, user } = await openDelete();
+    expect(await within(dialog).findByText('Could not load what this delete removes.')).toBeTruthy();
+    expect(within(dialog).getByText('Directory removed')).toBeTruthy();
+    await user.type(within(dialog).getByPlaceholderText('Compose 7'), 'Compose 7');
+    const confirm = within(dialog).getByRole('button', { name: 'Delete Compose' }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(false);
+    await user.click(confirm);
+    expect(deleteCompose).toHaveBeenCalled();
+  });
+});
