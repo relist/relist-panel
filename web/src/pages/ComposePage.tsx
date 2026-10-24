@@ -47,6 +47,7 @@ import { paths } from '../app/paths';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { ComposeDeploymentsTab } from '../components/ComposeDeploymentsTab';
 import { ComposeDomainsTab } from '../components/ComposeDomainsTab';
+import { ComposeEditorGuide } from '../components/ComposeEditorGuide';
 import { ComposePreviewModal } from '../components/ComposePreviewModal';
 import { BuildSnippetsModal, snippetComment } from '../components/BuildSnippetsModal';
 import { ComposeTerminalTab } from '../components/ComposeTerminalTab';
@@ -787,6 +788,7 @@ export function ComposePage() {
                         value={draft}
                       />
                     </div>
+                    <ComposeEditorGuide />
                   </Card>
                 </Col>
 
