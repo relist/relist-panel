@@ -1,0 +1,13 @@
+http:
+  routers:
+    panel:            # same rule shape as the install's panel router
+      rule: "Host(`panel.example.test`)"
+      entryPoints: [web]
+      service: panel
+    relist-c9-d1:     # what domains.Rule() emits for host=panel.example.test path=/api
+      rule: "Host(`panel.example.test`)"
+      entryPoints: [web]
+      service: app
+  services:
+    panel: {loadBalancer: {servers: [{url: "http://relistreview-panel"}]}}
+    app:   {loadBalancer: {servers: [{url: "http://relistreview-app"}]}}

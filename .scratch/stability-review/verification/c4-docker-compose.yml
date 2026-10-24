@@ -1,0 +1,10 @@
+services:
+  a: &svc
+    image: postgres:18-alpine
+    entrypoint: ["sh", "-c", "trap '' TERM; sleep 3600"]
+    stop_grace_period: 15s
+    volumes: [dbdata:/data, ./data:/bind]
+  b: *svc
+  c: *svc
+volumes:
+  dbdata: {}

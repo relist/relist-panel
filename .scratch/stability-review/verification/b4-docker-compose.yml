@@ -1,0 +1,8 @@
+services:
+  app:
+    image: traefik/whoami:latest
+    volumes:
+      - shared:/data
+volumes:
+  shared:
+    name: relistreview-shared
