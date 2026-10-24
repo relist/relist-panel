@@ -7,7 +7,7 @@ ADR-0017 accepted retention "until Compose teardown" without a bound; change tha
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] After a Deployment settles, and once at boot, remove every snapshot directory of that Compose
       except: those of queued/running Deployments, the one `compose_source_materializations`
