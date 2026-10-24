@@ -16,7 +16,7 @@
   is just its route.
 - *(overlay)* / *(feedback)* — a dialog or a feedback state rather than a screen.
 
-Total: **105 states in 9 groups.**
+Total: **102 states in 9 groups.**
 
 The mock's own code, including the registry this was rendered from, is one `git worktree add /tmp/design-mock design-mock` away.
 
@@ -217,7 +217,7 @@ The mock's own code, including the registry this was rendered from, is one `git 
 - `guidelines` — Guidelines · `#/design/guidelines`
   The panel documenting itself — spacing, type, tables, feedback rules and the live examples under each: one tall frame on purpose, so a rule and its example are reviewed in the same glance.
 
-## Auth — 7 states
+## Auth — 4 states
 
 - `auth-signin` — Sign in · `#/signin`
   The split screen exists so sign-out does not feel like an error page: check the form is the focus and the left panel says what this panel is before asking for credentials.
@@ -225,12 +225,6 @@ The mock's own code, including the registry this was rendered from, is one `git 
   The button holds its own loading state for the length of the mock's 500 ms sign-in: check nothing else on the form disables, because backspacing the email mid-flight should stay possible.
 - `auth-signin-errors` — Sign in — validation errors · `#/signin` · forced by after:submit:auth.signin.empty
   Produced by the form's real submit with nothing typed: the errors sit under their fields, and check that nothing implies the credentials were wrong — nothing was sent.
-- `auth-setup` — Set up — create the admin · `#/setup`
-  First-run, step 1 of 2: the Steps control and the password rules are visible before typing, because the confirm-password rule is the one people get told about only after failing it.
-- `auth-setup-errors` — Set up — mismatched confirmation · `#/setup` · forced by after:submit:auth.setup.mismatchedConfirm
-  The only state no click sequence reaches today (the mock's submit skips cross-field validation), produced by the real handler with a mismatched confirm: check "Passwords do not match" lands on the confirm field, not the password.
-- `auth-setup-ready` — Set up — done · `#/setup` · forced by ui:auth.setupStep=1, after:toast:auth.adminCreated
-  Step 2 with the app's own "Admin account created" toast held open: check the only way off this screen is forward, because there is no admin to sign in as before this succeeds.
 - `not-found` — Route not found · `#/projects/nope`
   The router's catch-all for a hash nothing owns: check it stays inside the shell and offers the overview, because a panel that 404s to a blank page has lost the operator twice.
 

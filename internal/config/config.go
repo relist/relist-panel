@@ -20,10 +20,6 @@ type Config struct {
 	Port    int
 	DataDir string
 	Install InstallSettings
-	// AdminEmail and AdminPassword are RELIST_ADMIN_EMAIL and
-	// RELIST_ADMIN_PASSWORD, the admin created at boot while none exists.
-	AdminEmail    string
-	AdminPassword string
 	// ControlSocket is where the migration control socket listens
 	// (ADR-0019), RELIST_CONTROL_SOCKET for a bare binary that cannot write
 	// /run. InsecureOldHost is --insecure-migration-source, which lets the
@@ -64,7 +60,6 @@ func Load() (Config, error) {
 		controlSocket = defaultControlSocket
 	}
 	return Config{Port: port, DataDir: dataDir, Install: install,
-		AdminEmail: os.Getenv("RELIST_ADMIN_EMAIL"), AdminPassword: os.Getenv("RELIST_ADMIN_PASSWORD"),
 		ControlSocket: controlSocket, InsecureOldHost: slices.Contains(os.Args[1:], "--insecure-migration-source")}, nil
 }
 

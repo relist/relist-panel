@@ -128,7 +128,8 @@ func (s *Service) account(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"email":            email,
 		"twoFactorEnabled": secret.Valid,
-		// The password is still the one RELIST_ADMIN_PASSWORD seeded.
+		// The password is still the one RELIST_ADMIN_PASSWORD seeded, on installs
+		// from before create-admin.
 		"passwordFromEnv": fromEnv,
 	})
 }

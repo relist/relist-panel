@@ -22,7 +22,6 @@ export const paths = {
   overview: '/',
   project: (projectId: number | string) => `/projects/${projectId}`,
   projects: '/projects',
-  setup: '/setup',
   signIn: '/signin',
   /**
    * The Volume Explorer's URL: the Compose's route plus a `volumes/explorer`
@@ -46,8 +45,8 @@ export const paths = {
 
 /**
  * The route grammar of the shell's screens, as react-router matcher patterns
- * (no elements). The auth screens (`/signin`, `/setup`) sit outside the shell —
- * the signed-out visitor must not see the sider — so they are routed in
+ * (no elements). The auth screen (`/signin`) sits outside the shell —
+ * the signed-out visitor must not see the sider — so it is routed in
  * `app/routes.tsx` without being part of this grammar.
  */
 export const routePaths = [

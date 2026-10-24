@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react';
 
 import { api } from './api';
-import type { Credentials, LoginResult, ProjectInput } from './api';
+import type { LoginResult, ProjectInput } from './api';
 import type { Compose, ComposeDomains, DeploymentRequest, ComposeVariable, ComposePreview, EffectiveVariable, ServiceBindings, VariableSet, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
@@ -41,11 +41,10 @@ export type NewVariable = { key: string; value: string; secret: boolean };
 export type AuthState = {
   /** False until the first `/api/auth/status` read settles. */
   checked: boolean;
-  setupRequired: boolean;
   authenticated: boolean;
 };
 
-const signedOut: AuthState = { checked: true, setupRequired: false, authenticated: false };
+const signedOut: AuthState = { checked: true, authenticated: false };
 
 type PanelValue = {
   auth: AuthState;
@@ -126,7 +125,6 @@ type PanelValue = {
   replaceVariables: (environmentId: number, rows: NewVariable[]) => Promise<void>;
   signIn: (email: string, password: string, code?: string) => Promise<LoginResult>;
   signOut: () => Promise<void>;
-  signUp: (email: string, password: string) => Promise<void>;
   stopCompose: (composeId: number) => Promise<void>;
   updateProject: (projectId: number, input: ProjectInput) => Promise<void>;
 };
@@ -134,7 +132,7 @@ type PanelValue = {
 const PanelContext = createContext<PanelValue | undefined>(undefined);
 
 export function PanelProvider({ children }: { children: ReactNode }) {
-  const [auth, setAuth] = useState<AuthState>({ checked: false, setupRequired: false, authenticated: false });
+  const [auth, setAuth] = useState<AuthState>({ checked: false, authenticated: false });
   const [projects, setProjects] = useState<Project[]>([]);
   const [checkedAt, setCheckedAt] = useState<Record<number, string>>({});
   const [services, setServices] = useState<Record<number, ComposeService[]>>({});
@@ -203,7 +201,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   const loadAuthStatus = useCallback(async () => {
     await track('auth-status', async () => {
       const status = await api.authStatus();
-      setAuth({ checked: true, setupRequired: status.setupRequired, authenticated: status.authenticated });
+      setAuth({ checked: true, authenticated: status.authenticated });
     });
   }, [track]);
 
@@ -214,21 +212,9 @@ export function PanelProvider({ children }: { children: ReactNode }) {
         // Only a completed sign-in opens the app; a code prompt or the lock
         // leaves the auth state untouched so the page stays on its step.
         if (result.kind === 'signedIn') {
-          setAuth({ checked: true, setupRequired: false, authenticated: true });
+          setAuth({ checked: true, authenticated: true });
         }
         return result;
-      });
-    },
-    [track],
-  );
-
-  const signUp = useCallback(
-    async (email: string, password: string) => {
-      await track('signup', async () => {
-        await api.setup({ email, password } satisfies Credentials);
-        // Setup creates the admin account but does not start a session; the
-        // entry flow moves on to sign-in (as the monolith does today).
-        setAuth({ checked: true, setupRequired: false, authenticated: false });
       });
     },
     [track],
@@ -1067,7 +1053,6 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       services,
       signIn,
       signOut,
-      signUp,
       stopCompose,
       updateProject,
       writeVolumeFile,
@@ -1127,7 +1112,6 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       saveVariable,
       signIn,
       signOut,
-      signUp,
       stopCompose,
       updateProject,
       writeVolumeFile,

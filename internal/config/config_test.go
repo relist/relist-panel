@@ -67,9 +67,7 @@ func TestLoadInstallSettings(t *testing.T) {
 	}
 }
 
-func TestLoadAdminSeedAndMigrationSettings(t *testing.T) {
-	t.Setenv("RELIST_ADMIN_EMAIL", "seed@example.com")
-	t.Setenv("RELIST_ADMIN_PASSWORD", "seeded password 123")
+func TestLoadMigrationSettings(t *testing.T) {
 	t.Setenv("RELIST_CONTROL_SOCKET", "/tmp/relist.sock")
 	args := os.Args
 	t.Cleanup(func() { os.Args = args })
@@ -78,9 +76,6 @@ func TestLoadAdminSeedAndMigrationSettings(t *testing.T) {
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.AdminEmail != "seed@example.com" || cfg.AdminPassword != "seeded password 123" {
-		t.Fatalf("admin seed = %q / %q", cfg.AdminEmail, cfg.AdminPassword)
 	}
 	if cfg.ControlSocket != "/tmp/relist.sock" || !cfg.InsecureOldHost {
 		t.Fatalf("ControlSocket = %q, InsecureOldHost = %v", cfg.ControlSocket, cfg.InsecureOldHost)

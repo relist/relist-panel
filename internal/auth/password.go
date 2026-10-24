@@ -5,81 +5,39 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
-// AdminEmailEnv and AdminPasswordEnv seed the first admin at boot, so a
-// fresh install never has a window in which anyone can claim it.
-const (
-	AdminEmailEnv    = "RELIST_ADMIN_EMAIL"
-	AdminPasswordEnv = "RELIST_ADMIN_PASSWORD"
-)
-
-// SeedAdmin creates the admin from email and password when there is none
-// yet; both empty is no seed. Invalid values are an error naming the
-// variable, never its value, so the panel never starts with setup left open
-// by mistake.
-func SeedAdmin(ctx context.Context, db *sql.DB, email, password string, now func() time.Time) (bool, error) {
-	if email == "" && password == "" {
-		return false, nil
-	}
-	if email == "" {
-		return false, fmt.Errorf("%s is set but %s is not: set both, or neither", AdminPasswordEnv, AdminEmailEnv)
-	}
-	if password == "" {
-		return false, fmt.Errorf("%s is set but %s is not: set both, or neither", AdminEmailEnv, AdminPasswordEnv)
-	}
+// CreateAdmin creates the first admin from email and password, as
+// relist-panel create-admin does, and returns the stored (normalized) email.
+// With an admin already present it returns ErrAdminAlreadyExists.
+func CreateAdmin(ctx context.Context, db *sql.DB, email, password string, now func() time.Time) (string, error) {
 	normalized, err := validateEmail(email)
 	if err != nil {
-		return false, fmt.Errorf("%s: %w", AdminEmailEnv, err)
+		return "", err
 	}
 	if err := validatePassword(password); err != nil {
-		return false, fmt.Errorf("%s: %w", AdminPasswordEnv, err)
-	}
-	var exists int
-	if err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM admin_credentials)").Scan(&exists); err != nil {
-		return false, err
-	}
-	if exists == 1 {
-		log.Printf("auth: an admin already exists, so %s and %s are ignored", AdminEmailEnv, AdminPasswordEnv)
-		return false, markPasswordFromEnv(ctx, db, password)
+		return "", err
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if err := insertAdmin(ctx, db, normalized, string(hash), now()); err != nil {
-		if errors.Is(err, ErrAdminAlreadyExists) {
-			return false, nil
-		}
-		return false, err
+		return "", err
 	}
-	err = flagPasswordFromEnv(ctx, db)
-	return err == nil, err
+	return normalized, nil
 }
 
-// markPasswordFromEnv records an existing admin whose password is still the
-// env's, such as one seeded before the flag was kept.
-func markPasswordFromEnv(ctx context.Context, db *sql.DB, password string) error {
-	var hash string
-	var flagged bool
-	err := db.QueryRowContext(ctx, "SELECT password_hash, password_from_env FROM admin_credentials LIMIT 1").Scan(&hash, &flagged)
-	if err != nil || flagged || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
-		return err
-	}
-	return flagPasswordFromEnv(ctx, db)
-}
-
-// flagPasswordFromEnv records that the admin's password is still the env's.
-func flagPasswordFromEnv(ctx context.Context, db *sql.DB) error {
-	_, err := db.ExecContext(ctx, "UPDATE admin_credentials SET password_from_env = 1")
-	return err
+// AdminExists reports whether the panel has its admin account yet.
+func AdminExists(ctx context.Context, db *sql.DB) (bool, error) {
+	var exists int
+	err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM admin_credentials)").Scan(&exists)
+	return exists == 1, err
 }
 
 type passwordChange struct {

@@ -146,8 +146,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			Install:         migrationOptions.Install,
 		})
 		oldHost.RegisterRoutes(mux)
-		local := migration.LocalHost{DB: db, Docker: migrationOptions.Docker, DataDir: dataDir, Install: migrationOptions.Install,
-			SeededAdmin: migrationOptions.SeededAdmin}
+		local := migration.LocalHost{DB: db, Docker: migrationOptions.Docker, DataDir: dataDir, Install: migrationOptions.Install}
 		stateDir := filepath.Join(dataDir, ".migration")
 		target := migration.NewTarget(migration.TargetDeps{
 			Local:    local,
@@ -165,7 +164,6 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			oldHost.RegisterControlRoutes(migrationOptions.Control)
 			target.RegisterControlRoutes(migrationOptions.Control)
 		}
-		authService.SetSetupBlocker(target.InProgress)
 		authService.AllowSelfAuthenticated(migration.SessionPath)
 		inner = oldHost.Middleware(inner)
 		worker.Add(1)

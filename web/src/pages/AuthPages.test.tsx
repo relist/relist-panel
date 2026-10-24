@@ -5,28 +5,30 @@ import { App } from 'antd';
 import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { SetupPage } from './AuthPages';
+import { SignInPage } from './AuthPages';
 
 vi.mock('../data/store', () => ({
   usePanel: () => ({
-    auth: { checked: true, setupRequired: true, authenticated: false },
+    auth: { checked: true, authenticated: false },
     isPending: () => false,
-    signUp: vi.fn(),
+    signIn: vi.fn(),
   }),
 }));
 
 afterEach(cleanup);
 
-describe('SetupPage', () => {
-  it('names the pull command instead of linking to a migration page', async () => {
+describe('SignInPage', () => {
+  // The admin comes from relist-panel create-admin: the web never offers to make one.
+  it('offers no way to create the admin account', async () => {
     render(
       <App>
         <MemoryRouter>
-          <SetupPage />
+          <SignInPage />
         </MemoryRouter>
       </App>,
     );
-    expect(await screen.findByText('docker compose exec panel relist-panel migration pull')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Migrate from another panel' })).toBeNull();
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeTruthy();
+    expect(screen.queryByText('First run?')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Create the admin account' })).toBeNull();
   });
 });

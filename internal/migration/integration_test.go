@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"relist-panel/internal/auth"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/database"
 	"relist-panel/internal/httpapi"
@@ -162,8 +163,8 @@ func (p *panel) signIn(setup bool) {
 	p.t.Helper()
 	creds := map[string]string{"email": "admin@example.com", "password": "correct horse battery staple"}
 	if setup {
-		if code, body := p.do("POST", "/api/auth/setup", creds); code != http.StatusCreated {
-			p.t.Fatalf("setup = %d %s", code, body)
+		if _, err := auth.CreateAdmin(context.Background(), p.db, creds["email"], creds["password"], time.Now); err != nil {
+			p.t.Fatalf("create admin: %v", err)
 		}
 	}
 	if code, body := p.do("POST", "/api/auth/login", creds); code != http.StatusOK {

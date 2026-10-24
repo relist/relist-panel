@@ -1,19 +1,16 @@
 import type { AuthState } from '../data/store';
 
 /**
- * The entry-flow decisions the auth screens share, kept pure so the monolith's
- * routing table (`authenticated → app, setupRequired → setup, else login`) can
- * be tested without a router.
+ * The entry-flow decisions the auth screens share, kept pure so the routing
+ * table (`authenticated → app, else sign-in`) can be tested without a router.
+ * There is no setup screen: the admin comes from `relist-panel create-admin`.
  */
 
 /** Which screen the visitor should be on, once the auth status has settled. */
-export type EntryScreen = 'app' | 'setup' | 'signin';
+export type EntryScreen = 'app' | 'signin';
 
 export function entryScreen(auth: AuthState): EntryScreen {
-  if (auth.authenticated) {
-    return 'app';
-  }
-  return auth.setupRequired ? 'setup' : 'signin';
+  return auth.authenticated ? 'app' : 'signin';
 }
 
 /**

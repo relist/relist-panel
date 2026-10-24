@@ -32,6 +32,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "reset-2fa" {
 		os.Exit(runResetTwoFactor(os.Args[2:], os.Stdout, os.Stderr))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "create-admin" {
+		os.Exit(runCreateAdmin(os.Args[2:], os.Stdin, os.Stdout, os.Stderr, stdinConsole()))
+	}
 	// Drive a server migration from a terminal in the panel container,
 	// through the running panel's control socket (ADR-0019).
 	if len(os.Args) > 1 && os.Args[1] == "migration" {
@@ -93,11 +96,12 @@ func main() {
 		}
 	}
 
-	// An admin from the install's .env closes the setup screen before the
-	// panel listens, so nobody else can claim a fresh install. After a
-	// migration the old host's admin exists and the env is ignored.
-	if _, err := auth.SeedAdmin(ctx, db, cfg.AdminEmail, cfg.AdminPassword, time.Now); err != nil {
+	// The first admin comes only from create-admin in the panel container;
+	// until then every sign-in is refused like a wrong password.
+	if exists, err := auth.AdminExists(ctx, db); err != nil {
 		log.Fatal(err)
+	} else if !exists {
+		log.Println(`auth: no admin account exists; run "relist-panel create-admin" in the panel container`)
 	}
 
 	// Rows created before identity was stored (ADR-0005) must be frozen to
@@ -154,12 +158,11 @@ func main() {
 		Terminal:       &terminal.Options{Exec: terminalExec},
 		Images:         dockerexec.NewImages(dockerexec.DefaultSocketPath),
 		Migration: &migration.Options{
-			Docker:      dockerexec.NewMigrationDocker(),
-			Install:     cfg.Install,
-			Insecure:    cfg.InsecureOldHost,
-			SeededAdmin: cfg.AdminEmail,
-			Restart:     restart,
-			Control:     control,
+			Docker:   dockerexec.NewMigrationDocker(),
+			Install:  cfg.Install,
+			Insecure: cfg.InsecureOldHost,
+			Restart:  restart,
+			Control:  control,
 		},
 		Docker: dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
 	})

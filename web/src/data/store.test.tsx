@@ -45,7 +45,7 @@ async function loadedPanel() {
 describe('Variable Set writes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocked.authStatus.mockResolvedValue({ setupRequired: false, authenticated: true } as never);
+    mocked.authStatus.mockResolvedValue({ authenticated: true } as never);
     mocked.listProjects.mockResolvedValue([{ id: 1, name: 'p' }] as never);
     mocked.listEnvironments.mockResolvedValue([{ id: 2, name: 'e' }] as never);
     mocked.listComposes.mockResolvedValue([{ id: 7, name: 'a' }, { id: 8, name: 'b' }] as never);

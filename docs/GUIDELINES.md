@@ -68,7 +68,7 @@ Routes (history URLs, as shipped in `web/`):  /                                 
                      /projects/:projectId                    /projects/:projectId/env/:environmentId/:tab
                      /projects/:projectId/env/:environmentId/compose/:composeId
                      /projects/:projectId/env/:environmentId/compose/:composeId/monitor
-                     /signin  /setup
+                     /signin
                      Design-system screens stay prototype-only: #/design/guidelines, #/design/states
 ```
 
@@ -345,16 +345,14 @@ UI — is the enforcer.
 - The tab's empty state says the Compose declares no volumes rather than showing an empty table.
 - The page scrolls with the document, like every other screen; the file editor is the only bounded box (see §6).
 
-### 4.8 Auth (`/signin`, `/setup`)
+### 4.8 Auth (`/signin`)
 
-Split layout: what the panel is on the left (in `colorPrimaryBg`), the form on the right. Setup is a
-two-step flow (Account → Ready) ending in a `Result` with the Project → Environment → Compose
-mental model restated. When the account has two-factor on, sign-in asks for the code as a second
-step: an autofocused six-digit `Input.OTP` replaces the password form, a complete code submits, and
-**Back** returns to the password step and clears it. Under the setup form, a secondary line tells an
-operator moving a panel here not to create an admin and names
-`docker compose exec panel relist-panel migration pull` as copyable code: a server Migration is
-started from a terminal only (ADR-0019).
+Split layout: what the panel is on the left (in `colorPrimaryBg`), the form on the right. There is
+no setup screen: the admin is made with `relist-panel create-admin` in the panel container, and
+until then sign-in refuses everyone like a wrong password, with no hint or link. When the account
+has two-factor on, sign-in asks for the code as a second step: an autofocused six-digit
+`Input.OTP` replaces the password form, a complete code submits, and **Back** returns to the
+password step and clears it.
 
 **Migration lock.** While an old host is locked for a Migration, a signed-in admin sees one centred
 card instead of the app. Locked, it shows *This server is being migrated*, who is copying it, and the

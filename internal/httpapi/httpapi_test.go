@@ -22,6 +22,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 
+	"relist-panel/internal/auth"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/database"
 	"relist-panel/internal/httpapi"
@@ -51,25 +52,45 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
-func TestAuthSetupAndLogin(t *testing.T) {
+// With no admin yet the panel is only a sign-in screen that refuses
+// everyone: the admin comes from relist-panel create-admin, not the web.
+func TestNoAdminRefusesSignInLikeAWrongPassword(t *testing.T) {
 	server := newTestServer(t)
 
-	status := getAuthStatus(t, server)
-	if !status.SetupRequired || status.Authenticated {
-		t.Fatalf("initial auth status = %+v, want setup required and unauthenticated", status)
+	response := server.request(t, http.MethodGet, "/api/auth/status", nil)
+	if body := readBody(t, response); response.StatusCode != http.StatusOK || strings.TrimSpace(body) != `{"authenticated":false}` {
+		t.Fatalf("auth status = %d %s, want only authenticated false", response.StatusCode, body)
 	}
 
-	setupResponse := postJSON(t, server, "/api/auth/setup", map[string]string{
-		"email":    "Admin@example.com",
+	login := postJSON(t, server, "/api/auth/login", map[string]string{
+		"email":    "admin@example.com",
 		"password": "correct horse battery staple",
 	})
-	setupResponse.Body.Close()
-	if setupResponse.StatusCode != http.StatusCreated {
-		t.Fatalf("setup status = %d, want %d", setupResponse.StatusCode, http.StatusCreated)
+	if body := readBody(t, login); login.StatusCode != http.StatusUnauthorized || !strings.Contains(body, "invalid email or password") {
+		t.Fatalf("login with no admin = %d %s, want 401 invalid email or password", login.StatusCode, body)
 	}
-	status = getAuthStatus(t, server)
-	if status.SetupRequired || status.Authenticated {
-		t.Fatalf("post-setup auth status = %+v, want configured and unauthenticated", status)
+
+	setup := postJSON(t, server, "/api/auth/setup", map[string]string{
+		"email":    "admin@example.com",
+		"password": "correct horse battery staple",
+	})
+	setup.Body.Close()
+	if setup.StatusCode == http.StatusCreated {
+		t.Fatal("POST /api/auth/setup still creates an admin")
+	}
+	var admins int
+	if err := server.db.QueryRow("SELECT COUNT(*) FROM admin_credentials").Scan(&admins); err != nil || admins != 0 {
+		t.Fatalf("admins after the web attempts = %d, %v; want none", admins, err)
+	}
+}
+
+func TestAuthLogin(t *testing.T) {
+	server := newTestServer(t)
+	createAdmin(t, server)
+
+	status := getAuthStatus(t, server)
+	if status.Authenticated {
+		t.Fatalf("initial auth status = %+v, want unauthenticated", status)
 	}
 
 	var passwordHash string
@@ -81,15 +102,6 @@ func TestAuthSetupAndLogin(t *testing.T) {
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte("correct horse battery staple")); err != nil {
 		t.Fatalf("stored password hash does not verify: %v", err)
-	}
-
-	secondSetup := postJSON(t, server, "/api/auth/setup", map[string]string{
-		"email":    "other@example.com",
-		"password": "another valid password",
-	})
-	secondSetup.Body.Close()
-	if secondSetup.StatusCode != http.StatusConflict {
-		t.Fatalf("second setup status = %d, want %d", secondSetup.StatusCode, http.StatusConflict)
 	}
 
 	wrongLogin := postJSON(t, server, "/api/auth/login", map[string]string{
@@ -122,8 +134,8 @@ func TestAuthSetupAndLogin(t *testing.T) {
 	}
 
 	status = getAuthStatus(t, server)
-	if status.SetupRequired || !status.Authenticated {
-		t.Fatalf("authenticated auth status = %+v, want configured and authenticated", status)
+	if !status.Authenticated {
+		t.Fatalf("authenticated auth status = %+v, want authenticated", status)
 	}
 
 	protectedResponse := server.request(t, http.MethodGet, "/api/projects", nil)
@@ -2219,12 +2231,8 @@ func TestAuthMiddlewareRejectsUnauthenticatedRoutes(t *testing.T) {
 
 func TestLogoutRevokesSessionAndClearsCookie(t *testing.T) {
 	server := newTestServer(t)
+	createAdmin(t, server)
 
-	setupResponse := postJSON(t, server, "/api/auth/setup", map[string]string{
-		"email":    "admin@example.com",
-		"password": "correct horse battery staple",
-	})
-	setupResponse.Body.Close()
 	loginResponse := postJSON(t, server, "/api/auth/login", map[string]string{
 		"email":    "admin@example.com",
 		"password": "correct horse battery staple",
@@ -2356,7 +2364,6 @@ func assetPath(t *testing.T, shell string) string {
 }
 
 type authStatus struct {
-	SetupRequired bool `json:"setupRequired"`
 	Authenticated bool `json:"authenticated"`
 }
 
@@ -2727,16 +2734,17 @@ func postJSON(t *testing.T, server *testServer, path string, value any) *http.Re
 	return server.request(t, http.MethodPost, path, value)
 }
 
+// createAdmin makes admin@example.com the way relist-panel create-admin does.
+func createAdmin(t *testing.T, server *testServer) {
+	t.Helper()
+	if _, err := auth.CreateAdmin(context.Background(), server.db, "Admin@example.com", "correct horse battery staple", time.Now); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+}
+
 func setupAndLogin(t *testing.T, server *testServer) {
 	t.Helper()
-	setupResponse := postJSON(t, server, "/api/auth/setup", map[string]string{
-		"email":    "admin@example.com",
-		"password": "correct horse battery staple",
-	})
-	setupResponse.Body.Close()
-	if setupResponse.StatusCode != http.StatusCreated {
-		t.Fatalf("setup status = %d, want %d", setupResponse.StatusCode, http.StatusCreated)
-	}
+	createAdmin(t, server)
 
 	loginResponse := postJSON(t, server, "/api/auth/login", map[string]string{
 		"email":    "admin@example.com",
