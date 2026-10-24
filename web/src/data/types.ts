@@ -680,4 +680,6 @@ export type DockerReport = {
  containersRunning: number; containersPaused: number; containersStopped: number;
  usage: DockerUsage[]; containers: DockerContainer[]; volumes: DockerVolume[]; networks: DockerNetwork[]; warnings: string[];
 };
-export type DockerPruneResult = { kind: DockerPruneKind; spaceReclaimed: number; deleted: string[] };
+export type DockerPruneSkip = { name: string; compose?: string; reason: string };
+export type DockerPruneResult = { kind: DockerPruneKind; spaceReclaimed: number; deleted: string[]; skipped?: DockerPruneSkip[] };
+export type DockerPrunePlan = { kind: DockerPruneKind; delete: { name: string; size: number | null }[]; skip: DockerPruneSkip[] };

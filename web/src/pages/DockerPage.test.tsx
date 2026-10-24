@@ -17,6 +17,7 @@ import { DockerPage } from './DockerPage';
 const mocks = vi.hoisted(() => ({
   dockerReport: vi.fn(),
   pruneDocker: vi.fn(),
+  dockerPrunePlan: vi.fn(),
   globalDeploymentQueue: vi.fn(),
   resumeDocker: vi.fn(),
 }));
@@ -68,6 +69,11 @@ function show() {
 beforeEach(() => {
   mocks.dockerReport.mockResolvedValue(report);
   mocks.resumeDocker.mockResolvedValue({ resumed: true });
+  mocks.dockerPrunePlan.mockResolvedValue({
+    kind: 'all-volumes',
+    delete: [],
+    skip: [],
+  });
   mocks.globalDeploymentQueue.mockResolvedValue([]);
   mocks.pruneDocker.mockResolvedValue({
     kind: 'build-cache',
@@ -176,6 +182,123 @@ describe('Docker host management', () => {
         .getByRole('button', { name: 'Prune' })
         .hasAttribute('disabled'),
     ).toBe(true);
+  });
+  describe('prune plan', () => {
+    const plan = {
+      kind: 'all-volumes',
+      delete: [
+        { name: 'stray', size: 10 },
+        { name: 'old-cache', size: null },
+      ],
+      skip: [{ name: 'shop_data', compose: 'shop', reason: 'used by Compose shop' }],
+    };
+    async function open(name: string) {
+      show();
+      if (name === 'Prune all unused volumes')
+        fireEvent.click(await screen.findByText('Advanced cleanup'));
+      const button = await screen.findByRole('button', { name });
+      await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false));
+      fireEvent.click(button);
+      return screen.getByRole('dialog');
+    }
+    it('lists what is deleted and what is kept for a panel Compose', async () => {
+      mocks.dockerPrunePlan.mockResolvedValue(plan);
+      const dialog = await open('Prune all unused volumes');
+      expect(mocks.dockerPrunePlan).toHaveBeenCalledWith('all-volumes');
+      expect(await within(dialog).findByText('Deleted (2)')).toBeTruthy();
+      expect(within(dialog).getByText('stray')).toBeTruthy();
+      expect(within(dialog).getByText('old-cache')).toBeTruthy();
+      expect(
+        within(dialog).getByText('Kept because a Compose uses them (1)'),
+      ).toBeTruthy();
+      expect(within(dialog).getByText('shop_data — Compose shop')).toBeTruthy();
+    });
+    it('caps a long list with an and-N-more line', async () => {
+      mocks.dockerPrunePlan.mockResolvedValue({
+        kind: 'all-volumes',
+        delete: Array.from({ length: 53 }, (_, i) => ({
+          name: `vol-${i}`,
+          size: null,
+        })),
+        skip: [],
+      });
+      const dialog = await open('Prune all unused volumes');
+      expect(await within(dialog).findByText('Deleted (53)')).toBeTruthy();
+      expect(within(dialog).getByText('vol-49')).toBeTruthy();
+      expect(within(dialog).queryByText('vol-50')).toBeNull();
+      expect(within(dialog).getByText('and 3 more')).toBeTruthy();
+    });
+    it('includes panel data behind the stronger confirmation word', async () => {
+      mocks.dockerPrunePlan.mockResolvedValue(plan);
+      mocks.pruneDocker.mockResolvedValue({
+        kind: 'all-volumes',
+        spaceReclaimed: 0,
+        deleted: [],
+      });
+      const dialog = await open('Prune all unused volumes');
+      await within(dialog).findByText('Deleted (2)');
+      fireEvent.click(
+        within(dialog).getByRole('checkbox', {
+          name: 'Also delete the ones panel Composes use',
+        }),
+      );
+      expect(await within(dialog).findByText('Deleted (3)')).toBeTruthy();
+      expect(within(dialog).queryByText(/Kept because/)).toBeNull();
+      fireEvent.change(within(dialog).getByRole('textbox'), {
+        target: { value: 'DELETE VOLUMES' },
+      });
+      expect(
+        within(dialog).getByRole('button', { name: 'Prune' }).hasAttribute('disabled'),
+      ).toBe(true);
+      fireEvent.change(within(dialog).getByRole('textbox'), {
+        target: { value: 'DELETE PANEL DATA' },
+      });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Prune' }));
+      await waitFor(() =>
+        expect(mocks.pruneDocker).toHaveBeenCalledWith(
+          'all-volumes',
+          'DELETE PANEL DATA',
+          true,
+        ),
+      );
+    });
+    it('shows what the server skipped', async () => {
+      mocks.dockerPrunePlan.mockResolvedValue(plan);
+      mocks.pruneDocker.mockResolvedValue({
+        kind: 'all-volumes',
+        spaceReclaimed: 0,
+        deleted: ['stray'],
+        skipped: [
+          { name: 'shop_data', compose: 'shop', reason: 'used by Compose shop' },
+        ],
+      });
+      const dialog = await open('Prune all unused volumes');
+      await within(dialog).findByText('Deleted (2)');
+      fireEvent.change(within(dialog).getByRole('textbox'), {
+        target: { value: 'DELETE VOLUMES' },
+      });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Prune' }));
+      expect(
+        await screen.findByText('Skipped: shop_data (used by Compose shop)'),
+      ).toBeTruthy();
+    });
+    it('disables confirm when the plan cannot be fetched', async () => {
+      mocks.dockerPrunePlan.mockRejectedValue(new Error('plan unavailable'));
+      const dialog = await open('Prune all unused volumes');
+      expect(await within(dialog).findByText('plan unavailable')).toBeTruthy();
+      fireEvent.change(within(dialog).getByRole('textbox'), {
+        target: { value: 'DELETE VOLUMES' },
+      });
+      expect(
+        within(dialog).getByRole('button', { name: 'Prune' }).hasAttribute('disabled'),
+      ).toBe(true);
+    });
+    it('keeps the container confirmation unchanged', async () => {
+      const dialog = await open('Prune stopped containers');
+      expect(mocks.dockerPrunePlan).not.toHaveBeenCalled();
+      expect(within(dialog).queryByRole('checkbox')).toBeNull();
+      expect(within(dialog).queryByText(/Deleted \(/)).toBeNull();
+    });
   });
   it('disables pruning while the queue has work', async () => {
     mocks.globalDeploymentQueue.mockResolvedValue([

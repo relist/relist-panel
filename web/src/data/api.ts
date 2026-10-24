@@ -9,6 +9,7 @@
 import type {
   DockerReport,
   DockerPruneKind,
+  DockerPrunePlan,
   DockerPruneResult,
   Compose,
   ComposeDomains,
@@ -217,7 +218,9 @@ export const api = {
   migrationStatus: () => request<MigrationStatus>('/api/migration/status'),
   resumeDocker: (confirm: string) => request<{ resumed: boolean }>('/api/docker/recover', jsonInit('POST', { confirm })),
   dockerReport: (refresh = false) => request<DockerReport>(`/api/docker${refresh ? '?refresh=1' : ''}`),
-  pruneDocker: (kind: DockerPruneKind, confirm: string) => request<DockerPruneResult>('/api/docker/prune', jsonInit('POST', { kind, confirm })),
+  dockerPrunePlan: (kind: DockerPruneKind) => request<DockerPrunePlan>(`/api/docker/prune-plan?kind=${encodeURIComponent(kind)}`),
+  pruneDocker: (kind: DockerPruneKind, confirm: string, includePanel = false) =>
+    request<DockerPruneResult>('/api/docker/prune', jsonInit('POST', includePanel ? { kind, confirm, includePanel } : { kind, confirm })),
   authStatus: () => request<AuthStatus>('/api/auth/status'),
   /**
    * Sign-in, with its own `fetch` rather than `request`: a `401` asking for the
