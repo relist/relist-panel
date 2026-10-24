@@ -22,6 +22,9 @@ var (
 	ErrMigrationMismatch = errors.New("applied migration differs from this binary's")
 )
 
+// migrationFilesMigration creates the migration_files table.
+const migrationFilesMigration = "00020_migration_files.sql"
+
 type embeddedMigration struct {
 	version int64
 	name    string
@@ -56,6 +59,20 @@ func checkSchema(db *sql.DB) error {
 	applied, err := appliedVersions(ctx, db)
 	if err != nil {
 		return err
+	}
+	// goose ran nothing for the migration that creates migration_files, so its
+	// number was already applied from another file.
+	var tables int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'migration_files'").Scan(&tables); err != nil {
+		return fmt.Errorf("look for migration_files: %w", err)
+	}
+	if tables == 0 {
+		for _, migration := range embedded {
+			if migration.name == migrationFilesMigration {
+				return fmt.Errorf("%w: migration %d was applied from another file; this binary ships %s; run the binary that applied it or restore a backup", ErrMigrationMismatch, migration.version, migration.name)
+			}
+		}
+		return fmt.Errorf("%w: migration_files is missing and %s is not embedded", ErrMigrationMismatch, migrationFilesMigration)
 	}
 	recorded, err := recordedFiles(ctx, db)
 	if err != nil {

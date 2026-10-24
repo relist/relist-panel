@@ -196,3 +196,33 @@ func TestVacuumCopyBoots(t *testing.T) {
 	}
 	copied.Close()
 }
+
+// Another branch's 00020 leaves no migration_files table, and goose skips this
+// binary's 00020 because the number is already applied.
+func TestOpenAndMigrateRefusesAForeignMigrationWithTheSameNumber(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	goose.SetBaseFS(migrations.FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(db, ".", 19); err != nil {
+		t.Fatalf("migrate to 19: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO goose_db_version (version_id, is_applied) VALUES (20, 1)"); err != nil {
+		t.Fatal(err)
+	}
+
+	err = Migrate(db)
+	if !errors.Is(err, ErrMigrationMismatch) {
+		t.Fatalf("Migrate() error = %v, want ErrMigrationMismatch", err)
+	}
+	if !strings.Contains(err.Error(), "00020_migration_files.sql") {
+		t.Errorf("error %q does not name 00020_migration_files.sql", err)
+	}
+}
