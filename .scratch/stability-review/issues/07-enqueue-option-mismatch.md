@@ -7,7 +7,7 @@ volumes; the reverse silently drops the requested wipe. Verified at the queue le
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Same Mode/NoCache/FreshVolumes as the queued one: 200 `{number}` as today
 - [ ] Different: 409 with the queued Deployment's number and options, e.g.
