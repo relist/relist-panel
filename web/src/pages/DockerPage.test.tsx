@@ -278,9 +278,8 @@ describe('Docker host management', () => {
         target: { value: 'DELETE VOLUMES' },
       });
       fireEvent.click(within(dialog).getByRole('button', { name: 'Prune' }));
-      expect(
-        await screen.findByText('Skipped: shop_data (used by Compose shop)'),
-      ).toBeTruthy();
+      expect(await screen.findByText('Skipped 1')).toBeTruthy();
+      expect(screen.getByText('shop_data (used by Compose shop)')).toBeTruthy();
     });
     it('disables confirm when the plan cannot be fetched', async () => {
       mocks.dockerPrunePlan.mockRejectedValue(new Error('plan unavailable'));

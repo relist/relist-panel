@@ -462,14 +462,20 @@ export function DockerPage() {
           />
         )}
         {pruneError && <Alert showIcon type="error" title={pruneError} />}
-        {result?.skipped?.map((entry) => (
+        {!!result?.skipped?.length && (
           <Alert
-            key={entry.name}
             showIcon
             type="info"
-            title={`Skipped: ${entry.name} (${entry.reason})`}
+            title={`Skipped ${result.skipped.length}`}
+            description={
+              <NameList
+                names={result.skipped.map(
+                  (entry) => `${entry.name} (${entry.reason})`,
+                )}
+              />
+            }
           />
-        ))}
+        )}
         {result && (
           <Alert
             showIcon
