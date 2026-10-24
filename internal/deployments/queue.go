@@ -15,6 +15,7 @@ import (
 
 	"relist-panel/internal/composes"
 	"relist-panel/internal/dockerhost"
+	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
 )
 
@@ -195,7 +196,16 @@ func (q *Queue) Run(ctx context.Context) {
 	if _, err := q.d.Store.FailRunning(bg, reasonRestarted, q.d.Now()); err != nil {
 		logf("fail running deployments: %v", err)
 	}
-	q.collectAllSnapshots(ctx)
+	// Collected in the background: a hung daemon must not hold up the first
+	// Deployment. Each collection takes the Project gate and volumes hold, so it
+	// is safe beside the worker; Run returns only once it has ended.
+	var boot sync.WaitGroup
+	boot.Add(1)
+	go func() {
+		defer boot.Done()
+		safely.Do("collect snapshots at boot", func() { q.collectAllSnapshots(ctx) })
+	}()
+	defer boot.Wait()
 	paused := false // the paused Docker state is already logged for this period
 	for ctx.Err() == nil {
 		d, ok, err := q.d.Store.NextQueued(ctx)
