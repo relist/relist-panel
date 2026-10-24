@@ -7,7 +7,7 @@ undo it. Verified on Traefik v3.7.
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] `docker-compose.yml`: `traefik.http.routers.panel.priority` and
       `traefik.http.routers.panel-http.priority` set high (e.g. 100000); README notes the existing
