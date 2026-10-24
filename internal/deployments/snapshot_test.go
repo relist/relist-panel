@@ -49,47 +49,69 @@ func (g serialSnapshotGate) Acquire(ctx context.Context, _ int64) (func(), error
 	}
 }
 
+func (g serialSnapshotGate) AcquireVolumes(context.Context, int64) (func(), error) {
+	return func() {}, nil
+}
+
 func TestConcurrentDedupSkipsRedundantFailedSourceCapture(t *testing.T) {
-	h := newHarness(t)
-	h.gitSource(h.a)
-	h.newQueue()
-	gateAttempts := make(chan struct{}, 2)
-	h.q.d.Gate = serialSnapshotGate{token: make(chan struct{}, 1), attempts: gateAttempts}
-	lookupStarted, releaseLookup := make(chan struct{}), make(chan struct{})
-	lookups := 0
-	h.fetch.onResolve = func(context.Context, sources.Source, string) (string, error) {
-		lookups++
-		if lookups > 1 {
-			return "", errors.New("redundant lookup failed")
-		}
-		close(lookupStarted)
-		<-releaseLookup
-		return "abc123", nil
-	}
-	type result struct {
-		deployment Deployment
-		created    bool
-		err        error
-	}
-	first, second := make(chan result, 1), make(chan result, 1)
-	go func() {
-		d, c, e := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeBuild, FreshVolumes: true, NoCache: true})
-		first <- result{d, c, e}
-	}()
-	recv(t, lookupStarted, "first capture lookup")
-	recv(t, gateAttempts, "first capture gate")
-	secondStarted := make(chan struct{})
-	go func() {
-		close(secondStarted)
-		d, c, e := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeBuild})
-		second <- result{d, c, e}
-	}()
-	recv(t, secondStarted, "second enqueue")
-	recv(t, gateAttempts, "second capture waiting on gate")
-	close(releaseLookup)
-	a, b := <-first, <-second
-	if a.err != nil || b.err != nil || !a.created || b.created || a.deployment.ID != b.deployment.ID || !b.deployment.FreshVolumes || !b.deployment.NoCache || lookups != 1 {
-		t.Fatalf("dedup first=%+v second=%+v lookups=%d", a, b, lookups)
+	firstRequest := Request{Mode: ModeBuild, FreshVolumes: true, NoCache: true}
+	for _, tc := range []struct {
+		name     string
+		second   Request
+		conflict bool
+	}{
+		{"same request is deduplicated", firstRequest, false},
+		{"other options are refused", Request{Mode: ModeBuild}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.gitSource(h.a)
+			h.newQueue()
+			gateAttempts := make(chan struct{}, 2)
+			h.q.d.Gate = serialSnapshotGate{token: make(chan struct{}, 1), attempts: gateAttempts}
+			lookupStarted, releaseLookup := make(chan struct{}), make(chan struct{})
+			lookups := 0
+			h.fetch.onResolve = func(context.Context, sources.Source, string) (string, error) {
+				lookups++
+				if lookups > 1 {
+					return "", errors.New("redundant lookup failed")
+				}
+				close(lookupStarted)
+				<-releaseLookup
+				return "abc123", nil
+			}
+			type result struct {
+				deployment Deployment
+				created    bool
+				err        error
+			}
+			first, second := make(chan result, 1), make(chan result, 1)
+			go func() {
+				d, c, e := h.q.Enqueue(context.Background(), h.a, firstRequest)
+				first <- result{d, c, e}
+			}()
+			recv(t, lookupStarted, "first capture lookup")
+			recv(t, gateAttempts, "first capture gate")
+			secondStarted := make(chan struct{})
+			go func() {
+				close(secondStarted)
+				d, c, e := h.q.Enqueue(context.Background(), h.a, tc.second)
+				second <- result{d, c, e}
+			}()
+			recv(t, secondStarted, "second enqueue")
+			recv(t, gateAttempts, "second capture waiting on gate")
+			close(releaseLookup)
+			a, b := <-first, <-second
+			var conflict *QueuedConflictError
+			switch {
+			case a.err != nil || !a.created || lookups != 1:
+				t.Fatalf("first=%+v lookups=%d", a, lookups)
+			case tc.conflict && (!errors.As(b.err, &conflict) || b.created || conflict.Queued.ID != a.deployment.ID):
+				t.Fatalf("second=%+v, want a QueuedConflictError for the first", b)
+			case !tc.conflict && (b.err != nil || b.created || b.deployment.ID != a.deployment.ID || !b.deployment.FreshVolumes || !b.deployment.NoCache):
+				t.Fatalf("dedup first=%+v second=%+v lookups=%d", a, b, lookups)
+			}
+		})
 	}
 }
 
@@ -175,7 +197,7 @@ func TestSnapshotIsPrivateAndDedupKeepsFirstInputs(t *testing.T) {
 	h.comp.mu.Lock()
 	h.comp.yaml[h.a] = "secret-yaml-after-enqueue"
 	h.comp.mu.Unlock()
-	second, created, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeBuild})
+	second, created, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeDeploy, FreshVolumes: true})
 	if err != nil || created || second.ID != first.ID || !second.FreshVolumes {
 		t.Fatalf("dedup = %+v %v %v", second, created, err)
 	}

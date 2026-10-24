@@ -5,10 +5,13 @@ import { useNavigate } from 'react-router';
 
 import { paths } from '../app/paths';
 import { DangerModal } from '../components/DangerModal';
+import { RemovalPlanList } from '../components/RemovalPlanList';
 import { TeardownDetails } from '../components/TeardownDetails';
 import { RelativeTime } from '../components/primitives';
 import type { ProjectInput } from '../data/api';
+import { removalPlanPath } from '../data/api';
 import { usePanel } from '../data/store';
+import { useRemovalPlan } from '../data/useRemovalPlan';
 import type { Environment, Project } from '../data/types';
 import { environmentDeleteFacts, projectDeleteFacts } from './project-view';
 
@@ -86,6 +89,10 @@ export function ProjectSettingsTab({
     }
   };
 
+  const environmentPlan = useRemovalPlan(
+    deletingEnvironment ? removalPlanPath.environment(project.id, deletingEnvironment.id) : undefined,
+  );
+  const projectPlan = useRemovalPlan(deleteProjectOpen ? removalPlanPath.project(project.id) : undefined);
   const environmentFacts = deletingEnvironment ? environmentDeleteFacts(deletingEnvironment) : undefined;
   const projectFacts = projectDeleteFacts(project);
 
@@ -186,7 +193,7 @@ export function ProjectSettingsTab({
                 Removes this Project, its {projectFacts.environments}{' '}
                 {projectFacts.environments === 1 ? 'Environment' : 'Environments'} and {projectFacts.composes}{' '}
                 {projectFacts.composes === 1 ? 'Compose' : 'Composes'}. This first stops and removes their containers,
-                networks, volumes and deployment files. Volume data is permanently deleted.
+                networks, volumes and deployment files; volumes another Compose uses are kept.
               </Text>
             </div>
             <Button danger icon={<DeleteOutlined />} onClick={() => setDeleteProjectOpen(true)}>
@@ -204,8 +211,9 @@ export function ProjectSettingsTab({
               <>
                 This deletes {deletingEnvironment.name} and its {environmentFacts.composes}{' '}
                 {environmentFacts.composes === 1 ? 'Compose' : 'Composes'} from the panel, after stopping and removing
-                their containers, networks, volumes and deployment files. Volume data is permanently deleted.
-                <TeardownDetails directories={environmentFacts.directories} />
+                their containers, networks and deployment files, and deletes the volumes listed below with their data.
+                <RemovalPlanList {...environmentPlan} fallbackDirectories={environmentFacts.directories} />
+                <TeardownDetails />
               </>
             )}
           </div>
@@ -226,8 +234,9 @@ export function ProjectSettingsTab({
             This removes {project.name}, its {projectFacts.environments}{' '}
             {projectFacts.environments === 1 ? 'Environment' : 'Environments'} and {projectFacts.composes}{' '}
             {projectFacts.composes === 1 ? 'Compose' : 'Composes'}, after stopping and removing their containers,
-            networks, volumes and deployment files. Volume data is permanently deleted.
-            <TeardownDetails directories={projectFacts.directories} />
+            networks and deployment files, and deletes the volumes listed below with their data.
+            <RemovalPlanList {...projectPlan} fallbackDirectories={projectFacts.directories} />
+            <TeardownDetails />
           </div>
         }
         description="Deleting a Project cannot be undone."

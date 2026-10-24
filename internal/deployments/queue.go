@@ -17,9 +17,14 @@ import (
 	"relist-panel/internal/sources"
 )
 
-// Gate serialises work on a Project; the Deploy step holds it.
+// Gate serialises work on a Project; the Deploy step holds it. AcquireVolumes
+// is the exclusive hold on the Project's volumes, which a fresh-volumes Deploy
+// needs on top of the gate. Open Volume reads share the volumes but not the
+// gate, so only AcquireVolumes waits for them. Take it after Acquire, never
+// before.
 type Gate interface {
 	Acquire(ctx context.Context, projectID int64) (release func(), err error)
+	AcquireVolumes(ctx context.Context, projectID int64) (release func(), err error)
 }
 
 type Composes interface {
@@ -51,6 +56,7 @@ type Deps struct {
 	Fetcher     Fetcher
 	Builder     Builder
 	Gate        Gate
+	Mounts      MountLister   // nil turns off snapshot collection
 	Timeout     time.Duration // 60 * time.Minute in production
 	Keep        int           // 20
 	Now         func() time.Time
@@ -64,6 +70,29 @@ type Request struct {
 // ErrNotCancelable is returned for a Deployment that is in its Deploy step or
 // already settled.
 var ErrNotCancelable = errors.New("deployment can no longer be canceled")
+
+// QueuedConflictError refuses a request whose options differ from the
+// Compose's queued Deployment, which would otherwise be reused as it is.
+type QueuedConflictError struct{ Queued Deployment }
+
+func (e *QueuedConflictError) Error() string {
+	return fmt.Sprintf("deployment #%d is already queued with mode=%s, noCache=%t, freshVolumes=%t; cancel it first",
+		e.Queued.Number, e.Queued.Mode, e.Queued.NoCache, e.Queued.FreshVolumes)
+}
+
+// sameRequest reports whether r asks for what the queued Deployment d will do.
+func sameRequest(d Deployment, r Request) bool {
+	return d.Mode == r.Mode && d.NoCache == r.NoCache && d.FreshVolumes == r.FreshVolumes
+}
+
+// reuse returns the Compose's queued Deployment for r: it as it is when r asks
+// for the same, a QueuedConflictError when it asks for something else.
+func reuse(queued Deployment, r Request) (Deployment, bool, error) {
+	if !sameRequest(queued, r) {
+		return Deployment{}, false, &QueuedConflictError{Queued: queued}
+	}
+	return queued, false, nil
+}
 
 // ErrHeld refuses a Deployment while a server Migration holds the queue.
 var ErrHeld = errors.New("deployments are paused while this server is being migrated")
@@ -164,6 +193,7 @@ func (q *Queue) Run(ctx context.Context) {
 	if _, err := q.d.Store.FailRunning(bg, reasonRestarted, q.d.Now()); err != nil {
 		logf("fail running deployments: %v", err)
 	}
+	q.collectAllSnapshots(ctx)
 	for ctx.Err() == nil {
 		d, ok, err := q.d.Store.NextQueued(ctx)
 		if err != nil {
@@ -187,6 +217,36 @@ func (q *Queue) Run(ctx context.Context) {
 	}
 }
 
+// collectAllSnapshots clears the source snapshots earlier runs left behind.
+func (q *Queue) collectAllSnapshots(ctx context.Context) {
+	if q.d.Mounts == nil {
+		return
+	}
+	rows, err := q.d.Store.db.QueryContext(ctx, `SELECT id FROM composes`)
+	if err != nil {
+		logf("list composes for snapshot collection: %v", err)
+		return
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			break
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		logf("list composes for snapshot collection: %v", err)
+	}
+	rows.Close()
+	for _, id := range ids {
+		if ctx.Err() != nil {
+			return
+		}
+		q.collectSnapshots(ctx, id)
+	}
+}
+
 func sleep(ctx context.Context, d time.Duration) {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -196,7 +256,10 @@ func sleep(ctx context.Context, d time.Duration) {
 	}
 }
 
-// Enqueue queues a Deployment, or returns the Compose's already queued one.
+// Enqueue queues a Deployment, or returns the Compose's already queued one when
+// the request asks for the same. A request for other options is refused with a
+// QueuedConflictError: reusing the queued one would run or drop a wipe of the
+// volumes the caller did not ask for.
 func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deployment, bool, error) {
 	switch r.Mode {
 	case ModeDeploy, ModeBuild, ModeSkipBuild:
@@ -207,7 +270,7 @@ func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deploy
 		return Deployment{}, false, ErrHeld
 	}
 	if existing, err := queuedFor(ctx, q.d.Store.db, composeID); err == nil {
-		return existing, false, nil
+		return reuse(existing, r)
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return Deployment{}, false, err
 	}
@@ -215,7 +278,7 @@ func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deploy
 	if err != nil {
 		var existing *alreadyQueued
 		if errors.As(err, &existing) {
-			return existing.deployment, false, nil
+			return reuse(existing.deployment, r)
 		}
 		return Deployment{}, false, err
 	}
@@ -234,6 +297,9 @@ func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deploy
 	}
 	if err != nil {
 		return Deployment{}, false, err
+	}
+	if !created {
+		return reuse(d, r)
 	}
 	select {
 	case q.wake <- struct{}{}:
@@ -484,7 +550,13 @@ func (q *Queue) process(ctx context.Context, d Deployment) error {
 	if d.Mode == ModeSkipBuild && snapshot.Source == nil {
 		j.pre = &outcome{status: StatusFailed, reason: reasonNoSource}
 	}
-	return j.execute()
+	err = j.execute()
+	if j.settled {
+		// After execute returns, so a Cancel or Delete that holds the Project
+		// gate while waiting for this Deployment is not left waiting on it.
+		q.collectSnapshots(bg, d.ComposeID)
+	}
+	return err
 }
 
 // settleUnstarted settles a Deployment that never got to run its steps.
@@ -522,6 +594,7 @@ type job struct {
 	rs       *activeRun
 	out      io.Writer
 	step     string
+	settled  bool // the final outcome is recorded
 }
 
 func (j *job) execute() error {
@@ -586,6 +659,7 @@ func (j *job) execute() error {
 		logf("prune compose %d: %v", j.d.ComposeID, err)
 	}
 	removeLogs(dir, removed)
+	j.settled = true
 	return finishErr
 }
 
@@ -770,9 +844,9 @@ func (j *job) recordMaterialization(src sources.Source) error {
 	return nil
 }
 
-// deploy waits for the Project gate, then runs the Deploy step. It holds
-// nothing but the gate while it runs, and the step is shielded from
-// shutdown and Cancel.
+// deploy waits for the Project gate (and, for a fresh-volumes Deployment, the
+// exclusive volumes hold), then runs the Deploy step. It holds nothing but
+// those while it runs, and the step is shielded from shutdown and Cancel.
 func (j *job) deploy() outcome {
 	q := j.q
 	j.begin(stepDeploy)
@@ -780,6 +854,17 @@ func (j *job) deploy() outcome {
 	rel, err := q.d.Gate.Acquire(j.tctx, j.target.ProjectID)
 	if err != nil {
 		return j.stepFailed(err)
+	}
+	if j.d.FreshVolumes {
+		// The step deletes the Compose's volumes, so open Volume reads must
+		// end first. Waiting here keeps the gate, as a Delete would.
+		relVolumes, err := q.d.Gate.AcquireVolumes(j.tctx, j.target.ProjectID)
+		if err != nil {
+			rel()
+			return j.stepFailed(err)
+		}
+		relGate := rel
+		rel = func() { relVolumes(); relGate() }
 	}
 	var once sync.Once
 	release := func() { once.Do(rel) }

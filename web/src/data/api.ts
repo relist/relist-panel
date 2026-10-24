@@ -34,6 +34,7 @@ import type {
   HostMetrics,
   OrphanVolume,
   Project,
+  RemovalPlanEntry,
   ServiceBindings,
   SetEntry,
   VariableSet,
@@ -42,7 +43,7 @@ import type {
   ServiceMetrics,
   TerminalServices,
   VolumeAccess,
-  VolumeEntry,
+  VolumeListing,
 } from './types';
 import type { MetricWindow } from './types';
 import type { MigrationStatus } from './migration';
@@ -291,9 +292,12 @@ export const api = {
   updateCompose: (location: ComposePath, input: ComposeUpdateInput) =>
     request<Compose>(composePath(location), jsonInit('PUT', input)),
   deleteCompose: (location: ComposePath) => request<void>(composePath(location), { method: 'DELETE' }),
+  /** The plan behind a Delete: one of the `removalPlanPath` URLs. Reads only; deletes nothing. */
+  removalPlan: (path: string) => request<{ composes: RemovalPlanEntry[] }>(path),
   /**
-   * Queues a Deployment: 202 for a new one, 200 when the same request is already
-   * queued. No client timeout: the POST waits behind a same-Project deploy step.
+   * Queues a Deployment: 202 for a new one, 200 when an identical request is already
+   * queued, 409 when one with other options is (the message names it). No client
+   * timeout: the POST waits behind a same-Project deploy step.
    */
   enqueueDeployment: (location: ComposePath, req: DeploymentRequest) =>
     request<{ number: number }>(`${composePath(location)}/deployments`, jsonInit('POST', req)),
@@ -423,13 +427,14 @@ export const api = {
   deleteOrphanVolume: (location: ComposePath, name: string) =>
     request<void>(`${composePath(location)}/volumes/orphans/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   /**
-   * One directory's entries, from the helper's `list`. `source` must be one
+   * One directory's first entries (a capped, name-sorted listing that says
+   * when it was cut short), from the helper's `list`. `source` must be one
    * of the Compose's resolved sources and `path` is relative to the Volume
    * root (`''` is the root); a refusal — a symlink that escapes, a directory
    * the operation uid cannot read — arrives as the API's own message.
    */
   listVolumeEntries: (location: ComposePath, source: string, path: string, access?: VolumeAccess) =>
-    request<VolumeEntry[]>(
+    request<VolumeListing>(
       `${composePath(location)}/volumes/list?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}${volumeAccessQuery(access)}`,
     ),
   /**
@@ -514,6 +519,14 @@ function composesPath(projectId: number, environmentId: number): string {
 function composePath(location: ComposePath): string {
   return `${composesPath(location.projectId, location.environmentId)}/${location.composeId}`;
 }
+
+/** The URLs of the removal plan a Delete of a Project, an Environment or a Compose shows first. */
+export const removalPlanPath = {
+  compose: (location: ComposePath) => `${composePath(location)}/removal-plan`,
+  environment: (projectId: number, environmentId: number) =>
+    `/api/projects/${projectId}/environments/${environmentId}/removal-plan`,
+  project: (projectId: number) => `/api/projects/${projectId}/removal-plan`,
+};
 
 function setsPath(location: ComposePath): string {
   return `${composePath(location)}/variable-sets`;

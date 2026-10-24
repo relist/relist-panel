@@ -108,7 +108,12 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "mode must be deploy, build or skip-build")
 		return
 	}
+	req := Request{Mode: in.Mode, NoCache: in.NoCache, FreshVolumes: in.FreshVolumes}
 	if existing, err := queuedFor(r.Context(), a.q.d.Store.db, composeID); err == nil {
+		if !sameRequest(existing, req) {
+			writeQueuedConflict(w, &QueuedConflictError{Queued: existing})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]int{"number": existing.Number})
 		return
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -151,8 +156,13 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, reasonNoBranch)
 		return
 	}
-	d, created, err := a.q.Enqueue(r.Context(), composeID, Request{Mode: in.Mode, NoCache: in.NoCache, FreshVolumes: in.FreshVolumes})
+	d, created, err := a.q.Enqueue(r.Context(), composeID, req)
 	if err != nil {
+		var conflict *QueuedConflictError
+		if errors.As(err, &conflict) {
+			writeQueuedConflict(w, conflict)
+			return
+		}
 		var f *composes.DeployFailure
 		if errors.As(err, &f) && f.Kind == composes.FailureInvalid {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -170,6 +180,12 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusAccepted
 	}
 	writeJSON(w, status, map[string]int{"number": d.Number})
+}
+
+// writeQueuedConflict answers 409 with the queued Deployment's number, so the
+// client can point at it.
+func writeQueuedConflict(w http.ResponseWriter, e *QueuedConflictError) {
+	writeJSON(w, http.StatusConflict, map[string]any{"error": e.Error(), "number": e.Queued.Number})
 }
 
 func (a *API) list(w http.ResponseWriter, r *http.Request) {

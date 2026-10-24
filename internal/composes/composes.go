@@ -157,6 +157,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/stop", s.stop)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/restart", s.restart)
 	mux.HandleFunc("DELETE /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.delete)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/removal-plan", s.removalPlan)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/logs", s.logs)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/services/{service}/effective-variables", s.effectiveVariables)
 }
@@ -469,6 +470,14 @@ func removeStaleSetFiles(dir, envFilePath string, keep map[int64]string) error {
 	return nil
 }
 
+// LifecycleContext detaches Docker work that must not stop halfway from the
+// request that started it: a browser that closes mid-Stop or mid-Delete would
+// otherwise kill the docker CLI and leave a half-removed stack. The timeout
+// keeps a hung Docker from holding the Project gate forever.
+func LifecycleContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), 10*time.Minute)
+}
+
 func (s *Service) stop(w http.ResponseWriter, r *http.Request) {
 	if !s.available() {
 		writeError(w, http.StatusInternalServerError, "composes are temporarily unavailable")
@@ -495,7 +504,9 @@ func (s *Service) stop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.runner.Down(r.Context(), req); err != nil {
+	ctx, cancel := LifecycleContext(r.Context())
+	defer cancel()
+	if err := s.runner.Down(ctx, req); err != nil {
 		writeError(w, http.StatusBadGateway, "stop failed: "+err.Error())
 		return
 	}
@@ -529,7 +540,9 @@ func (s *Service) restart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.runner.Restart(r.Context(), req); err != nil {
+	ctx, cancel := LifecycleContext(r.Context())
+	defer cancel()
+	if err := s.runner.Restart(ctx, req); err != nil {
 		writeError(w, http.StatusBadGateway, "restart failed: "+err.Error())
 		return
 	}
@@ -558,14 +571,17 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, req, ok := s.loadComposeAndRunRequest(w, r, environmentID, id)
+	compose, req, ok := s.loadComposeAndRunRequest(w, r, environmentID, id)
 	if !ok {
 		return
 	}
 
-	s.cancelDeployments(r.Context(), id)
+	// From here the delete runs to the end even if the browser goes away.
+	ctx, cancel := LifecycleContext(r.Context())
+	defer cancel()
+	s.cancelDeployments(ctx, id)
 	if _, err := os.Stat(req.ComposeFilePath); err == nil {
-		if err := s.runner.DownWithVolumes(r.Context(), req); err != nil {
+		if _, _, err := s.destroyStack(ctx, compose, req, []int64{compose.ID}); err != nil {
 			writeError(w, http.StatusBadGateway, "delete failed: "+err.Error())
 			return
 		}
@@ -574,7 +590,7 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	deleted, err := s.repository.delete(r.Context(), environmentID, id)
+	deleted, err := s.repository.delete(ctx, environmentID, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete compose")
 		return

@@ -19,6 +19,9 @@
 package volfs
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -51,6 +54,10 @@ func Open(rootDir string) (*FS, error) {
 func (fs *FS) Close() error {
 	return fs.root.Close()
 }
+
+// ErrIncompleteWrite is Write's report that the stream ended before (or ran
+// past) the size the caller declared: a cut-off upload, not a smaller file.
+var ErrIncompleteWrite = errors.New("stream ended before the declared size")
 
 // Kind is what an entry is, derived from the metadata call's own mode bits.
 type Kind string
@@ -107,6 +114,39 @@ func (fs *FS) List(name string) ([]Entry, error) {
 	}
 	slices.SortFunc(entries, func(a, b Entry) int { return strings.Compare(a.Name, b.Name) })
 	return entries, nil
+}
+
+// ListFirst is List for the Explorer: the first limit entries by name, and
+// whether more were cut off. Only the names of the whole directory are held —
+// a short string each — and only the first limit are Lstat'd, so a directory
+// of a million entries costs a million names, not a million Entry values and
+// their syscalls. List stays whole for the callers that need every child
+// (pack, archive and recursive remove).
+func (fs *FS) ListFirst(name string, limit int) (entries []Entry, truncated bool, err error) {
+	dir, err := fs.root.Open(name)
+	if err != nil {
+		return nil, false, fmt.Errorf("list %q: %w", name, err)
+	}
+	defer dir.Close()
+
+	names, err := dir.Readdirnames(-1)
+	if err != nil {
+		return nil, false, fmt.Errorf("list %q: %w", name, err)
+	}
+	slices.Sort(names)
+	if len(names) > limit {
+		names, truncated = names[:limit], true
+	}
+
+	entries = make([]Entry, 0, len(names))
+	for _, child := range names {
+		entry, err := fs.entry(path.Join(name, child))
+		if err != nil {
+			return nil, false, fmt.Errorf("list %q: %w", name, err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries, truncated, nil
 }
 
 // Stat describes one path exactly as a List entry would: the entry itself,
@@ -203,22 +243,118 @@ func (fs *FS) Read(name string, dst io.Writer) error {
 	return nil
 }
 
-// Write streams src into one file, creating it or truncating it first, and
-// never buffers the stream here. A symlink out of the root is refused exactly
-// as Read refuses it: Create resolves the final component through the root
-// too.
-func (fs *FS) Write(name string, src io.Reader) error {
-	f, err := fs.root.Create(name)
+// Write streams src into one file and never buffers the stream here. A
+// regular target, or a missing one, is written atomically: the bytes go to a
+// `.relist-write-*` temp beside it and only a complete stream is renamed over
+// the target, so a failed or cut-off write leaves the original untouched and
+// the target is never opened (ticket 19). expect is the declared size, or
+// negative when unknown; a stream that ends at a different length is
+// ErrIncompleteWrite. Three cases keep the truncate-and-stream path, outside
+// that guarantee: a symlink target (resolving a chain through os.Root is not
+// worth it in v1), a file owned by another user (a rename would hand it to
+// this one, and the unprivileged helper cannot chown it back), and a file
+// whose directory refuses the temp (the rename needs write access to the
+// directory, an in-place write only to the file). A symlink out of the root
+// is refused exactly as Read refuses it: both resolve the final component
+// through the root.
+func (fs *FS) Write(name string, src io.Reader, expect int64) error {
+	info, err := fs.root.Lstat(name)
+	switch {
+	case err != nil && !errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("write %q: %w", name, err)
+	case err != nil:
+		info = nil
+	case !replaceAtomically(info, os.Geteuid()):
+		// A symlink, a directory or special file (the open reports what it
+		// is), or another user's file.
+		return fs.writeInPlace(name, src, expect)
+	}
+
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return fmt.Errorf("write %q: %w", name, err)
+	}
+	tmp := path.Join(path.Dir(name), ".relist-write-"+hex.EncodeToString(suffix[:]))
+	f, err := fs.root.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o666)
+	if errors.Is(err, os.ErrPermission) && info != nil {
+		// The directory is read-only to this user but the file may not be.
+		return fs.writeInPlace(name, src, expect)
+	}
 	if err != nil {
 		return fmt.Errorf("write %q: %w", name, err)
 	}
 
-	if _, err := io.Copy(f, src); err != nil {
-		f.Close()
+	err = copyExpecting(f, src, name, expect)
+	if err == nil {
+		// Flush before the rename, so a power loss cannot leave a
+		// zero-length file in place of the original.
+		if serr := f.Sync(); serr != nil {
+			err = fmt.Errorf("write %q: %w", name, serr)
+		}
+	}
+	if cerr := f.Close(); err == nil && cerr != nil {
+		err = fmt.Errorf("write %q: %w", name, cerr)
+	}
+	if err == nil && info != nil {
+		// The temp is created with the umask-derived mode; an existing target
+		// keeps the mode it had.
+		if cerr := fs.root.Chmod(tmp, info.Mode().Perm()); cerr != nil {
+			err = fmt.Errorf("write %q: %w", name, cerr)
+		}
+	}
+	if err == nil {
+		if rerr := fs.root.Rename(tmp, name); rerr != nil {
+			err = fmt.Errorf("write %q: %w", name, rerr)
+		}
+	}
+	if err != nil {
+		_ = fs.root.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// replaceAtomically decides whether Write may go through a temp and a rename
+// for the target Lstat described (nil when it is missing): a missing target,
+// or a regular file the operation user (euid) already owns. Anything else —
+// a symlink, a directory, a special file, another user's file — is written in
+// place.
+func replaceAtomically(info fs.FileInfo, euid int) bool {
+	if info == nil {
+		return true
+	}
+	if !info.Mode().IsRegular() {
+		return false
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Uid != uint32(euid) {
+		return false
+	}
+	return true
+}
+
+// writeInPlace is Write's truncate-and-stream path, for a target the temp-and-
+// rename cannot stand in for.
+func (fs *FS) writeInPlace(name string, src io.Reader, expect int64) error {
+	f, err := fs.root.Create(name)
+	if err != nil {
 		return fmt.Errorf("write %q: %w", name, err)
 	}
-	if err := f.Close(); err != nil {
+	err = copyExpecting(f, src, name, expect)
+	if cerr := f.Close(); err == nil && cerr != nil {
+		err = fmt.Errorf("write %q: %w", name, cerr)
+	}
+	return err
+}
+
+// copyExpecting copies src into dst and, when expect is not negative, reports
+// a stream of any other length as ErrIncompleteWrite.
+func copyExpecting(dst io.Writer, src io.Reader, name string, expect int64) error {
+	written, err := io.Copy(dst, src)
+	if err != nil {
 		return fmt.Errorf("write %q: %w", name, err)
+	}
+	if expect >= 0 && written != expect {
+		return fmt.Errorf("write %q: %w (%d of %d bytes)", name, ErrIncompleteWrite, written, expect)
 	}
 	return nil
 }

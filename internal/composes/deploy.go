@@ -185,6 +185,15 @@ func (s *Service) resolveForDeploy(ctx context.Context, projectID int64, compose
 	} else if err != nil {
 		return "", nil, nil, failure(FailureInvalid, "compose yaml is invalid: "+err.Error(), err)
 	}
+	hasSource, err := s.repository.hasSource(ctx, compose.ID)
+	if err != nil {
+		return "", nil, nil, failure(FailureInternal, "could not load source", err)
+	}
+	elsewhere, err := s.volumeNamesElsewhere(ctx, []int64{compose.ID})
+	if err != nil {
+		return "", nil, nil, failure(FailureInternal, "could not load compose volumes", err)
+	}
+	warnings = append(warnings, volumeWarnings(yamlContent, filepath.Dir(envFilePath), hasSource, elsewhere)...)
 	if warnings == nil {
 		warnings = []string{}
 	}
@@ -214,13 +223,12 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 	}()
 	if opts.FreshVolumes {
 		if _, err := os.Stat(req.ComposeFilePath); err == nil {
-			var err error
-			if tracked, ok := s.runner.(interface {
-				DownWithVolumesTracked(context.Context, RunRequest) (bool, error)
-			}); ok {
-				removed, err = tracked.DownWithVolumesTracked(ctx, req)
-			} else {
-				err = s.runner.DownWithVolumes(ctx, req)
+			plan, removedAny, err := s.destroyStack(ctx, t.Compose, req, []int64{t.Compose.ID})
+			removed = removedAny
+			if opts.Out != nil {
+				for _, kept := range plan.Keep {
+					fmt.Fprintf(opts.Out, "kept volume %s: %s\n", kept.Name, kept.Reason)
+				}
 			}
 			if err != nil {
 				return nil, failure(FailureRunner, "delete volumes failed: "+err.Error(), err)

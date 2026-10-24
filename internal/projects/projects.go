@@ -61,6 +61,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{id}", s.get)
 	mux.HandleFunc("PUT /api/projects/{id}", s.update)
 	mux.HandleFunc("DELETE /api/projects/{id}", s.delete)
+	mux.HandleFunc("GET /api/projects/{id}/removal-plan", s.removalPlan)
 }
 
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
@@ -220,11 +221,13 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "compose teardown is unavailable")
 		return
 	}
-	if err := s.teardown.TeardownProject(r.Context(), id); err != nil {
+	ctx, cancel := composes.LifecycleContext(r.Context())
+	defer cancel()
+	if err := s.teardown.TeardownProject(ctx, id); err != nil {
 		writeError(w, http.StatusBadGateway, "project teardown failed: "+err.Error())
 		return
 	}
-	deleted, err := s.repository.delete(r.Context(), id)
+	deleted, err := s.repository.delete(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete project")
 		return
@@ -234,6 +237,37 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// removalPlan reports what deleting the Project would remove from each of its
+// Composes, without removing anything.
+func (s *Service) removalPlan(w http.ResponseWriter, r *http.Request) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "projects are temporarily unavailable")
+		return
+	}
+	id, err := projectID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "project id must be a positive integer")
+		return
+	}
+	if _, err := s.repository.findByID(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load project")
+		return
+	}
+	if s.teardown == nil {
+		writeError(w, http.StatusInternalServerError, "compose teardown is unavailable")
+		return
+	}
+	entries, err := s.teardown.RemovalPlan(r.Context(), id, 0, 0)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not work out what a delete removes")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"composes": entries})
 }
 
 func (s *Service) available() bool {

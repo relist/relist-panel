@@ -23,6 +23,7 @@ import (
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/migration"
 	"relist-panel/internal/projects"
+	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
 	"relist-panel/internal/terminal"
 	"relist-panel/internal/variablesets"
@@ -59,6 +60,10 @@ type Deps struct {
 	Migration *migration.Options
 	// Docker adds host reports and confirmed cleanup.
 	Docker dockerhost.Engine
+	// PanelDomain is the install's RELIST_DOMAIN. A Domain cannot take this
+	// host, or Traefik could route the panel's own traffic to an app. Empty
+	// means unknown and refuses nothing.
+	PanelDomain string
 }
 
 // NewHandler builds the top-level HTTP handler for the panel.
@@ -83,6 +88,9 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	gate := newCoordinator()
 	hostGuard := dockerhost.NewGuard()
 	gate.host = hostGuard
+	// Without a Runner that can list container mounts, source snapshots are
+	// never collected.
+	mounts, _ := runner.(deployments.MountLister)
 	queue := deployments.NewQueue(deployments.Deps{
 		Maintenance: hostGuard,
 		Store:       deployments.NewStore(db),
@@ -91,6 +99,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		Fetcher:     sources.Git{},
 		Builder:     runner,
 		Gate:        gate,
+		Mounts:      mounts,
 		Timeout:     60 * time.Minute,
 		Keep:        20,
 	})
@@ -103,7 +112,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		queue.Run(ctx)
 	}()
 	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
-	domains.New(db).RegisterRoutes(mux)
+	domains.New(db).WithPanelHost(d.PanelDomain).RegisterRoutes(mux)
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
 	volumeapi.New(composesService, d.VolumeResolver, d.VolumeRunner).RegisterRoutes(mux)
@@ -169,7 +178,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		worker.Add(1)
 		go func() {
 			defer worker.Done()
-			if err := oldHost.ResumeLock(ctx); err != nil && ctx.Err() == nil {
+			if err := safely.Call("migration resume lock", func() error { return oldHost.ResumeLock(ctx) }); err != nil && ctx.Err() == nil {
 				log.Printf("migration: resume the lock: %v", err)
 			}
 		}()

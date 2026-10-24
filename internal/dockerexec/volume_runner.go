@@ -133,6 +133,12 @@ func volumeArgv(image string, req volumes.Request) []string {
 		"--tmpfs", "/tmp",
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
+		// The helper is bounded so one bad Volume cannot take the host's
+		// memory: the hard cap is generous because pack, archive and
+		// recursive remove still list whole directories, and GOMEMLIMIT sits
+		// under it so the GC works before the kernel's OOM killer does.
+		"--memory", "512m",
+		"-e", "GOMEMLIMIT=400MiB",
 		"-v", mount,
 		"--entrypoint", helperEntrypoint,
 		image,

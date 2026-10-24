@@ -161,6 +161,8 @@ func (b *fakeBuilder) Build(ctx context.Context, req composes.RunRequest, opts c
 type fakeGate struct {
 	rec       *recorder
 	onAcquire func(ctx context.Context) error
+	// onAcquireVolumes runs before the exclusive volumes hold is granted.
+	onAcquireVolumes func(ctx context.Context) error
 }
 
 func (g *fakeGate) Acquire(ctx context.Context, projectID int64) (func(), error) {
@@ -172,6 +174,17 @@ func (g *fakeGate) Acquire(ctx context.Context, projectID int64) (func(), error)
 		}
 	}
 	return func() { g.rec.add("gate-") }, nil
+}
+
+func (g *fakeGate) AcquireVolumes(ctx context.Context, projectID int64) (func(), error) {
+	g.rec.add("volumes+")
+	if g.onAcquireVolumes != nil {
+		if err := g.onAcquireVolumes(ctx); err != nil {
+			g.rec.add("volumes-failed")
+			return nil, err
+		}
+	}
+	return func() { g.rec.add("volumes-") }, nil
 }
 
 type harness struct {
@@ -556,6 +569,64 @@ func TestGateOnlyForDeployStep(t *testing.T) {
 	}
 }
 
+// Only a fresh-volumes Deploy deletes volumes, so only it takes the exclusive
+// volumes hold, after the gate and released before it.
+func TestFreshVolumesDeployTakesTheVolumesHoldAfterTheGate(t *testing.T) {
+	h := newHarness(t)
+	h.newQueue()
+	d, _, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeDeploy, FreshVolumes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.start()
+	h.waitSettled(h.a, d.Number)
+	want := []string{"gate+", "gate-", "gate+", "volumes+", "deploy:" + fmt.Sprint(h.a), "volumes-", "gate-"}
+	if got := h.rec.all(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("events = %v, want %v", got, want)
+	}
+}
+
+func TestPlainDeployNeverTakesTheVolumesHold(t *testing.T) {
+	h := newHarness(t)
+	d := h.enqueue(h.a, ModeDeploy)
+	h.start()
+	h.waitSettled(h.a, d.Number)
+	for _, event := range h.rec.all() {
+		if strings.HasPrefix(event, "volumes") {
+			t.Fatalf("a plain Deploy took the volumes hold: %v", h.rec.all())
+		}
+	}
+}
+
+// Waiting for the volumes hold is interruptible and gives the gate back.
+func TestCancelWhileWaitingForTheVolumesHold(t *testing.T) {
+	h := newHarness(t)
+	h.newQueue()
+	d, _, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeDeploy, FreshVolumes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := make(chan struct{})
+	h.gate.onAcquireVolumes = func(ctx context.Context) error {
+		close(waiting)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	h.start()
+	recv(t, waiting, "worker to wait on the volumes hold")
+	h.q.CancelForComposes(context.Background(), []int64{h.a})
+	if got := h.get(h.a, d.Number); got.Status != StatusCanceled {
+		t.Fatalf("status = %s %q, want canceled", got.Status, got.Reason)
+	}
+	if len(h.comp.deployed) != 0 {
+		t.Fatal("RunDeploy must not run")
+	}
+	events := h.rec.all()
+	if events[len(events)-1] != "gate-" {
+		t.Fatalf("events = %v, want the gate released last", events)
+	}
+}
+
 func TestQueueCancelQueued(t *testing.T) {
 	h := newHarness(t)
 	d := h.enqueue(h.a, ModeDeploy)
@@ -923,13 +994,76 @@ func TestEnqueueReturnsExistingAndRejectsBadMode(t *testing.T) {
 	if err != nil || !created {
 		t.Fatal(err, created)
 	}
-	second, created, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeSkipBuild})
+	second, created, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeDeploy})
 	if err != nil || created || second.Number != first.Number || second.Mode != ModeDeploy {
 		t.Fatalf("second = %+v created=%v err=%v", second, created, err)
 	}
 	if _, _, err := h.q.Enqueue(context.Background(), h.b, Request{Mode: "bogus"}); err == nil {
 		t.Fatal("bogus mode accepted")
 	}
+}
+
+func TestEnqueueRefusesDifferentOptions(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name          string
+		first, second Request
+	}{
+		{"fresh then plain", Request{Mode: ModeDeploy, FreshVolumes: true}, Request{Mode: ModeDeploy}},
+		{"plain then fresh", Request{Mode: ModeDeploy}, Request{Mode: ModeDeploy, FreshVolumes: true}},
+		{"noCache differs", Request{Mode: ModeBuild}, Request{Mode: ModeBuild, NoCache: true}},
+		{"mode differs", Request{Mode: ModeDeploy}, Request{Mode: ModeSkipBuild}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.newQueue()
+			first, created, err := h.q.Enqueue(ctx, h.a, c.first)
+			if err != nil || !created {
+				t.Fatal(err, created)
+			}
+			_, created, err = h.q.Enqueue(ctx, h.a, c.second)
+			var conflict *QueuedConflictError
+			if !errors.As(err, &conflict) || created {
+				t.Fatalf("err = %v created = %v, want a QueuedConflictError", err, created)
+			}
+			if conflict.Queued.Number != first.Number || conflict.Queued.FreshVolumes != c.first.FreshVolumes ||
+				conflict.Queued.NoCache != c.first.NoCache || conflict.Queued.Mode != c.first.Mode {
+				t.Fatalf("conflict.Queued = %+v, want the first request's options", conflict.Queued)
+			}
+			if got := h.get(h.a, first.Number); got.FreshVolumes != c.first.FreshVolumes {
+				t.Fatalf("queued Deployment changed: %+v", got)
+			}
+		})
+	}
+
+	t.Run("message", func(t *testing.T) {
+		h := newHarness(t)
+		h.newQueue()
+		d, _, err := h.q.Enqueue(ctx, h.a, Request{Mode: ModeDeploy, FreshVolumes: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = h.q.Enqueue(ctx, h.a, Request{Mode: ModeDeploy})
+		want := fmt.Sprintf("deployment #%d is already queued with mode=deploy, noCache=false, freshVolumes=true; cancel it first", d.Number)
+		if err == nil || err.Error() != want {
+			t.Fatalf("err = %v, want %q", err, want)
+		}
+	})
+
+	t.Run("same request twice", func(t *testing.T) {
+		h := newHarness(t)
+		h.newQueue()
+		r := Request{Mode: ModeBuild, NoCache: true, FreshVolumes: true}
+		first, created, err := h.q.Enqueue(ctx, h.a, r)
+		if err != nil || !created {
+			t.Fatal(err, created)
+		}
+		second, created, err := h.q.Enqueue(ctx, h.a, r)
+		if err != nil || created || second.Number != first.Number {
+			t.Fatalf("second = %+v created=%v err=%v", second, created, err)
+		}
+	})
 }
 
 func TestPrunesAfterFinish(t *testing.T) {

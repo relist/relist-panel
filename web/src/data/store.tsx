@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { LoginResult, ProjectInput } from './api';
-import type { Compose, ComposeDomains, DeploymentRequest, ComposeVariable, ComposePreview, EffectiveVariable, ServiceBindings, VariableSet, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeEntry, VolumeAccess } from './types';
+import type { Compose, ComposeDomains, DeploymentRequest, ComposeVariable, ComposePreview, EffectiveVariable, ServiceBindings, VariableSet, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeListing, VolumeAccess } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
@@ -96,7 +96,7 @@ type PanelValue = {
   /** The Compose's resolved Volumes and pre-flight statuses, from the Compose CLI. */
   loadVolumes: (composeId: number) => Promise<ComposeVolumes>;
   /** One directory inside a resolved Volume, for the Explorer's current path. */
-  listVolumeEntries: (composeId: number, source: string, path: string, access?: VolumeAccess) => Promise<VolumeEntry[]>;
+  listVolumeEntries: (composeId: number, source: string, path: string, access?: VolumeAccess) => Promise<VolumeListing>;
   /** One file's bytes inside a resolved Volume, for the editor (the caller applies the 1 MB gate). */
   readVolumeFile: (composeId: number, source: string, path: string, access?: VolumeAccess) => Promise<Uint8Array>;
   /** Uploads or overwrites one file inside a resolved Volume. Rejects with the API's message. */

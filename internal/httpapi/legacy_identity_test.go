@@ -169,6 +169,12 @@ func (r *partialTeardownRunner) DownWithVolumes(ctx context.Context, req compose
 	return r.fakeComposeRunner.DownWithVolumes(ctx, req)
 }
 
+// DownWithVolumesTracked routes through the override above: teardown prefers
+// the tracked variant when a runner has one.
+func (r *partialTeardownRunner) DownWithVolumesTracked(ctx context.Context, req composes.RunRequest) (bool, error) {
+	return false, r.DownWithVolumes(ctx, req)
+}
+
 func TestPartialParentTeardownCanRetryWithoutRepeatingCompletedChild(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)

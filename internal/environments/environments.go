@@ -55,6 +55,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{projectID}/environments", s.list)
 	mux.HandleFunc("POST /api/projects/{projectID}/environments", s.create)
 	mux.HandleFunc("DELETE /api/projects/{projectID}/environments/{id}", s.delete)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{id}/removal-plan", s.removalPlan)
 }
 
 // ProvisionDefault creates the Environment required for a newly-created
@@ -168,11 +169,13 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "compose teardown is unavailable")
 		return
 	}
-	if err := s.teardown.TeardownEnvironment(r.Context(), projectID, environmentID); err != nil {
+	ctx, cancel := composes.LifecycleContext(r.Context())
+	defer cancel()
+	if err := s.teardown.TeardownEnvironment(ctx, projectID, environmentID); err != nil {
 		writeError(w, http.StatusBadGateway, "environment teardown failed: "+err.Error())
 		return
 	}
-	deleted, err := s.repository.delete(r.Context(), projectID, environmentID)
+	deleted, err := s.repository.delete(ctx, projectID, environmentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete environment")
 		return
@@ -183,6 +186,46 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// removalPlan reports what deleting the Environment would remove from each of
+// its Composes, without removing anything.
+func (s *Service) removalPlan(w http.ResponseWriter, r *http.Request) {
+	if !s.available() {
+		writeError(w, http.StatusInternalServerError, "environments are temporarily unavailable")
+		return
+	}
+	projectID, err := projectID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "project id must be a positive integer")
+		return
+	}
+	environmentID, err := environmentID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "environment id must be a positive integer")
+		return
+	}
+	if err := s.requireProject(r.Context(), projectID); err != nil {
+		writeProjectError(w, err)
+		return
+	}
+	if _, err := s.repository.findByID(r.Context(), projectID, environmentID); errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "environment not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load environment")
+		return
+	}
+	if s.teardown == nil {
+		writeError(w, http.StatusInternalServerError, "compose teardown is unavailable")
+		return
+	}
+	entries, err := s.teardown.RemovalPlan(r.Context(), projectID, environmentID, 0)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not work out what a delete removes")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"composes": entries})
 }
 
 func (s *Service) requireProject(ctx context.Context, id int64) error {

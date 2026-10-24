@@ -230,12 +230,21 @@ func boolInt(v bool) int {
 
 // Service serves the domains HTTP routes.
 type Service struct {
-	store *Store
+	store     *Store
+	panelHost string
 }
 
 // New returns the domains HTTP service over the migrated database.
 func New(db *sql.DB) *Service {
 	return &Service{store: NewStore(db)}
+}
+
+// WithPanelHost makes the service refuse any Domain on the install's own
+// panel host, compared after the same normalisation Validate applies. An
+// empty host means unknown and refuses nothing.
+func (s *Service) WithPanelHost(host string) *Service {
+	s.panelHost = strings.ToLower(strings.TrimSpace(host))
+	return s
 }
 
 // RegisterRoutes adds the authenticated domains endpoints to mux.
@@ -354,6 +363,10 @@ func (s *Service) readInput(w http.ResponseWriter, r *http.Request, rt route) (I
 	in, fieldErr := Validate(in, DeclaredServices(yamlContent))
 	if fieldErr != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fieldErr.Message, "field": fieldErr.Field})
+		return Input{}, false
+	}
+	if s.panelHost != "" && in.Host == s.panelHost {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host is the panel's own domain; pick another host", "field": "host"})
 		return Input{}, false
 	}
 	return in, true

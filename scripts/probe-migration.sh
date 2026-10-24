@@ -72,7 +72,9 @@ for host in "$OLD" "$NEW"; do
 	for _ in $(seq 60); do docker exec "$host" docker info >/dev/null 2>&1 && break; sleep 1; done
 	docker save "$IMAGE" | docker exec -i "$host" docker load -q >/dev/null
 	docker exec "$host" mkdir -p /install
-	sed 's|^\(\s*\)- --certificatesresolvers.letsencrypt.acme.storage=.*$|&\n\1- --certificatesresolvers.letsencrypt.acme.caserver=https://127.0.0.1:9/directory|' \
+	# The probe reaches each panel at http://<host>:8888 from another container,
+	# so it drops the install file's loopback-only host IP.
+	sed -e 's|^\(\s*\)- --certificatesresolvers.letsencrypt.acme.storage=.*$|&\n\1- --certificatesresolvers.letsencrypt.acme.caserver=https://127.0.0.1:9/directory|' -e 's|"127\.0\.0\.1:\${RELIST_PORT|"${RELIST_PORT|' \
 		"$ROOT/docker-compose.yml" | docker exec -i "$host" sh -c 'cat > /install/docker-compose.yml'
 	grep -q 'acme.caserver' <(docker exec "$host" cat /install/docker-compose.yml) || fail "could not point Traefik away from Let's Encrypt"
 	if [ "$host" = "$OLD" ]; then

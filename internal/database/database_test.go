@@ -1,7 +1,9 @@
 package database
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -24,8 +26,8 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 19 {
-		t.Fatalf("migration version = %d, want 19", version)
+	if version != 20 {
+		t.Fatalf("migration version = %d, want 20", version)
 	}
 
 	var one int
@@ -404,5 +406,100 @@ func TestComposeOwnedSetsMigrationMovesEnvironmentSets(t *testing.T) {
 	}
 	if err := Migrate(db); err != nil {
 		t.Fatalf("migrate up again: %v", err)
+	}
+}
+
+func foreignKeysSetting(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var on int
+	if err := db.QueryRow("PRAGMA foreign_keys").Scan(&on); err != nil {
+		t.Fatalf("read PRAGMA foreign_keys: %v", err)
+	}
+	return on
+}
+
+func TestCanceledQueryKeepsForeignKeys(t *testing.T) {
+	db, err := OpenAndMigrate(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// modernc.org/sqlite discards a connection whose query was interrupted,
+	// and database/sql opens a replacement; it must come up with foreign keys on.
+	for i := 0; i < 5; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		var n int
+		err := db.QueryRowContext(ctx, `WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 100000000) SELECT count(*) FROM c`).Scan(&n)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("round %d: error = %v, want context.DeadlineExceeded", i, err)
+		}
+		if got := foreignKeysSetting(t, db); got != 1 {
+			t.Fatalf("round %d: foreign_keys = %d after canceled query, want 1", i, got)
+		}
+	}
+
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, description, created_at, updated_at) VALUES (1, 'p', '', 1, 1);
+		INSERT INTO environments (id, project_id, name, created_at) VALUES (1, 1, 'production', 1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("DELETE FROM projects WHERE id = 1"); err != nil {
+		t.Fatal(err)
+	}
+	var environments int
+	if err := db.QueryRow("SELECT COUNT(*) FROM environments").Scan(&environments); err != nil {
+		t.Fatal(err)
+	}
+	if environments != 0 {
+		t.Fatalf("environments left after deleting their project = %d, want 0", environments)
+	}
+}
+
+func TestReplacementConnectionKeepsForeignKeys(t *testing.T) {
+	db, err := OpenAndMigrate(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// With no idle connections allowed the pool closes this one, so the next
+	// query runs on a fresh connection.
+	db.SetMaxIdleConns(0)
+	var one int
+	if err := db.QueryRow("SELECT 1").Scan(&one); err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxIdleConns(1)
+	if got := foreignKeysSetting(t, db); got != 1 {
+		t.Fatalf("foreign_keys = %d on a replacement connection, want 1", got)
+	}
+}
+
+func TestForeignKeyViolationsCountsOrphans(t *testing.T) {
+	db, err := OpenAndMigrate(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("PRAGMA foreign_keys = OFF"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO environments (id, project_id, name, created_at) VALUES (1, 99, 'production', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ForeignKeyViolations(context.Background(), db)
+	if err != nil {
+		t.Fatalf("ForeignKeyViolations() error = %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("ForeignKeyViolations() = %d, want 1", got)
 	}
 }

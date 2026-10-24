@@ -90,6 +90,13 @@ func main() {
 	}
 	defer db.Close()
 
+	// Report-only: the operator decides what to do with orphaned rows.
+	if n, err := database.ForeignKeyViolations(ctx, db); err != nil {
+		log.Printf("warning: could not check foreign keys: %v", err)
+	} else if n > 0 {
+		log.Printf("warning: %d rows reference deleted parents (PRAGMA foreign_key_check); they were left by an earlier connection without foreign keys", n)
+	}
+
 	if migrationPending {
 		if err := migration.ClearCopiedState(ctx, db, time.Now()); err != nil {
 			log.Fatal(err)
@@ -164,9 +171,10 @@ func main() {
 			Restart:  restart,
 			Control:  control,
 		},
-		Docker: dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
+		Docker:      dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
+		PanelDomain: cfg.Install.Domain,
 	})
-	server := &http.Server{Addr: cfg.Address(), Handler: handler}
+	server := newServer(cfg.Address(), handler)
 	controlServer, err := serveControl(cfg.ControlSocket, control)
 	if err != nil {
 		log.Printf("warning: no migration control socket, so this panel cannot migrate or resume a migration lock; set RELIST_CONTROL_SOCKET to a writable path and restart: %v", err)

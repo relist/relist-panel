@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"relist-panel/internal/safely"
 )
 
 const (
@@ -261,19 +263,23 @@ func (s *Sampler) carriedDockerDisk() float64 {
 // tick performs one sampling pass. Unexported so tests drive it directly —
 // no test sleeps through a real ticker.
 func (s *Sampler) tick(ctx context.Context) {
-	at := s.now()
-	sample := nanSample(at)
-	dt := at.Sub(s.lastAt).Seconds()
+	// One bad tick is skipped, not fatal: the loop goroutine has no other
+	// recover, and tickN still advances so the due counters keep their turns.
+	safely.Do("host metrics sampling", func() {
+		at := s.now()
+		sample := nanSample(at)
+		dt := at.Sub(s.lastAt).Seconds()
 
-	s.sampleCPU(&sample)
-	s.sampleMemory(&sample)
-	s.sampleDiskSpace(&sample)
-	s.sampleBlockIO(&sample, dt)
-	s.sampleNetwork(&sample, dt)
-	sample.DockerDiskBytes = s.carriedDockerDisk()
+		s.sampleCPU(&sample)
+		s.sampleMemory(&sample)
+		s.sampleDiskSpace(&sample)
+		s.sampleBlockIO(&sample, dt)
+		s.sampleNetwork(&sample, dt)
+		sample.DockerDiskBytes = s.carriedDockerDisk()
 
-	s.ring.Push(sample)
-	s.lastAt = at
+		s.ring.Push(sample)
+		s.lastAt = at
+	})
 	s.tickN++
 
 	// The due counters: every job rides this one ticker, when its turn
@@ -287,7 +293,7 @@ func (s *Sampler) tick(ctx context.Context) {
 		go func() {
 			defer s.hooks.Done()
 			defer s.sweepInFlight.Store(false)
-			s.cfg.SweepContainers(ctx)
+			safely.Do("container sweep", func() { s.cfg.SweepContainers(ctx) })
 		}()
 	}
 	if s.tickN%s.ticksPer(time.Minute) == 0 {
@@ -299,7 +305,7 @@ func (s *Sampler) tick(ctx context.Context) {
 		go func() {
 			defer s.hooks.Done()
 			defer s.dfInFlight.Store(false)
-			s.cfg.RefreshDockerDisk(ctx)
+			safely.Do("docker disk refresh", func() { s.cfg.RefreshDockerDisk(ctx) })
 		}()
 	}
 }
@@ -346,7 +352,7 @@ func (s *Sampler) closeMinute() {
 		return
 	}
 	s.lastClose = seen[len(seen)-1].At
-	s.cfg.OnMinuteClose(MinuteAverage(seen))
+	safely.Do("minute close", func() { s.cfg.OnMinuteClose(MinuteAverage(seen)) })
 }
 
 func (s *Sampler) sampleCPU(sample *HostSample) {

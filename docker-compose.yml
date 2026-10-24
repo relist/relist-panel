@@ -10,8 +10,13 @@ services:
       RELIST_ACME_EMAIL: ${RELIST_ACME_EMAIL:-}
       TRAEFIK_HTTP_PORT: ${TRAEFIK_HTTP_PORT:-80}
       TRAEFIK_HTTPS_PORT: ${TRAEFIK_HTTPS_PORT:-443}
+      # Go can't see the cgroup mem_limit; keep this under it so the GC steps
+      # in before the kernel OOM-kills the panel.
+      GOMEMLIMIT: 200MiB
     ports:
-      - "${RELIST_PORT:-8888}:${RELIST_PORT:-8080}"
+      # Loopback only: reach the panel through Traefik, or an SSH tunnel when
+      # routing is broken. A published port on every interface would bypass TLS.
+      - "127.0.0.1:${RELIST_PORT:-8888}:${RELIST_PORT:-8080}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${RELIST_DATA_DIR:-/var/lib/relist-panel}:${RELIST_DATA_DIR:-/var/lib/relist-panel}
@@ -27,9 +32,12 @@ services:
       - traefik.http.routers.panel.entrypoints=websecure
       - traefik.http.routers.panel.tls.certresolver=letsencrypt
       - traefik.http.routers.panel.service=panel
+      # Top priority, so no Domain's longer rule can outrank the panel's own host.
+      - traefik.http.routers.panel.priority=100000
       - traefik.http.routers.panel-http.rule=Host(`${RELIST_DOMAIN:-panel.localhost}`)
       - traefik.http.routers.panel-http.entrypoints=web
       - traefik.http.routers.panel-http.middlewares=panel-redirect
+      - traefik.http.routers.panel-http.priority=100000
       - traefik.http.routers.panel-http.service=panel
       - traefik.http.middlewares.panel-redirect.redirectscheme.scheme=https
       - traefik.http.middlewares.panel-redirect.redirectscheme.permanent=true

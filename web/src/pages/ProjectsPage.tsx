@@ -33,13 +33,15 @@ import { useNavigate } from 'react-router';
 
 import { paths } from '../app/paths';
 import { DangerModal } from '../components/DangerModal';
+import { RemovalPlanList } from '../components/RemovalPlanList';
 import { TeardownDetails } from '../components/TeardownDetails';
-import { projectDeleteFacts } from './project-view';
 import { ComposeStatusTag, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
+import { removalPlanPath } from '../data/api';
 import { usePanel } from '../data/store';
+import { useRemovalPlan } from '../data/useRemovalPlan';
 import type { Project } from '../data/types';
 import { projectComposes, summarize } from '../data/types';
-import { visibleProjects } from './project-view';
+import { projectDeleteFacts, visibleProjects } from './project-view';
 import type { ProjectSortKey } from './project-view';
 
 const { Text, Paragraph } = Typography;
@@ -96,6 +98,8 @@ export function ProjectsPage() {
       fail(reason);
     }
   };
+
+  const deletePlan = useRemovalPlan(deleting ? removalPlanPath.project(deleting.id) : undefined);
 
   const confirmDelete = async () => {
     if (!deleting) return;
@@ -370,8 +374,9 @@ export function ProjectsPage() {
                 This removes {deleting.environments.length}{' '}
                 {deleting.environments.length === 1 ? 'Environment' : 'Environments'} and {projectComposes(deleting).length}{' '}
                 {projectComposes(deleting).length === 1 ? 'Compose' : 'Composes'} from the panel, after stopping and removing
-                their containers, networks, volumes and deployment files. Volume data is permanently deleted.
-                <TeardownDetails directories={projectDeleteFacts(deleting).directories} />
+                their containers, networks and deployment files, and deletes the volumes listed below with their data.
+                <RemovalPlanList {...deletePlan} fallbackDirectories={projectDeleteFacts(deleting).directories} />
+                <TeardownDetails />
               </>
             )}
           </div>

@@ -20,8 +20,8 @@ import (
 const sourceSnapshotsDir = ".deployment-sources"
 
 // executionSnapshot never participates in public Deployment serialization.
-// SourceDir belongs to the Compose, and is retained until its teardown because
-// existing containers can still bind files from a previous Deployment's tree.
+// SourceDir belongs to the Compose. It outlives its Deployment while a container
+// can still bind files from it; collectSnapshots removes it once nothing does.
 type executionSnapshot struct {
 	Version         int
 	Target          composes.DeployTarget

@@ -656,3 +656,22 @@ func TestServiceCollectorServiceWindow(t *testing.T) {
 		t.Errorf("ghost Service window = %+v, want nil", got)
 	}
 }
+
+// A panic while reading one container's stats must cost that container a
+// sample (reported like any stats error), not the panel its process.
+func TestServiceCollectorSurvivesAPanickingStatsCall(t *testing.T) {
+	clock := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
+	source := &fakeSource{
+		containers: []hostmetrics.ContainerInfo{containerInfo("c1", "web", nil)},
+		stats: map[string]hostmetrics.ContainerStatsSample{
+			"c1": statsSample(1000, 100000, 4, 5000, 1200, 10000, 100, 50, 111, 222),
+		},
+		onStats: func(string) { panic("malformed stats payload") },
+	}
+	collector := hostmetrics.NewServiceCollector(source, knownOnlyPec, func() time.Time { return clock })
+	collector.Sweep(context.Background())
+
+	if status := collector.Status(); status.Available || !strings.Contains(status.Reason, "panicked") {
+		t.Fatalf("Status() = %+v, want the panic reported as a stats error", status)
+	}
+}
