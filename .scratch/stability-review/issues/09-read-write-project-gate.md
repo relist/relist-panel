@@ -8,7 +8,7 @@ Decision (2026-10-24): split the gate into read and write.
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Volume list/stat/read/archive take a shared (read) hold; Compose/Project/Environment delete,
       teardown, volume writes and fresh-volumes deploys take the exclusive hold
