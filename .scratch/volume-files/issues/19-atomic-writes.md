@@ -11,7 +11,7 @@ untouched.
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Regular targets: a unique `.relist-write-*` temp beside the target — `os.Root` has no
       `CreateTemp`, so `OpenFile(tmp, O_CREATE|O_EXCL|O_WRONLY, 0666)` with a random suffix —
