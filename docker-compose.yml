@@ -11,7 +11,9 @@ services:
       TRAEFIK_HTTP_PORT: ${TRAEFIK_HTTP_PORT:-80}
       TRAEFIK_HTTPS_PORT: ${TRAEFIK_HTTPS_PORT:-443}
     ports:
-      - "${RELIST_PORT:-8888}:${RELIST_PORT:-8080}"
+      # Loopback only: reach the panel through Traefik, or an SSH tunnel when
+      # routing is broken. A published port on every interface would bypass TLS.
+      - "127.0.0.1:${RELIST_PORT:-8888}:${RELIST_PORT:-8080}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${RELIST_DATA_DIR:-/var/lib/relist-panel}:${RELIST_DATA_DIR:-/var/lib/relist-panel}

@@ -44,7 +44,10 @@ This builds the panel image (Go binary + embedded frontend, per the
 `Dockerfile`) and starts it alongside Traefik, both attached to
 `relist-network`. The panel is reachable two ways out of the box:
 
-- Directly, via its published port: `http://<host>:8888/`
+- On the host itself, via its published port, which listens on loopback only:
+  `http://127.0.0.1:8888/`. From another machine, open an SSH tunnel with
+  `ssh -L 8888:127.0.0.1:8888 <host>` and browse `http://127.0.0.1:8888/`.
+  This is the way in when Traefik or a Domain breaks routing.
 - Through Traefik, via `Host` routing: `https://panel.localhost/` (resolves to
   loopback on most systems without any DNS setup; plain HTTP redirects to it) —
   override the hostname with `RELIST_DOMAIN` for a real domain
@@ -73,7 +76,7 @@ Override the defaults via environment variables (or a `.env` file next to
 
 - `RELIST_PORT` (default `8080`) — the panel's port inside the container; when
   set it also becomes the published host port, which otherwise defaults to
-  `8888`
+  `8888`. The host port is bound to `127.0.0.1` only
 - `RELIST_DATA_DIR` (default `/var/lib/relist-panel`) — bind-mounted at the
   **same path** on the host and inside the panel container, per ADR-0002
 - `RELIST_DOMAIN` (default `panel.localhost`) — the Host rule Traefik routes
@@ -117,8 +120,9 @@ Traefik does not know shows only in Traefik's log.
 Image uploads through the domain must finish within one hour: Traefik's read
 timeout on the `web` and `websecure` entrypoints is set to `3600s` (this applies
 to every app on those entrypoints, not only the panel), and 10 GiB needs roughly
-25 Mbit/s sustained. A slower link can upload through the panel's direct port
-(`RELIST_PORT`, default host port `8888`), which bypasses Traefik.
+25 Mbit/s sustained. A slower link can upload through the panel's loopback port
+(`RELIST_PORT`, default host port `8888`) over an SSH tunnel, which bypasses
+Traefik.
 
 ### Local development
 
@@ -147,6 +151,13 @@ Composes with hand-written Traefik labels keep routing as before.
 Every upgrade that changes the panel's Traefik labels, such as the router
 priority added to keep a Domain from taking the panel's host, needs the panel
 container recreated: run `docker compose up -d` so it picks the labels up.
+
+The panel's published port now listens on `127.0.0.1` only; before, it listened
+on every interface and served the panel over plain HTTP, bypassing Traefik's
+TLS. Recreate the panel container so the new binding applies (`docker compose
+up -d` does it once `docker-compose.yml` is updated). Anything that reached
+`http://<host>:8888/` from another machine must use the panel's domain or an SSH
+tunnel instead.
 
 `RELIST_ADMIN_EMAIL` and `RELIST_ADMIN_PASSWORD` are no longer read; the
 admin they created stays. Remove them from `.env`, and if **Account** still

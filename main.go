@@ -174,7 +174,7 @@ func main() {
 		Docker:      dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
 		PanelDomain: cfg.Install.Domain,
 	})
-	server := &http.Server{Addr: cfg.Address(), Handler: handler}
+	server := newServer(cfg.Address(), handler)
 	controlServer, err := serveControl(cfg.ControlSocket, control)
 	if err != nil {
 		log.Printf("warning: no migration control socket, so this panel cannot migrate or resume a migration lock; set RELIST_CONTROL_SOCKET to a writable path and restart: %v", err)
