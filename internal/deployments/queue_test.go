@@ -161,6 +161,8 @@ func (b *fakeBuilder) Build(ctx context.Context, req composes.RunRequest, opts c
 type fakeGate struct {
 	rec       *recorder
 	onAcquire func(ctx context.Context) error
+	// onAcquireVolumes runs before the exclusive volumes hold is granted.
+	onAcquireVolumes func(ctx context.Context) error
 }
 
 func (g *fakeGate) Acquire(ctx context.Context, projectID int64) (func(), error) {
@@ -172,6 +174,17 @@ func (g *fakeGate) Acquire(ctx context.Context, projectID int64) (func(), error)
 		}
 	}
 	return func() { g.rec.add("gate-") }, nil
+}
+
+func (g *fakeGate) AcquireVolumes(ctx context.Context, projectID int64) (func(), error) {
+	g.rec.add("volumes+")
+	if g.onAcquireVolumes != nil {
+		if err := g.onAcquireVolumes(ctx); err != nil {
+			g.rec.add("volumes-failed")
+			return nil, err
+		}
+	}
+	return func() { g.rec.add("volumes-") }, nil
 }
 
 type harness struct {
@@ -553,6 +566,64 @@ func TestGateOnlyForDeployStep(t *testing.T) {
 	want := []string{"gate+", "gate-", "fetch", "build:web", "build:api", "gate+", "deploy:" + fmt.Sprint(h.a), "gate-"}
 	if got := h.rec.all(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("events = %v, want %v", got, want)
+	}
+}
+
+// Only a fresh-volumes Deploy deletes volumes, so only it takes the exclusive
+// volumes hold, after the gate and released before it.
+func TestFreshVolumesDeployTakesTheVolumesHoldAfterTheGate(t *testing.T) {
+	h := newHarness(t)
+	h.newQueue()
+	d, _, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeDeploy, FreshVolumes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.start()
+	h.waitSettled(h.a, d.Number)
+	want := []string{"gate+", "gate-", "gate+", "volumes+", "deploy:" + fmt.Sprint(h.a), "volumes-", "gate-"}
+	if got := h.rec.all(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("events = %v, want %v", got, want)
+	}
+}
+
+func TestPlainDeployNeverTakesTheVolumesHold(t *testing.T) {
+	h := newHarness(t)
+	d := h.enqueue(h.a, ModeDeploy)
+	h.start()
+	h.waitSettled(h.a, d.Number)
+	for _, event := range h.rec.all() {
+		if strings.HasPrefix(event, "volumes") {
+			t.Fatalf("a plain Deploy took the volumes hold: %v", h.rec.all())
+		}
+	}
+}
+
+// Waiting for the volumes hold is interruptible and gives the gate back.
+func TestCancelWhileWaitingForTheVolumesHold(t *testing.T) {
+	h := newHarness(t)
+	h.newQueue()
+	d, _, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeDeploy, FreshVolumes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := make(chan struct{})
+	h.gate.onAcquireVolumes = func(ctx context.Context) error {
+		close(waiting)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	h.start()
+	recv(t, waiting, "worker to wait on the volumes hold")
+	h.q.CancelForComposes(context.Background(), []int64{h.a})
+	if got := h.get(h.a, d.Number); got.Status != StatusCanceled {
+		t.Fatalf("status = %s %q, want canceled", got.Status, got.Reason)
+	}
+	if len(h.comp.deployed) != 0 {
+		t.Fatal("RunDeploy must not run")
+	}
+	events := h.rec.all()
+	if events[len(events)-1] != "gate-" {
+		t.Fatalf("events = %v, want the gate released last", events)
 	}
 }
 

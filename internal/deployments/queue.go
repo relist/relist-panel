@@ -17,9 +17,14 @@ import (
 	"relist-panel/internal/sources"
 )
 
-// Gate serialises work on a Project; the Deploy step holds it.
+// Gate serialises work on a Project; the Deploy step holds it. AcquireVolumes
+// is the exclusive hold on the Project's volumes, which a fresh-volumes Deploy
+// needs on top of the gate. Open Volume reads share the volumes but not the
+// gate, so only AcquireVolumes waits for them. Take it after Acquire, never
+// before.
 type Gate interface {
 	Acquire(ctx context.Context, projectID int64) (release func(), err error)
+	AcquireVolumes(ctx context.Context, projectID int64) (release func(), err error)
 }
 
 type Composes interface {
@@ -839,9 +844,9 @@ func (j *job) recordMaterialization(src sources.Source) error {
 	return nil
 }
 
-// deploy waits for the Project gate, then runs the Deploy step. It holds
-// nothing but the gate while it runs, and the step is shielded from
-// shutdown and Cancel.
+// deploy waits for the Project gate (and, for a fresh-volumes Deployment, the
+// exclusive volumes hold), then runs the Deploy step. It holds nothing but
+// those while it runs, and the step is shielded from shutdown and Cancel.
 func (j *job) deploy() outcome {
 	q := j.q
 	j.begin(stepDeploy)
@@ -849,6 +854,17 @@ func (j *job) deploy() outcome {
 	rel, err := q.d.Gate.Acquire(j.tctx, j.target.ProjectID)
 	if err != nil {
 		return j.stepFailed(err)
+	}
+	if j.d.FreshVolumes {
+		// The step deletes the Compose's volumes, so open Volume reads must
+		// end first. Waiting here keeps the gate, as a Delete would.
+		relVolumes, err := q.d.Gate.AcquireVolumes(j.tctx, j.target.ProjectID)
+		if err != nil {
+			rel()
+			return j.stepFailed(err)
+		}
+		relGate := rel
+		rel = func() { relVolumes(); relGate() }
 	}
 	var once sync.Once
 	release := func() { once.Do(rel) }

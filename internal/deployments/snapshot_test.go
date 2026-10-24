@@ -49,6 +49,10 @@ func (g serialSnapshotGate) Acquire(ctx context.Context, _ int64) (func(), error
 	}
 }
 
+func (g serialSnapshotGate) AcquireVolumes(context.Context, int64) (func(), error) {
+	return func() {}, nil
+}
+
 func TestConcurrentDedupSkipsRedundantFailedSourceCapture(t *testing.T) {
 	firstRequest := Request{Mode: ModeBuild, FreshVolumes: true, NoCache: true}
 	for _, tc := range []struct {
