@@ -7,7 +7,7 @@ earns its place: it is the action that destroys data.
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] A read endpoint (or a field on an existing one) returns the removal plan computed the same
       way as ticket 03: volumes to remove, volumes kept and why, the Compose directory
