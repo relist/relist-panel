@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
@@ -21,7 +23,7 @@ const (
 // unexported so tests in this package can drive the lock across time without
 // sleeping.
 func newServiceWithClock(db *sql.DB, now func() time.Time) *Service {
-	return &Service{db: db, now: now}
+	return &Service{db: db, now: now, comparePassword: bcrypt.CompareHashAndPassword}
 }
 
 // lockedFor reports how much longer the account is locked, or zero when it is
