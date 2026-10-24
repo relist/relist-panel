@@ -6,7 +6,7 @@
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] A small helper that runs a function, recovers, and logs the panic with its stack; used by the
       goroutines above. A recovered sampler hook skips that round and the next tick runs normally
