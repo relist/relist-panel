@@ -329,10 +329,11 @@ func (d *DockerHost) volumeCandidates(ctx context.Context, kind dockerhost.Kind)
 
 func (d *DockerHost) imageCandidates(ctx context.Context, kind dockerhost.Kind) ([]dockerhost.Candidate, error) {
 	var images []struct {
-		ID       string `json:"Id"`
-		RepoTags []string
-		Labels   map[string]string
-		Size     int64
+		ID          string `json:"Id"`
+		RepoTags    []string
+		RepoDigests []string
+		Labels      map[string]string
+		Size        int64
 	}
 	if err := d.source.get(ctx, "/images/json", &images); err != nil {
 		return nil, err
@@ -363,7 +364,7 @@ func (d *DockerHost) imageCandidates(ctx context.Context, kind dockerhost.Kind) 
 		if len(tags) > 0 {
 			name = tags[0]
 		}
-		candidates = append(candidates, dockerhost.Candidate{ID: image.ID, Name: name, Labels: image.Labels, Tags: tags, Size: bytesAvailable(image.Size)})
+		candidates = append(candidates, dockerhost.Candidate{ID: image.ID, Name: name, Labels: image.Labels, Tags: tags, Digests: image.RepoDigests, Size: bytesAvailable(image.Size)})
 	}
 	return candidates, nil
 }

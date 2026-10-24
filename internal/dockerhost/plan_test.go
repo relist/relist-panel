@@ -13,6 +13,40 @@ func names(entries []PlanEntry) []string {
 	return out
 }
 
+func TestNormalizeReference(t *testing.T) {
+	for in, want := range map[string]string{
+		"nginx":                              "nginx:latest",
+		"nginx:1.27":                         "nginx:1.27",
+		"docker.io/library/nginx":            "nginx:latest",
+		"index.docker.io/library/nginx":      "nginx:latest",
+		"docker.io/library/nginx:latest":     "nginx:latest",
+		"library/nginx:1":                    "nginx:1",
+		"docker.io/acme/app":                 "acme/app:latest",
+		"localhost:5000/app":                 "localhost:5000/app:latest",
+		"myreg:5000/app:2":                   "myreg:5000/app:2",
+		"ghcr.io/acme/app@sha256:abc":        "ghcr.io/acme/app@sha256:abc",
+		"docker.io/library/nginx@sha256:abc": "nginx@sha256:abc",
+	} {
+		if got := normalizeReference(in); got != want {
+			t.Errorf("normalizeReference(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestPlanMatchesImageReferenceHoweverSpelled(t *testing.T) {
+	owners := Ownership{Images: map[string]string{"docker.io/library/nginx": "web", "myreg:5000/app": "api", "ghcr.io/a/b@sha256:abc": "pinned"}}
+	images := []Candidate{
+		{ID: "1", Name: "nginx:latest", Tags: []string{"nginx:latest"}},
+		{ID: "2", Name: "myreg:5000/app:latest", Tags: []string{"myreg:5000/app:latest"}},
+		{ID: "3", Name: "sha256:3", Digests: []string{"ghcr.io/a/b@sha256:abc"}},
+		{ID: "4", Name: "myreg:5000/app:2", Tags: []string{"myreg:5000/app:2"}},
+	}
+	plan := Plan(UnusedImages, images, owners, false)
+	if got := names(plan.Delete); !reflect.DeepEqual(got, []string{"myreg:5000/app:2"}) || len(plan.Skip) != 3 {
+		t.Fatalf("plan: %+v", plan)
+	}
+}
+
 func TestPlanSkipsPanelOwned(t *testing.T) {
 	size := uint64(7)
 	owners := Ownership{

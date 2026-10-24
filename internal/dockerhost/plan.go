@@ -18,6 +18,7 @@ type Candidate struct {
 	ID, Name string
 	Labels   map[string]string
 	Tags     []string
+	Digests  []string // repo@sha256:... references
 	Size     *uint64
 }
 
@@ -48,6 +49,7 @@ func Plan(kind Kind, candidates []Candidate, owners Ownership, includePanel bool
 // plan also returns the candidates behind p.Delete, in the same order.
 func plan(kind Kind, candidates []Candidate, owners Ownership, includePanel bool) (PrunePlan, []Candidate) {
 	p := PrunePlan{Kind: kind, Delete: []PlanEntry{}, Skip: []SkipEntry{}}
+	owners.Images = normalizedKeys(owners.Images)
 	doomed := []Candidate{}
 	for _, c := range candidates {
 		if compose := owner(kind, c, owners); compose != "" && !includePanel {
@@ -60,6 +62,14 @@ func plan(kind Kind, candidates []Candidate, owners Ownership, includePanel bool
 	return p, doomed
 }
 
+func normalizedKeys(images map[string]string) map[string]string {
+	out := make(map[string]string, len(images))
+	for ref, compose := range images {
+		out[normalizeReference(ref)] = compose
+	}
+	return out
+}
+
 // owner returns the panel Compose that owns or names the candidate, "" if none.
 func owner(kind Kind, c Candidate, owners Ownership) string {
 	if compose, ok := owners.Projects[c.Labels[ProjectLabel]]; ok && c.Labels[ProjectLabel] != "" {
@@ -69,28 +79,26 @@ func owner(kind Kind, c Candidate, owners Ownership) string {
 	case Volumes, AllVolumes:
 		return owners.Volumes[c.Name]
 	case Images, UnusedImages:
-		for _, tag := range c.Tags {
-			for _, ref := range referenceForms(tag) {
-				if compose, ok := owners.Images[ref]; ok {
-					return compose
-				}
+		for _, ref := range append(append([]string{}, c.Tags...), c.Digests...) {
+			if compose, ok := owners.Images[normalizeReference(ref)]; ok {
+				return compose
 			}
 		}
 	}
 	return ""
 }
 
-// referenceForms is a stored repo:tag with the spellings a Compose file may
-// use for it: "nginx" and "docker.io/library/nginx:latest" are both nginx:latest.
-func referenceForms(tag string) []string {
-	forms := []string{tag}
-	short := strings.TrimPrefix(tag, "docker.io/")
-	short = strings.TrimPrefix(short, "library/")
-	if short != tag {
-		forms = append(forms, short)
+// normalizeReference spells an image reference one way, so "nginx",
+// "docker.io/library/nginx:latest" and "index.docker.io/library/nginx" compare
+// equal. A registry host with a port ("localhost:5000/app") is kept intact.
+func normalizeReference(ref string) string {
+	ref = strings.TrimPrefix(ref, "index.docker.io/")
+	ref = strings.TrimPrefix(ref, "docker.io/")
+	if rest, ok := strings.CutPrefix(ref, "library/"); ok && !strings.Contains(rest, "/") {
+		ref = rest
 	}
-	if name, ok := strings.CutSuffix(short, ":latest"); ok {
-		forms = append(forms, name)
+	if !strings.Contains(ref, "@") && !strings.Contains(ref[strings.LastIndex(ref, "/")+1:], ":") {
+		ref += ":latest"
 	}
-	return forms
+	return ref
 }
