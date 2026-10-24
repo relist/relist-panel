@@ -1,6 +1,6 @@
 # รายงานตรวจความเสถียรของ Relist Panel
 
-Status: closed — ticket 01–13, 16 และ volume-files 19 ทำเสร็จบน branch `fix/stability-review`; ที่ยังเหลือ: ticket 14 (C5, พักไว้) และ 15 (B6) สถานะ needs-triage
+Status: closed — ticket 01–13, 16 และ volume-files 19 ปิดใน PR #15; ticket 14, 15 และ 17–20 ปิดใน branch `fix/stability-followups`
 
 - **วันที่:** 2026-10-24
 - **Commit ที่ตรวจ:** `7214547` (main, หลัง merge PR #14)

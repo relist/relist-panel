@@ -85,6 +85,64 @@ func TestListPrintsEntriesAndTruncated(t *testing.T) {
 	}
 }
 
+// TestListPagesByAfterCursor: `list --after <name>` prints the names sorting
+// strictly after it, and a truncated page names its last entry as next.
+func TestListPagesByAfterCursor(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < listLimit+5; i++ {
+		plant(t, root, fmt.Sprintf("f%05d", i), nil)
+	}
+	type page struct {
+		Entries   []volfs.Entry `json:"entries"`
+		Truncated bool          `json:"truncated"`
+		Next      string        `json:"next"`
+	}
+	decode := func(stdout []byte) page {
+		var p page
+		if err := json.Unmarshal(stdout, &p); err != nil {
+			t.Fatalf("list stdout is not JSON: %v", err)
+		}
+		return p
+	}
+
+	code, stdout, stderr := runHelper(t, root, nil, "list", "--", ".")
+	if code != 0 {
+		t.Fatalf("list exit = %d, stderr = %q", code, stderr)
+	}
+	first := decode(stdout)
+	if want := fmt.Sprintf("f%05d", listLimit-1); first.Next != want {
+		t.Errorf("first page next = %q, want %q", first.Next, want)
+	}
+
+	code, stdout, stderr = runHelper(t, root, nil, "list", "--after", first.Next, "--", ".")
+	if code != 0 {
+		t.Fatalf("list --after exit = %d, stderr = %q", code, stderr)
+	}
+	second := decode(stdout)
+	if len(second.Entries) != 5 || second.Truncated || second.Entries[0].Name != fmt.Sprintf("f%05d", listLimit) {
+		t.Errorf("second page = %d entries truncated=%v, want the last 5 and not truncated", len(second.Entries), second.Truncated)
+	}
+	if strings.Contains(string(stdout), `"next"`) {
+		t.Errorf("an untruncated page carries next: %s", stdout)
+	}
+}
+
+// TestListRefusesAnAfterThatIsNotOneName: the cursor is one path segment, like
+// the path it travels beside.
+func TestListRefusesAnAfterThatIsNotOneName(t *testing.T) {
+	root := t.TempDir()
+	plant(t, root, "a", nil)
+	for _, after := range []string{"", "a/b", "..", ".", "a\x00b"} {
+		code, stdout, _ := runHelper(t, root, nil, "list", "--after", after, "--", ".")
+		if code != exitUsage || len(stdout) != 0 {
+			t.Errorf("list --after %q exit = %d stdout = %q, want a usage refusal", after, code, stdout)
+		}
+	}
+	if code, _, _ := runHelper(t, root, nil, "stat", "--after", "a", "--", "."); code != exitUsage {
+		t.Errorf("stat --after exit = %d, want a usage refusal", code)
+	}
+}
+
 // TestListReturnsAJSONArrayOfEntries pins list's output shape: one JSON object
 // whose entries are volfs.Entry's shape, one level deep, with a symlink's
 // target described.

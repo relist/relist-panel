@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -13,16 +15,18 @@ type API struct {
 	engine    Engine
 	pending   func(context.Context) (bool, error)
 	guard     *Guard
+	owners    func(context.Context) (Ownership, error)
 	cacheLock chan struct{}
 	cached    *Report
 	cachedAt  time.Time
 }
 
-func NewAPI(engine Engine, guard *Guard, pending func(context.Context) (bool, error)) *API {
-	return &API{engine: engine, guard: guard, pending: pending, cacheLock: make(chan struct{}, 1)}
+func NewAPI(engine Engine, guard *Guard, pending func(context.Context) (bool, error), owners func(context.Context) (Ownership, error)) *API {
+	return &API{engine: engine, guard: guard, pending: pending, owners: owners, cacheLock: make(chan struct{}, 1)}
 }
 func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/docker", a.report)
+	mux.HandleFunc("GET /api/docker/prune-plan", a.prunePlan)
 	mux.HandleFunc("POST /api/docker/prune", a.prune)
 	mux.HandleFunc("POST /api/docker/recover", a.recover)
 }
@@ -69,8 +73,9 @@ func (a *API) report(w http.ResponseWriter, r *http.Request) {
 }
 func (a *API) prune(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Kind    Kind   `json:"kind"`
-		Confirm string `json:"confirm"`
+		Kind         Kind   `json:"kind"`
+		Confirm      string `json:"confirm"`
+		IncludePanel bool   `json:"includePanel"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
@@ -83,7 +88,15 @@ func (a *API) prune(w http.ResponseWriter, r *http.Request) {
 		failure(w, 400, "Provide one JSON object")
 		return
 	}
-	if expected := input.Kind.Confirmation(); expected == "" || input.Confirm != expected {
+	expected := input.Kind.Confirmation()
+	if input.IncludePanel {
+		if !input.Kind.Listed() {
+			failure(w, 400, "Only volumes and images can include panel-owned data")
+			return
+		}
+		expected = PanelDataConfirmation
+	}
+	if expected == "" || input.Confirm != expected {
 		failure(w, 400, "Prune confirmation does not match the selected operation")
 		return
 	}
@@ -119,16 +132,99 @@ func (a *API) prune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { <-a.cacheLock }()
-	result, err := a.engine.Prune(ctx, input.Kind)
+	var result PruneResult
+	var err error
+	if input.Kind.Listed() {
+		// Decide from the live Composes and Docker state at the moment of
+		// deletion, never from a plan the browser saw earlier.
+		owners, ownersErr := a.ownership(ctx)
+		if ownersErr != nil {
+			failure(w, 503, "Could not read which resources the Composes use; nothing was deleted")
+			return
+		}
+		candidates, listErr := a.engine.Candidates(ctx, input.Kind)
+		if listErr != nil {
+			failure(w, 502, listErr.Error()+". Nothing was deleted.")
+			return
+		}
+		result, err = a.removePlanned(ctx, input.Kind, candidates, owners, input.IncludePanel)
+	} else {
+		result, err = a.engine.Prune(ctx, input.Kind)
+	}
 	a.cached = nil // Errors can follow partial deletion too.
 	if err != nil {
 		if errors.Is(err, ErrPruneUncertain) {
 			a.guard.Block()
 		}
-		failure(w, 502, err.Error()+". Docker may have removed some resources; refresh the report before trying again.")
+		message := err.Error()
+		if len(result.Deleted) > 0 {
+			message += ". Removed before the failure: " + strings.Join(result.Deleted, ", ")
+		}
+		failure(w, 502, message+". Docker may have removed some resources; refresh the report before trying again.")
 		return
 	}
 	reply(w, 200, result)
+}
+
+func (a *API) ownership(ctx context.Context) (Ownership, error) {
+	if a.owners == nil {
+		return Ownership{}, nil
+	}
+	return a.owners(ctx)
+}
+
+// removePlanned deletes the plan's Delete entries one by one, unforced. A
+// refusal is a skip; a failure of any other kind is uncertain, so the guard
+// blocks as it does for a failed Docker prune. result holds what was removed
+// so far even when err is set.
+func (a *API) removePlanned(ctx context.Context, kind Kind, candidates []Candidate, owners Ownership, includePanel bool) (PruneResult, error) {
+	plan, doomed := plan(kind, candidates, owners, includePanel)
+	result := PruneResult{Kind: kind, Deleted: []string{}, Skipped: plan.Skip}
+	for i, c := range doomed {
+		removed, refusal, err := a.engine.Remove(ctx, kind, c)
+		if err != nil {
+			if !errors.Is(err, ErrPruneUncertain) {
+				err = fmt.Errorf("%w: %v", ErrPruneUncertain, err)
+			}
+			return result, err
+		}
+		if !removed {
+			result.Skipped = append(result.Skipped, SkipEntry{Name: plan.Delete[i].Name, Reason: refusal})
+			continue
+		}
+		result.Deleted = append(result.Deleted, plan.Delete[i].Name)
+		if size := plan.Delete[i].Size; size != nil {
+			result.SpaceReclaimed += *size
+		}
+	}
+	return result, nil
+}
+
+// prunePlan previews what a prune of the kind would delete and skip. The kinds
+// that keep Docker's own prune have nothing to preview.
+func (a *API) prunePlan(w http.ResponseWriter, r *http.Request) {
+	kind := Kind(r.URL.Query().Get("kind"))
+	if kind.Confirmation() == "" {
+		failure(w, 400, "Provide a prune kind")
+		return
+	}
+	if !kind.Listed() {
+		reply(w, 200, PrunePlan{Kind: kind, Delete: []PlanEntry{}, Skip: []SkipEntry{}})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	owners, err := a.ownership(ctx)
+	if err != nil {
+		failure(w, 503, "Could not read which resources the Composes use")
+		return
+	}
+	candidates, err := a.engine.Candidates(ctx, kind)
+	if err != nil {
+		failure(w, 502, err.Error())
+		return
+	}
+	reply(w, 200, Plan(kind, candidates, owners, r.URL.Query().Get("includePanel") == "1"))
 }
 
 func (a *API) replyReport(w http.ResponseWriter, report Report) {

@@ -192,6 +192,14 @@ func (t *Target) save() error {
 	return os.Rename(tmp, t.statePath())
 }
 
+// locked runs fn holding t.mu and releases it even when fn panics, so the
+// recovered run goroutine and the status endpoint never meet a stuck lock.
+func (t *Target) locked(fn func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	fn()
+}
+
 func (t *Target) client() *client {
 	return &client{http: t.d.HTTP, base: strings.TrimRight(t.st.SourceURL, "/"), sessionKey: t.st.SessionKey}
 }
@@ -216,9 +224,9 @@ func (t *Target) Connect(ctx context.Context, oldHostURL, token, selfURL string)
 		return Progress{}, errBusy
 	}
 	defer t.op.Unlock()
-	t.mu.Lock()
-	phase, key, claimedFrom := t.st.Phase, t.st.SessionKey, t.st.SourceURL
-	t.mu.Unlock()
+	var phase Phase
+	var key, claimedFrom string
+	t.locked(func() { phase, key, claimedFrom = t.st.Phase, t.st.SessionKey, t.st.SourceURL })
 	if phase != PhaseIdle && phase != PhaseConnected {
 		return Progress{}, errors.New("a migration is already running")
 	}
@@ -234,12 +242,12 @@ func (t *Target) Connect(ctx context.Context, oldHostURL, token, selfURL string)
 			return Progress{}, err
 		}
 		c.sessionKey = key
-		t.mu.Lock()
-		t.st = targetState{Phase: PhaseConnected, SourceURL: c.base, SelfURL: selfURL, SessionKey: key,
-			Selected: []string{}, Warnings: []string{}}
-		t.record("info", "", "Claimed the migration token on "+c.base)
-		err = t.save()
-		t.mu.Unlock()
+		t.locked(func() {
+			t.st = targetState{Phase: PhaseConnected, SourceURL: c.base, SelfURL: selfURL, SessionKey: key,
+				Selected: []string{}, Warnings: []string{}}
+			t.record("info", "", "Claimed the migration token on "+c.base)
+			err = t.save()
+		})
 		if err != nil {
 			return Progress{}, err
 		}
@@ -298,9 +306,9 @@ func (t *Target) recheck(ctx context.Context, selected []string) error {
 	if selected == nil {
 		selected = []string{}
 	}
-	t.mu.Lock()
-	phase, c := t.st.Phase, t.client()
-	t.mu.Unlock()
+	var phase Phase
+	var c *client
+	t.locked(func() { phase, c = t.st.Phase, t.client() })
 	if phase != PhaseConnected {
 		return errors.New("connect to a source first")
 	}
@@ -355,40 +363,43 @@ func (t *Target) launch() {
 		defer close(stopped)
 		defer cancel()
 		err := safely.Call("migration run", func() error { return t.run(ctx) })
-		t.mu.Lock()
-		t.running = false
-		if err != nil && ctx.Err() == nil {
-			log.Printf("migration: %v", err)
-			t.st.Error = err.Error()
-			t.record("error", "", err.Error())
-			t.save()
-		}
-		t.mu.Unlock()
+		t.locked(func() {
+			t.running = false
+			if err != nil && ctx.Err() == nil {
+				log.Printf("migration: %v", err)
+				t.st.Error = err.Error()
+				t.record("error", "", err.Error())
+				t.save()
+			}
+		})
 	}()
 }
 
 // run takes the Migration from locking through finalizing.
 func (t *Target) run(ctx context.Context) error {
-	t.mu.Lock()
-	phase := t.st.Phase
-	t.mu.Unlock()
+	var phase Phase
+	t.locked(func() { phase = t.st.Phase })
 	if phase == PhaseLocking {
 		if err := t.waitManifest(ctx); err != nil {
 			return err
 		}
 	}
-	t.mu.Lock()
-	if t.st.Manifest == nil {
+	var m Manifest
+	var aborted bool
+	t.locked(func() {
+		if t.st.Manifest == nil {
+			aborted = true
+			return
+		}
+		m = *t.st.Manifest
+	})
+	if aborted {
 		// Aborted under this run: there is nothing left to pull.
-		t.mu.Unlock()
 		return errors.New("the migration was aborted")
 	}
-	m := *t.st.Manifest
-	t.mu.Unlock()
 	for _, item := range m.Items {
-		t.mu.Lock()
-		state := t.st.Items[item.ID].State
-		t.mu.Unlock()
+		var state ItemState
+		t.locked(func() { state = t.st.Items[item.ID].State })
 		if state == ItemDone {
 			continue
 		}
@@ -396,11 +407,12 @@ func (t *Target) run(ctx context.Context) error {
 			return nil
 		}
 	}
-	t.mu.Lock()
-	t.st.Phase = PhaseFinalizing
-	t.record("info", "", "Every item copied. Finalizing")
-	err := t.save()
-	t.mu.Unlock()
+	var err error
+	t.locked(func() {
+		t.st.Phase = PhaseFinalizing
+		t.record("info", "", "Every item copied. Finalizing")
+		err = t.save()
+	})
 	if err != nil {
 		return err
 	}
@@ -411,9 +423,9 @@ func (t *Target) waitManifest(ctx context.Context) error {
 	var loggedStep Step
 	var loggedErr string
 	for {
-		t.mu.Lock()
-		c, selected := t.client(), t.st.Selected
-		t.mu.Unlock()
+		var c *client
+		var selected []string
+		t.locked(func() { c, selected = t.client(), t.st.Selected })
 		m, step, lastErr, err := c.start(ctx, selected)
 		if err != nil {
 			var remote *remoteError
@@ -423,51 +435,56 @@ func (t *Target) waitManifest(ctx context.Context) error {
 			// The old panel may be restarting: keep asking, and say why.
 			lastErr = "Waiting for the source: " + err.Error()
 		}
-		t.mu.Lock()
-		if m != nil {
-			if err := checkHostPaths(*m, t.st.Selected); err != nil {
-				t.mu.Unlock()
-				return err
+		var refused, saveErr error
+		t.locked(func() {
+			if m != nil {
+				if err := checkHostPaths(*m, t.st.Selected); err != nil {
+					refused = err
+					return
+				}
+				var reviewed []Item
+				if t.st.Info != nil {
+					reviewed = t.st.Info.Volumes
+				}
+				late, err := checkVolumes(*m, reviewed)
+				if err != nil {
+					refused = err
+					return
+				}
+				for _, name := range late {
+					t.record("warn", "volume-"+name, "Volume "+name+" was not in the preview: the old server created it after, and it is copied too")
+				}
 			}
-			var reviewed []Item
-			if t.st.Info != nil {
-				reviewed = t.st.Info.Volumes
+			if step == "" {
+				step = t.st.LockStep
 			}
-			late, err := checkVolumes(*m, reviewed)
-			if err != nil {
-				t.mu.Unlock()
-				return err
+			if step != "" && step != loggedStep {
+				t.record("info", "", "Old server: "+string(step))
+				loggedStep = step
 			}
-			for _, name := range late {
-				t.record("warn", "volume-"+name, "Volume "+name+" was not in the preview: the old server created it after, and it is copied too")
+			if lastErr != "" && lastErr != loggedErr {
+				t.record("warn", "", lastErr)
 			}
+			loggedErr = lastErr
+			t.st.LockStep, t.st.Error = step, lastErr
+			if m != nil {
+				t.st.Manifest, t.st.Phase = m, PhasePulling
+				t.st.Items = map[string]*itemState{}
+				for _, it := range m.Items {
+					t.st.Items[it.ID] = &itemState{State: ItemPending}
+				}
+				t.st.Warnings = append(t.st.Warnings, m.Warnings...)
+				t.record("info", "", fmt.Sprintf("Old server locked: %d items to copy", len(m.Items)))
+				for _, w := range m.Warnings {
+					t.record("warn", "", w)
+				}
+			}
+			saveErr = t.save()
+		})
+		if refused != nil {
+			return refused
 		}
-		if step == "" {
-			step = t.st.LockStep
-		}
-		if step != "" && step != loggedStep {
-			t.record("info", "", "Old server: "+string(step))
-			loggedStep = step
-		}
-		if lastErr != "" && lastErr != loggedErr {
-			t.record("warn", "", lastErr)
-		}
-		loggedErr = lastErr
-		t.st.LockStep, t.st.Error = step, lastErr
-		if m != nil {
-			t.st.Manifest, t.st.Phase = m, PhasePulling
-			t.st.Items = map[string]*itemState{}
-			for _, it := range m.Items {
-				t.st.Items[it.ID] = &itemState{State: ItemPending}
-			}
-			t.st.Warnings = append(t.st.Warnings, m.Warnings...)
-			t.record("info", "", fmt.Sprintf("Old server locked: %d items to copy", len(m.Items)))
-			for _, w := range m.Warnings {
-				t.record("warn", "", w)
-			}
-		}
-		err = t.save()
-		t.mu.Unlock()
+		err = saveErr
 		if err != nil || m != nil {
 			return err
 		}
@@ -509,22 +526,30 @@ func checkVolumes(m Manifest, reviewed []Item) ([]string, error) {
 	return late, nil
 }
 
+// pullSectionHook is a test seam: it runs inside the locked section that
+// starts each pull attempt, so a test can panic while t.mu is held.
+var pullSectionHook func()
+
 // pull restores one item with retries. It reports false when the Migration
 // paused or ctx ended.
 func (t *Target) pull(ctx context.Context, item Item) bool {
 	for {
-		t.mu.Lock()
-		is := t.st.Items[item.ID]
-		is.State, is.Error = ItemRunning, ""
+		var is *itemState
 		counter := &atomic.Int64{}
-		t.done[item.ID] = counter
-		if is.Attempts == 0 {
-			t.record("info", item.ID, "Copying "+item.ID)
-		} else {
-			t.record("info", item.ID, fmt.Sprintf("Copying %s (attempt %d)", item.ID, is.Attempts+1))
-		}
-		t.save()
-		t.mu.Unlock()
+		t.locked(func() {
+			if pullSectionHook != nil {
+				pullSectionHook()
+			}
+			is = t.st.Items[item.ID]
+			is.State, is.Error = ItemRunning, ""
+			t.done[item.ID] = counter
+			if is.Attempts == 0 {
+				t.record("info", item.ID, "Copying "+item.ID)
+			} else {
+				t.record("info", item.ID, fmt.Sprintf("Copying %s (attempt %d)", item.ID, is.Attempts+1))
+			}
+			t.save()
+		})
 
 		if err := t.d.Restore.Cleanup(ctx, item); err != nil {
 			log.Printf("migration: clean up %s: %v", item.ID, err)
@@ -533,35 +558,42 @@ func (t *Target) pull(ctx context.Context, item Item) bool {
 		if ctx.Err() != nil {
 			return false
 		}
-		t.mu.Lock()
-		if err == nil {
-			is.State = ItemDone
-			t.record("info", item.ID, "Copied "+item.ID)
-			if warning != "" {
-				t.st.Warnings = append(t.st.Warnings, warning)
-				t.record("warn", item.ID, warning)
+		var copied, paused bool
+		var attempts int
+		t.locked(func() {
+			if err == nil {
+				is.State = ItemDone
+				t.record("info", item.ID, "Copied "+item.ID)
+				if warning != "" {
+					t.st.Warnings = append(t.st.Warnings, warning)
+					t.record("warn", item.ID, warning)
+				}
+				t.save()
+				copied = true
+				return
 			}
+			is.Attempts++
+			is.Error = err.Error()
+			if is.Attempts >= maxAttempts {
+				is.State = ItemFailed
+				t.st.Phase = PhasePaused
+				t.record("error", item.ID, fmt.Sprintf("%s failed %d times: %s. Paused", item.ID, is.Attempts, err))
+				t.save()
+				paused = true
+				return
+			}
+			is.State = ItemPending
+			t.record("warn", item.ID, fmt.Sprintf("%s failed: %s. Retrying", item.ID, err))
+			attempts = is.Attempts
 			t.save()
-			t.mu.Unlock()
+		})
+		if copied {
 			return true
 		}
-		is.Attempts++
-		is.Error = err.Error()
-		if is.Attempts >= maxAttempts {
-			is.State = ItemFailed
-			t.st.Phase = PhasePaused
-			t.record("error", item.ID, fmt.Sprintf("%s failed %d times: %s. Paused", item.ID, is.Attempts, err))
-			t.save()
-			t.mu.Unlock()
-			t.d.Restore.Cleanup(ctx, item)
+		t.d.Restore.Cleanup(ctx, item)
+		if paused {
 			return false
 		}
-		is.State = ItemPending
-		t.record("warn", item.ID, fmt.Sprintf("%s failed: %s. Retrying", item.ID, err))
-		attempts := is.Attempts
-		t.save()
-		t.mu.Unlock()
-		t.d.Restore.Cleanup(ctx, item)
 		select {
 		case <-ctx.Done():
 			return false
@@ -587,9 +619,8 @@ func (c countingReader) Read(p []byte) (int, error) {
 // stream opens an item, hashing it as it is read; check compares the hash
 // with the old host's digest once the body is consumed.
 func (t *Target) stream(ctx context.Context, id string, counter *atomic.Int64) (io.ReadCloser, func() error, error) {
-	t.mu.Lock()
-	c := t.client()
-	t.mu.Unlock()
+	var c *client
+	t.locked(func() { c = t.client() })
 	body, err := c.item(ctx, id)
 	if err != nil {
 		return nil, nil, err
@@ -688,29 +719,39 @@ func (t *Target) Retry(ctx context.Context) error {
 func (t *Target) Abort(ctx context.Context) error {
 	t.op.Lock()
 	defer t.op.Unlock()
-	t.mu.Lock()
-	if t.st.Phase == PhaseIdle {
-		t.mu.Unlock()
-		return nil
-	}
-	if !t.canAbort() {
-		t.mu.Unlock()
-		return errors.New("the migration is finalizing and can no longer be aborted here; on the old server run " + TerminalCommand("resume") + " instead")
-	}
-	if t.cancel != nil {
-		t.cancel()
-	}
-	stopped := t.stopped
-	c, m, claimed := t.client(), t.st.Manifest, t.st.SessionKey != ""
+	var idle, tooLate, claimed bool
+	var stopped chan struct{}
+	var c *client
 	var restored []Item
-	if m != nil {
-		for _, it := range m.Items {
-			if is := t.st.Items[it.ID]; is != nil && is.State != ItemPending {
-				restored = append(restored, it)
+	t.locked(func() {
+		if t.st.Phase == PhaseIdle {
+			idle = true
+			return
+		}
+		if !t.canAbort() {
+			tooLate = true
+			return
+		}
+		if t.cancel != nil {
+			t.cancel()
+		}
+		stopped = t.stopped
+		var m *Manifest
+		c, m, claimed = t.client(), t.st.Manifest, t.st.SessionKey != ""
+		if m != nil {
+			for _, it := range m.Items {
+				if is := t.st.Items[it.ID]; is != nil && is.State != ItemPending {
+					restored = append(restored, it)
+				}
 			}
 		}
+	})
+	if idle {
+		return nil
 	}
-	t.mu.Unlock()
+	if tooLate {
+		return errors.New("the migration is finalizing and can no longer be aborted here; on the old server run " + TerminalCommand("resume") + " instead")
+	}
 	// Let a helper run in flight end before its target is removed.
 	if stopped != nil {
 		<-stopped
@@ -731,10 +772,10 @@ func (t *Target) Abort(ctx context.Context) error {
 	if err := os.RemoveAll(t.d.StateDir); err != nil {
 		return err
 	}
-	t.mu.Lock()
-	t.st = targetState{}
-	t.done = map[string]*atomic.Int64{}
-	t.mu.Unlock()
+	t.locked(func() {
+		t.st = targetState{}
+		t.done = map[string]*atomic.Int64{}
+	})
 	return nil
 }
 
@@ -795,35 +836,36 @@ func (t *Target) ResumeIfPending(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	t.mu.Lock()
-	if err := json.Unmarshal(raw, &t.st); err != nil {
-		t.mu.Unlock()
-		return fmt.Errorf("read %s: %w", t.statePath(), err)
-	}
-	phase := t.st.Phase
-	switch phase {
-	case PhaseLocking, PhasePulling:
-		for _, is := range t.st.Items {
-			if is.State == ItemRunning {
-				is.State = ItemPending
-			}
+	var readErr error
+	t.locked(func() {
+		if err := json.Unmarshal(raw, &t.st); err != nil {
+			readErr = fmt.Errorf("read %s: %w", t.statePath(), err)
+			return
 		}
-		t.launch()
-	}
-	if phase == PhaseFinalizing {
-		if t.markerWritten() {
-			// Begin finished and the database was swapped in at boot.
-			t.restarted = true
-			t.record("info", "", "Panel restarted with the migrated database")
-			t.save()
-			t.completeAsync()
-		} else {
-			// Begin never finished: run it again.
+		phase := t.st.Phase
+		switch phase {
+		case PhaseLocking, PhasePulling:
+			for _, is := range t.st.Items {
+				if is.State == ItemRunning {
+					is.State = ItemPending
+				}
+			}
 			t.launch()
 		}
-	}
-	t.mu.Unlock()
-	return nil
+		if phase == PhaseFinalizing {
+			if t.markerWritten() {
+				// Begin finished and the database was swapped in at boot.
+				t.restarted = true
+				t.record("info", "", "Panel restarted with the migrated database")
+				t.save()
+				t.completeAsync()
+			} else {
+				// Begin never finished: run it again.
+				t.launch()
+			}
+		}
+	})
+	return readErr
 }
 
 // canRetry is when Retry acts: a paused pull, or a lock, copy or finalize
@@ -861,9 +903,7 @@ func (t *Target) loadSummary() error {
 	if err := json.Unmarshal(raw, &summary); err != nil {
 		return fmt.Errorf("read summary.json: %w", err)
 	}
-	t.mu.Lock()
-	t.st.Phase, t.summary = PhaseDone, &summary
-	t.mu.Unlock()
+	t.locked(func() { t.st.Phase, t.summary = PhaseDone, &summary })
 	return nil
 }
 
@@ -879,28 +919,31 @@ func (t *Target) completeAsync() {
 		defer close(stopped)
 		defer cancel()
 		err := safely.Call("migration complete", func() error { return t.complete(ctx) })
-		t.mu.Lock()
-		t.running = false
-		if err != nil && ctx.Err() == nil {
-			log.Printf("migration: complete: %v", err)
-			t.st.Error = err.Error()
-			t.record("error", "", err.Error())
-			t.save()
-		}
-		t.mu.Unlock()
+		t.locked(func() {
+			t.running = false
+			if err != nil && ctx.Err() == nil {
+				log.Printf("migration: complete: %v", err)
+				t.st.Error = err.Error()
+				t.record("error", "", err.Error())
+				t.save()
+			}
+		})
 	}()
 }
 
 // complete runs after the restart: Traefik and the Deployments, then finish
 // on the old host, then summary.json in place of the state.
 func (t *Target) complete(ctx context.Context) error {
-	t.mu.Lock()
 	var m Manifest
-	if t.st.Manifest != nil {
-		m = *t.st.Manifest
-	}
-	c, self, warnings := t.client(), t.st.SelfURL, slices.Clone(t.st.Warnings)
-	t.mu.Unlock()
+	var c *client
+	var self string
+	var warnings []string
+	t.locked(func() {
+		if t.st.Manifest != nil {
+			m = *t.st.Manifest
+		}
+		c, self, warnings = t.client(), t.st.SelfURL, slices.Clone(t.st.Warnings)
+	})
 
 	summary, err := t.d.Finalizer.Complete(WithFinalizeReporter(ctx, t.reportFinalize), m)
 	if err != nil {
@@ -928,9 +971,7 @@ func (t *Target) complete(ctx context.Context) error {
 		t.logf("warn", "", "Could not tell the old server the migration finished: "+finishErr.Error())
 	}
 	t.logf("info", "", "Migration complete")
-	t.mu.Lock()
-	summary.Log = slices.Clone(t.st.Log)
-	t.mu.Unlock()
+	t.locked(func() { summary.Log = slices.Clone(t.st.Log) })
 	raw, err := json.Marshal(summary)
 	if err != nil {
 		return err
@@ -943,8 +984,6 @@ func (t *Target) complete(ctx context.Context) error {
 			return err
 		}
 	}
-	t.mu.Lock()
-	t.st.Phase, t.summary = PhaseDone, &summary
-	t.mu.Unlock()
+	t.locked(func() { t.st.Phase, t.summary = PhaseDone, &summary })
 	return nil
 }

@@ -73,10 +73,6 @@ func TestDockerHostPruneUsesExplicitFiltersAndNeverForceDeletes(t *testing.T) {
 		kind               dockerhost.Kind
 		path, filters, all string
 	}{
-		{dockerhost.Images, "images", `{"dangling":["true"]}`, ""},
-		{dockerhost.UnusedImages, "images", `{"dangling":["false"]}`, ""},
-		{dockerhost.Volumes, "volumes", `{"all":["false"]}`, ""},
-		{dockerhost.AllVolumes, "volumes", `{"all":["true"]}`, ""},
 		{dockerhost.Containers, "containers", "", ""},
 		{dockerhost.Networks, "networks", "", ""},
 		{dockerhost.BuildCache, "build", "", "true"},
@@ -99,15 +95,108 @@ func TestDockerHostPruneUsesExplicitFiltersAndNeverForceDeletes(t *testing.T) {
 		})
 	}
 }
-func TestDockerHostRefusesOldAPIVolumePrune(t *testing.T) {
+func TestDockerHostPruneRefusesKindsThatMustBePlanned(t *testing.T) {
 	socket := newTerminalDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/version" {
-			t.Error("old daemon received deletion")
-		}
-		_, _ = w.Write([]byte(`{"ApiVersion":"1.41"}`))
+		t.Errorf("a planned kind reached Docker's prune: %s", r.URL)
 	}))
-	if _, err := dockerexec.NewDockerHost(socket).Prune(context.Background(), dockerhost.Volumes); err == nil {
-		t.Fatal("old volume prune was permitted")
+	for _, kind := range []dockerhost.Kind{dockerhost.Images, dockerhost.UnusedImages, dockerhost.Volumes, dockerhost.AllVolumes} {
+		if _, err := dockerexec.NewDockerHost(socket).Prune(context.Background(), kind); err == nil {
+			t.Fatalf("host-wide prune of %s was permitted", kind)
+		}
+	}
+}
+
+func TestDockerHostVolumeCandidates(t *testing.T) {
+	socket := newTerminalDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/volumes":
+			if r.URL.Query().Get("filters") != `{"dangling":["true"]}` {
+				t.Errorf("filters = %q", r.URL.Query().Get("filters"))
+			}
+			_, _ = w.Write([]byte(`{"Volumes":[{"Name":"anon","Labels":{"com.docker.volume.anonymous":""}},{"Name":"named","Labels":{"com.docker.compose.project":"p"}},{"Name":"bare","Labels":null}]}`))
+		case "/system/df":
+			_, _ = w.Write([]byte(`{"Volumes":[{"Name":"named","UsageData":{"Size":55,"RefCount":0}},{"Name":"bare","UsageData":{"Size":-1,"RefCount":-1}}]}`))
+		default:
+			t.Errorf("unexpected request %s", r.URL)
+		}
+	}))
+	host := dockerexec.NewDockerHost(socket)
+	got, err := host.Candidates(context.Background(), dockerhost.Volumes)
+	if err != nil || len(got) != 1 || got[0].Name != "anon" {
+		t.Fatalf("volumes: %+v %v", got, err)
+	}
+	got, err = host.Candidates(context.Background(), dockerhost.AllVolumes)
+	if err != nil || len(got) != 3 || got[1].Labels["com.docker.compose.project"] != "p" || got[1].Size == nil || *got[1].Size != 55 || got[2].Size != nil {
+		t.Fatalf("all volumes: %+v %v", got, err)
+	}
+}
+
+func TestDockerHostImageCandidates(t *testing.T) {
+	socket := newTerminalDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/images/json":
+			_, _ = w.Write([]byte(`[{"Id":"sha256:used","RepoTags":["web:1"],"Size":10},{"Id":"sha256:dangling","RepoTags":null,"Size":20},{"Id":"sha256:none","RepoTags":["<none>:<none>"],"Size":5},{"Id":"sha256:tagged","RepoTags":["old:1","old:2"],"Size":30,"Labels":{"com.docker.compose.project":"p"}}]`))
+		case "/containers/json":
+			if r.URL.Query().Get("all") != "1" {
+				t.Errorf("containers query = %q", r.URL.RawQuery)
+			}
+			_, _ = w.Write([]byte(`[{"Id":"c","ImageID":"sha256:used"}]`))
+		default:
+			t.Errorf("unexpected request %s", r.URL)
+		}
+	}))
+	host := dockerexec.NewDockerHost(socket)
+	got, err := host.Candidates(context.Background(), dockerhost.Images)
+	if err != nil || len(got) != 2 || got[0].ID != "sha256:dangling" || got[0].Name != "sha256:dangling" || got[1].ID != "sha256:none" || len(got[1].Tags) != 0 {
+		t.Fatalf("dangling: %+v %v", got, err)
+	}
+	got, err = host.Candidates(context.Background(), dockerhost.UnusedImages)
+	if err != nil || len(got) != 3 || got[2].Name != "old:1" || len(got[2].Tags) != 2 || got[2].Labels["com.docker.compose.project"] != "p" || *got[2].Size != 30 {
+		t.Fatalf("unused: %+v %v", got, err)
+	}
+}
+
+func TestDockerHostRemoveIsUnforcedAndMapsConflictToRefusal(t *testing.T) {
+	var requests []string
+	socket := newTerminalDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		if r.URL.Query().Get("force") == "true" || r.URL.Query().Get("force") == "1" {
+			t.Errorf("forced delete: %s", r.URL)
+		}
+		switch r.URL.Path {
+		case "/volumes/busy", "/images/sha256:busy":
+			w.WriteHeader(409)
+			_, _ = w.Write([]byte(`{"message":"remove busy: volume is in use"}`))
+		case "/volumes/broken":
+			w.WriteHeader(500)
+			_, _ = w.Write([]byte(`{"message":"disk on fire"}`))
+		default:
+			w.WriteHeader(204)
+		}
+	}))
+	host := dockerexec.NewDockerHost(socket)
+	ctx := context.Background()
+	if removed, refusal, err := host.Remove(ctx, dockerhost.AllVolumes, dockerhost.Candidate{Name: "gone"}); !removed || refusal != "" || err != nil {
+		t.Fatalf("volume: %v %q %v", removed, refusal, err)
+	}
+	if removed, refusal, err := host.Remove(ctx, dockerhost.AllVolumes, dockerhost.Candidate{Name: "busy"}); removed || !strings.Contains(refusal, "in use") || err != nil {
+		t.Fatalf("busy volume: %v %q %v", removed, refusal, err)
+	}
+	if _, _, err := host.Remove(ctx, dockerhost.AllVolumes, dockerhost.Candidate{Name: "broken"}); err == nil {
+		t.Fatal("a 500 was treated as a refusal")
+	}
+	if removed, _, err := host.Remove(ctx, dockerhost.UnusedImages, dockerhost.Candidate{ID: "sha256:img", Name: "sha256:img"}); !removed || err != nil {
+		t.Fatalf("image: %v %v", removed, err)
+	}
+	if removed, refusal, err := host.Remove(ctx, dockerhost.UnusedImages, dockerhost.Candidate{ID: "sha256:busy", Name: "x"}); removed || refusal == "" || err != nil {
+		t.Fatalf("busy image: %v %q %v", removed, refusal, err)
+	}
+	if removed, _, err := host.Remove(ctx, dockerhost.UnusedImages, dockerhost.Candidate{ID: "sha256:multi", Name: "a:1", Tags: []string{"reg:5000/a:1", "a:2"}}); !removed || err != nil {
+		t.Fatalf("multi-tag image: %v %v", removed, err)
+	}
+	want := []string{"DELETE /volumes/gone", "DELETE /volumes/busy", "DELETE /volumes/broken", "DELETE /images/sha256:img", "DELETE /images/sha256:busy", "DELETE /images/reg:5000/a:1", "DELETE /images/a:2"}
+	if strings.Join(requests, "|") != strings.Join(want, "|") {
+		t.Fatalf("requests = %v", requests)
 	}
 }
 

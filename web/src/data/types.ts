@@ -514,7 +514,8 @@ export type VolumeEntry = {
  * One directory listing (`GET …/volumes/list`): the helper prints at most
  * 10,000 entries sorted by name, and `truncated` says it stopped short.
  */
-export type VolumeListing = { entries: VolumeEntry[]; truncated: boolean };
+/** `next` is the last name of a truncated page: pass it as `after` to read the following one. */
+export type VolumeListing = { entries: VolumeEntry[]; truncated: boolean; next?: string };
 
 /** Identity and acknowledged mount risks for every Volume operation. */
 export type VolumeAccess = {
@@ -680,4 +681,6 @@ export type DockerReport = {
  containersRunning: number; containersPaused: number; containersStopped: number;
  usage: DockerUsage[]; containers: DockerContainer[]; volumes: DockerVolume[]; networks: DockerNetwork[]; warnings: string[];
 };
-export type DockerPruneResult = { kind: DockerPruneKind; spaceReclaimed: number; deleted: string[] };
+export type DockerPruneSkip = { name: string; compose?: string; reason: string };
+export type DockerPruneResult = { kind: DockerPruneKind; spaceReclaimed: number; deleted: string[]; skipped?: DockerPruneSkip[] };
+export type DockerPrunePlan = { kind: DockerPruneKind; delete: { name: string; size: number | null }[]; skip: DockerPruneSkip[] };

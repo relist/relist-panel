@@ -78,6 +78,8 @@ func (s *Service) volumePlan(ctx context.Context, c Compose, req RunRequest, tog
 		switch other, declared := elsewhere[candidate.Name]; {
 		case candidate.Project != "" && candidate.Project != req.ProjectName:
 			plan.Keep = append(plan.Keep, KeptVolume{candidate.Name, "owned by another Compose project (" + candidate.Project + ")"})
+		case candidate.Project == "":
+			plan.Keep = append(plan.Keep, KeptVolume{candidate.Name, "not created by Docker Compose"})
 		case declared:
 			plan.Keep = append(plan.Keep, KeptVolume{candidate.Name, "declared by Compose " + other})
 		default:

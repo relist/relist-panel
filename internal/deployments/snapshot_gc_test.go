@@ -488,3 +488,67 @@ func TestRunCollectsSnapshotsAtStart(t *testing.T) {
 		t.Fatalf("dirs = %v, want the previous run's leftovers removed", dirs)
 	}
 }
+
+// firstCallBlocksMounts blocks its first MountedSources call until released or
+// canceled, as a hung Docker daemon would; later calls return at once.
+type firstCallBlocksMounts struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (m *firstCallBlocksMounts) MountedSources(ctx context.Context, _ string) ([]string, error) {
+	block := false
+	m.once.Do(func() { block = true })
+	if !block {
+		return nil, nil
+	}
+	close(m.entered)
+	select {
+	case <-m.release:
+		return nil, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func TestBootCollectionDoesNotDelayFirstDeployment(t *testing.T) {
+	f := newGCFixture(t)
+	f.leftover("source-previous-run")
+	mounts := &firstCallBlocksMounts{entered: make(chan struct{}), release: make(chan struct{})}
+	f.q.d.Mounts = mounts
+	d, _, err := f.q.Enqueue(context.Background(), f.id, Request{Mode: ModeDeploy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.q.Run(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	select {
+	case <-mounts.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("boot collection never asked for the mounts")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, err := f.q.d.Store.Get(context.Background(), f.id, d.Number)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status == StatusSucceeded {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("deployment = %s, want it to run while boot collection waits on Docker", got.Status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(mounts.release)
+}

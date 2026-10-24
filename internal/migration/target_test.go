@@ -797,3 +797,30 @@ func TestAPanicInCompleteIsRecordedAsTheMigrationError(t *testing.T) {
 		return !restarted.running
 	})
 }
+
+// A panic inside a section that holds t.mu must release it: the recovered run
+// takes the lock again for its error path, and status polling must go on.
+func TestPanicInsideLockedSectionDoesNotDeadlock(t *testing.T) {
+	pullSectionHook = func() { panic("section bug") }
+	t.Cleanup(func() { pullSectionHook = nil })
+	f := newTargetFixture(t)
+	f.connectAndStart(t)
+	done := make(chan Progress, 1)
+	go func() {
+		var p Progress
+		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if p = f.target.Progress(); strings.Contains(p.Error, "panicked: section bug") {
+				break
+			}
+		}
+		done <- p
+	}()
+	select {
+	case p := <-done:
+		if !strings.Contains(p.Error, "panicked: section bug") {
+			t.Fatalf("status did not show the panic: %q", p.Error)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("status deadlocked after a panic inside a locked section")
+	}
+}

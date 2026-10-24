@@ -15,7 +15,10 @@ import (
 )
 
 // DockerHost reads and prunes only the connected host through the Engine API.
-// No arbitrary command, path, filter or force-delete option reaches Docker.
+// Containers, networks and build cache use Docker's own prune endpoints with
+// fixed options. Volumes and images are listed, then removed one by one with an
+// unforced delete, so the caller decides which ones go. No arbitrary command,
+// path or filter, and no force-delete option, reaches Docker.
 type DockerHost struct{ source *ContainerSource }
 
 func NewDockerHost(socketPath string) *DockerHost {
@@ -206,6 +209,9 @@ func (d *DockerHost) Prune(ctx context.Context, kind dockerhost.Kind) (dockerhos
 	if kind.Confirmation() == "" {
 		return result, fmt.Errorf("unknown Docker prune operation")
 	}
+	if kind.Listed() {
+		return result, fmt.Errorf("%s must be listed and removed one by one, not pruned host-wide", kind)
+	}
 	v, err := d.version(ctx)
 	if err != nil {
 		return result, err
@@ -214,18 +220,12 @@ func (d *DockerHost) Prune(ctx context.Context, kind dockerhost.Kind) (dockerhos
 		return result, fmt.Errorf("Docker reported an invalid API version")
 	}
 	minor, _ := strconv.Atoi(strings.TrimPrefix(v.APIVersion, "1."))
-	if minor < 25 || ((kind == dockerhost.Volumes || kind == dockerhost.AllVolumes) && minor < 42) {
-		return result, fmt.Errorf("this prune operation requires a newer Docker Engine API (volumes require 1.42 or newer)")
+	if minor < 25 {
+		return result, fmt.Errorf("this prune operation requires a newer Docker Engine API")
 	}
 	path := ""
 	query := url.Values{}
 	switch kind {
-	case dockerhost.Images:
-		path = "images"
-		query.Set("filters", `{"dangling":["true"]}`)
-	case dockerhost.UnusedImages:
-		path = "images"
-		query.Set("filters", `{"dangling":["false"]}`)
 	case dockerhost.Containers:
 		path = "containers"
 	case dockerhost.Networks:
@@ -233,12 +233,6 @@ func (d *DockerHost) Prune(ctx context.Context, kind dockerhost.Kind) (dockerhos
 	case dockerhost.BuildCache:
 		path = "build"
 		query.Set("all", "true")
-	case dockerhost.Volumes:
-		path = "volumes"
-		query.Set("filters", `{"all":["false"]}`)
-	case dockerhost.AllVolumes:
-		path = "volumes"
-		query.Set("filters", `{"all":["true"]}`)
 	}
 	endpoint := "/v" + v.APIVersion + "/" + path + "/prune"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker"+endpoint+"?"+query.Encode(), nil)
@@ -259,32 +253,172 @@ func (d *DockerHost) Prune(ctx context.Context, kind dockerhost.Kind) (dockerhos
 		return result, fmt.Errorf("Docker prune: %s: %s", resp.Status, strings.TrimSpace(string(raw)))
 	}
 	var body struct {
-		SpaceReclaimed                                                    uint64
-		ImagesDeleted                                                     []struct{ Deleted, Untagged string }
-		ContainersDeleted, NetworksDeleted, VolumesDeleted, CachesDeleted []string
+		SpaceReclaimed                                    uint64
+		ContainersDeleted, NetworksDeleted, CachesDeleted []string
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return result, fmt.Errorf("%w: could not read the result: %v", dockerhost.ErrPruneUncertain, err)
 	}
 	result.SpaceReclaimed = body.SpaceReclaimed
 	switch kind {
-	case dockerhost.Images, dockerhost.UnusedImages:
-		for _, i := range body.ImagesDeleted {
-			if i.Deleted != "" {
-				result.Deleted = append(result.Deleted, i.Deleted)
-			}
-			if i.Untagged != "" {
-				result.Deleted = append(result.Deleted, "untagged: "+i.Untagged)
-			}
-		}
 	case dockerhost.Containers:
 		result.Deleted = append(result.Deleted, body.ContainersDeleted...)
 	case dockerhost.Networks:
 		result.Deleted = append(result.Deleted, body.NetworksDeleted...)
-	case dockerhost.Volumes, dockerhost.AllVolumes:
-		result.Deleted = append(result.Deleted, body.VolumesDeleted...)
 	case dockerhost.BuildCache:
 		result.Deleted = append(result.Deleted, body.CachesDeleted...)
 	}
 	return result, nil
+}
+
+// anonymousVolumeLabel marks a volume Docker created for a container's
+// anonymous VOLUME, which Docker's default volume prune removes.
+const anonymousVolumeLabel = "com.docker.volume.anonymous"
+
+func (d *DockerHost) Candidates(ctx context.Context, kind dockerhost.Kind) ([]dockerhost.Candidate, error) {
+	switch kind {
+	case dockerhost.Volumes, dockerhost.AllVolumes:
+		return d.volumeCandidates(ctx, kind)
+	case dockerhost.Images, dockerhost.UnusedImages:
+		return d.imageCandidates(ctx, kind)
+	}
+	return nil, fmt.Errorf("%s has no candidate list", kind)
+}
+
+func (d *DockerHost) volumeCandidates(ctx context.Context, kind dockerhost.Kind) ([]dockerhost.Candidate, error) {
+	var listing struct {
+		Volumes []struct {
+			Name      string
+			Labels    map[string]string
+			UsageData *struct{ Size int64 }
+		}
+	}
+	query := url.Values{"filters": {`{"dangling":["true"]}`}}
+	if err := d.source.get(ctx, "/volumes?"+query.Encode(), &listing); err != nil {
+		return nil, err
+	}
+	// Sizes are optional: only /system/df has them, so a failure costs the
+	// sizes and nothing else.
+	var df struct {
+		Volumes []struct {
+			Name      string
+			UsageData *struct{ Size int64 }
+		}
+	}
+	sizes := map[string]*uint64{}
+	if d.source.get(ctx, "/system/df", &df) == nil {
+		for _, v := range df.Volumes {
+			if v.UsageData != nil {
+				sizes[v.Name] = bytesAvailable(v.UsageData.Size)
+			}
+		}
+	}
+	candidates := []dockerhost.Candidate{}
+	for _, v := range listing.Volumes {
+		if _, anonymous := v.Labels[anonymousVolumeLabel]; kind == dockerhost.Volumes && !anonymous {
+			continue
+		}
+		size := sizes[v.Name]
+		if v.UsageData != nil {
+			size = bytesAvailable(v.UsageData.Size)
+		}
+		candidates = append(candidates, dockerhost.Candidate{ID: v.Name, Name: v.Name, Labels: v.Labels, Size: size})
+	}
+	return candidates, nil
+}
+
+func (d *DockerHost) imageCandidates(ctx context.Context, kind dockerhost.Kind) ([]dockerhost.Candidate, error) {
+	var images []struct {
+		ID          string `json:"Id"`
+		RepoTags    []string
+		RepoDigests []string
+		Labels      map[string]string
+		Size        int64
+	}
+	if err := d.source.get(ctx, "/images/json", &images); err != nil {
+		return nil, err
+	}
+	var containers []struct{ ImageID string }
+	if err := d.source.get(ctx, "/containers/json?all=1", &containers); err != nil {
+		return nil, err
+	}
+	used := make(map[string]bool, len(containers))
+	for _, c := range containers {
+		used[c.ImageID] = true
+	}
+	candidates := []dockerhost.Candidate{}
+	for _, image := range images {
+		if used[image.ID] {
+			continue
+		}
+		tags := []string{}
+		for _, tag := range image.RepoTags {
+			if tag != "<none>:<none>" {
+				tags = append(tags, tag)
+			}
+		}
+		if kind == dockerhost.Images && len(tags) > 0 {
+			continue
+		}
+		name := image.ID
+		if len(tags) > 0 {
+			name = tags[0]
+		}
+		candidates = append(candidates, dockerhost.Candidate{ID: image.ID, Name: name, Labels: image.Labels, Tags: tags, Digests: image.RepoDigests, Size: bytesAvailable(image.Size)})
+	}
+	return candidates, nil
+}
+
+// Remove deletes one volume or image without force. Docker's 409 (in use,
+// conflict) is a refusal; any other failure is an error.
+func (d *DockerHost) Remove(ctx context.Context, kind dockerhost.Kind, c dockerhost.Candidate) (bool, string, error) {
+	switch kind {
+	case dockerhost.Volumes, dockerhost.AllVolumes:
+		return d.delete(ctx, "/volumes/"+c.Name)
+	case dockerhost.Images, dockerhost.UnusedImages:
+		// An image with several tags cannot be deleted by id without force;
+		// untag each, and Docker deletes the image with the last one.
+		references := []string{c.ID}
+		if len(c.Tags) > 1 {
+			references = c.Tags
+		}
+		for _, reference := range references {
+			if removed, refusal, err := d.delete(ctx, "/images/"+reference); !removed {
+				return false, refusal, err
+			}
+		}
+		return true, "", nil
+	}
+	return false, "", fmt.Errorf("%s cannot be removed one by one", kind)
+}
+
+func (d *DockerHost) delete(ctx context.Context, path string) (bool, string, error) {
+	target := url.URL{Scheme: "http", Host: "docker", Path: path}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, target.String(), nil)
+	if err != nil {
+		return false, "", err
+	}
+	resp, err := d.source.client.Do(req)
+	if err != nil {
+		return false, "", err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var body struct{ Message string }
+	message := strings.TrimSpace(string(raw))
+	if json.Unmarshal(raw, &body) == nil && body.Message != "" {
+		message = body.Message
+	}
+	switch {
+	case resp.StatusCode/100 == 2:
+		return true, "", nil
+	case resp.StatusCode == http.StatusConflict:
+		if message == "" {
+			message = "Docker refused: conflict"
+		}
+		return false, message, nil
+	case resp.StatusCode == http.StatusNotFound:
+		return false, "already gone", nil
+	}
+	return false, "", fmt.Errorf("Docker delete %s: %s: %s", path, resp.Status, message)
 }

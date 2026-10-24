@@ -32,9 +32,30 @@ func (k Kind) Confirmation() string {
 	}
 }
 
+// PanelDataConfirmation is the word that includes panel-owned volumes and
+// images in a prune, in place of the kind's usual Confirmation.
+const PanelDataConfirmation = "DELETE PANEL DATA"
+
+// Listed reports whether the kind goes through Candidates, Plan and Remove,
+// so panel-owned resources can be skipped, rather than Docker's host-wide Prune.
+func (k Kind) Listed() bool {
+	switch k {
+	case Volumes, AllVolumes, Images, UnusedImages:
+		return true
+	}
+	return false
+}
+
 type Engine interface {
 	Report(context.Context) (Report, error)
+	// Prune is Docker's own prune, for the kinds that are not Listed.
 	Prune(context.Context, Kind) (PruneResult, error)
+	// Candidates lists what a Listed kind would remove: Docker's unused
+	// volumes or images, narrowed to the kind's meaning.
+	Candidates(ctx context.Context, kind Kind) ([]Candidate, error)
+	// Remove deletes one candidate without force. refusal is non-empty when
+	// Docker said no (in use, conflict); err is a transport or unknown failure.
+	Remove(ctx context.Context, kind Kind, c Candidate) (removed bool, refusal string, err error)
 }
 
 type Report struct {
@@ -85,4 +106,7 @@ type PruneResult struct {
 	Kind           Kind     `json:"kind"`
 	SpaceReclaimed uint64   `json:"spaceReclaimed"`
 	Deleted        []string `json:"deleted"`
+	// Skipped is what a Listed prune left alone: panel-owned resources and
+	// anything Docker refused to remove.
+	Skipped []SkipEntry `json:"skipped"`
 }

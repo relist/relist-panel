@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Collapse,
   Descriptions,
   Flex,
@@ -27,6 +28,7 @@ import type {
   DockerContainer,
   DockerNetwork,
   DockerPruneKind,
+  DockerPrunePlan,
   DockerPruneResult,
   DockerUsage,
   DockerVolume,
@@ -95,6 +97,12 @@ const size = (value: number | null) =>
   ) : (
     formatBytes(value)
   );
+const listedOperation = (kind: DockerPruneKind | 'recover') =>
+  kind === 'volumes' ||
+  kind === 'all-volumes' ||
+  kind === 'images' ||
+  kind === 'unused-images';
+const planCap = 50;
 const volumeOperation = (kind: DockerPruneKind | 'recover') =>
   kind === 'volumes' || kind === 'all-volumes';
 
@@ -120,6 +128,9 @@ export function DockerPage() {
   const [pruneError, setPruneError] = useState<string>();
   const [resumed, setResumed] = useState(false);
   const [result, setResult] = useState<DockerPruneResult>();
+  const [plan, setPlan] = useState<DockerPrunePlan>();
+  const [planError, setPlanError] = useState<string>();
+  const [includePanel, setIncludePanel] = useState(false);
   const [now, setNow] = useState(Date.now());
   const submitting = useRef(false);
   const mounted = useRef(true);
@@ -131,6 +142,32 @@ export function DockerPage() {
       window.clearInterval(clock);
     };
   }, []);
+  // The plan is a preview; the server recomputes it when the prune runs.
+  useEffect(() => {
+    setPlan(undefined);
+    setPlanError(undefined);
+    setIncludePanel(false);
+    if (!selected || !listedOperation(selected)) return;
+    let current = true;
+    api
+      .dockerPrunePlan(selected)
+      .then((next) => {
+        if (current) setPlan(next);
+      })
+      .catch((reason) => {
+        if (current)
+          setPlanError(
+            reason instanceof Error
+              ? reason.message
+              : 'Could not load what this prune would delete',
+          );
+      });
+    return () => {
+      current = false;
+    };
+  }, [selected]);
+  const planning = !!selected && listedOperation(selected) && !plan;
+  const panelData = includePanel && !!plan && plan.skip.length > 0;
   const stale =
     !!data &&
     (!Number.isFinite(Date.parse(data.checkedAt)) ||
@@ -173,7 +210,12 @@ export function DockerPage() {
       } else {
         const outcome = await api.pruneDocker(
           kind,
-          volumeOperation(kind) ? 'DELETE VOLUMES' : 'PRUNE',
+          panelData
+            ? 'DELETE PANEL DATA'
+            : volumeOperation(kind)
+              ? 'DELETE VOLUMES'
+              : 'PRUNE',
+          ...(panelData ? [true] : []),
         );
         if (mounted.current) {
           setResult(outcome);
@@ -420,6 +462,20 @@ export function DockerPage() {
           />
         )}
         {pruneError && <Alert showIcon type="error" title={pruneError} />}
+        {!!result?.skipped?.length && (
+          <Alert
+            showIcon
+            type="info"
+            title={`Skipped ${result.skipped.length}`}
+            description={
+              <NameList
+                names={result.skipped.map(
+                  (entry) => `${entry.name} (${entry.reason})`,
+                )}
+              />
+            }
+          />
+        )}
         {result && (
           <Alert
             showIcon
@@ -618,9 +674,11 @@ export function DockerPage() {
         confirmWord={
           selected === 'recover'
             ? 'RESUME DOCKER'
-            : selected && volumeOperation(selected)
-              ? 'DELETE VOLUMES'
-              : 'PRUNE'
+            : panelData
+              ? 'DELETE PANEL DATA'
+              : selected && volumeOperation(selected)
+                ? 'DELETE VOLUMES'
+                : 'PRUNE'
         }
         description={selected ? operations[selected].description : ''}
         consequences={
@@ -639,6 +697,14 @@ export function DockerPage() {
                 title="Deleted volume data is not restored if a later deployment fails. Back up the data before continuing."
               />
             )}
+            {selected && listedOperation(selected) && (
+              <PrunePlanList
+                error={planError}
+                includePanel={includePanel}
+                onIncludePanel={setIncludePanel}
+                plan={plan}
+              />
+            )}
             {(busyQueue || queue.error || stale || error) && (
               <Alert
                 showIcon
@@ -648,7 +714,9 @@ export function DockerPage() {
             )}
           </Flex>
         }
-        disabled={selected === 'recover' ? pruning : disabled}
+        disabled={
+          selected === 'recover' ? pruning : disabled || planning || !!planError
+        }
         loading={pruning}
         okText={selected === 'recover' ? 'Resume' : 'Prune'}
         onCancel={() => {
@@ -661,5 +729,63 @@ export function DockerPage() {
         title={selected ? operations[selected].title : 'Docker cleanup'}
       />
     </>
+  );
+}
+
+function NameList({ names }: { names: string[] }) {
+  return (
+    <div style={{ ...wrapping, maxHeight: 160, overflow: 'auto' }}>
+      {names.slice(0, planCap).map((name) => (
+        <div key={name}>{name}</div>
+      ))}
+      {names.length > planCap && (
+        <Text type="secondary">and {names.length - planCap} more</Text>
+      )}
+    </div>
+  );
+}
+
+/** What a volume or image prune deletes, what it keeps for panel Composes, and the opt-in to delete those too. */
+function PrunePlanList({
+  error,
+  includePanel,
+  onIncludePanel,
+  plan,
+}: {
+  error?: string;
+  includePanel: boolean;
+  onIncludePanel: (value: boolean) => void;
+  plan?: DockerPrunePlan;
+}) {
+  if (error) return <Alert showIcon type="error" title={error} />;
+  if (!plan) return <Skeleton active paragraph={{ rows: 2 }} />;
+  const kept = includePanel ? [] : plan.skip;
+  const deleted = [
+    ...plan.delete.map((entry) => entry.name),
+    ...(includePanel ? plan.skip.map((entry) => entry.name) : []),
+  ];
+  return (
+    <Flex gap={8} vertical>
+      <Text strong>Deleted ({deleted.length})</Text>
+      <NameList names={deleted} />
+      {kept.length > 0 && (
+        <>
+          <Text strong>Kept because a Compose uses them ({kept.length})</Text>
+          <NameList
+            names={kept.map((entry) =>
+              entry.compose ? `${entry.name} — Compose ${entry.compose}` : entry.name,
+            )}
+          />
+        </>
+      )}
+      {plan.skip.length > 0 && (
+        <Checkbox
+          checked={includePanel}
+          onChange={(event) => onIncludePanel(event.target.checked)}
+        >
+          Also delete the ones panel Composes use
+        </Checkbox>
+      )}
+    </Flex>
   );
 }

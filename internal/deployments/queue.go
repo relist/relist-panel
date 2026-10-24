@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"relist-panel/internal/composes"
+	"relist-panel/internal/dockerhost"
+	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
 )
 
@@ -107,9 +109,10 @@ const (
 
 	stepFetch  = "fetch"
 	stepDeploy = "deploy"
-
-	retryDelay = time.Second
 )
+
+// retryDelay is how long Run backs off after an error; tests shorten it.
+var retryDelay = time.Second
 
 type phase string
 
@@ -193,7 +196,17 @@ func (q *Queue) Run(ctx context.Context) {
 	if _, err := q.d.Store.FailRunning(bg, reasonRestarted, q.d.Now()); err != nil {
 		logf("fail running deployments: %v", err)
 	}
-	q.collectAllSnapshots(ctx)
+	// Collected in the background: a hung daemon must not hold up the first
+	// Deployment. Each collection takes the Project gate and volumes hold, so it
+	// is safe beside the worker; Run returns only once it has ended.
+	var boot sync.WaitGroup
+	boot.Add(1)
+	go func() {
+		defer boot.Done()
+		safely.Do("collect snapshots at boot", func() { q.collectAllSnapshots(ctx) })
+	}()
+	defer boot.Wait()
+	paused := false // the paused Docker state is already logged for this period
 	for ctx.Err() == nil {
 		d, ok, err := q.d.Store.NextQueued(ctx)
 		if err != nil {
@@ -204,13 +217,26 @@ func (q *Queue) Run(ctx context.Context) {
 			continue
 		}
 		if !ok {
+			paused = false
 			select {
 			case <-q.wake:
 			case <-ctx.Done():
 			}
 			continue
 		}
-		if err := q.processSafely(ctx, d); err != nil {
+		err = q.processSafely(ctx, d)
+		if errors.Is(err, dockerhost.ErrMaintenanceBlocked) {
+			// The Deployment stays queued until an operator resumes Docker
+			// operations; say so once per blocked period, not every retry.
+			if !paused {
+				logf("deployment %d of compose %d waits: %v", d.Number, d.ComposeID, err)
+				paused = true
+			}
+			sleep(ctx, retryDelay)
+			continue
+		}
+		paused = false
+		if err != nil {
 			logf("deployment %d of compose %d: %v", d.Number, d.ComposeID, err)
 			sleep(ctx, retryDelay)
 		}

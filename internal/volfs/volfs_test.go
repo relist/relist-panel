@@ -146,7 +146,7 @@ func TestListFirstTruncatesSortedByName(t *testing.T) {
 		f.plant(t, fmt.Sprintf("f%02d.txt", i), "x")
 	}
 
-	entries, truncated, err := f.ListFirst(".", 10)
+	entries, truncated, err := f.ListFirst(".", "", 10)
 	if err != nil {
 		t.Fatalf("ListFirst limit 10 error = %v", err)
 	}
@@ -159,13 +159,48 @@ func TestListFirstTruncatesSortedByName(t *testing.T) {
 		t.Errorf("ListFirst limit 10 = %q truncated=%v, want the first ten by name and truncated", names, truncated)
 	}
 
-	entries, truncated, err = f.ListFirst(".", 12)
+	entries, truncated, err = f.ListFirst(".", "", 12)
 	if err != nil || len(entries) != 12 || truncated {
 		t.Errorf("ListFirst limit 12 = %d entries truncated=%v err=%v, want 12 and not truncated", len(entries), truncated, err)
 	}
-	entries, truncated, err = f.ListFirst(".", 20)
+	entries, truncated, err = f.ListFirst(".", "", 20)
 	if err != nil || len(entries) != 12 || truncated {
 		t.Errorf("ListFirst limit 20 = %d entries truncated=%v err=%v, want 12 and not truncated", len(entries), truncated, err)
+	}
+}
+
+// With after, ListFirst keeps only the names sorting strictly after it, then
+// applies the cap: the pages of a listing chain through the last name.
+func TestListFirstPagesAfterACursor(t *testing.T) {
+	f := newFixture(t)
+	for i := 11; i >= 0; i-- {
+		f.plant(t, fmt.Sprintf("f%02d.txt", i), "x")
+	}
+	namesOf := func(entries []Entry) []string {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name)
+		}
+		return names
+	}
+
+	entries, truncated, err := f.ListFirst(".", "f04.txt", 3)
+	if want := []string{"f05.txt", "f06.txt", "f07.txt"}; err != nil || !reflect.DeepEqual(namesOf(entries), want) || !truncated {
+		t.Errorf("after f04.txt limit 3 = %q truncated=%v err=%v, want %q and truncated", namesOf(entries), truncated, err, want)
+	}
+	// A cursor that names no entry still splits the order.
+	entries, truncated, err = f.ListFirst(".", "f09.z", 10)
+	if want := []string{"f10.txt", "f11.txt"}; err != nil || !reflect.DeepEqual(namesOf(entries), want) || truncated {
+		t.Errorf("after f09.z = %q truncated=%v err=%v, want %q and not truncated", namesOf(entries), truncated, err, want)
+	}
+	// The last name leaves nothing, and exactly limit names left is not truncated.
+	entries, truncated, err = f.ListFirst(".", "f11.txt", 10)
+	if err != nil || len(entries) != 0 || truncated {
+		t.Errorf("after the last name = %d entries truncated=%v err=%v, want none", len(entries), truncated, err)
+	}
+	entries, truncated, err = f.ListFirst(".", "f08.txt", 3)
+	if err != nil || len(entries) != 3 || truncated {
+		t.Errorf("after f08.txt limit 3 = %d entries truncated=%v err=%v, want 3 and not truncated", len(entries), truncated, err)
 	}
 }
 

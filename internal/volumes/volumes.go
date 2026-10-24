@@ -49,7 +49,9 @@ type Request struct {
 	Op            Op
 	Path          string
 	DeclaredBytes int64
-	ReadOnly      bool
+	// After is a list's name cursor: only names sorting after it are listed.
+	After    string
+	ReadOnly bool
 }
 
 // RefusalError is a helper refusal: the helper exited 3 before doing the

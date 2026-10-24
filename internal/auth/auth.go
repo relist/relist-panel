@@ -13,10 +13,9 @@ import (
 	"net/http"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 const (
@@ -33,6 +32,11 @@ var (
 type Service struct {
 	db  *sql.DB
 	now func() time.Time
+	// comparePassword checks a password against its bcrypt hash; tests swap it
+	// to hold a login inside the comparison.
+	comparePassword func(hash, password []byte) error
+	// loginMu serializes whole login attempts (see login).
+	loginMu sync.Mutex
 	// selfAuthenticated names further paths the cookie check skips because
 	// their handlers authenticate on their own.
 	selfAuthenticated func(path string) bool
@@ -149,30 +153,26 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// The password check below runs inside this transaction deliberately: it
-	// keeps the failure counter, the replay step (totp_last_step) and the
-	// session insert atomic across concurrent logins. The pool holds a single
-	// connection, so this serializes logins for the duration of the bcrypt
-	// comparison; widening the pool means revisiting this hold together with
-	// the replay guard's unconditional totp_last_step update.
-	tx, err := s.db.BeginTx(r.Context(), nil)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
-		return
-	}
-	defer tx.Rollback()
+	// One admin signs in, so a process-wide mutex serializes whole login
+	// attempts. It replaces the single database connection as the serializer
+	// the failure counter, the replay step (totp_last_step) and the session
+	// insert depend on: parallel wrong guesses still run strictly one after
+	// another, and each sees the failure the previous one recorded. That lets
+	// the bcrypt comparison run outside any transaction, so it no longer
+	// holds the pool's only connection while every other request waits. The
+	// attempt reads the account and the lockout first, compares the password
+	// with no connection held, then re-reads the account in the write
+	// transaction and refuses if the hash changed or the lock started
+	// meanwhile (a password change bypasses this mutex). Widening the pool
+	// does not change this; the mutex alone provides the ordering.
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
 
-	account, err := s.findAdmin(r.Context(), tx, email)
+	account, remaining, err := s.readLoginAccount(r.Context(), email)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
-		return
-	}
-
-	remaining, err := s.lockedFor(r.Context(), tx, account.id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
@@ -182,7 +182,42 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(account.passwordHash), []byte(input.Password)); err != nil {
+	passwordErr := s.comparePassword([]byte(account.passwordHash), []byte(input.Password))
+
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
+		return
+	}
+	defer tx.Rollback()
+
+	staleHash := account.passwordHash
+	account, err = s.findAdminByID(r.Context(), tx, account.id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusUnauthorized, "invalid email or password")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
+		return
+	}
+	remaining, err = s.lockedFor(r.Context(), tx, account.id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
+		return
+	}
+	if remaining > 0 {
+		writeLocked(w, remaining)
+		return
+	}
+	if account.passwordHash != staleHash {
+		// The password changed while it was being checked: the verdict was
+		// for the old one, so it counts neither for nor against the account.
+		writeError(w, http.StatusUnauthorized, "invalid email or password")
+		return
+	}
+
+	if passwordErr != nil {
 		if err := s.recordFailure(r.Context(), tx, account.id); err != nil {
 			writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 			return
@@ -227,6 +262,26 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 
 	// Two-factor is off: any code sent is ignored.
 	s.completeLogin(w, r, tx, account, sql.NullInt64{})
+}
+
+// readLoginAccount is the login's short first phase: it finds the account and
+// reads how long it stays locked, then releases the connection.
+func (s *Service) readLoginAccount(ctx context.Context, email string) (admin, time.Duration, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return admin{}, 0, err
+	}
+	defer tx.Rollback()
+
+	account, err := s.findAdmin(ctx, tx, email)
+	if err != nil {
+		return admin{}, 0, err
+	}
+	remaining, err := s.lockedFor(ctx, tx, account.id)
+	if err != nil {
+		return admin{}, 0, err
+	}
+	return account, remaining, nil
 }
 
 // completeLogin clears the failure counter, records the last accepted TOTP
