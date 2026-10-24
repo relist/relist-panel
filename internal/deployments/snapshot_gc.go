@@ -55,7 +55,9 @@ func (q *Queue) collectSnapshots(ctx context.Context, composeID int64) {
 	}
 
 	// The gate keeps a Deploy or a capture from adding a reference while the
-	// references are being listed.
+	// references are being listed. The volumes hold makes open Volume reads,
+	// which a stopped Compose's ./src can still resolve to a snapshot, end
+	// first; gate before volumes, as everywhere.
 	gateCtx, cancel := context.WithTimeout(ctx, snapshotLookupTimeout)
 	release, err := q.d.Gate.Acquire(gateCtx, target.ProjectID)
 	cancel()
@@ -64,6 +66,14 @@ func (q *Queue) collectSnapshots(ctx context.Context, composeID int64) {
 		return
 	}
 	defer release()
+	volumesCtx, cancelVolumes := context.WithTimeout(ctx, snapshotLookupTimeout)
+	releaseVolumes, err := q.d.Gate.AcquireVolumes(volumesCtx, target.ProjectID)
+	cancelVolumes()
+	if err != nil {
+		logf("collect snapshots of compose %d: project volumes: %v", composeID, err)
+		return
+	}
+	defer releaseVolumes()
 
 	// A hung daemon must not hold the Project gate or the worker for ever.
 	lookupCtx, cancelLookup := context.WithTimeout(ctx, snapshotLookupTimeout)

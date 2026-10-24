@@ -28,7 +28,8 @@ worker captures and persists current inputs once and records a legacy warning.
 Per-deployment source files survive restart. Containers can still mount a
 Deployment's tree after history pruning, so trees are not deleted with their
 Deployment. Instead each Compose's snapshot directories are garbage-collected
-once a Deployment settles and once at boot, under the Project gate. A directory
+once a Deployment settles and once at boot, under the Project gate and its
+exclusive volumes hold, so no open Volume read is cut off. A directory
 is kept while a queued or running Deployment will use it, while the Source's
 materialized tree lives in it, or while it holds a path mounted by any container
 of the Compose's Docker project, stopped ones included. Everything else under

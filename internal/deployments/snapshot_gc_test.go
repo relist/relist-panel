@@ -390,6 +390,74 @@ func TestSnapshotGCWaitsForTheProjectGate(t *testing.T) {
 	}
 }
 
+func TestSnapshotGCWaitsForTheProjectVolumes(t *testing.T) {
+	f := newGCFixture(t)
+	f.leftover("source-old")
+	held := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	f.gate.onAcquireVolumes = func(ctx context.Context) error {
+		entered <- struct{}{}
+		select {
+		case <-held:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.q.collectSnapshots(context.Background(), f.id)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("collectSnapshots never asked for the Project's volumes")
+	}
+	select {
+	case <-done:
+		t.Fatal("collectSnapshots finished while a Volume read held the volumes")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if dirs := f.snapshotDirs(); len(dirs) != 1 {
+		t.Fatalf("dirs = %v, want nothing deleted while the volumes are held", dirs)
+	}
+	close(held)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("collectSnapshots did not run after the volumes were released")
+	}
+	if dirs := f.snapshotDirs(); len(dirs) != 0 {
+		t.Fatalf("dirs = %v, want the leftover removed", dirs)
+	}
+	// Gate first, then volumes; both released, the volumes first.
+	events := strings.Join(f.gate.rec.all(), ",")
+	if !strings.Contains(events, "gate+,volumes+,volumes-,gate-") {
+		t.Fatalf("events = %s, want the gate taken before the volumes and released after", events)
+	}
+}
+
+func TestSnapshotGCSkipsWhenTheVolumesTimeOut(t *testing.T) {
+	old := snapshotLookupTimeout
+	snapshotLookupTimeout = 50 * time.Millisecond
+	defer func() { snapshotLookupTimeout = old }()
+	f := newGCFixture(t)
+	f.leftover("source-old")
+	f.gate.onAcquireVolumes = func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	f.q.collectSnapshots(context.Background(), f.id)
+	if dirs := f.snapshotDirs(); len(dirs) != 1 {
+		t.Fatalf("dirs = %v, want nothing deleted", dirs)
+	}
+	events := f.gate.rec.all()
+	if len(events) == 0 || events[len(events)-1] != "gate-" {
+		t.Fatalf("events = %v, want the gate released", events)
+	}
+}
+
 func TestSnapshotGCSkipsWhenTheGateFails(t *testing.T) {
 	f := newGCFixture(t)
 	f.leftover("source-old")
