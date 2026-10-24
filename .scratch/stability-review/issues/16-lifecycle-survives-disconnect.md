@@ -8,7 +8,7 @@ prune already does in `internal/dockerhost/api.go`.
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Exported helper in `internal/composes`: `LifecycleContext(parent context.Context) (context.Context, context.CancelFunc)`
       = `context.WithTimeout(context.WithoutCancel(parent), 10*time.Minute)`
