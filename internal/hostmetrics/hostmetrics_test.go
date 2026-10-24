@@ -601,3 +601,108 @@ func TestSamplerStartsOnceAndWaitsForShutdown(t *testing.T) {
 		t.Fatal("Wait did not return after the loop finished")
 	}
 }
+
+// A4: a panic in an off-loop hook must not take the panel down. The sweep is
+// logged and dropped, its in-flight flag resets, and the next turn runs.
+func TestSweepPanicIsRecoveredAndNextTickSamples(t *testing.T) {
+	clock := &fakeClock{now: baseTime()}
+	var sweeps int
+	s := newTestSampler(t, clock, func(cfg *Config) {
+		cfg.SweepContainers = func(context.Context) {
+			sweeps++
+			panic("unexpected Docker stats payload")
+		}
+	})
+
+	for i := 0; i < 6; i++ {
+		s.tick(context.Background())
+		clock.advance(10 * time.Second)
+		s.waitIdle()
+	}
+
+	if s.sweepInFlight.Load() {
+		t.Error("sweepInFlight still set after a panicking sweep")
+	}
+	if sweeps != 2 {
+		t.Errorf("sweep ran %d times in 6 ticks, want 2 (a panicked sweep does not stop the next turn)", sweeps)
+	}
+	if got := len(s.Window(10)); got != 6 {
+		t.Errorf("window has %d samples after 6 ticks, want 6", got)
+	}
+}
+
+func TestDockerDiskRefreshPanicIsRecovered(t *testing.T) {
+	clock := &fakeClock{now: baseTime()}
+	var refreshes int
+	s := newTestSampler(t, clock, func(cfg *Config) {
+		cfg.RefreshDockerDisk = func(context.Context) {
+			refreshes++
+			panic("docker system df returned nonsense")
+		}
+	})
+
+	for i := 0; i < 60; i++ {
+		s.tick(context.Background())
+		clock.advance(10 * time.Second)
+		s.waitIdle()
+	}
+
+	if s.dfInFlight.Load() {
+		t.Error("dfInFlight still set after a panicking refresh")
+	}
+	if refreshes != 2 {
+		t.Errorf("refresh ran %d times in 60 ticks, want 2", refreshes)
+	}
+}
+
+// OnMinuteClose runs on the loop itself; a panic in it must not skip the
+// rest of the tick (the df refresh rides the same tick as the sixth close).
+func TestMinuteClosePanicIsRecoveredAndTickContinues(t *testing.T) {
+	clock := &fakeClock{now: baseTime()}
+	var closes, refreshes int
+	s := newTestSampler(t, clock, func(cfg *Config) {
+		cfg.OnMinuteClose = func(HostSample) {
+			closes++
+			panic("persist failed badly")
+		}
+		cfg.RefreshDockerDisk = func(context.Context) { refreshes++ }
+	})
+
+	for i := 0; i < 30; i++ {
+		s.tick(context.Background())
+		clock.advance(10 * time.Second)
+		s.waitIdle()
+	}
+
+	if closes != 5 {
+		t.Errorf("minute close ran %d times in 30 ticks, want 5", closes)
+	}
+	if refreshes != 1 {
+		t.Errorf("docker df refresh ran %d times in 30 ticks, want 1 (the panic must not skip it)", refreshes)
+	}
+}
+
+// A panic in the tick's own sampling skips that tick; the next one records.
+func TestTickSamplingPanicSkipsOnlyThatTick(t *testing.T) {
+	clock := &fakeClock{now: baseTime()}
+	calls := 0
+	s := newTestSampler(t, clock, func(cfg *Config) {
+		cfg.Now = func() time.Time {
+			calls++
+			if calls == 1 {
+				panic("clock exploded")
+			}
+			return clock.Now()
+		}
+	})
+
+	s.tick(context.Background())
+	if got := len(s.Window(10)); got != 0 {
+		t.Fatalf("window has %d samples after the panicked tick, want 0", got)
+	}
+	clock.advance(10 * time.Second)
+	s.tick(context.Background())
+	if got := len(s.Window(10)); got != 1 {
+		t.Fatalf("window has %d samples after the next tick, want 1", got)
+	}
+}

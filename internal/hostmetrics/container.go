@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"relist-panel/internal/safely"
 )
 
 // ContainerSource is the port for reading containers and their raw stats off
@@ -195,7 +197,10 @@ func (c *ServiceCollector) Sweep(ctx context.Context) {
 		wg.Add(1)
 		go func(i int, tgt target) {
 			defer wg.Done()
-			stats[i], errs[i] = c.source.ContainerStats(ctx, tgt.info.ID)
+			errs[i] = safely.Call("container stats", func() (err error) {
+				stats[i], err = c.source.ContainerStats(ctx, tgt.info.ID)
+				return err
+			})
 		}(i, tgt)
 	}
 	wg.Wait()

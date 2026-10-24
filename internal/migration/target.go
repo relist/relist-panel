@@ -17,6 +17,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"relist-panel/internal/safely"
 )
 
 type Phase string
@@ -352,7 +354,7 @@ func (t *Target) launch() {
 	go func() {
 		defer close(stopped)
 		defer cancel()
-		err := t.run(ctx)
+		err := safely.Call("migration run", func() error { return t.run(ctx) })
 		t.mu.Lock()
 		t.running = false
 		if err != nil && ctx.Err() == nil {
@@ -876,7 +878,7 @@ func (t *Target) completeAsync() {
 	go func() {
 		defer close(stopped)
 		defer cancel()
-		err := t.complete(ctx)
+		err := safely.Call("migration complete", func() error { return t.complete(ctx) })
 		t.mu.Lock()
 		t.running = false
 		if err != nil && ctx.Err() == nil {

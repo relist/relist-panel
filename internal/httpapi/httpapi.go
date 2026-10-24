@@ -23,6 +23,7 @@ import (
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/migration"
 	"relist-panel/internal/projects"
+	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
 	"relist-panel/internal/terminal"
 	"relist-panel/internal/variablesets"
@@ -177,7 +178,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		worker.Add(1)
 		go func() {
 			defer worker.Done()
-			if err := oldHost.ResumeLock(ctx); err != nil && ctx.Err() == nil {
+			if err := safely.Call("migration resume lock", func() error { return oldHost.ResumeLock(ctx) }); err != nil && ctx.Err() == nil {
 				log.Printf("migration: resume the lock: %v", err)
 			}
 		}()

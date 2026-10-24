@@ -226,16 +226,25 @@ type recordingFinalizer struct {
 	mu    sync.Mutex
 	began []Manifest
 	fail  error
+	// panicBegin and panicComplete make the matching call panic, as a bug in
+	// the finalizer would.
+	panicBegin, panicComplete bool
 }
 
 func (f *recordingFinalizer) Begin(_ context.Context, m Manifest) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.began = append(f.began, m)
+	if f.panicBegin {
+		panic("finalizer bug")
+	}
 	return f.fail
 }
 
 func (f *recordingFinalizer) Complete(context.Context, Manifest) (Summary, error) {
+	if f.panicComplete {
+		panic("finalizer bug")
+	}
 	return Summary{Deployments: []SummaryDeployment{{ComposeID: 1, Number: 1}}, Warnings: []string{}, DNS: []string{"shop.example.com"}}, nil
 }
 
@@ -747,4 +756,44 @@ func TestAbortWithNoMigrationDoesNothing(t *testing.T) {
 	if p := target.Progress(); p.Phase != PhaseIdle || p.CanAbort {
 		t.Fatalf("Phase, CanAbort = %s, %v, want idle, false", p.Phase, p.CanAbort)
 	}
+}
+
+// A panic in the pull goroutine must reach the same error path as a returned
+// error: the run is marked stopped (so Abort and Start work again) and the
+// panel stays up.
+func TestAPanicInThePullIsRecordedAsTheMigrationError(t *testing.T) {
+	f := newTargetFixture(t)
+	f.final.panicBegin = true
+	f.connectAndStart(t)
+	eventuallyTrue(t, "the panic to be recorded", func() bool {
+		return strings.Contains(f.target.Progress().Error, "panicked: finalizer bug")
+	})
+	eventuallyTrue(t, "the run to stop", func() bool {
+		f.target.mu.Lock()
+		defer f.target.mu.Unlock()
+		return !f.target.running
+	})
+	if err := f.target.Abort(context.Background()); err != nil {
+		t.Fatalf("Abort after a panicked run: %v", err)
+	}
+}
+
+func TestAPanicInCompleteIsRecordedAsTheMigrationError(t *testing.T) {
+	f := newTargetFixture(t)
+	f.connectAndStart(t)
+	waitPhase(t, f.target, PhaseFinalizing)
+	os.WriteFile(filepath.Join(f.deps.StateDir, markerName), []byte(`{}`), 0o600)
+	f.final.panicComplete = true
+	restarted := NewTarget(f.deps)
+	if err := restarted.ResumeIfPending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	eventuallyTrue(t, "the panic to be recorded", func() bool {
+		return strings.Contains(restarted.Progress().Error, "panicked: finalizer bug")
+	})
+	eventuallyTrue(t, "the run to stop", func() bool {
+		restarted.mu.Lock()
+		defer restarted.mu.Unlock()
+		return !restarted.running
+	})
 }

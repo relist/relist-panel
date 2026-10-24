@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"relist-panel/internal/safely"
 )
 
 var tokenLifetimes = map[string]time.Duration{"1h": time.Hour, "24h": 24 * time.Hour, "168h": 168 * time.Hour}
@@ -150,7 +152,10 @@ func (s *OldHost) startRoute(w http.ResponseWriter, r *http.Request) {
 	if !s.starting {
 		s.starting, s.startErr = true, nil
 		go func() {
-			_, err := s.Start(context.WithoutCancel(r.Context()), in.HostPaths)
+			err := safely.Call("migration lock", func() error {
+				_, err := s.Start(context.WithoutCancel(r.Context()), in.HostPaths)
+				return err
+			})
 			if err != nil {
 				log.Printf("migration: start: %v", err)
 			}
