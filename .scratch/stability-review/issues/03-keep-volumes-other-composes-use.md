@@ -12,7 +12,7 @@ volumes stay and are named in the response.
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Before the destructive step, resolve the candidates from `docker compose config --format json`
       (as `DownWithVolumesTracked` already does). A volume is kept when it is external, when its
