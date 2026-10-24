@@ -22,6 +22,15 @@ func (h *hostEngine) Prune(_ context.Context, k dockerhost.Kind) (dockerhost.Pru
 	return dockerhost.PruneResult{Kind: k, SpaceReclaimed: 1024, Deleted: []string{}}, nil
 }
 
+func (h *hostEngine) Candidates(context.Context, dockerhost.Kind) ([]dockerhost.Candidate, error) {
+	h.calls.Add(1)
+	return nil, nil
+}
+func (h *hostEngine) Remove(context.Context, dockerhost.Kind, dockerhost.Candidate) (bool, string, error) {
+	h.calls.Add(1)
+	return true, "", nil
+}
+
 func TestDockerHostRoutesRequireAuthAndConfirmations(t *testing.T) {
 	s := newTestServer(t)
 	s.stopWorker()
@@ -30,7 +39,7 @@ func TestDockerHostRoutesRequireAuthAndConfirmations(t *testing.T) {
 	handler, wait := httpapi.NewHandler(ctx, httpapi.Deps{DB: s.db, Runner: s.runner, DataDir: s.dataDir, Images: s.images, Docker: engine})
 	t.Cleanup(func() { cancel(); wait() })
 	s.handler = handler
-	for _, route := range []struct{ method, path string }{{"GET", "/api/docker"}, {"POST", "/api/docker/prune"}, {"POST", "/api/docker/recover"}} {
+	for _, route := range []struct{ method, path string }{{"GET", "/api/docker"}, {"GET", "/api/docker/prune-plan?kind=volumes"}, {"POST", "/api/docker/prune"}, {"POST", "/api/docker/recover"}} {
 		response := s.request(t, route.method, route.path, map[string]string{"kind": "containers", "confirm": "PRUNE"})
 		if response.StatusCode != 401 {
 			t.Errorf("unauthenticated %s: %d", route.path, response.StatusCode)
@@ -45,6 +54,10 @@ func TestDockerHostRoutesRequireAuthAndConfirmations(t *testing.T) {
 	if response.StatusCode != 200 || !strings.Contains(readBody(t, response), `"version":"28.0"`) {
 		t.Fatal("report unavailable")
 	}
+	response = s.request(t, http.MethodGet, "/api/docker/prune-plan?kind=all-volumes", nil)
+	if body := readBody(t, response); response.StatusCode != 200 || !strings.Contains(body, `"delete":[]`) {
+		t.Fatalf("plan: %d %s", response.StatusCode, body)
+	}
 	response = s.request(t, http.MethodPost, "/api/docker/prune", map[string]string{"kind": "containers"})
 	if response.StatusCode != 400 {
 		t.Fatalf("no confirmation: %d", response.StatusCode)
@@ -54,7 +67,7 @@ func TestDockerHostRoutesRequireAuthAndConfirmations(t *testing.T) {
 	if response.StatusCode != 200 || !strings.Contains(readBody(t, response), `"spaceReclaimed":1024`) {
 		t.Fatalf("confirmed prune failed: %d %s", response.StatusCode, readBody(t, response))
 	}
-	if engine.calls.Load() != 2 {
+	if engine.calls.Load() != 3 {
 		t.Fatal("refused request reached Docker")
 	}
 }

@@ -131,7 +131,11 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM deployments WHERE status IN ('queued', 'running')").Scan(&count)
 			return count > 0, err
 		}
-		dockerhost.NewAPI(d.Docker, hostGuard, pending).RegisterRoutes(mux)
+		owners := func(ctx context.Context) (dockerhost.Ownership, error) {
+			projects, volumes, images, err := composesService.DockerOwnership(ctx)
+			return dockerhost.Ownership{Projects: projects, Volumes: volumes, Images: images}, err
+		}
+		dockerhost.NewAPI(d.Docker, hostGuard, pending, owners).RegisterRoutes(mux)
 	}
 	if d.History != nil && d.Services != nil {
 		metricsService := metrics.New(metrics.NewStore(db), d.History, d.Services)
