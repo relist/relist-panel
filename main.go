@@ -90,6 +90,13 @@ func main() {
 	}
 	defer db.Close()
 
+	// Report-only: the operator decides what to do with orphaned rows.
+	if n, err := database.ForeignKeyViolations(ctx, db); err != nil {
+		log.Printf("warning: could not check foreign keys: %v", err)
+	} else if n > 0 {
+		log.Printf("warning: %d rows reference deleted parents (PRAGMA foreign_key_check); they were left by an earlier connection without foreign keys", n)
+	}
+
 	if migrationPending {
 		if err := migration.ClearCopiedState(ctx, db, time.Now()); err != nil {
 			log.Fatal(err)
