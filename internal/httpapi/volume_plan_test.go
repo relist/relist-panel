@@ -167,3 +167,51 @@ func TestFreshDeployLogsKeptVolumes(t *testing.T) {
 		t.Fatalf("deployment log reports an owned volume as kept: %q", log)
 	}
 }
+
+// perProjectInspector reports, for every Compose it is asked about, two
+// volumes owned by that Compose's own project.
+type perProjectInspector struct{ *scriptedVolumeRunner }
+
+func (r perProjectInspector) CandidateVolumes(_ context.Context, req composes.RunRequest) ([]composes.VolumeCandidate, error) {
+	return []composes.VolumeCandidate{
+		{Name: "shared-db", Exists: true, Project: req.ProjectName},
+		{Name: "other-shared", Exists: true, Project: req.ProjectName},
+	}, nil
+}
+
+func createDeployedCompose(t *testing.T, server *testServer, p projectResponse, e environmentResponse, name, yaml string) composeResponse {
+	t.Helper()
+	response := postJSON(t, server, composesPath(p.ID, e.ID), map[string]string{"name": name, "yamlContent": yaml})
+	defer response.Body.Close()
+	var c composeResponse
+	decodeLifecycleResponse(t, response, &c)
+	server.deployOK(t, composePath(p.ID, e.ID, c.ID), nil)
+	return c
+}
+
+func TestProjectTeardownRemovesVolumeOnlyItsOwnComposesDeclare(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	p := createProject(t, server, "Together", "")
+	e := productionEnvironment(t, server, p)
+	const header = "services:\n  web:\n    image: nginx\nvolumes:\n"
+	createDeployedCompose(t, server, p, e, "first", header+"  db:\n    name: shared-db\n  o:\n    name: other-shared\n")
+	createDeployedCompose(t, server, p, e, "second", header+"  db:\n    name: shared-db\n")
+	outside := createProject(t, server, "Outside", "")
+	outsideEnv := productionEnvironment(t, server, outside)
+	response := postJSON(t, server, composesPath(outside.ID, outsideEnv.ID), map[string]string{"name": "third", "yamlContent": header + "  o:\n    name: other-shared\n"})
+	response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create outside compose = %d", response.StatusCode)
+	}
+
+	runner := perProjectInspector{&scriptedVolumeRunner{fakeComposeRunner: server.runner}}
+	server.useRunner(t, runner)
+	runner.resetCalls()
+	legacyStatus(t, server, http.MethodDelete, "/api/projects/"+lifecycleID(p.ID), http.StatusNoContent)
+
+	got := runner.removals()
+	if len(got) != 2 || !slices.Equal(got[0], []string{"shared-db"}) || !slices.Equal(got[1], []string{"shared-db"}) {
+		t.Fatalf("DownAndRemoveVolumes args = %v, want shared-db removed for both children and other-shared kept", got)
+	}
+}

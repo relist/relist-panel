@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -49,7 +50,9 @@ type VolumePlan struct {
 // volumePlan decides, without side effects, which volumes a destructive down of
 // c would remove. supported is false when the runner cannot inspect volumes or
 // the Compose has no files on disk, so the caller falls back to plain `down -v`.
-func (s *Service) volumePlan(ctx context.Context, c Compose, req RunRequest) (plan VolumePlan, supported bool, err error) {
+// together holds the ids of the Composes torn down in the same operation (c
+// included): a volume only they declare is not "declared elsewhere".
+func (s *Service) volumePlan(ctx context.Context, c Compose, req RunRequest, together []int64) (plan VolumePlan, supported bool, err error) {
 	inspector, ok := s.runner.(VolumeInspector)
 	if !ok {
 		return VolumePlan{}, false, nil
@@ -63,7 +66,7 @@ func (s *Service) volumePlan(ctx context.Context, c Compose, req RunRequest) (pl
 	if err != nil {
 		return VolumePlan{}, false, err
 	}
-	elsewhere, err := s.volumeNamesElsewhere(ctx, c.ID)
+	elsewhere, err := s.volumeNamesElsewhere(ctx, append([]int64{c.ID}, together...))
 	if err != nil {
 		return VolumePlan{}, false, err
 	}
@@ -88,9 +91,9 @@ func (s *Service) volumePlan(ctx context.Context, c Compose, req RunRequest) (pl
 // fresh-volumes deploy. The Compose's files must be on disk. With nothing to
 // keep it is today's `down -v`; otherwise it removes only plan.Remove. A
 // kept volume is logged server-side. removedAny reports whether a named volume
-// was confirmed gone, when the runner can tell.
-func (s *Service) destroyStack(ctx context.Context, c Compose, req RunRequest) (plan VolumePlan, removedAny bool, err error) {
-	plan, supported, err := s.volumePlan(ctx, c, req)
+// was confirmed gone, when the runner can tell. together is as for volumePlan.
+func (s *Service) destroyStack(ctx context.Context, c Compose, req RunRequest, together []int64) (plan VolumePlan, removedAny bool, err error) {
+	plan, supported, err := s.volumePlan(ctx, c, req, together)
 	if err != nil {
 		return VolumePlan{}, false, err
 	}
@@ -150,19 +153,23 @@ func declaredVolumeNames(yamlContent string) []string {
 	return names
 }
 
-// volumeNamesElsewhere maps each volume name another Compose in the panel
-// declares to that Compose's name. Where two declare it the lowest id wins.
-func (s *Service) volumeNamesElsewhere(ctx context.Context, composeID int64) (map[string]string, error) {
-	rows, err := s.repository.db.QueryContext(ctx, `SELECT name, yaml_content FROM composes WHERE id <> ? ORDER BY id`, composeID)
+// volumeNamesElsewhere maps each volume name declared by a Compose outside
+// exclude to that Compose's name. Where two declare it the lowest id wins.
+func (s *Service) volumeNamesElsewhere(ctx context.Context, exclude []int64) (map[string]string, error) {
+	rows, err := s.repository.db.QueryContext(ctx, `SELECT id, name, yaml_content FROM composes ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("list other composes: %w", err)
 	}
 	defer rows.Close()
 	names := make(map[string]string)
 	for rows.Next() {
+		var id int64
 		var name, content string
-		if err := rows.Scan(&name, &content); err != nil {
+		if err := rows.Scan(&id, &name, &content); err != nil {
 			return nil, fmt.Errorf("list other composes: %w", err)
+		}
+		if slices.Contains(exclude, id) {
+			continue
 		}
 		for _, volume := range declaredVolumeNames(content) {
 			if _, taken := names[volume]; !taken {

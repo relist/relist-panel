@@ -565,7 +565,7 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 
 	s.cancelDeployments(r.Context(), id)
 	if _, err := os.Stat(req.ComposeFilePath); err == nil {
-		if _, _, err := s.destroyStack(r.Context(), compose, req); err != nil {
+		if _, _, err := s.destroyStack(r.Context(), compose, req, []int64{compose.ID}); err != nil {
 			writeError(w, http.StatusBadGateway, "delete failed: "+err.Error())
 			return
 		}

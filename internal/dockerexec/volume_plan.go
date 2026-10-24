@@ -12,9 +12,9 @@ import (
 	"relist-panel/internal/composes"
 )
 
-// composeProjectLabel is the label Compose puts on every volume it creates.
 var _ composes.VolumeInspector = Runner{}
 
+// composeProjectLabel is the label Compose puts on every volume it creates.
 const composeProjectLabel = "com.docker.compose.project"
 
 // CandidateVolumes resolves the Compose's non-external named volumes from its

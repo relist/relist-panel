@@ -214,7 +214,7 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 	}()
 	if opts.FreshVolumes {
 		if _, err := os.Stat(req.ComposeFilePath); err == nil {
-			plan, removedAny, err := s.destroyStack(ctx, t.Compose, req)
+			plan, removedAny, err := s.destroyStack(ctx, t.Compose, req, []int64{t.Compose.ID})
 			removed = removedAny
 			if opts.Out != nil {
 				for _, kept := range plan.Keep {
