@@ -83,15 +83,15 @@ func (s *Service) teardownChildren(ctx context.Context, projectID, environmentID
 	}
 	s.cancelDeployments(ctx, ids...)
 	for _, c := range children {
-		if err := s.teardown(ctx, runRequestFor(s.dataDir, c)); err != nil {
+		if err := s.teardown(ctx, c, runRequestFor(s.dataDir, c)); err != nil {
 			return fmt.Errorf("compose %d: %w", c.ID, err)
 		}
 	}
 	return nil
 }
-func (s *Service) teardown(ctx context.Context, req RunRequest) error {
+func (s *Service) teardown(ctx context.Context, c Compose, req RunRequest) error {
 	if _, err := os.Stat(req.ComposeFilePath); err == nil {
-		if err := s.runner.DownWithVolumes(ctx, req); err != nil {
+		if _, _, err := s.destroyStack(ctx, c, req); err != nil {
 			return err
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {

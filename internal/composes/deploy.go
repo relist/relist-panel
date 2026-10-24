@@ -214,13 +214,12 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 	}()
 	if opts.FreshVolumes {
 		if _, err := os.Stat(req.ComposeFilePath); err == nil {
-			var err error
-			if tracked, ok := s.runner.(interface {
-				DownWithVolumesTracked(context.Context, RunRequest) (bool, error)
-			}); ok {
-				removed, err = tracked.DownWithVolumesTracked(ctx, req)
-			} else {
-				err = s.runner.DownWithVolumes(ctx, req)
+			plan, removedAny, err := s.destroyStack(ctx, t.Compose, req)
+			removed = removedAny
+			if opts.Out != nil {
+				for _, kept := range plan.Keep {
+					fmt.Fprintf(opts.Out, "kept volume %s: %s\n", kept.Name, kept.Reason)
+				}
 			}
 			if err != nil {
 				return nil, failure(FailureRunner, "delete volumes failed: "+err.Error(), err)
