@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"relist-panel/internal/composes"
+	"relist-panel/internal/dockerhost"
 	"relist-panel/internal/sources"
 )
 
@@ -168,7 +169,7 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if errors.Is(err, ErrHeld) {
+		if errors.Is(err, ErrHeld) || errors.Is(err, dockerhost.ErrMaintenanceBlocked) {
 			writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}
