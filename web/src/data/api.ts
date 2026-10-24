@@ -295,8 +295,9 @@ export const api = {
   /** The plan behind a Delete: one of the `removalPlanPath` URLs. Reads only; deletes nothing. */
   removalPlan: (path: string) => request<{ composes: RemovalPlanEntry[] }>(path),
   /**
-   * Queues a Deployment: 202 for a new one, 200 when the same request is already
-   * queued. No client timeout: the POST waits behind a same-Project deploy step.
+   * Queues a Deployment: 202 for a new one, 200 when an identical request is already
+   * queued, 409 when one with other options is (the message names it). No client
+   * timeout: the POST waits behind a same-Project deploy step.
    */
   enqueueDeployment: (location: ComposePath, req: DeploymentRequest) =>
     request<{ number: number }>(`${composePath(location)}/deployments`, jsonInit('POST', req)),

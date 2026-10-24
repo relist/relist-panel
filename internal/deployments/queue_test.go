@@ -923,13 +923,76 @@ func TestEnqueueReturnsExistingAndRejectsBadMode(t *testing.T) {
 	if err != nil || !created {
 		t.Fatal(err, created)
 	}
-	second, created, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeSkipBuild})
+	second, created, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeDeploy})
 	if err != nil || created || second.Number != first.Number || second.Mode != ModeDeploy {
 		t.Fatalf("second = %+v created=%v err=%v", second, created, err)
 	}
 	if _, _, err := h.q.Enqueue(context.Background(), h.b, Request{Mode: "bogus"}); err == nil {
 		t.Fatal("bogus mode accepted")
 	}
+}
+
+func TestEnqueueRefusesDifferentOptions(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name          string
+		first, second Request
+	}{
+		{"fresh then plain", Request{Mode: ModeDeploy, FreshVolumes: true}, Request{Mode: ModeDeploy}},
+		{"plain then fresh", Request{Mode: ModeDeploy}, Request{Mode: ModeDeploy, FreshVolumes: true}},
+		{"noCache differs", Request{Mode: ModeBuild}, Request{Mode: ModeBuild, NoCache: true}},
+		{"mode differs", Request{Mode: ModeDeploy}, Request{Mode: ModeSkipBuild}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.newQueue()
+			first, created, err := h.q.Enqueue(ctx, h.a, c.first)
+			if err != nil || !created {
+				t.Fatal(err, created)
+			}
+			_, created, err = h.q.Enqueue(ctx, h.a, c.second)
+			var conflict *QueuedConflictError
+			if !errors.As(err, &conflict) || created {
+				t.Fatalf("err = %v created = %v, want a QueuedConflictError", err, created)
+			}
+			if conflict.Queued.Number != first.Number || conflict.Queued.FreshVolumes != c.first.FreshVolumes ||
+				conflict.Queued.NoCache != c.first.NoCache || conflict.Queued.Mode != c.first.Mode {
+				t.Fatalf("conflict.Queued = %+v, want the first request's options", conflict.Queued)
+			}
+			if got := h.get(h.a, first.Number); got.FreshVolumes != c.first.FreshVolumes {
+				t.Fatalf("queued Deployment changed: %+v", got)
+			}
+		})
+	}
+
+	t.Run("message", func(t *testing.T) {
+		h := newHarness(t)
+		h.newQueue()
+		d, _, err := h.q.Enqueue(ctx, h.a, Request{Mode: ModeDeploy, FreshVolumes: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = h.q.Enqueue(ctx, h.a, Request{Mode: ModeDeploy})
+		want := fmt.Sprintf("deployment #%d is already queued with mode=deploy, noCache=false, freshVolumes=true; cancel it first", d.Number)
+		if err == nil || err.Error() != want {
+			t.Fatalf("err = %v, want %q", err, want)
+		}
+	})
+
+	t.Run("same request twice", func(t *testing.T) {
+		h := newHarness(t)
+		h.newQueue()
+		r := Request{Mode: ModeBuild, NoCache: true, FreshVolumes: true}
+		first, created, err := h.q.Enqueue(ctx, h.a, r)
+		if err != nil || !created {
+			t.Fatal(err, created)
+		}
+		second, created, err := h.q.Enqueue(ctx, h.a, r)
+		if err != nil || created || second.Number != first.Number {
+			t.Fatalf("second = %+v created=%v err=%v", second, created, err)
+		}
+	})
 }
 
 func TestPrunesAfterFinish(t *testing.T) {

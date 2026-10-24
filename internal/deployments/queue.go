@@ -65,6 +65,29 @@ type Request struct {
 // already settled.
 var ErrNotCancelable = errors.New("deployment can no longer be canceled")
 
+// QueuedConflictError refuses a request whose options differ from the
+// Compose's queued Deployment, which would otherwise be reused as it is.
+type QueuedConflictError struct{ Queued Deployment }
+
+func (e *QueuedConflictError) Error() string {
+	return fmt.Sprintf("deployment #%d is already queued with mode=%s, noCache=%t, freshVolumes=%t; cancel it first",
+		e.Queued.Number, e.Queued.Mode, e.Queued.NoCache, e.Queued.FreshVolumes)
+}
+
+// sameRequest reports whether r asks for what the queued Deployment d will do.
+func sameRequest(d Deployment, r Request) bool {
+	return d.Mode == r.Mode && d.NoCache == r.NoCache && d.FreshVolumes == r.FreshVolumes
+}
+
+// reuse returns the Compose's queued Deployment for r: it as it is when r asks
+// for the same, a QueuedConflictError when it asks for something else.
+func reuse(queued Deployment, r Request) (Deployment, bool, error) {
+	if !sameRequest(queued, r) {
+		return Deployment{}, false, &QueuedConflictError{Queued: queued}
+	}
+	return queued, false, nil
+}
+
 // ErrHeld refuses a Deployment while a server Migration holds the queue.
 var ErrHeld = errors.New("deployments are paused while this server is being migrated")
 
@@ -196,7 +219,10 @@ func sleep(ctx context.Context, d time.Duration) {
 	}
 }
 
-// Enqueue queues a Deployment, or returns the Compose's already queued one.
+// Enqueue queues a Deployment, or returns the Compose's already queued one when
+// the request asks for the same. A request for other options is refused with a
+// QueuedConflictError: reusing the queued one would run or drop a wipe of the
+// volumes the caller did not ask for.
 func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deployment, bool, error) {
 	switch r.Mode {
 	case ModeDeploy, ModeBuild, ModeSkipBuild:
@@ -207,7 +233,7 @@ func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deploy
 		return Deployment{}, false, ErrHeld
 	}
 	if existing, err := queuedFor(ctx, q.d.Store.db, composeID); err == nil {
-		return existing, false, nil
+		return reuse(existing, r)
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return Deployment{}, false, err
 	}
@@ -215,7 +241,7 @@ func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deploy
 	if err != nil {
 		var existing *alreadyQueued
 		if errors.As(err, &existing) {
-			return existing.deployment, false, nil
+			return reuse(existing.deployment, r)
 		}
 		return Deployment{}, false, err
 	}
@@ -234,6 +260,9 @@ func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deploy
 	}
 	if err != nil {
 		return Deployment{}, false, err
+	}
+	if !created {
+		return reuse(d, r)
 	}
 	select {
 	case q.wake <- struct{}{}:

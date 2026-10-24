@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -378,6 +379,54 @@ func TestSecondPostWhileQueuedReturnsTheSameNumber(t *testing.T) {
 	}
 	if firstBody["number"] != secondBody["number"] {
 		t.Fatalf("numbers = %v and %v, want the same", firstBody["number"], secondBody["number"])
+	}
+}
+
+func TestDeploymentPostWithDifferentOptionsIs409(t *testing.T) {
+	server := newDeploymentsServer(t)
+	runner := newHoldRunner()
+	server.useRunner(t, runner)
+	runner.hold()
+	running := newDeploymentsFixture(t, server, "Running", "web", plainYAML)
+	t.Cleanup(runner.release)
+	running.post(t, map[string]any{"mode": "deploy"})
+	waitSignal(t, runner.upStarted, "the first deploy to reach Up")
+
+	fresh := map[string]any{"mode": "deploy", "freshVolumes": true, "confirmName": "api"}
+	plain := map[string]any{"mode": "deploy"}
+	cases := []struct {
+		name          string
+		first, second map[string]any
+		wantOptions   string
+	}{
+		{"fresh then plain", fresh, plain, "mode=deploy, noCache=false, freshVolumes=true"},
+		{"plain then fresh", plain, fresh, "mode=deploy, noCache=false, freshVolumes=false"},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			queued := newDeploymentsFixture(t, server, fmt.Sprintf("Queued %d", i), "api", plainYAML)
+			status, first := queued.post(t, c.first)
+			if status != http.StatusAccepted {
+				t.Fatalf("first status = %d, want 202", status)
+			}
+			status, second := queued.post(t, c.second)
+			if status != http.StatusConflict {
+				t.Fatalf("second status = %d, want 409", status)
+			}
+			number := first["number"]
+			if second["number"] != number {
+				t.Fatalf("number = %v, want %v", second["number"], number)
+			}
+			want := fmt.Sprintf("deployment #%v is already queued with %s; cancel it first", number, c.wantOptions)
+			if second["error"] != want {
+				t.Fatalf("error = %v, want %q", second["error"], want)
+			}
+			// The same request still answers 200 with the same number.
+			status, again := queued.post(t, c.first)
+			if status != http.StatusOK || again["number"] != number {
+				t.Fatalf("repeat = %d %v, want 200 %v", status, again, number)
+			}
+		})
 	}
 }
 
