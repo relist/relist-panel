@@ -10,7 +10,7 @@ behind. Put the pragma in the DSN so every connection gets it.
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] DSN becomes `file:<path>?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)`
       (verified: after five interrupted queries every replacement connection reports `foreign_keys=1`)
