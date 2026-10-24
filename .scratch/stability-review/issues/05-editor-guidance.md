@@ -9,7 +9,7 @@ avoid. Static text; the dynamic part is ticket 04.
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** closed
 
 - [ ] Follow AGENTS.md: read Ant Design's `llms.txt` and the relevant component page (Typography /
       Alert) against the installed `antd` 6.5.1, and `docs/GUIDELINES.md`
