@@ -167,7 +167,10 @@ declared size cannot fit the Volume — refused before any stdin is read — or 
 free space measured when it began, in which case its temp file is removed. `write` streams into a
 `.relist-write-*` temp beside its target and renames it over the target only when the stream
 completed (and, with `--expect`, matched that size), so a short or failed stream leaves the original
-untouched (ticket 19); a symlink target keeps the truncate-and-stream path, outside that guarantee.
+untouched (ticket 19). Three targets keep the truncate-and-stream path, outside that guarantee: a
+symlink; a file owned by another user than the operation's, which a rename would hand to the
+operation user and the unprivileged helper cannot chown back; and a file in a directory the
+operation user cannot write, where the temp cannot be created.
 An `extract` exits **4** when the archive was refused — an unsafe entry, a cap exceeded, or not a
 usable tar.gz — so the panel answers 4xx instead of 502: the body is the client's, not the Volume's.
 A `mkdir` or `create` exits **5** when the name is already taken — neither ever merges an existing

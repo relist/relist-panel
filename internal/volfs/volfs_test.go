@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -657,4 +658,69 @@ func TestCreateCreatesAnEmptyFileAndNeverTruncates(t *testing.T) {
 	if string(content) != "keep me" {
 		t.Errorf("notes.txt = %q, want the original content intact", content)
 	}
+}
+
+// fakeInfo is a FileInfo with just the mode and owner replaceAtomically reads.
+type fakeInfo struct {
+	fs.FileInfo
+	mode fs.FileMode
+	sys  any
+}
+
+func (i fakeInfo) Mode() fs.FileMode { return i.mode }
+func (i fakeInfo) Sys() any          { return i.sys }
+
+// Only a missing target, or a regular file the operation user already owns, is
+// replaced through a temp: a symlink keeps the in-place path, and another
+// owner's file stays in place because the rename would hand it to this user
+// and an unprivileged helper cannot chown it back.
+func TestReplaceAtomically(t *testing.T) {
+	owned := func(uid uint32) any { return &syscall.Stat_t{Uid: uid} }
+	tests := []struct {
+		name string
+		info fs.FileInfo
+		want bool
+	}{
+		{"missing target", nil, true},
+		{"regular file owned by the euid", fakeInfo{mode: 0o644, sys: owned(1000)}, true},
+		{"regular file owned by another uid", fakeInfo{mode: 0o644, sys: owned(999)}, false},
+		{"symlink owned by the euid", fakeInfo{mode: fs.ModeSymlink | 0o777, sys: owned(1000)}, false},
+		{"directory", fakeInfo{mode: fs.ModeDir | 0o755, sys: owned(1000)}, false},
+		{"no owner information", fakeInfo{mode: 0o644}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := replaceAtomically(tt.info, 1000); got != tt.want {
+				t.Errorf("replaceAtomically() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// A file the operation user may write inside a directory it may not write
+// cannot be replaced through a temp (the rename needs the directory), so
+// Write falls back to writing in place, as it always did.
+func TestWriteFallsBackInPlaceWhenTheDirectoryIsReadOnly(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	f := newFixture(t)
+	f.plant(t, "locked/app.conf", "old content")
+	if err := os.Chmod(f.path("locked/app.conf"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(f.path("locked"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(f.path("locked"), 0o755) })
+
+	if err := f.Write("locked/app.conf", strings.NewReader("new"), 3); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := os.ReadFile(f.path("locked/app.conf"))
+	if err != nil || string(got) != "new" {
+		t.Errorf("app.conf = %q, %v; want %q", got, err, "new")
+	}
+	noTempLeft(t, f.path("locked"))
 }

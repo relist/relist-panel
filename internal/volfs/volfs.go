@@ -216,20 +216,25 @@ func (fs *FS) Read(name string, dst io.Writer) error {
 // the target, so a failed or cut-off write leaves the original untouched and
 // the target is never opened (ticket 19). expect is the declared size, or
 // negative when unknown; a stream that ends at a different length is
-// ErrIncompleteWrite. A symlink target keeps the truncate-and-stream path —
-// resolving a chain through os.Root is not worth it in v1 — so the atomicity
-// does not cover it. A symlink out of the root is refused exactly as Read
-// refuses it: both resolve the final component through the root.
+// ErrIncompleteWrite. Three cases keep the truncate-and-stream path, outside
+// that guarantee: a symlink target (resolving a chain through os.Root is not
+// worth it in v1), a file owned by another user (a rename would hand it to
+// this one, and the unprivileged helper cannot chown it back), and a file
+// whose directory refuses the temp (the rename needs write access to the
+// directory, an in-place write only to the file). A symlink out of the root
+// is refused exactly as Read refuses it: both resolve the final component
+// through the root.
 func (fs *FS) Write(name string, src io.Reader, expect int64) error {
 	info, err := fs.root.Lstat(name)
 	switch {
-	case err == nil && info.Mode()&os.ModeSymlink != 0:
-		return fs.writeInPlace(name, src, expect)
-	case err == nil && !info.Mode().IsRegular():
-		// A directory or special file: let the open report what it is.
-		return fs.writeInPlace(name, src, expect)
 	case err != nil && !errors.Is(err, os.ErrNotExist):
 		return fmt.Errorf("write %q: %w", name, err)
+	case err != nil:
+		info = nil
+	case !replaceAtomically(info, os.Geteuid()):
+		// A symlink, a directory or special file (the open reports what it
+		// is), or another user's file.
+		return fs.writeInPlace(name, src, expect)
 	}
 
 	var suffix [8]byte
@@ -238,11 +243,22 @@ func (fs *FS) Write(name string, src io.Reader, expect int64) error {
 	}
 	tmp := path.Join(path.Dir(name), ".relist-write-"+hex.EncodeToString(suffix[:]))
 	f, err := fs.root.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o666)
+	if errors.Is(err, os.ErrPermission) && info != nil {
+		// The directory is read-only to this user but the file may not be.
+		return fs.writeInPlace(name, src, expect)
+	}
 	if err != nil {
 		return fmt.Errorf("write %q: %w", name, err)
 	}
 
 	err = copyExpecting(f, src, name, expect)
+	if err == nil {
+		// Flush before the rename, so a power loss cannot leave a
+		// zero-length file in place of the original.
+		if serr := f.Sync(); serr != nil {
+			err = fmt.Errorf("write %q: %w", name, serr)
+		}
+	}
 	if cerr := f.Close(); err == nil && cerr != nil {
 		err = fmt.Errorf("write %q: %w", name, cerr)
 	}
@@ -263,6 +279,24 @@ func (fs *FS) Write(name string, src io.Reader, expect int64) error {
 		return err
 	}
 	return nil
+}
+
+// replaceAtomically decides whether Write may go through a temp and a rename
+// for the target Lstat described (nil when it is missing): a missing target,
+// or a regular file the operation user (euid) already owns. Anything else —
+// a symlink, a directory, a special file, another user's file — is written in
+// place.
+func replaceAtomically(info fs.FileInfo, euid int) bool {
+	if info == nil {
+		return true
+	}
+	if !info.Mode().IsRegular() {
+		return false
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Uid != uint32(euid) {
+		return false
+	}
+	return true
 }
 
 // writeInPlace is Write's truncate-and-stream path, for a target the temp-and-
