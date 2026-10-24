@@ -10,6 +10,9 @@ services:
       RELIST_ACME_EMAIL: ${RELIST_ACME_EMAIL:-}
       TRAEFIK_HTTP_PORT: ${TRAEFIK_HTTP_PORT:-80}
       TRAEFIK_HTTPS_PORT: ${TRAEFIK_HTTPS_PORT:-443}
+      # Go can't see the cgroup mem_limit; keep this under it so the GC steps
+      # in before the kernel OOM-kills the panel.
+      GOMEMLIMIT: 200MiB
     ports:
       # Loopback only: reach the panel through Traefik, or an SSH tunnel when
       # routing is broken. A published port on every interface would bypass TLS.

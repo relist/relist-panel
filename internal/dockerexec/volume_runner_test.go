@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -63,6 +64,8 @@ func TestVolumeArgvForEveryOp(t *testing.T) {
 				"--tmpfs", "/tmp",
 				"--cap-drop", "ALL",
 				"--security-opt", "no-new-privileges",
+				"--memory", "512m",
+				"-e", "GOMEMLIMIT=400MiB",
 				"-v", tt.wantMount,
 				"--entrypoint", "/usr/local/bin/relist-volhelper",
 				testImage,
@@ -74,6 +77,27 @@ func TestVolumeArgvForEveryOp(t *testing.T) {
 				t.Errorf("volumeArgv() =\n\t%q\nwant\n\t%q", got, want)
 			}
 		})
+	}
+}
+
+// Every helper container is memory-limited, so a runaway listing or archive
+// is killed inside its own cgroup instead of taking the panel's host with it.
+// GOMEMLIMIT sits under --memory so the helper's GC works before the kernel's
+// OOM killer does. pack, archive and recursive remove still list whole
+// directories, so the cap is generous. Both flags come before the image,
+// where docker reads them as its own.
+func TestVolumeArgvLimitsMemory(t *testing.T) {
+	got := volumeArgv(testImage, volumes.Request{Source: "demo_pgdata", User: "1000:1000", Op: volumes.OpList, Path: ".", ReadOnly: true})
+
+	image := slices.Index(got, testImage)
+	if image < 0 {
+		t.Fatalf("volumeArgv() = %q, want the image in it", got)
+	}
+	for _, pair := range [][2]string{{"--memory", "512m"}, {"-e", "GOMEMLIMIT=400MiB"}} {
+		at := slices.Index(got, pair[0])
+		if at < 0 || at+1 >= len(got) || got[at+1] != pair[1] || at > image {
+			t.Errorf("volumeArgv() = %q, want %s %s before the image", got, pair[0], pair[1])
+		}
 	}
 }
 
@@ -101,6 +125,8 @@ func TestVolumeArgvPassesSourceUserAndLeadingDashPathVerbatim(t *testing.T) {
 		"--tmpfs", "/tmp",
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
+		"--memory", "512m",
+		"-e", "GOMEMLIMIT=400MiB",
 		"-v", "/srv/app/data:/data:ro",
 		"--entrypoint", "/usr/local/bin/relist-volhelper",
 		testImage,

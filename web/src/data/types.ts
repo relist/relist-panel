@@ -510,6 +510,12 @@ export type VolumeEntry = {
   link?: string;
 };
 
+/**
+ * One directory listing (`GET …/volumes/list`): the helper prints at most
+ * 10,000 entries sorted by name, and `truncated` says it stopped short.
+ */
+export type VolumeListing = { entries: VolumeEntry[]; truncated: boolean };
+
 /** Identity and acknowledged mount risks for every Volume operation. */
 export type VolumeAccess = {
   service?: string;

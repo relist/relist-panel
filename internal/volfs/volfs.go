@@ -116,6 +116,39 @@ func (fs *FS) List(name string) ([]Entry, error) {
 	return entries, nil
 }
 
+// ListFirst is List for the Explorer: the first limit entries by name, and
+// whether more were cut off. Only the names of the whole directory are held —
+// a short string each — and only the first limit are Lstat'd, so a directory
+// of a million entries costs a million names, not a million Entry values and
+// their syscalls. List stays whole for the callers that need every child
+// (pack, archive and recursive remove).
+func (fs *FS) ListFirst(name string, limit int) (entries []Entry, truncated bool, err error) {
+	dir, err := fs.root.Open(name)
+	if err != nil {
+		return nil, false, fmt.Errorf("list %q: %w", name, err)
+	}
+	defer dir.Close()
+
+	names, err := dir.Readdirnames(-1)
+	if err != nil {
+		return nil, false, fmt.Errorf("list %q: %w", name, err)
+	}
+	slices.Sort(names)
+	if len(names) > limit {
+		names, truncated = names[:limit], true
+	}
+
+	entries = make([]Entry, 0, len(names))
+	for _, child := range names {
+		entry, err := fs.entry(path.Join(name, child))
+		if err != nil {
+			return nil, false, fmt.Errorf("list %q: %w", name, err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries, truncated, nil
+}
+
 // Stat describes one path exactly as a List entry would: the entry itself,
 // never following a final symlink, so a link that points outside the root is
 // still describable while Read and Write on it are refused.

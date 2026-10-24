@@ -109,7 +109,7 @@ func TestVolumeOperationsRunTheHelperReadOnly(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
 	fixture := setupExplorerCompose(t, server)
-	server.volumeRunner.Stdout = `{"entries":[]}`
+	server.volumeRunner.Stdout = `{"entries":[{"name":"a.txt","kind":"file","size":1,"mode":420,"mtime":"2026-01-01T00:00:00Z","uid":0,"gid":0}],"truncated":true}`
 
 	tests := []struct {
 		name   string

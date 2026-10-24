@@ -43,7 +43,7 @@ import type {
   ServiceMetrics,
   TerminalServices,
   VolumeAccess,
-  VolumeEntry,
+  VolumeListing,
 } from './types';
 import type { MetricWindow } from './types';
 import type { MigrationStatus } from './migration';
@@ -427,13 +427,14 @@ export const api = {
   deleteOrphanVolume: (location: ComposePath, name: string) =>
     request<void>(`${composePath(location)}/volumes/orphans/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   /**
-   * One directory's entries, from the helper's `list`. `source` must be one
+   * One directory's first entries (a capped, name-sorted listing that says
+   * when it was cut short), from the helper's `list`. `source` must be one
    * of the Compose's resolved sources and `path` is relative to the Volume
    * root (`''` is the root); a refusal — a symlink that escapes, a directory
    * the operation uid cannot read — arrives as the API's own message.
    */
   listVolumeEntries: (location: ComposePath, source: string, path: string, access?: VolumeAccess) =>
-    request<VolumeEntry[]>(
+    request<VolumeListing>(
       `${composePath(location)}/volumes/list?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}${volumeAccessQuery(access)}`,
     ),
   /**

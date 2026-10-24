@@ -24,7 +24,7 @@ func TestVolumeAcknowledgementsBeforeMount(t *testing.T) {
 			server := newTestServer(t)
 			setupAndLogin(t, server)
 			fixture := setupExplorerCompose(t, server)
-			server.volumeRunner.Stdout = "[]"
+			server.volumeRunner.Stdout = `{"entries":[],"truncated":false}`
 			response := server.request(t, http.MethodGet, volumeOpPath(fixture, "list", url.Values{"source": {tc.source}, "user": {tc.user}, "service": {tc.service}, "rootConfirmed": {tc.root}, "bindConfirmed": {tc.bind}}), nil)
 			defer response.Body.Close()
 			if response.StatusCode != tc.want {

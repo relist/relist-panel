@@ -279,7 +279,7 @@ export function VolumeExplorerPage() {
   const confirmedQuery = applied?.query ?? '';
   const listingKey = `${confirmedQuery}\u0000${path}`;
   const listPendingKey = `volume-list:${composeId}:${source}:${path}`;
-  const [listing, setListing] = useState<{ key: string; entries?: VolumeEntry[]; error?: string }>();
+  const [listing, setListing] = useState<{ key: string; entries?: VolumeEntry[]; truncated?: boolean; error?: string }>();
   const [selected, setSelected] = useState<string>();
   const [openError, setOpenError] = useState<{ entry: VolumeEntry; error: string }>();
   // A refused or failed write stays on this screen as an Alert (GUIDELINES §8),
@@ -326,9 +326,9 @@ export function VolumeExplorerPage() {
     const request = ++listRequest.current;
     const key = listingKey;
     try {
-      const entries = await listVolumeEntries(composeId, source, path, access);
+      const { entries, truncated } = await listVolumeEntries(composeId, source, path, access);
       if (listRequest.current === request) {
-        setListing({ key, entries });
+        setListing({ key, entries, truncated });
       }
     } catch (reason: unknown) {
       if (listRequest.current === request) {
@@ -396,11 +396,11 @@ export function VolumeExplorerPage() {
         return;
       }
       try {
-        const entries = await listVolumeEntries(composeId, source, next, access);
+        const { entries, truncated } = await listVolumeEntries(composeId, source, next, access);
         // The listing is already in hand: stash it so following the symlink
         // does not pay for the same read twice.
         listRequest.current += 1;
-        setListing({ key: `${confirmedQuery}\u0000${next}`, entries });
+        setListing({ key: `${confirmedQuery}\u0000${next}`, entries, truncated });
         navigate(paths.volumeExplorer(projectId, environmentId, composeId, source, next));
       } catch (reason: unknown) {
         const refusal = failureMessage(reason);
@@ -1090,27 +1090,37 @@ export function VolumeExplorerPage() {
               title="This directory is empty"
             />
           ) : (
-            <Table<Row>
-              columns={columns}
-              dataSource={rows}
-              loading={isPending(listPendingKey)}
-              onRow={(row) => ({
-                onClick: () => void openEntry(row.entry),
-                style:
-                  row.entry.kind === 'file' || row.entry.kind === 'directory' || row.entry.kind === 'symlink'
-                    ? { cursor: 'pointer' }
-                    : undefined,
-              })}
-              pagination={false}
-              rowKey={(row) => row.entry.name}
-              rowSelection={{
-                getCheckboxProps: (row) => ({ disabled: row.entry.kind !== 'file' }),
-                onChange: (keys) => setSelected(keys.length > 0 ? String(keys[0]) : undefined),
-                selectedRowKeys: selected ? [selected] : [],
-                type: 'radio',
-              }}
-              size="middle"
-            />
+            <>
+              {currentListing.truncated && (
+                <Alert
+                  showIcon
+                  style={{ marginBottom: LAYOUT.gutterSmall }}
+                  title="Showing the first 10,000 entries."
+                  type="info"
+                />
+              )}
+              <Table<Row>
+                columns={columns}
+                dataSource={rows}
+                loading={isPending(listPendingKey)}
+                onRow={(row) => ({
+                  onClick: () => void openEntry(row.entry),
+                  style:
+                    row.entry.kind === 'file' || row.entry.kind === 'directory' || row.entry.kind === 'symlink'
+                      ? { cursor: 'pointer' }
+                      : undefined,
+                })}
+                pagination={false}
+                rowKey={(row) => row.entry.name}
+                rowSelection={{
+                  getCheckboxProps: (row) => ({ disabled: row.entry.kind !== 'file' }),
+                  onChange: (keys) => setSelected(keys.length > 0 ? String(keys[0]) : undefined),
+                  selectedRowKeys: selected ? [selected] : [],
+                  type: 'radio',
+                }}
+                size="middle"
+              />
+            </>
           )}
           <Paragraph style={{ marginBottom: 0, marginTop: LAYOUT.gutterSmall }} type="secondary">
             New folders and files are created here as the confirmed operation user, uploads land in this directory,

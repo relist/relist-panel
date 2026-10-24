@@ -58,9 +58,36 @@ func plant(t *testing.T, root, rel string, content []byte) string {
 	return full
 }
 
-// TestListReturnsAJSONArrayOfEntries pins list's output shape: one JSON array,
-// each element volfs.Entry's shape, one level deep, with a symlink's target
-// described.
+// TestListPrintsEntriesAndTruncated pins the cap: past listLimit names the
+// helper prints the first listLimit by name and says it cut the rest.
+func TestListPrintsEntriesAndTruncated(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < listLimit+5; i++ {
+		plant(t, root, fmt.Sprintf("f%05d", i), nil)
+	}
+
+	code, stdout, stderr := runHelper(t, root, nil, "list", "--", ".")
+	if code != 0 {
+		t.Fatalf("list exit = %d, stderr = %q", code, stderr)
+	}
+	var listing struct {
+		Entries   []volfs.Entry `json:"entries"`
+		Truncated bool          `json:"truncated"`
+	}
+	if err := json.Unmarshal(stdout, &listing); err != nil {
+		t.Fatalf("list stdout is not a JSON object: %v", err)
+	}
+	if len(listing.Entries) != listLimit || !listing.Truncated {
+		t.Fatalf("list = %d entries truncated=%v, want %d and truncated", len(listing.Entries), listing.Truncated, listLimit)
+	}
+	if first, last := listing.Entries[0].Name, listing.Entries[listLimit-1].Name; first != "f00000" || last != fmt.Sprintf("f%05d", listLimit-1) {
+		t.Errorf("list first/last = %q/%q, want the first %d names in order", first, last, listLimit)
+	}
+}
+
+// TestListReturnsAJSONArrayOfEntries pins list's output shape: one JSON object
+// whose entries are volfs.Entry's shape, one level deep, with a symlink's
+// target described.
 func TestListReturnsAJSONArrayOfEntries(t *testing.T) {
 	root := t.TempDir()
 	plant(t, root, "plain.txt", []byte("hello"))
@@ -77,9 +104,16 @@ func TestListReturnsAJSONArrayOfEntries(t *testing.T) {
 		t.Errorf("list stderr = %q, want empty", stderr)
 	}
 
-	var entries []volfs.Entry
-	if err := json.Unmarshal(stdout, &entries); err != nil {
-		t.Fatalf("list stdout is not a JSON array: %v\n%s", err, stdout)
+	var listing struct {
+		Entries   []volfs.Entry `json:"entries"`
+		Truncated bool          `json:"truncated"`
+	}
+	if err := json.Unmarshal(stdout, &listing); err != nil {
+		t.Fatalf("list stdout is not a JSON object: %v\n%s", err, stdout)
+	}
+	entries := listing.Entries
+	if listing.Truncated {
+		t.Error("list truncated = true for three entries, want false")
 	}
 	names := make([]string, 0, len(entries))
 	kinds := map[string]volfs.Kind{}
@@ -112,8 +146,8 @@ func TestListReturnsAJSONArrayOfEntries(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("list empty exit = %d, stderr = %q", code, stderr)
 	}
-	if strings.TrimSpace(string(stdout)) != "[]" {
-		t.Errorf("list empty stdout = %q, want []", stdout)
+	if strings.TrimSpace(string(stdout)) != `{"entries":[],"truncated":false}` {
+		t.Errorf("list empty stdout = %q, want an empty entries array, never null", stdout)
 	}
 
 	// An operation failure goes to stderr only; stdout stays empty and the

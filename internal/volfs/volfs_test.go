@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -134,6 +135,37 @@ func TestEscapingPathsFailWithGoRootsOwnError(t *testing.T) {
 	// root that does not exist — never the sibling they would decode to.
 	if _, err := f.Stat("%2e%2e%2fsecret.txt"); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("Stat(percent-encoded) error = %v, want fs.ErrNotExist", err)
+	}
+}
+
+// ListFirst is List capped: it keeps the first limit names in name order and
+// reports that it cut the rest off, and it stats nothing past the cap.
+func TestListFirstTruncatesSortedByName(t *testing.T) {
+	f := newFixture(t)
+	for i := 11; i >= 0; i-- {
+		f.plant(t, fmt.Sprintf("f%02d.txt", i), "x")
+	}
+
+	entries, truncated, err := f.ListFirst(".", 10)
+	if err != nil {
+		t.Fatalf("ListFirst limit 10 error = %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name)
+	}
+	want := []string{"f00.txt", "f01.txt", "f02.txt", "f03.txt", "f04.txt", "f05.txt", "f06.txt", "f07.txt", "f08.txt", "f09.txt"}
+	if !reflect.DeepEqual(names, want) || !truncated {
+		t.Errorf("ListFirst limit 10 = %q truncated=%v, want the first ten by name and truncated", names, truncated)
+	}
+
+	entries, truncated, err = f.ListFirst(".", 12)
+	if err != nil || len(entries) != 12 || truncated {
+		t.Errorf("ListFirst limit 12 = %d entries truncated=%v err=%v, want 12 and not truncated", len(entries), truncated, err)
+	}
+	entries, truncated, err = f.ListFirst(".", 20)
+	if err != nil || len(entries) != 12 || truncated {
+		t.Errorf("ListFirst limit 20 = %d entries truncated=%v err=%v, want 12 and not truncated", len(entries), truncated, err)
 	}
 }
 

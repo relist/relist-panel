@@ -41,6 +41,11 @@ import (
 // declared source, nothing else, ever (the spec's Run spec).
 const dataDir = "/data"
 
+// listLimit caps how many entries `list` prints: a directory of a million
+// files would otherwise cost the helper, the panel's buffer and the browser
+// ~138 B each. The listing says when it stopped short.
+const listLimit = 10000
+
 // usage is printed for every malformed invocation: an unknown op, a missing
 // argument, or anything that is not exactly the protocol's shape.
 const usage = `usage:
@@ -120,11 +125,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, rootDir strin
 
 	switch cmd.op {
 	case "list":
-		entries, err := vol.List(cmd.name)
+		entries, truncated, err := vol.ListFirst(cmd.name, listLimit)
 		if err != nil {
 			return fail(stderr, err)
 		}
-		if err := json.NewEncoder(stdout).Encode(entries); err != nil {
+		listing := struct {
+			Entries   []volfs.Entry `json:"entries"`
+			Truncated bool          `json:"truncated"`
+		}{entries, truncated}
+		if err := json.NewEncoder(stdout).Encode(listing); err != nil {
 			return fail(stderr, fmt.Errorf("write listing: %w", err))
 		}
 		return exitOK
