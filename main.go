@@ -171,7 +171,8 @@ func main() {
 			Restart:  restart,
 			Control:  control,
 		},
-		Docker: dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
+		Docker:      dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
+		PanelDomain: cfg.Install.Domain,
 	})
 	server := &http.Server{Addr: cfg.Address(), Handler: handler}
 	controlServer, err := serveControl(cfg.ControlSocket, control)

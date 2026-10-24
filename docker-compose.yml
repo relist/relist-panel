@@ -27,9 +27,12 @@ services:
       - traefik.http.routers.panel.entrypoints=websecure
       - traefik.http.routers.panel.tls.certresolver=letsencrypt
       - traefik.http.routers.panel.service=panel
+      # Top priority, so no Domain's longer rule can outrank the panel's own host.
+      - traefik.http.routers.panel.priority=100000
       - traefik.http.routers.panel-http.rule=Host(`${RELIST_DOMAIN:-panel.localhost}`)
       - traefik.http.routers.panel-http.entrypoints=web
       - traefik.http.routers.panel-http.middlewares=panel-redirect
+      - traefik.http.routers.panel-http.priority=100000
       - traefik.http.routers.panel-http.service=panel
       - traefik.http.middlewares.panel-redirect.redirectscheme.scheme=https
       - traefik.http.middlewares.panel-redirect.redirectscheme.permanent=true

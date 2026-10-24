@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"relist-panel/internal/httpapi"
 )
 
 type domainResponse struct {
@@ -469,5 +472,49 @@ func TestDeployNamesLegacyComposeRoutersFromDatabaseIDs(t *testing.T) {
 		if strings.Contains(line, "traefik.") && strings.Contains(line, "legacy-domains") {
 			t.Fatalf("label %q derives a Traefik name from slugs", line)
 		}
+	}
+}
+
+// useHandlerWithPanelDomain swaps the server's handler for one that knows the
+// install's panel host.
+func (s *testServer) useHandlerWithPanelDomain(t *testing.T, panelDomain string) {
+	t.Helper()
+	s.stopWorker()
+	ctx, cancel := context.WithCancel(context.Background())
+	handler, wait := httpapi.NewHandler(ctx, httpapi.Deps{DB: s.db, Runner: s.runner, DataDir: s.dataDir, PanelDomain: panelDomain})
+	t.Cleanup(func() { cancel(); wait() })
+	s.handler = handler
+}
+
+func TestDomainOnPanelHostIsRefused(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	f := newDomainsCompose(t, server, "shop", "web")
+	other := f.createDomain(t, "shop.example.com", "/")
+	server.useHandlerWithPanelDomain(t, "panel.example.com")
+
+	const want = "host is the panel's own domain; pick another host"
+	refused := func(response *http.Response, raw []byte) {
+		t.Helper()
+		var body struct{ Error, Field string }
+		_ = json.Unmarshal(raw, &body)
+		if response.StatusCode != http.StatusBadRequest || body.Field != "host" || body.Error != want {
+			t.Errorf("status = %d, body %s; want 400 host error %q", response.StatusCode, raw, want)
+		}
+	}
+	refused(f.send(t, http.MethodPost, "/domains", domainBody("Panel.Example.com", "/api")))
+	refused(f.send(t, http.MethodPost, "/domains", domainBody(" panel.example.com ", "/")))
+	refused(f.send(t, http.MethodPut, "/domains/"+idString(other.ID), domainBody("PANEL.example.com", "/")))
+
+	if response, raw := f.send(t, http.MethodPut, "/domains/"+idString(other.ID), domainBody("shop2.example.com", "/")); response.StatusCode != http.StatusOK {
+		t.Errorf("update to another host status = %d, body %s", response.StatusCode, raw)
+	}
+	if response, raw := f.send(t, http.MethodPost, "/domains", domainBody("app.example.com", "/api")); response.StatusCode != http.StatusCreated {
+		t.Errorf("create on another host status = %d, body %s", response.StatusCode, raw)
+	}
+
+	server.useHandlerWithPanelDomain(t, "")
+	if response, raw := f.send(t, http.MethodPost, "/domains", domainBody("panel.example.com", "/")); response.StatusCode != http.StatusCreated {
+		t.Errorf("unknown panel domain must refuse nothing: status = %d, body %s", response.StatusCode, raw)
 	}
 }

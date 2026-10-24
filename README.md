@@ -106,9 +106,12 @@ when the host's DNS points at this machine and port 80 is reachable from the
 internet. When it cannot, Traefik serves its default self-signed certificate and
 logs the ACME error; the panel cannot see this.
 
-Two limits on Domains: a hand-written router in another Compose, or one for
-`RELIST_DOMAIN`, that uses the same host as a Domain is not detected, and
-Traefik picks one of the two routers by priority. A custom resolver name that
+The panel refuses a Domain whose host is `RELIST_DOMAIN`, and its own routers
+carry the top Traefik priority, so no Domain can take the panel's traffic. A
+Domain that already uses that host is left as it is: change its host in the
+Domains tab. One limit on Domains: a hand-written router in another Compose that
+uses the same host as a Domain is not detected, and Traefik picks one of the
+two routers by priority. A custom resolver name that
 Traefik does not know shows only in Traefik's log.
 
 Image uploads through the domain must finish within one hour: Traefik's read
@@ -140,6 +143,10 @@ Traefik's log says why. To upgrade:
 4. Run `docker compose up -d`.
 
 Composes with hand-written Traefik labels keep routing as before.
+
+Every upgrade that changes the panel's Traefik labels, such as the router
+priority added to keep a Domain from taking the panel's host, needs the panel
+container recreated: run `docker compose up -d` so it picks the labels up.
 
 `RELIST_ADMIN_EMAIL` and `RELIST_ADMIN_PASSWORD` are no longer read; the
 admin they created stays. Remove them from `.env`, and if **Account** still

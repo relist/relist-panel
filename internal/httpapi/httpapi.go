@@ -59,6 +59,10 @@ type Deps struct {
 	Migration *migration.Options
 	// Docker adds host reports and confirmed cleanup.
 	Docker dockerhost.Engine
+	// PanelDomain is the install's RELIST_DOMAIN. A Domain cannot take this
+	// host, or Traefik could route the panel's own traffic to an app. Empty
+	// means unknown and refuses nothing.
+	PanelDomain string
 }
 
 // NewHandler builds the top-level HTTP handler for the panel.
@@ -107,7 +111,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		queue.Run(ctx)
 	}()
 	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
-	domains.New(db).RegisterRoutes(mux)
+	domains.New(db).WithPanelHost(d.PanelDomain).RegisterRoutes(mux)
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
 	volumeapi.New(composesService, d.VolumeResolver, d.VolumeRunner).RegisterRoutes(mux)
