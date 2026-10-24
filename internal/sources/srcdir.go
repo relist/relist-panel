@@ -3,8 +3,10 @@ package sources
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // MarkerName is the file that says a Compose's src/ belongs to its Source.
@@ -83,4 +85,88 @@ func ReplaceSrc(composeDir, newDir string) error {
 		}
 	}
 	return nil
+}
+
+// CleanStaging clears what a crash mid-upload leaves in a Compose directory:
+// .upload-*.zip, .src.new-* and .src.old. A missing src/ with a .src.old means
+// ReplaceSrc died between its two renames, and the database still describes
+// that old tree, so it is put back before anything is removed. With neither a
+// src/ nor a .src.old, a .src.new-* may be the only copy and stays. Matches
+// are direct children only, and a link is removed as a link.
+func CleanStaging(composeDir string) error {
+	entries, err := os.ReadDir(composeDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("list %s: %w", composeDir, err)
+	}
+	var uploads, staged []string
+	hasOld := false
+	for _, e := range entries {
+		name := e.Name()
+		switch {
+		case strings.HasPrefix(name, ".upload-") && strings.HasSuffix(name, ".zip"):
+			uploads = append(uploads, name)
+		case strings.HasPrefix(name, ".src.new-"):
+			staged = append(staged, name)
+		case name == ".src.old":
+			hasOld = true
+		}
+	}
+
+	var errs []error
+	remove := func(name string) {
+		path := filepath.Join(composeDir, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return
+		}
+		if info.IsDir() {
+			err = os.RemoveAll(path)
+		} else {
+			err = os.Remove(path)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("remove %s: %w", path, err))
+		}
+	}
+	for _, name := range uploads {
+		remove(name)
+	}
+
+	src := filepath.Join(composeDir, "src")
+	old := filepath.Join(composeDir, ".src.old")
+	srcInfo, srcErr := os.Lstat(src)
+	switch {
+	case srcErr == nil && srcInfo.IsDir():
+	case errors.Is(srcErr, os.ErrNotExist):
+		oldInfo, err := os.Lstat(old)
+		if !hasOld || err != nil || !oldInfo.IsDir() {
+			if len(staged) > 0 {
+				log.Printf("sources: %s has no src/ and no .src.old but keeps %d staged tree(s); left in place", composeDir, len(staged))
+			}
+			if hasOld {
+				remove(".src.old")
+			}
+			return errors.Join(errs...)
+		}
+		if err := os.Rename(old, src); err != nil {
+			errs = append(errs, fmt.Errorf("restore %s: %w", old, err))
+			return errors.Join(errs...)
+		}
+		log.Printf("sources: restored %s from .src.old after an interrupted upload", src)
+		hasOld = false
+	default:
+		// src/ is not a directory the panel can reason about; touch nothing else.
+		return errors.Join(errs...)
+	}
+
+	for _, name := range staged {
+		remove(name)
+	}
+	if hasOld {
+		remove(".src.old")
+	}
+	return errors.Join(errs...)
 }

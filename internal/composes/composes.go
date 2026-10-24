@@ -1233,3 +1233,26 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
+
+// ComposeDirs lists the directory of every Compose row, legacy identities
+// included, resolved the same way a deploy resolves it.
+func ComposeDirs(ctx context.Context, db *sql.DB, dataDir string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, project_slug, env_slug, name, identity_version
+		FROM composes
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list compose directories: %w", err)
+	}
+	defer rows.Close()
+
+	var dirs []string
+	for rows.Next() {
+		var compose Compose
+		if err := rows.Scan(&compose.ID, &compose.ProjectSlug, &compose.EnvSlug, &compose.Name, &compose.IdentityVersion); err != nil {
+			return nil, fmt.Errorf("scan compose directory: %w", err)
+		}
+		dirs = append(dirs, ComposeDir(runRequestFor(dataDir, compose)))
+	}
+	return dirs, rows.Err()
+}

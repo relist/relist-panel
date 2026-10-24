@@ -24,6 +24,7 @@ import (
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/migration"
 	"relist-panel/internal/migrationcli"
+	"relist-panel/internal/sources"
 	"relist-panel/internal/terminal"
 	"relist-panel/internal/volumes"
 )
@@ -116,6 +117,11 @@ func main() {
 	if err := composes.BackfillLegacyIdentities(ctx, db); err != nil {
 		log.Fatal(err)
 	}
+
+	// A crash mid-upload leaves staging files in a Compose directory, and one
+	// between ReplaceSrc's renames leaves src/ missing; settle both before any
+	// request can touch a Source. A failure is logged, never fatal.
+	cleanSourceStaging(ctx, db, cfg.DataDir)
 
 	// The metrics loop (ADR-0006): one sampler for the panel's lifetime,
 	// with the 30s container sweep and the 5-minute docker df refresh
@@ -289,5 +295,19 @@ func knownComposeProjects(db *sql.DB) hostmetrics.KnownProjects {
 			known[compose.DeployProjectName()] = true
 		}
 		return known, rows.Err()
+	}
+}
+
+// cleanSourceStaging runs sources.CleanStaging over every Compose directory.
+func cleanSourceStaging(ctx context.Context, db *sql.DB, dataDir string) {
+	dirs, err := composes.ComposeDirs(ctx, db, dataDir)
+	if err != nil {
+		log.Printf("warning: could not list Compose directories to clear upload leftovers: %v", err)
+		return
+	}
+	for _, dir := range dirs {
+		if err := sources.CleanStaging(dir); err != nil {
+			log.Printf("warning: clearing upload leftovers in %s: %v", dir, err)
+		}
 	}
 }
