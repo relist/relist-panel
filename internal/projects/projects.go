@@ -221,11 +221,13 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "compose teardown is unavailable")
 		return
 	}
-	if err := s.teardown.TeardownProject(r.Context(), id); err != nil {
+	ctx, cancel := composes.LifecycleContext(r.Context())
+	defer cancel()
+	if err := s.teardown.TeardownProject(ctx, id); err != nil {
 		writeError(w, http.StatusBadGateway, "project teardown failed: "+err.Error())
 		return
 	}
-	deleted, err := s.repository.delete(r.Context(), id)
+	deleted, err := s.repository.delete(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete project")
 		return
