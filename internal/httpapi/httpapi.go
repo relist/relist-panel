@@ -25,6 +25,7 @@ import (
 	"relist-panel/internal/projects"
 	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
+	"relist-panel/internal/sshkeys"
 	"relist-panel/internal/terminal"
 	"relist-panel/internal/variablesets"
 	"relist-panel/internal/volumeapi"
@@ -112,6 +113,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		queue.Run(ctx)
 	}()
 	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
+	sshkeys.New(db).RegisterRoutes(mux)
 	domains.New(db).WithPanelHost(d.PanelDomain).RegisterRoutes(mux)
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
