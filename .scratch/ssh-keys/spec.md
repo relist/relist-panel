@@ -1,7 +1,7 @@
 # Spec — SSH keys as a host-wide library chosen by each Git Source
 
 Date: 2026-10-25.
-Status: needs-triage
+Status: closed — built on branch feat/ssh-keys
 
 ## Problem
 
