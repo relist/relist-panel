@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, MenuOutlined, RocketOutlined, SyncOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SyncOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -88,6 +88,8 @@ export function AppShell() {
             ? 'docker'
           : resolved.pattern === 'images'
             ? 'images'
+          : resolved.pattern === 'ssh-keys'
+            ? 'ssh-keys'
           : resolved.pattern === '/'
             ? 'overview'
             : undefined
@@ -119,6 +121,7 @@ export function AppShell() {
     { key: 'monitoring', icon: <DashboardOutlined />, label: 'Monitoring' },
     { key: 'docker', icon: <CloudServerOutlined />, label: 'Docker' },
     { key: 'images', icon: <ContainerOutlined />, label: 'Images' },
+    { key: 'ssh-keys', icon: <KeyOutlined />, label: 'SSH keys' },
     {
       type: 'group',
       label: 'Recent Projects',
@@ -146,6 +149,7 @@ export function AppShell() {
     if (key === 'deployments') return navigate(paths.deployments);
     if (key === 'docker') return navigate(paths.docker);
     if (key === 'images') return navigate(paths.images);
+    if (key === 'ssh-keys') return navigate(paths.sshKeys);
     const projectId = Number(String(key).replace('project-', ''));
     if (Number.isFinite(projectId)) void navigate(paths.project(projectId));
   };
@@ -165,6 +169,8 @@ export function AppShell() {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Docker' });
       } else if (resolved?.pattern === 'images') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Images' });
+      } else if (resolved?.pattern === 'ssh-keys') {
+        trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'SSH keys' });
       }
       return trail;
     }
