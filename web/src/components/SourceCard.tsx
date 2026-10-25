@@ -1,4 +1,4 @@
-import { Button, Card, Flex, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Flex, Tag, Typography } from 'antd';
 
 import { buildServices, sourceCardState } from '../data/source-view';
 import type { ComposeSource, Deployment } from '../data/types';
@@ -70,6 +70,7 @@ export function SourceCard({
 
         {source.kind === 'git' ? (
           <>
+            {state.noKey && <Alert showIcon title="No SSH key — choose one before deploying." type="warning" />}
             {source.lastTest && (
               <Text style={{ fontSize: 12 }} type={source.lastTest.ok ? 'success' : 'danger'}>
                 {source.lastTest.ok ? 'Connected' : 'Connection failed'} · <RelativeTime value={source.lastTest.at} />

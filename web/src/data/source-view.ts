@@ -8,12 +8,14 @@ export type SourceCardState = {
   builtLine: string;
   newCommits: boolean;
   notBuilt: boolean;
+  /** A git Source whose SSH key is unset (never chosen, or its key was deleted): it cannot fetch. */
+  noKey: boolean;
 };
 
 /** What the Source card shows, given the Source and the Compose's last successful build (if any). */
 export function sourceCardState(src: ComposeSource | null, lastBuilt: Deployment | undefined): SourceCardState {
   if (!src) {
-    return { kind: 'none', title: 'No Source', builtLine: '', newCommits: false, notBuilt: false };
+    return { kind: 'none', title: 'No Source', builtLine: '', newCommits: false, notBuilt: false, noKey: false };
   }
   const built = lastBuilt?.status === 'succeeded' ? lastBuilt : undefined;
   const builtLine = built
@@ -26,7 +28,7 @@ export function sourceCardState(src: ComposeSource | null, lastBuilt: Deployment
     // not what that build used, and the upload is not blocked then.
     const startedAt = built ? Date.parse(built.startedAt ?? built.queuedAt) : NaN;
     const notBuilt = !built || (Number.isFinite(uploadedAt) && uploadedAt > startedAt);
-    return { kind: 'zip', title: src.zip?.name ?? 'Uploaded zip', builtLine, newCommits: false, notBuilt };
+    return { kind: 'zip', title: src.zip?.name ?? 'Uploaded zip', builtLine, newCommits: false, notBuilt, noKey: false };
   }
 
   const newCommits = src.headSha !== '' && built !== undefined && src.headSha !== built.sourceRef;
@@ -36,6 +38,7 @@ export function sourceCardState(src: ComposeSource | null, lastBuilt: Deployment
     builtLine,
     newCommits,
     notBuilt: !built,
+    noKey: src.sshKey === null,
   };
 }
 

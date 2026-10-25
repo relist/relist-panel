@@ -48,6 +48,13 @@ function build(overrides: Partial<Deployment> = {}): Deployment {
 }
 
 describe('sourceCardState', () => {
+  it('flags a git Source without an SSH key', () => {
+    expect(sourceCardState(git({ sshKey: null }), undefined).noKey).toBe(true);
+    expect(sourceCardState(git({ sshKey: { id: 1, name: 'ci', publicKey: 'k' } }), undefined).noKey).toBe(false);
+    expect(sourceCardState(zip('2026-01-01T00:00:00Z'), undefined).noKey).toBe(false);
+    expect(sourceCardState(null, undefined).noKey).toBe(false);
+  });
+
   it('is none without a Source', () => {
     const state = sourceCardState(null, undefined);
     expect(state.kind).toBe('none');

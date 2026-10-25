@@ -120,6 +120,21 @@ describe('Compose Source loading', () => {
   });
 });
 
+describe('Source card key warning', () => {
+  it('warns when a git Source has no SSH key', async () => {
+    vi.spyOn(api, 'getSource').mockResolvedValue({ ...source, sshKey: null });
+    renderPage();
+    expect(await screen.findByText('No SSH key — choose one before deploying.')).toBeTruthy();
+  });
+
+  it('shows no warning when the Source has a key', async () => {
+    vi.spyOn(api, 'getSource').mockResolvedValue(source);
+    renderPage();
+    await screen.findByText(/acme\/old/);
+    expect(screen.queryByText('No SSH key — choose one before deploying.')).toBeNull();
+  });
+});
+
 describe('Fresh volumes confirmation', () => {
   it('warns before submitting that deletion survives failure and requires a backup', async () => {
     vi.spyOn(api, 'getSource').mockResolvedValue(null);

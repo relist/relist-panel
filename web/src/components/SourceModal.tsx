@@ -2,9 +2,10 @@ import { InboxOutlined } from '@ant-design/icons';
 import { Alert, Button, Divider, Flex, Input, Modal, Popconfirm, Segmented, Select, Switch, Typography, Upload } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 
-import { api } from '../data/api';
+import { paths } from '../app/paths';
+import { ApiError, api } from '../data/api';
 import type { ComposePath } from '../data/api';
-import type { ComposeSource } from '../data/types';
+import type { ComposeSource, SshKey } from '../data/types';
 
 const { Dragger } = Upload;
 const { Paragraph, Text } = Typography;
@@ -20,7 +21,7 @@ const SAVE_URL_DELAY_MS = 600;
 
 /**
  * Configures a Compose's Source. The Git flow saves the SSH URL as soon as it
- * is valid so the Deploy key exists; Test connection fills Branch; Save stores
+ * is valid; the SSH key comes from the library; Test connection fills Branch; Save stores
  * branch and submodules. Every API failure shows in an Alert inside the modal.
  * `onSaved(source, firstTime)`: `firstTime` is true when this save or upload
  * created the Source.
@@ -37,7 +38,7 @@ export function SourceModal({
 }: {
   initialMode?: Mode;
   location: ComposePath;
-  /** The Source changed server side (key regenerated, connection tested): re-read it. */
+  /** The Source changed server side (connection tested): re-read it. */
   onChanged: () => void;
   onClose: () => void;
   onRemoved: () => void;
@@ -50,7 +51,8 @@ export function SourceModal({
   const [branch, setBranch] = useState('');
   const [submodules, setSubmodules] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
-  const [publicKey, setPublicKey] = useState('');
+  const [keys, setKeys] = useState<SshKey[] | null>(null);
+  const [sshKeyId, setSshKeyId] = useState<number | null>(null);
   const [testError, setTestError] = useState('');
   const [testOk, setTestOk] = useState(false);
   const [error, setError] = useState('');
@@ -74,7 +76,7 @@ export function SourceModal({
     setBranch(current?.branch ?? '');
     setSubmodules(current?.submodules ?? false);
     setBranches([]);
-    setPublicKey(current?.sshKey?.publicKey ?? '');
+    setSshKeyId(current?.sshKey?.id ?? null);
     setTestError('');
     setTestOk(false);
     setError('');
@@ -82,6 +84,30 @@ export function SourceModal({
   }, [initialMode, open]);
 
   const fail = (reason: unknown) => setError(reason instanceof Error ? reason.message : 'Something went wrong');
+
+  const loadKeys = async () => {
+    try {
+      setKeys(await api.listSshKeys());
+    } catch (reason) {
+      fail(reason);
+    }
+  };
+
+  useEffect(() => {
+    if (open) {
+      setKeys(null);
+      void loadKeys();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadKeys only closes over setters
+  }, [open]);
+
+  /** The server no longer has the chosen key (deleted elsewhere): drop the choice and re-read the library. */
+  const dropUnknownKey = (reason: unknown) => {
+    if (reason instanceof ApiError && reason.status === 400 && reason.message === 'unknown SSH key') {
+      setSshKeyId(null);
+      void loadKeys();
+    }
+  };
 
   const persistUrl = async (value: string) => {
     const trimmed = value.trim();
@@ -96,12 +122,36 @@ export function SourceModal({
         kind: 'git',
         repoUrl: trimmed,
         submodules,
-        sshKeyId: sourceRef.current?.sshKey?.id ?? null,
+        sshKeyId,
       });
-      setPublicKey(saved.sshKey?.publicKey ?? '');
       onSaved(saved, false);
     } catch (reason) {
       savedUrl.current = '';
+      dropUnknownKey(reason);
+      fail(reason);
+    }
+  };
+
+  /** Choosing a key saves it at once when the URL is already valid; otherwise the URL's own save carries it. */
+  const chooseKey = async (id: number) => {
+    setSshKeyId(id);
+    const trimmed = url.trim();
+    if (!isValidSshUrl(trimmed)) {
+      return;
+    }
+    setError('');
+    try {
+      const saved = await api.saveSource(location, {
+        branch: sourceRef.current?.branch ?? '',
+        kind: 'git',
+        repoUrl: trimmed,
+        submodules,
+        sshKeyId: id,
+      });
+      savedUrl.current = trimmed;
+      onSaved(saved, false);
+    } catch (reason) {
+      dropUnknownKey(reason);
       fail(reason);
     }
   };
@@ -116,7 +166,9 @@ export function SourceModal({
     return () => clearTimeout(timer);
   }, [open, url]);
 
-  const urlSaved = savedUrl.current !== '' && url.trim() === savedUrl.current && publicKey !== '';
+  const urlSaved = savedUrl.current !== '' && url.trim() === savedUrl.current;
+  const canTest = urlSaved && sshKeyId !== null;
+  const chosenKey = keys?.find((k) => k.id === sshKeyId);
 
   const run = async (name: string, action: () => Promise<void>) => {
     setBusy(name);
@@ -124,6 +176,7 @@ export function SourceModal({
     try {
       await action();
     } catch (reason) {
+      dropUnknownKey(reason);
       fail(reason);
     } finally {
       setBusy('');
@@ -146,7 +199,7 @@ export function SourceModal({
 
   const save = () =>
     run('save', async () => {
-      const saved = await api.saveSource(location, { branch, kind: 'git', repoUrl: url.trim(), submodules, sshKeyId: source?.sshKey?.id ?? null });
+      const saved = await api.saveSource(location, { branch, kind: 'git', repoUrl: url.trim(), submodules, sshKeyId });
       onSaved(saved, wasNew.current);
       onClose();
     });
@@ -206,20 +259,45 @@ export function SourceModal({
               />
             </Flex>
 
-            {publicKey && (
-              <Flex gap={4} vertical>
-                <Text strong>Deploy key</Text>
-                <Paragraph copyable={{ text: publicKey }} style={{ marginBottom: 0, wordBreak: 'break-all' }}>
-                  <Text code>{publicKey}</Text>
-                </Paragraph>
-                <Text style={{ fontSize: 12 }} type="secondary">
-                  Repository → Settings → Deploy keys → Add deploy key, leave write access off
-                </Text>
-              </Flex>
-            )}
+            <Flex gap={4} vertical>
+              <label htmlFor="source-ssh-key">
+                <Text strong>SSH key</Text>
+              </label>
+              {keys !== null && keys.length === 0 ? (
+                <Flex align="center" gap={8} wrap>
+                  <Text type="secondary">No SSH keys yet</Text>
+                  <a href={paths.sshKeys} rel="noreferrer" target="_blank">
+                    Create one in SSH keys
+                  </a>
+                  <Button onClick={() => void loadKeys()} size="small">
+                    Reload
+                  </Button>
+                </Flex>
+              ) : (
+                <Select
+                  aria-label="SSH key"
+                  id="source-ssh-key"
+                  loading={keys === null}
+                  onChange={(id: number) => void chooseKey(id)}
+                  options={(keys ?? []).map((k) => ({ label: k.name, value: k.id }))}
+                  placeholder="Choose an SSH key"
+                  value={sshKeyId ?? undefined}
+                />
+              )}
+              {chosenKey && (
+                <>
+                  <Paragraph copyable={{ text: chosenKey.publicKey }} style={{ marginBottom: 0, wordBreak: 'break-all' }}>
+                    <Text code>{chosenKey.publicKey}</Text>
+                  </Paragraph>
+                  <Text style={{ fontSize: 12 }} type="secondary">
+                    Repository → Settings → Deploy keys → Add deploy key, leave write access off
+                  </Text>
+                </>
+              )}
+            </Flex>
 
             <Flex align="center" gap={8}>
-              <Button disabled={!urlSaved} loading={busy === 'test'} onClick={() => void test()}>
+              <Button disabled={!canTest} loading={busy === 'test'} onClick={() => void test()}>
                 Test connection
               </Button>
               {testOk && <Text type="success">Connected</Text>}
@@ -284,11 +362,9 @@ export function SourceModal({
               </Text>
               <Flex gap={8} wrap>
                 {source.kind === 'git' && (
-                  <>
-                    <Button danger loading={busy === 'reset'} onClick={() => void resetHost()}>
-                      Reset host key
-                    </Button>
-                  </>
+                  <Button danger loading={busy === 'reset'} onClick={() => void resetHost()}>
+                    Reset host key
+                  </Button>
                 )}
                 <Popconfirm
                   description="The code in src/ is deleted. The YAML is not changed."
