@@ -33,6 +33,8 @@
 - Name uniqueness is case-insensitive (`COLLATE NOCASE`), matching `projects.name`.
 - `PUT .../source` always takes `sshKeyId` as the full desired value (`null` or missing means no key). The modal therefore sends its current selection on every save, including the URL-blur save.
 - Spec open question closed: server migration copies `panel.db` whole with `VACUUM INTO` (`internal/migration/items.go:128`), so `ssh_keys` travels with no change.
+- The migration lock (`internal/migration/lock.go:434`) blocks every `/api/` path that isn't on its allowlist, so `/api/ssh-keys` is gated with no change.
+- `spec.md` has been updated to match these decisions.
 
 ## Review Focus
 
@@ -116,7 +118,11 @@
 - Modify: `internal/sources/store.go`: add `SSHKeyID *int64` and `SSHKeyName string` to `Source`. `Get` reads `ssh_key_id` and LEFT JOINs `ssh_keys` into `PrivateKey`, `PublicKey` and `SSHKeyName`. `Save` writes `ssh_key_id` and stops writing `ssh_private_key`/`ssh_public_key`.
 - Modify: `internal/sources/http.go`: `putInput.SSHKeyID *int64 \`json:"sshKeyId"\``. In `sourceJSON`, replace `PublicKey` with `SSHKey *sshKeyJSON \`json:"sshKey"\`` (`{id, name, publicKey}`). Remove `regenerateKey`, its route, `keyComment` and the generate-on-save block.
 - Delete: `internal/sources/keys.go`, `internal/sources/keys_test.go`.
-- Test: `internal/sources/store_test.go`, `internal/sources/http_test.go`, and existing tests that set `PrivateKey` on a saved Source. Those tests now insert an `ssh_keys` row and set `SSHKeyID`.
+- Test: `internal/sources/store_test.go` and `internal/sources/http_test.go`. Two existing tests save a Source with `PrivateKey:` and expect it back. They now create a key with `sshkeys.NewStore(db).Create` and save `SSHKeyID` instead:
+  - `internal/httpapi/sources_test.go:383-387`, which also calls `sources.GenerateKey`.
+  - `internal/deployments/snapshot_test.go:121`.
+  - `internal/sources/git_test.go:76` and `internal/deployments/redaction_test.go:85` build `Source` structs in memory and stay as they are.
+- Callers of `Store.Save`: `put` (`http.go:250`) now sets `SSHKeyID` from the input. `regenerateKey` (`:328`) is removed. `upload` (`:594`) writes a zip Source, so losing the key there is correct.
 
 **Interfaces:**
 - Consumes: the `ssh_keys` table from Task 1. Tests may create keys with `sshkeys.NewStore(db).Create`.
@@ -240,7 +246,7 @@
 - Create: `docs/adr/0020-ssh-key-library.md`, in the format of `docs/adr/0016-sources-and-deployment-queue.md`. It says it supersedes ADR-0016's per-Compose Deploy key and links the spec.
 - Modify: `docs/adr/0016-sources-and-deployment-queue.md`: add one line under Consequences: "Superseded in part by ADR-0020 (SSH key library)."
 - Modify: `README.md`: rewrite the paragraph that mentions the deploy key (`grep -n -i "deploy key" README.md`).
-- Modify: `.scratch/ssh-keys/spec.md`: set the `Status:` line to `closed — merged on branch feat/ssh-keys`, in the style of `.scratch/stability-review/spec.md`. Record the 400 and NOCASE decisions and close the open question.
+- Modify: `.scratch/ssh-keys/spec.md`: set the `Status:` line to `closed — merged on branch feat/ssh-keys`, in the style of `.scratch/stability-review/spec.md`.
 - Regenerate: the embedded frontend, with `go generate ./internal/webassets/...`.
 
 - [ ] **Step 1: Write the docs changes above.**

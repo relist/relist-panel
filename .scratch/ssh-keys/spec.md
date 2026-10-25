@@ -69,7 +69,7 @@ UPDATE compose_sources SET ssh_private_key = '', ssh_public_key = '', last_test_
   `ON DELETE SET NULL` applies.
 - The public key's comment is `relist-<name>` at generation time. Renaming does not
   change it; Git hosts ignore the comment.
-- Names are trimmed, required, and unique (case-sensitive, as SQLite `UNIQUE` on TEXT).
+- Names are trimmed, required, and unique ignoring case (`COLLATE NOCASE`, like `projects.name`).
 
 `sources.Source` keeps its `PrivateKey` and `PublicKey` fields, now filled by joining
 `ssh_keys` in `Store.Get`, and gains `SSHKeyID *int64` and `SSHKeyName string`. The Git
@@ -106,8 +106,11 @@ writes key material.
 
 ### `internal/deployments`
 
-- Queuing a Deployment for a Compose whose Git Source has no SSH key: `409 "Choose an SSH
-  key for this Source"`. A zip Source and a Compose without a Source are unaffected.
+- Queuing a `build` Deployment for a Compose whose Git Source has no SSH key: `400 "Choose an
+  SSH key for this Source"`, beside the existing no-branch `400`. `skip-build` does not fetch
+  and is allowed. A zip Source and a Compose without a Source are unaffected.
+- A legacy Deployment resumed without a snapshot whose Git Source now has no key fails at
+  the fetch step with the same reason.
 - A queued Deployment uses the key in its snapshot, even if the key is deleted later.
 
 ## UI (antd 6.5.1)
@@ -160,7 +163,7 @@ TDD, following the existing test layout.
     no `last_test_*`.
   - `sources`: PUT with and without `sshKeyId`, unknown id, key change clears the test,
     test without a key, `Get` returns the joined key, the key route is gone.
-  - `deployments`: queuing without a key is `409`; a queued Deployment's snapshot keeps the
+  - `deployments`: a Git `build` without a key is `400` and `skip-build` is allowed; a queued Deployment's snapshot keeps the
     key after the key is deleted.
 - Web
   - `ssh-keys-view.test.ts`.
@@ -170,7 +173,7 @@ TDD, following the existing test layout.
   - Source card warning without a key.
 - The embedded frontend is rebuilt, as in earlier features.
 
-## Open questions
+## Resolved questions
 
-- Confirm while planning that server migration copies `ssh_keys` with the rest of the
-  database and needs no change.
+- Server migration copies `panel.db` whole with `VACUUM INTO`, so `ssh_keys` travels with
+  no change. The migration lock already blocks every `/api/` write, `/api/ssh-keys` included.
