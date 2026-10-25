@@ -156,6 +156,9 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 	case in.Mode == ModeBuild && src.Kind == sources.KindGit && src.Branch == "":
 		writeError(w, http.StatusBadRequest, reasonNoBranch)
 		return
+	case in.Mode == ModeBuild && src.Kind == sources.KindGit && src.PrivateKey == "":
+		writeError(w, http.StatusBadRequest, reasonNoKey)
+		return
 	}
 	d, created, err := a.q.Enqueue(r.Context(), composeID, req)
 	if err != nil {
