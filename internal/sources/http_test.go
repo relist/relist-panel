@@ -320,8 +320,17 @@ func TestTestWithoutKeyIs400(t *testing.T) {
 
 func TestKeyRouteIsGone(t *testing.T) {
 	f := newHTTPFixture(t)
+	k := f.newKey(t, "ci")
+	// With a saved Source, a surviving regenerate route would answer 200.
+	if code, _ := f.putSource(t, &k.ID, repoA); code != http.StatusOK {
+		t.Fatalf("setup PUT = %d", code)
+	}
 	rec := f.serve(httptest.NewRequest(http.MethodPost, f.base+"/key", nil))
 	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("POST /key = %d, want 404 or 405", rec.Code)
+		t.Fatalf("POST /key = %d %s, want 404 or 405", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	if json.Unmarshal(rec.Body.Bytes(), &body) == nil && body["publicKey"] != nil {
+		t.Fatalf("POST /key returned a public key: %s", rec.Body)
 	}
 }
