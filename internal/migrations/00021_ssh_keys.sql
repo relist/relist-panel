@@ -17,7 +17,5 @@ UPDATE compose_sources
 SET ssh_private_key = '', ssh_public_key = '', last_test_at = NULL, last_test_ok = NULL;
 
 -- +goose Down
--- SQLite cannot drop a column that is used in a foreign key, so ssh_key_id
--- stays on compose_sources (cleared) and only the table goes.
-UPDATE compose_sources SET ssh_key_id = NULL;
+ALTER TABLE compose_sources DROP COLUMN ssh_key_id;
 DROP TABLE ssh_keys;

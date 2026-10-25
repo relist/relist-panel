@@ -316,8 +316,8 @@ func TestComposeOwnedSetsMigrationMovesEnvironmentSets(t *testing.T) {
 		t.Fatalf("seed version 14 rows: %v", err)
 	}
 
-	if err := goose.UpTo(db, ".", 15); err != nil {
-		t.Fatalf("migrate 14 -> 15: %v", err)
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate 14 -> latest: %v", err)
 	}
 
 	// Every set of Environment 1 is copied into both of its Composes; the set
@@ -400,12 +400,11 @@ func TestComposeOwnedSetsMigrationMovesEnvironmentSets(t *testing.T) {
 		t.Fatalf("rows left after deleting compose a's sets = %d", leftover)
 	}
 
-	// Down returns to Environment-owned sets and Up runs again cleanly. The test
-	// stops at version 15: later migrations are not reversible all the way.
+	// Down returns to Environment-owned sets and Up runs again cleanly.
 	if err := goose.Down(db, "."); err != nil {
 		t.Fatalf("migrate down: %v", err)
 	}
-	if err := goose.UpTo(db, ".", 15); err != nil {
+	if err := Migrate(db); err != nil {
 		t.Fatalf("migrate up again: %v", err)
 	}
 }
