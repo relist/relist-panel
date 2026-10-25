@@ -27,6 +27,7 @@ import type {
   QueuedDeployment,
   SourceInput,
   SourceTestResult,
+  SshKey,
   Domain,
   DomainInput,
   Environment,
@@ -339,9 +340,11 @@ export const api = {
   saveSource: (location: ComposePath, input: SourceInput) =>
     request<ComposeSource>(`${composePath(location)}/source`, jsonInit('PUT', input)),
   deleteSource: (location: ComposePath) => request<void>(`${composePath(location)}/source`, { method: 'DELETE' }),
-  /** Replaces the Deploy key; answers only the new public key. */
-  regenerateKey: (location: ComposePath) =>
-    request<{ publicKey: string }>(`${composePath(location)}/source/key`, { method: 'POST' }),
+  /** The host-wide SSH keys library, ordered by name. */
+  listSshKeys: () => request<SshKey[]>('/api/ssh-keys'),
+  createSshKey: (name: string) => request<SshKey>('/api/ssh-keys', jsonInit('POST', { name })),
+  renameSshKey: (id: number, name: string) => request<SshKey>(`/api/ssh-keys/${id}`, jsonInit('PATCH', { name })),
+  deleteSshKey: (id: number) => request<void>(`/api/ssh-keys/${id}`, { method: 'DELETE' }),
   /** Tries the repository (the saved one when `repoUrl` is omitted) and lists its branches. */
   testSource: (location: ComposePath, repoUrl?: string) =>
     request<SourceTestResult>(`${composePath(location)}/source/test`, jsonInit('POST', repoUrl ? { repoUrl } : {})),

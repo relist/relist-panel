@@ -74,7 +74,7 @@ export function SourceModal({
     setBranch(current?.branch ?? '');
     setSubmodules(current?.submodules ?? false);
     setBranches([]);
-    setPublicKey(current?.publicKey ?? '');
+    setPublicKey(current?.sshKey?.publicKey ?? '');
     setTestError('');
     setTestOk(false);
     setError('');
@@ -96,8 +96,9 @@ export function SourceModal({
         kind: 'git',
         repoUrl: trimmed,
         submodules,
+        sshKeyId: sourceRef.current?.sshKey?.id ?? null,
       });
-      setPublicKey(saved.publicKey);
+      setPublicKey(saved.sshKey?.publicKey ?? '');
       onSaved(saved, false);
     } catch (reason) {
       savedUrl.current = '';
@@ -145,7 +146,7 @@ export function SourceModal({
 
   const save = () =>
     run('save', async () => {
-      const saved = await api.saveSource(location, { branch, kind: 'git', repoUrl: url.trim(), submodules });
+      const saved = await api.saveSource(location, { branch, kind: 'git', repoUrl: url.trim(), submodules, sshKeyId: source?.sshKey?.id ?? null });
       onSaved(saved, wasNew.current);
       onClose();
     });
@@ -155,14 +156,6 @@ export function SourceModal({
       const saved = await api.uploadSource(location, file);
       onSaved(saved, wasNew.current);
       onClose();
-    });
-
-  const regenerate = () =>
-    run('regenerate', async () => {
-      const result = await api.regenerateKey(location);
-      setPublicKey(result.publicKey);
-      setTestOk(false);
-      onChanged();
     });
 
   const resetHost = () =>
@@ -292,16 +285,6 @@ export function SourceModal({
               <Flex gap={8} wrap>
                 {source.kind === 'git' && (
                   <>
-                    <Popconfirm
-                      description="The old key stops working. Add the new one to the repository."
-                      okText="Regenerate"
-                      onConfirm={() => void regenerate()}
-                      title="Regenerate the deploy key?"
-                    >
-                      <Button danger loading={busy === 'regenerate'}>
-                        Regenerate key
-                      </Button>
-                    </Popconfirm>
                     <Button danger loading={busy === 'reset'} onClick={() => void resetHost()}>
                       Reset host key
                     </Button>

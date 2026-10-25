@@ -11,7 +11,6 @@ import { SourceModal } from './SourceModal';
 
 const api = vi.hoisted(() => ({
   deleteSource: vi.fn(),
-  regenerateKey: vi.fn(),
   resetKnownHosts: vi.fn(),
   saveSource: vi.fn(),
   testSource: vi.fn(),
@@ -31,7 +30,7 @@ const saved: ComposeSource = {
   headSha: '',
   kind: 'git',
   lastTest: null,
-  publicKey: 'ssh-ed25519 AAAA relist-compose-7',
+  sshKey: { id: 1, name: 'ci', publicKey: 'ssh-ed25519 AAAA relist-ci' },
   repoUrl: URL,
   submodules: false,
   zip: null,
@@ -55,8 +54,8 @@ describe('SourceModal', () => {
     await user.type(screen.getByLabelText('SSH URL'), URL);
     await user.tab();
 
-    expect(await screen.findByText('ssh-ed25519 AAAA relist-compose-7')).toBeTruthy();
-    expect(api.saveSource).toHaveBeenCalledWith(location, { branch: '', kind: 'git', repoUrl: URL, submodules: false });
+    expect(await screen.findByText('ssh-ed25519 AAAA relist-ci')).toBeTruthy();
+    expect(api.saveSource).toHaveBeenCalledWith(location, { branch: '', kind: 'git', repoUrl: URL, sshKeyId: null, submodules: false });
     expect(screen.getByText('Repository → Settings → Deploy keys → Add deploy key, leave write access off')).toBeTruthy();
     expect(screen.getByRole('button', { name: /copy/i })).toBeTruthy();
   });
@@ -76,7 +75,7 @@ describe('SourceModal', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(api.saveSource).toHaveBeenLastCalledWith(location, { branch: 'dev', kind: 'git', repoUrl: URL, submodules: false });
+    expect(api.saveSource).toHaveBeenLastCalledWith(location, { branch: 'dev', kind: 'git', repoUrl: URL, sshKeyId: 1, submodules: false });
     expect(onSaved.mock.calls[0][1]).toBe(false);
   });
 
@@ -143,18 +142,5 @@ describe('SourceModal', () => {
     await user.click(screen.getByRole('button', { name: 'Test connection' }));
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
-  });
-
-  it('refreshes the page after regenerating the key and shows the new one', async () => {
-    api.regenerateKey.mockResolvedValue({ publicKey: 'ssh-ed25519 NEW' });
-    const onChanged = vi.fn();
-    const user = userEvent.setup();
-    renderModal(saved, vi.fn(), onChanged);
-
-    await user.click(screen.getByRole('button', { name: 'Regenerate key' }));
-    await user.click(await screen.findByRole('button', { name: 'Regenerate' }));
-
-    expect(await screen.findByText('ssh-ed25519 NEW')).toBeTruthy();
-    expect(onChanged).toHaveBeenCalledTimes(1);
   });
 });

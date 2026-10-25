@@ -9,7 +9,7 @@ function git(overrides: Partial<ComposeSource> = {}): ComposeSource {
     repoUrl: 'git@github.com:acme/shop.git',
     branch: 'main',
     submodules: false,
-    publicKey: 'ssh-ed25519 AAAA',
+    sshKey: null,
     headSha: '',
     lastTest: null,
     zip: null,

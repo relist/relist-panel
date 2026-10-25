@@ -47,7 +47,7 @@ const source: ComposeSource = {
   headSha: '',
   kind: 'git',
   lastTest: null,
-  publicKey: 'ssh-ed25519 AAAA relist-compose-7',
+  sshKey: { id: 1, name: 'ci', publicKey: 'ssh-ed25519 AAAA relist-ci' },
   repoUrl: 'git@github.com:acme/old.git',
   submodules: false,
   zip: null,
