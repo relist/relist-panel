@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"relist-panel/internal/database"
+	"relist-panel/internal/sshkeys"
 )
 
 func newDB(t *testing.T) (*sql.DB, int64, int64) {
@@ -39,7 +40,7 @@ func TestSourceSaveGetRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	in := Source{
 		ComposeID: a, Kind: KindGit, RepoURL: "git@github.com:o/r.git", Branch: "main", Submodules: true,
-		PrivateKey: "priv", PublicKey: "pub", CreatedAt: time.Unix(100, 0), UpdatedAt: time.Unix(200, 0),
+		CreatedAt: time.Unix(100, 0), UpdatedAt: time.Unix(200, 0),
 	}
 	if err := s.Save(ctx, in); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -49,7 +50,7 @@ func TestSourceSaveGetRoundTrip(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	if got.Kind != KindGit || got.RepoURL != in.RepoURL || got.Branch != "main" || !got.Submodules ||
-		got.PrivateKey != "priv" || got.PublicKey != "pub" {
+		got.SSHKeyID != nil || got.PrivateKey != "" {
 		t.Fatalf("round trip mismatch: %+v", got)
 	}
 	if got.LastTestAt != nil || got.LastTestOK != nil || got.UploadedAt != nil {
@@ -81,6 +82,36 @@ func TestSourceSaveGetRoundTrip(t *testing.T) {
 	}
 	if _, err := s.Get(ctx, a); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("Get after Delete err = %v", err)
+	}
+}
+
+func TestGetJoinsTheChosenKey(t *testing.T) {
+	db, a, _ := newDB(t)
+	s := NewStore(db)
+	ctx := context.Background()
+	k, err := sshkeys.NewStore(db).Create(ctx, "ci")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := Source{ComposeID: a, Kind: KindGit, RepoURL: "git@github.com:o/r.git", Branch: "main"}
+	base.SSHKeyID = &k.ID
+	if err := s.Save(ctx, base); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SSHKeyID == nil || *got.SSHKeyID != k.ID || got.PrivateKey != k.PrivateKey || got.PublicKey != k.PublicKey || got.SSHKeyName != "ci" {
+		t.Fatalf("joined key = %+v", got)
+	}
+	base.SSHKeyID = nil
+	if err := s.Save(ctx, base); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Get(ctx, a)
+	if got.SSHKeyID != nil || got.PrivateKey != "" || got.PublicKey != "" || got.SSHKeyName != "" {
+		t.Fatalf("without key = %+v", got)
 	}
 }
 

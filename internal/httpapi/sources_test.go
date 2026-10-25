@@ -19,6 +19,7 @@ import (
 
 	"relist-panel/internal/composes"
 	"relist-panel/internal/sources"
+	"relist-panel/internal/sshkeys"
 )
 
 const foreignSrcMessage = "src/ already exists in this Compose's directory, move it first"
@@ -107,15 +108,22 @@ func mustRead(t *testing.T, path string) string {
 
 func exists(path string) bool { _, err := os.Lstat(path); return err == nil }
 
-func TestSourcePutGitGeneratesKeyAndKeepsItOnSecondPut(t *testing.T) {
+func TestSourcePutGitWithAKeyShowsItAndKeepsItOnSecondPut(t *testing.T) {
 	f := newSourceFixture(t)
-	status, first := f.putGit(t, "git@github.com:acme/shop.git", "")
+	key, err := sshkeys.NewStore(f.server.db).Create(context.Background(), "deploy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(branch string) (int, map[string]any) {
+		return f.do(t, http.MethodPut, f.sourcePath(), map[string]any{"kind": "git", "repoUrl": "git@github.com:acme/shop.git", "branch": branch, "sshKeyId": key.ID})
+	}
+	status, first := put("")
 	if status != http.StatusOK {
 		t.Fatalf("PUT = %d %v, want 200", status, first)
 	}
-	key, _ := first["publicKey"].(string)
-	if !strings.HasPrefix(key, "ssh-ed25519 ") {
-		t.Fatalf("publicKey = %q, want ssh-ed25519", key)
+	sk, _ := first["sshKey"].(map[string]any)
+	if sk == nil || sk["publicKey"] != key.PublicKey || sk["name"] != "deploy" {
+		t.Fatalf("sshKey = %v", first["sshKey"])
 	}
 	for k := range first {
 		if strings.Contains(strings.ToLower(k), "private") {
@@ -125,12 +133,12 @@ func TestSourcePutGitGeneratesKeyAndKeepsItOnSecondPut(t *testing.T) {
 	if first["kind"] != "git" || first["zip"] != nil || first["lastTest"] != nil {
 		t.Fatalf("response = %v", first)
 	}
-	_, second := f.putGit(t, "git@github.com:acme/shop.git", "main")
-	if second["publicKey"] != key || second["branch"] != "main" {
-		t.Fatalf("second PUT = %v, want same key and branch main", second)
+	_, second := put("main")
+	if second["branch"] != "main" || second["sshKey"] == nil {
+		t.Fatalf("second PUT = %v, want the key and branch main", second)
 	}
 	status, got := f.do(t, http.MethodGet, f.sourcePath(), nil)
-	if status != http.StatusOK || got["publicKey"] != key {
+	if status != http.StatusOK || got["sshKey"] == nil {
 		t.Fatalf("GET = %d %v", status, got)
 	}
 }
@@ -152,31 +160,6 @@ func TestSourceGetWithoutSourceIs404(t *testing.T) {
 	f := newSourceFixture(t)
 	if status, _ := f.do(t, http.MethodGet, f.sourcePath(), nil); status != http.StatusNotFound {
 		t.Fatalf("GET = %d, want 404", status)
-	}
-}
-
-func TestSourceRegenerateKeyChangesIt(t *testing.T) {
-	f := newSourceFixture(t)
-	_, first := f.putGit(t, "git@github.com:acme/shop.git", "")
-	status, regen := f.do(t, http.MethodPost, f.sourcePath()+"/key", nil)
-	if status != http.StatusOK {
-		t.Fatalf("regenerate = %d %v", status, regen)
-	}
-	key, _ := regen["publicKey"].(string)
-	if !strings.HasPrefix(key, "ssh-ed25519 ") || key == first["publicKey"] {
-		t.Fatalf("regenerated key = %q, first = %v", key, first["publicKey"])
-	}
-	_, got := f.do(t, http.MethodGet, f.sourcePath(), nil)
-	if got["publicKey"] != key {
-		t.Fatalf("stored key = %v, want %q", got["publicKey"], key)
-	}
-}
-
-func TestSourceRegenerateKeyOnZipIs400(t *testing.T) {
-	f := newSourceFixture(t)
-	f.upload(t, "a.zip", zipBytes(t, map[string]string{"Dockerfile": "FROM scratch\n"}))
-	if status, _ := f.do(t, http.MethodPost, f.sourcePath()+"/key", nil); status != http.StatusBadRequest {
-		t.Fatalf("regenerate on zip = %d, want 400", status)
 	}
 }
 
@@ -202,7 +185,7 @@ func TestSourceUploadCreatesAZipSource(t *testing.T) {
 	if body["kind"] != "zip" || zipInfo["name"] != "site.zip" || zipInfo["files"] != float64(2) || zipInfo["size"] == nil || zipInfo["uploadedAt"] == nil {
 		t.Fatalf("response = %v", body)
 	}
-	if body["repoUrl"] != "" || body["branch"] != "" || body["publicKey"] != "" {
+	if body["repoUrl"] != "" || body["branch"] != "" || body["sshKey"] != nil {
 		t.Fatalf("zip source carries git fields: %v", body)
 	}
 	dir := f.dir(t)
@@ -262,11 +245,11 @@ func TestSourceUploadSwitchesAGitSourceToZipAndBack(t *testing.T) {
 	f := newSourceFixture(t)
 	f.putGit(t, "git@github.com:acme/shop.git", "main")
 	status, body := f.upload(t, "a.zip", zipBytes(t, map[string]string{"Dockerfile": "x"}))
-	if status != http.StatusOK || body["kind"] != "zip" || body["publicKey"] != "" {
+	if status != http.StatusOK || body["kind"] != "zip" || body["sshKey"] != nil {
 		t.Fatalf("upload = %d %v", status, body)
 	}
 	status, body = f.putGit(t, "git@github.com:acme/shop.git", "")
-	if status != http.StatusOK || body["kind"] != "git" || !strings.HasPrefix(body["publicKey"].(string), "ssh-ed25519 ") || body["zip"] != nil {
+	if status != http.StatusOK || body["kind"] != "git" || body["zip"] != nil {
 		t.Fatalf("PUT git over zip = %d %v", status, body)
 	}
 }
@@ -380,11 +363,11 @@ func bareRepo(t *testing.T) (string, string) {
 
 func (f deploymentsFixture) saveGitRow(t *testing.T, url, branch string) {
 	t.Helper()
-	priv, pub, err := sources.GenerateKey("test")
+	key, err := sshkeys.NewStore(f.server.db).Create(context.Background(), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = sources.NewStore(f.server.db).Save(context.Background(), sources.Source{ComposeID: f.compose.ID, Kind: sources.KindGit, RepoURL: url, Branch: branch, PrivateKey: priv, PublicKey: pub})
+	err = sources.NewStore(f.server.db).Save(context.Background(), sources.Source{ComposeID: f.compose.ID, Kind: sources.KindGit, RepoURL: url, Branch: branch, SSHKeyID: &key.ID})
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}

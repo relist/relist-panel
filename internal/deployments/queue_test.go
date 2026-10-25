@@ -189,6 +189,7 @@ func (g *fakeGate) AcquireVolumes(ctx context.Context, projectID int64) (func(),
 
 type harness struct {
 	t       *testing.T
+	db      *sql.DB
 	store   *Store
 	srcs    *sources.Store
 	rec     *recorder
@@ -209,7 +210,7 @@ func newHarness(t *testing.T) *harness {
 	db, a, b := newDB(t)
 	rec := &recorder{}
 	h := &harness{
-		t: t, store: NewStore(db), srcs: sources.NewStore(db), rec: rec, a: a, b: b,
+		t: t, db: db, store: NewStore(db), srcs: sources.NewStore(db), rec: rec, a: a, b: b,
 		fetch: &fakeFetcher{rec: rec}, build: &fakeBuilder{rec: rec}, gate: &fakeGate{rec: rec},
 		comp: &fakeComposes{
 			rec:  rec,

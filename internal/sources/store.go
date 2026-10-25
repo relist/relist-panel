@@ -21,8 +21,10 @@ type Source struct {
 	RepoURL       string
 	Branch        string
 	Submodules    bool
-	PrivateKey    string
-	PublicKey     string
+	SSHKeyID      *int64
+	SSHKeyName    string // joined from ssh_keys by Get; never saved
+	PrivateKey    string // joined from ssh_keys by Get; never saved
+	PublicKey     string // joined from ssh_keys by Get; never saved
 	HeadSHA       string
 	PinnedSHA     string // execution-only revision; never saved as Source configuration
 	TreeDirectory string // private last-built Git tree; never part of Source JSON
@@ -44,26 +46,37 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
-const columns = `compose_id, kind, repo_url, branch, submodules, ssh_private_key, ssh_public_key,
+// columns are the compose_sources columns Save writes. The retired
+// ssh_private_key and ssh_public_key columns keep their defaults.
+const columns = `compose_id, kind, repo_url, branch, submodules, ssh_key_id,
 	head_sha, last_test_at, last_test_ok, zip_name, zip_size, zip_files, uploaded_at, created_at, updated_at`
 
 // Get returns the Source of a Compose, or sql.ErrNoRows when it has none.
 func (s *Store) Get(ctx context.Context, composeID int64) (Source, error) {
 	var (
 		src                        Source
+		keyID                      sql.NullInt64
 		kind                       string
 		submodules                 int
 		testAt, testOK, uploadedAt sql.NullInt64
 		createdAt, updatedAt       int64
 	)
-	err := s.db.QueryRowContext(ctx, `SELECT `+columns+`, COALESCE((SELECT source_dir FROM compose_source_materializations m WHERE m.compose_id = compose_sources.compose_id), '') FROM compose_sources WHERE compose_id = ?`, composeID).Scan(
-		&src.ComposeID, &kind, &src.RepoURL, &src.Branch, &submodules, &src.PrivateKey, &src.PublicKey,
+	err := s.db.QueryRowContext(ctx, `SELECT cs.compose_id, cs.kind, cs.repo_url, cs.branch, cs.submodules, cs.ssh_key_id,
+	COALESCE(k.name, ''), COALESCE(k.private_key, ''), COALESCE(k.public_key, ''),
+	cs.head_sha, cs.last_test_at, cs.last_test_ok, cs.zip_name, cs.zip_size, cs.zip_files, cs.uploaded_at, cs.created_at, cs.updated_at,
+	COALESCE((SELECT source_dir FROM compose_source_materializations m WHERE m.compose_id = cs.compose_id), '')
+FROM compose_sources cs LEFT JOIN ssh_keys k ON k.id = cs.ssh_key_id WHERE cs.compose_id = ?`, composeID).Scan(
+		&src.ComposeID, &kind, &src.RepoURL, &src.Branch, &submodules, &keyID,
+		&src.SSHKeyName, &src.PrivateKey, &src.PublicKey,
 		&src.HeadSHA, &testAt, &testOK, &src.ZipName, &src.ZipSize, &src.ZipFiles, &uploadedAt, &createdAt, &updatedAt, &src.TreeDirectory,
 	)
 	if err != nil {
 		return Source{}, err
 	}
 	src.Kind = Kind(kind)
+	if keyID.Valid {
+		src.SSHKeyID = &keyID.Int64
+	}
 	src.Submodules = submodules != 0
 	src.LastTestAt = nullTime(testAt)
 	if testOK.Valid {
@@ -98,16 +111,15 @@ func (s *Store) Save(ctx context.Context, src Source) error {
 	}
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO compose_sources (`+columns+`)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(compose_id) DO UPDATE SET
 	kind = excluded.kind, repo_url = excluded.repo_url, branch = excluded.branch,
-	submodules = excluded.submodules, ssh_private_key = excluded.ssh_private_key,
-	ssh_public_key = excluded.ssh_public_key, head_sha = excluded.head_sha,
+	submodules = excluded.submodules, ssh_key_id = excluded.ssh_key_id, head_sha = excluded.head_sha,
 	last_test_at = excluded.last_test_at, last_test_ok = excluded.last_test_ok,
 	zip_name = excluded.zip_name, zip_size = excluded.zip_size, zip_files = excluded.zip_files,
 	uploaded_at = excluded.uploaded_at, updated_at = excluded.updated_at`,
 		src.ComposeID, string(src.Kind), src.RepoURL, src.Branch, boolInt(src.Submodules),
-		src.PrivateKey, src.PublicKey, src.HeadSHA, unixPtr(src.LastTestAt), boolPtr(src.LastTestOK),
+		src.SSHKeyID, src.HeadSHA, unixPtr(src.LastTestAt), boolPtr(src.LastTestOK),
 		src.ZipName, src.ZipSize, src.ZipFiles, unixPtr(src.UploadedAt), created.Unix(), updated.Unix())
 	if err != nil {
 		return err
