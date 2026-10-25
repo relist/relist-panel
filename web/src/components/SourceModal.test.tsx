@@ -47,6 +47,12 @@ function renderModal(source: ComposeSource | null = null, onSaved = vi.fn(), onC
   return onSaved;
 }
 
+/** The name the SSH key Select shows, or null when it shows its placeholder. */
+function chosenKeyName(): string | null {
+  const select = document.querySelector('#source-ssh-key')?.closest('.ant-select');
+  return select?.querySelector('.ant-select-content-has-value')?.getAttribute('title') ?? null;
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   api.listSshKeys.mockResolvedValue(keys);
@@ -97,7 +103,77 @@ describe('SourceModal', () => {
     await waitFor(() => expect(api.listSshKeys).toHaveBeenCalledTimes(2));
     expect(await screen.findByText('unknown SSH key')).toBeTruthy();
     expect(screen.queryByText('ssh-ed25519 AAAA relist-ci')).toBeNull();
-    expect(document.querySelector('.ant-select-selection-item')).toBeNull();
+    expect(chosenKeyName()).toBeNull();
+  });
+
+  it('drops a key deleted elsewhere when Test connection says to choose a key', async () => {
+    api.testSource.mockRejectedValue(new ApiError(400, 'Choose an SSH key first'));
+    const user = userEvent.setup();
+    renderModal(saved);
+    await waitFor(() => expect(chosenKeyName()).toBe('ci'));
+    api.listSshKeys.mockResolvedValue([keys[1]]);
+
+    await user.click(screen.getByRole('button', { name: 'Test connection' }));
+
+    await waitFor(() => expect(api.listSshKeys).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Choose an SSH key first')).toBeTruthy();
+    await waitFor(() => expect(chosenKeyName()).toBeNull());
+    await waitFor(() => expect((screen.getByRole('button', { name: /Test connection/ }) as HTMLButtonElement).disabled).toBe(true));
+  });
+
+  it('never shows a raw id when the loaded keys do not contain the chosen one', async () => {
+    api.listSshKeys.mockResolvedValue([keys[1]]);
+    renderModal(saved);
+
+    await waitFor(() => expect(api.listSshKeys).toHaveBeenCalled());
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Test connection' }) as HTMLButtonElement).disabled).toBe(true));
+    expect(chosenKeyName()).toBeNull();
+    expect(screen.queryByText('1')).toBeNull();
+  });
+
+  it('shows the load error with a Reload button that recovers', async () => {
+    api.listSshKeys.mockRejectedValueOnce(new Error('could not list SSH keys')).mockResolvedValueOnce(keys);
+    const user = userEvent.setup();
+    renderModal({ ...saved, sshKey: null });
+
+    expect(await screen.findByText('could not list SSH keys')).toBeTruthy();
+    expect(document.querySelector('.ant-select-loading')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Reload' }));
+
+    await waitFor(() => expect(api.listSshKeys).toHaveBeenCalledTimes(2));
+    await user.click(await screen.findByRole('combobox', { name: 'SSH key' }));
+    expect(await screen.findByTitle('deploy')).toBeTruthy();
+    expect(screen.queryByText('could not list SSH keys')).toBeNull();
+  });
+
+  it('reverts the choice when saving it fails for another reason', async () => {
+    api.saveSource.mockRejectedValue(new ApiError(409, 'A deployment is running'));
+    const user = userEvent.setup();
+    renderModal(saved);
+    await waitFor(() => expect(chosenKeyName()).toBe('ci'));
+
+    await user.click(screen.getByRole('combobox', { name: 'SSH key' }));
+    await user.click(await screen.findByTitle('deploy'));
+
+    expect(await screen.findByText('A deployment is running')).toBeTruthy();
+    await waitFor(() => expect(chosenKeyName()).toBe('ci'));
+  });
+
+  it('clears the shown test result once a key change is saved', async () => {
+    api.testSource.mockResolvedValue({ branches: ['main', 'dev'], error: '', ok: true });
+    api.saveSource.mockResolvedValue({ ...saved, sshKey: { id: 2, name: 'deploy', publicKey: 'ssh-ed25519 BBBB relist-deploy' } });
+    const user = userEvent.setup();
+    renderModal(saved);
+
+    await user.click(screen.getByRole('button', { name: 'Test connection' }));
+    expect(await screen.findByText('Connected')).toBeTruthy();
+    await user.click(screen.getByRole('combobox', { name: 'SSH key' }));
+    await user.click(await screen.findByTitle('deploy'));
+
+    await waitFor(() => expect(screen.queryByText('Connected')).toBeNull());
+    await user.click(screen.getByRole('combobox', { name: 'Branch' }));
+    // Only the current branch is left to choose: the tested list is gone.
+    await waitFor(() => expect(document.querySelectorAll('[id^="source-branch_list_"]')).toHaveLength(1));
   });
 
   it('points to the SSH keys page when the library is empty, and reloads on request', async () => {

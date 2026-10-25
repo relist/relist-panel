@@ -52,6 +52,7 @@ export function SourceModal({
   const [submodules, setSubmodules] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
   const [keys, setKeys] = useState<SshKey[] | null>(null);
+  const [keysFailed, setKeysFailed] = useState(false);
   const [sshKeyId, setSshKeyId] = useState<number | null>(null);
   const [testError, setTestError] = useState('');
   const [testOk, setTestOk] = useState(false);
@@ -86,9 +87,14 @@ export function SourceModal({
   const fail = (reason: unknown) => setError(reason instanceof Error ? reason.message : 'Something went wrong');
 
   const loadKeys = async () => {
+    setKeysFailed(false);
     try {
-      setKeys(await api.listSshKeys());
+      const list = await api.listSshKeys();
+      setKeys(list);
+      // A key deleted elsewhere is no longer a choice.
+      setSshKeyId((current) => (current !== null && !list.some((k) => k.id === current) ? null : current));
     } catch (reason) {
+      setKeysFailed(true);
       fail(reason);
     }
   };
@@ -103,7 +109,11 @@ export function SourceModal({
 
   /** The server no longer has the chosen key (deleted elsewhere): drop the choice and re-read the library. */
   const dropUnknownKey = (reason: unknown) => {
-    if (reason instanceof ApiError && reason.status === 400 && reason.message === 'unknown SSH key') {
+    if (
+      reason instanceof ApiError &&
+      reason.status === 400 &&
+      (reason.message === 'unknown SSH key' || reason.message === 'Choose an SSH key first')
+    ) {
       setSshKeyId(null);
       void loadKeys();
     }
@@ -132,8 +142,12 @@ export function SourceModal({
     }
   };
 
-  /** Choosing a key saves it at once when the URL is already valid; otherwise the URL's own save carries it. */
+  /**
+   * Choosing a key saves it at once when the URL is already valid; otherwise the URL's own save carries it.
+   * A failed save puts the previous choice back.
+   */
   const chooseKey = async (id: number) => {
+    const previous = sshKeyId;
     setSshKeyId(id);
     const trimmed = url.trim();
     if (!isValidSshUrl(trimmed)) {
@@ -149,8 +163,13 @@ export function SourceModal({
         sshKeyId: id,
       });
       savedUrl.current = trimmed;
+      // The server cleared the last test with the key change.
+      setTestOk(false);
+      setTestError('');
+      setBranches([]);
       onSaved(saved, false);
     } catch (reason) {
+      setSshKeyId(previous);
       dropUnknownKey(reason);
       fail(reason);
     }
@@ -263,7 +282,7 @@ export function SourceModal({
               <label htmlFor="source-ssh-key">
                 <Text strong>SSH key</Text>
               </label>
-              {keys !== null && keys.length === 0 ? (
+              {keys !== null && keys.length === 0 && !keysFailed ? (
                 <Flex align="center" gap={8} wrap>
                   <Text type="secondary">No SSH keys yet</Text>
                   <a href={paths.sshKeys} rel="noreferrer" target="_blank">
@@ -274,15 +293,28 @@ export function SourceModal({
                   </Button>
                 </Flex>
               ) : (
-                <Select
-                  aria-label="SSH key"
-                  id="source-ssh-key"
-                  loading={keys === null}
-                  onChange={(id: number) => void chooseKey(id)}
-                  options={(keys ?? []).map((k) => ({ label: k.name, value: k.id }))}
-                  placeholder="Choose an SSH key"
-                  value={sshKeyId ?? undefined}
-                />
+                <Flex gap={8}>
+                  <Select
+                    aria-label="SSH key"
+                    id="source-ssh-key"
+                    loading={keys === null && !keysFailed}
+                    onChange={(id: number) => void chooseKey(id)}
+                    options={(keys ?? []).map((k) => ({ label: k.name, value: k.id }))}
+                    placeholder="Choose an SSH key"
+                    style={{ flex: 1 }}
+                    value={chosenKey ? chosenKey.id : undefined}
+                  />
+                  {keysFailed && (
+                    <Button
+                      onClick={() => {
+                        setError('');
+                        void loadKeys();
+                      }}
+                    >
+                      Reload
+                    </Button>
+                  )}
+                </Flex>
               )}
               {chosenKey && (
                 <>

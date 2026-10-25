@@ -127,7 +127,7 @@ Before implementing, read Ant Design's `llms.txt` and the pages for the componen
   or "Not used"), Created, actions (Rename, Delete).
 - **Generate key** opens a modal with a required Name field. After creation the modal shows
   the public key with copy, and: "Repository → Settings → Deploy keys → Add deploy key,
-  leave write access off. To reuse it, add the same key to each repository." A 409 shows
+  leave write access off. A deploy key works for one repository; to reuse a key across repositories, add it to a machine user's account instead." A 409 shows
   under the Name field.
 - **Rename** is a modal with the Name field and the same 409 handling.
 - **Delete** uses `DangerModal`. When the key is in use, the modal lists the Composes and

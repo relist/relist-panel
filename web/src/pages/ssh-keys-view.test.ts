@@ -42,12 +42,14 @@ describe('deleteWarning', () => {
 });
 
 describe('shortPublicKey', () => {
-  it('keeps the type and comment and trims the base64 body', () => {
-    expect(shortPublicKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIWXYZ relist-ci')).toBe('ssh-ed25519 AAAA…WXYZ relist-ci');
+  it('keeps the type and comment and trims the base64 body to its last 12 characters', () => {
+    expect(shortPublicKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOnlyTheBodyWXYZ relist-ci')).toBe(
+      'ssh-ed25519 …yTheBodyWXYZ relist-ci',
+    );
   });
 
-  it('returns a body of 8 characters or fewer whole', () => {
-    expect(shortPublicKey('ssh-ed25519 AAAABBBB relist-ci')).toBe('ssh-ed25519 AAAABBBB relist-ci');
+  it('returns a body of 12 characters or fewer whole', () => {
+    expect(shortPublicKey('ssh-ed25519 AAAABBBBCCCC relist-ci')).toBe('ssh-ed25519 AAAABBBBCCCC relist-ci');
     expect(shortPublicKey('ssh-ed25519 AAAA')).toBe('ssh-ed25519 AAAA');
   });
 });

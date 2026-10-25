@@ -22,7 +22,7 @@
   - build without a key: `Choose an SSH key for this Source`
   - card warning: `No SSH key — choose one before deploying.`
   - delete in use: `These Sources will have no SSH key and can't deploy until you choose another.`
-  - generate hint: `Repository → Settings → Deploy keys → Add deploy key, leave write access off. To reuse it, add the same key to each repository.`
+  - generate hint: `Repository → Settings → Deploy keys → Add deploy key, leave write access off. A deploy key works for one repository; to reuse a key across repositories, add it to a machine user's account instead.`
 - Commits: Conventional Commits with no scope, and no `Co-Authored-By` or `Claude-Session` trailers (`docs/agents/commit-conventions.md`).
 - Frontend: before touching `web/`, read https://ant.design/llms.txt and the pages for Table, Select, Modal, Form, Typography (copyable) and Alert. Follow `docs/GUIDELINES.md`.
 - Go tests: `go test ./...`. Web: `pnpm --dir web test`, `pnpm --dir web typecheck`.

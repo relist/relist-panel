@@ -58,11 +58,24 @@ describe('SshKeysPage', () => {
     show();
 
     expect(await screen.findByText('ci')).toBeTruthy();
-    expect(screen.getByText('ssh-ed25519 AAAA…WXYZ relist-ci')).toBeTruthy();
+    expect(screen.getByText('ssh-ed25519 …yTheBodyWXYZ relist-ci')).toBeTruthy();
     expect(screen.getByText('Not used')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /copy/i })).toHaveLength(2);
     const shop = screen.getByRole('link', { name: 'shop' });
     expect(shop.getAttribute('href')).toBe('/projects/1/env/2/compose/7');
     expect(screen.getByRole('link', { name: 'blog' }).getAttribute('href')).toBe('/projects/1/env/2/compose/8');
+  });
+
+  it('copies the full public key from the table', async () => {
+    api.listSshKeys.mockResolvedValue([unused]);
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+    show();
+    await screen.findByText('ci');
+
+    await user.click(screen.getByRole('button', { name: /copy/i }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(FULL_KEY));
   });
 
   it('shows an empty state with a Generate key button', async () => {
@@ -88,7 +101,7 @@ describe('SshKeysPage', () => {
     expect(api.createSshKey).toHaveBeenCalledWith('ci');
     expect(
       screen.getByText(
-        'Repository → Settings → Deploy keys → Add deploy key, leave write access off. To reuse it, add the same key to each repository.',
+        "Repository → Settings → Deploy keys → Add deploy key, leave write access off. A deploy key works for one repository; to reuse a key across repositories, add it to a machine user's account instead.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: /copy/i })).toBeTruthy();

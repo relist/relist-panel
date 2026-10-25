@@ -1,7 +1,7 @@
 import type { SshKey } from '../data/types';
 
 const SHOWN_USES = 2;
-const KEY_EDGE = 4;
+const KEY_TAIL = 12;
 
 export const DELETE_IN_USE_WARNING = "These Sources will have no SSH key and can't deploy until you choose another.";
 
@@ -15,14 +15,16 @@ export function usedByLabel(key: SshKey): string {
   return more > 0 ? `${names} +${more} more` : names;
 }
 
-/** `ssh-ed25519 AAAA…WXYZ relist-ci`: the base64 body is cut to its first and last four characters. */
+/**
+ * `ssh-ed25519 …WXYZ relist-ci`: the base64 body is cut to its last 12 characters,
+ * because every ed25519 body starts with the same prefix.
+ */
 export function shortPublicKey(publicKey: string): string {
   const [type, body, ...comment] = publicKey.trim().split(/\s+/);
-  if (body === undefined || body.length <= KEY_EDGE * 2) {
+  if (body === undefined || body.length <= KEY_TAIL) {
     return publicKey.trim();
   }
-  const short = `${body.slice(0, KEY_EDGE)}…${body.slice(-KEY_EDGE)}`;
-  return [type, short, ...comment].join(' ');
+  return [type, `…${body.slice(-KEY_TAIL)}`, ...comment].join(' ');
 }
 
 export function deleteWarning(key: SshKey): string | null {

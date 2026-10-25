@@ -18,7 +18,7 @@ const { Paragraph, Text } = Typography;
 const SSH_KEYS_KEY = '/api/ssh-keys';
 const SHOWN_USES = 2;
 const GENERATE_HINT =
-  'Repository → Settings → Deploy keys → Add deploy key, leave write access off. To reuse it, add the same key to each repository.';
+  "Repository → Settings → Deploy keys → Add deploy key, leave write access off. A deploy key works for one repository; to reuse a key across repositories, add it to a machine user's account instead.";
 
 /** A name error from the server (409 duplicate, 400 invalid) belongs under the field; anything else is a banner. */
 function nameError(reason: unknown): { field: boolean; message: string } {
@@ -50,7 +50,9 @@ export function SshKeysPage() {
       dataIndex: 'publicKey',
       key: 'publicKey',
       render: (publicKey: string) => (
-        <Text style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }}>{shortPublicKey(publicKey)}</Text>
+        <Text copyable={{ text: publicKey }} style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }}>
+          {shortPublicKey(publicKey)}
+        </Text>
       ),
       title: 'Public key',
     },
