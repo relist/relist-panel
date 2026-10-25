@@ -126,7 +126,7 @@ func readName(w http.ResponseWriter, r *http.Request) (string, bool) {
 
 func writeStoreError(w http.ResponseWriter, err error, fallback string) {
 	switch {
-	case errors.Is(err, ErrNameRequired):
+	case errors.Is(err, ErrNameRequired), errors.Is(err, ErrNameInvalid):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNameTaken):
 		writeError(w, http.StatusConflict, err.Error())

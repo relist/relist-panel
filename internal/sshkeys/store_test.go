@@ -79,6 +79,24 @@ func TestCreateRejectsBlankAndDuplicate(t *testing.T) {
 	}
 }
 
+func TestNamesRejectControlCharactersAndOverlongNames(t *testing.T) {
+	db, _, _ := newDB(t)
+	s := NewStore(db)
+	ctx := context.Background()
+	k, err := s.Create(ctx, strings.Repeat("é", 100))
+	if err != nil {
+		t.Fatalf("100-rune name: %v", err)
+	}
+	for _, name := range []string{"a\nb", "tab\there", strings.Repeat("x", 101)} {
+		if _, err := s.Create(ctx, name); !errors.Is(err, ErrNameInvalid) {
+			t.Errorf("Create(%q) err = %v, want ErrNameInvalid", name, err)
+		}
+		if _, err := s.Rename(ctx, k.ID, name); !errors.Is(err, ErrNameInvalid) {
+			t.Errorf("Rename(%q) err = %v, want ErrNameInvalid", name, err)
+		}
+	}
+}
+
 func TestRename(t *testing.T) {
 	db, _, _ := newDB(t)
 	s := NewStore(db)

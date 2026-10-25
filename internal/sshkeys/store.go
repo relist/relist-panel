@@ -8,6 +8,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 type Key struct {
@@ -31,10 +33,25 @@ type Use struct {
 var (
 	ErrNameTaken    = errors.New("An SSH key with this name already exists")
 	ErrNameRequired = errors.New("name is required")
+	ErrNameInvalid  = errors.New("name must be at most 100 characters with no control characters")
 )
 
 type Store struct {
 	db *sql.DB
+}
+
+const maxNameRunes = 100
+
+// cleanName trims name and checks it is usable.
+func cleanName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", ErrNameRequired
+	}
+	if utf8.RuneCountInString(name) > maxNameRunes || strings.IndexFunc(name, unicode.IsControl) >= 0 {
+		return "", ErrNameInvalid
+	}
+	return name, nil
 }
 
 func NewStore(db *sql.DB) *Store {
@@ -102,9 +119,9 @@ func (s *Store) Get(ctx context.Context, id int64) (Key, error) {
 
 // Create generates an ed25519 key named name (trimmed).
 func (s *Store) Create(ctx context.Context, name string) (Key, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return Key{}, ErrNameRequired
+	name, err := cleanName(name)
+	if err != nil {
+		return Key{}, err
 	}
 	priv, pub, err := GenerateKey("relist-" + name)
 	if err != nil {
@@ -128,9 +145,9 @@ func (s *Store) Create(ctx context.Context, name string) (Key, error) {
 
 // Rename changes a key's name; the key material is untouched.
 func (s *Store) Rename(ctx context.Context, id int64, name string) (Key, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return Key{}, ErrNameRequired
+	name, err := cleanName(name)
+	if err != nil {
+		return Key{}, err
 	}
 	res, err := s.db.ExecContext(ctx, `UPDATE ssh_keys SET name = ? WHERE id = ?`, name, id)
 	if err != nil {

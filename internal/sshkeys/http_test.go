@@ -94,6 +94,10 @@ func TestStatusCodes(t *testing.T) {
 		want                     int
 	}{
 		{"blank name", "POST", "/api/ssh-keys", `{"name":" "}`, 400},
+		{"newline in name", "POST", "/api/ssh-keys", `{"name":"a\nb"}`, 400},
+		{"101 character name", "POST", "/api/ssh-keys", `{"name":"` + strings.Repeat("x", 101) + `"}`, 400},
+		{"rename to newline", "PATCH", "/api/ssh-keys/" + itoa(o.ID), `{"name":"a\nb"}`, 400},
+		{"rename to 101 characters", "PATCH", "/api/ssh-keys/" + itoa(o.ID), `{"name":"` + strings.Repeat("x", 101) + `"}`, 400},
 		{"duplicate", "POST", "/api/ssh-keys", `{"name":"ci"}`, 409},
 		{"rename to other case", "PATCH", "/api/ssh-keys/" + itoa(o.ID), `{"name":"CI"}`, 409},
 		{"patch missing", "PATCH", "/api/ssh-keys/999", `{"name":"z"}`, 404},
