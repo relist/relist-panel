@@ -26,8 +26,8 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 20 {
-		t.Fatalf("migration version = %d, want 20", version)
+	if version != 21 {
+		t.Fatalf("migration version = %d, want 21", version)
 	}
 
 	var one int
@@ -316,8 +316,8 @@ func TestComposeOwnedSetsMigrationMovesEnvironmentSets(t *testing.T) {
 		t.Fatalf("seed version 14 rows: %v", err)
 	}
 
-	if err := Migrate(db); err != nil {
-		t.Fatalf("migrate 14 -> latest: %v", err)
+	if err := goose.UpTo(db, ".", 15); err != nil {
+		t.Fatalf("migrate 14 -> 15: %v", err)
 	}
 
 	// Every set of Environment 1 is copied into both of its Composes; the set
@@ -400,11 +400,12 @@ func TestComposeOwnedSetsMigrationMovesEnvironmentSets(t *testing.T) {
 		t.Fatalf("rows left after deleting compose a's sets = %d", leftover)
 	}
 
-	// Down returns to Environment-owned sets and Up runs again cleanly.
+	// Down returns to Environment-owned sets and Up runs again cleanly. The test
+	// stops at version 15: later migrations are not reversible all the way.
 	if err := goose.Down(db, "."); err != nil {
 		t.Fatalf("migrate down: %v", err)
 	}
-	if err := Migrate(db); err != nil {
+	if err := goose.UpTo(db, ".", 15); err != nil {
 		t.Fatalf("migrate up again: %v", err)
 	}
 }
@@ -501,5 +502,55 @@ func TestForeignKeyViolationsCountsOrphans(t *testing.T) {
 	}
 	if got != 1 {
 		t.Fatalf("ForeignKeyViolations() = %d, want 1", got)
+	}
+}
+
+func TestSSHKeysMigrationDiscardsSourceKeys(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatal(err)
+	}
+
+	goose.SetBaseFS(migrations.FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(db, ".", 20); err != nil {
+		t.Fatalf("migrate to 20: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO projects (name, description, created_at, updated_at) VALUES ('p', '', 1, 1);
+		INSERT INTO environments (project_id, name, created_at) VALUES (1, 'production', 1);
+		INSERT INTO composes (environment_id, name, yaml_content, created_at, updated_at) VALUES (1, 'a', '', 1, 1);
+		INSERT INTO compose_sources (compose_id, kind, ssh_private_key, ssh_public_key, last_test_at, last_test_ok, created_at, updated_at)
+			VALUES (1, 'git', 'PRIV', 'PUB', 5, 1, 1, 1);
+	`); err != nil {
+		t.Fatalf("seed version 20 rows: %v", err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate 20 -> latest: %v", err)
+	}
+
+	var priv, pub string
+	var testAt, testOK, keyID sql.NullInt64
+	if err := db.QueryRow(`SELECT ssh_private_key, ssh_public_key, last_test_at, last_test_ok, ssh_key_id
+		FROM compose_sources WHERE compose_id = 1`).Scan(&priv, &pub, &testAt, &testOK, &keyID); err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+	if priv != "" || pub != "" || testAt.Valid || testOK.Valid || keyID.Valid {
+		t.Fatalf("source = %q %q %v %v %v, want discarded keys, cleared test, no key", priv, pub, testAt, testOK, keyID)
+	}
+	var keys int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ssh_keys`).Scan(&keys); err != nil {
+		t.Fatalf("count ssh_keys: %v", err)
+	}
+	if keys != 0 {
+		t.Fatalf("ssh_keys has %d rows, want 0", keys)
 	}
 }
