@@ -414,11 +414,18 @@ func TestSourceTestWithoutAGitSourceIs404(t *testing.T) {
 	}
 }
 
-func TestSourceTestWithABodyURLValidatesAndDoesNotSaveIt(t *testing.T) {
+func TestSourceTestIgnoresABodyURL(t *testing.T) {
 	f := newSourceFixture(t)
-	f.saveGitRow(t, "git@github.com:acme/shop.git", "")
-	if status, _ := f.do(t, http.MethodPost, f.sourcePath()+"/test", map[string]string{"repoUrl": "https://x/y"}); status != http.StatusBadRequest {
-		t.Fatalf("bad url = %d, want 400", status)
+	url, sha := bareRepo(t)
+	f.saveGitRow(t, url, "main")
+	status, body := f.do(t, http.MethodPost, f.sourcePath()+"/test", map[string]string{"repoUrl": "git@elsewhere.example:x/y.git"})
+	branches, _ := body["branches"].([]any)
+	if status != http.StatusOK || body["ok"] != true || len(branches) != 1 || branches[0] != "main" {
+		t.Fatalf("test with a body URL = %d %v, want the saved repository tested", status, body)
+	}
+	_, got := f.do(t, http.MethodGet, f.sourcePath(), nil)
+	if lt, _ := got["lastTest"].(map[string]any); got["headSha"] != sha || lt["ok"] != true {
+		t.Fatalf("GET after test = %v, want the saved repository's test recorded", got)
 	}
 }
 

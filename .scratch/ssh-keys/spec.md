@@ -103,6 +103,9 @@ writes key material.
   generates a key.
 - `POST .../source/key` (regenerate) is removed, with `keyComment`.
 - `POST .../source/test` with no key: `400 "Choose an SSH key first"`.
+- `POST .../source/test` always tests the saved URL and records the result. The optional
+  `{repoUrl}` body from the source-builds spec is dropped and any body is ignored, so a
+  shared key is never offered to a host the Source does not name. The web app never sent it.
 
 ### `internal/deployments`
 

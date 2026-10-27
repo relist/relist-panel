@@ -345,9 +345,9 @@ export const api = {
   createSshKey: (name: string) => request<SshKey>('/api/ssh-keys', jsonInit('POST', { name })),
   renameSshKey: (id: number, name: string) => request<SshKey>(`/api/ssh-keys/${id}`, jsonInit('PATCH', { name })),
   deleteSshKey: (id: number) => request<void>(`/api/ssh-keys/${id}`, { method: 'DELETE' }),
-  /** Tries the repository (the saved one when `repoUrl` is omitted) and lists its branches. */
-  testSource: (location: ComposePath, repoUrl?: string) =>
-    request<SourceTestResult>(`${composePath(location)}/source/test`, jsonInit('POST', repoUrl ? { repoUrl } : {})),
+  /** Tries the saved repository with the Source's SSH key and lists its branches. */
+  testSource: (location: ComposePath) =>
+    request<SourceTestResult>(`${composePath(location)}/source/test`, { method: 'POST' }),
   resetKnownHosts: (location: ComposePath) =>
     request<void>(`${composePath(location)}/source/known-hosts/reset`, { method: 'POST' }),
   uploadSource: (location: ComposePath, file: File) => {

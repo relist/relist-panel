@@ -311,10 +311,6 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-type testInput struct {
-	RepoURL string `json:"repoUrl"`
-}
-
 type testResult struct {
 	OK       bool     `json:"ok"`
 	Branches []string `json:"branches"`
@@ -326,11 +322,8 @@ func (s *Service) test(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var in testInput
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, http.StatusBadRequest, "request body must be JSON")
-		return
-	}
+	// The test always runs against the saved URL, so the stored key is never
+	// offered to a host the Source does not name. Any body is ignored.
 	src, err := s.store.Get(r.Context(), t.id)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && src.Kind != KindGit {
 		writeError(w, http.StatusNotFound, "compose has no git source")
@@ -342,15 +335,6 @@ func (s *Service) test(w http.ResponseWriter, r *http.Request) {
 	if src.PrivateKey == "" {
 		writeError(w, http.StatusBadRequest, "Choose an SSH key first")
 		return
-	}
-	// A URL in the body is tried with the stored key and never saved, so its
-	// outcome says nothing about the stored Source.
-	record := in.RepoURL == ""
-	if !record {
-		if src.RepoURL, err = ValidateRepoURL(in.RepoURL); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), testTimeout)
 	defer cancel()
@@ -366,11 +350,9 @@ func (s *Service) test(w http.ResponseWriter, r *http.Request) {
 			headSHA = b.SHA
 		}
 	}
-	if record {
-		if err := s.store.RecordTest(r.Context(), t.id, res.OK, headSHA, time.Now()); err != nil {
-			writeError(w, http.StatusInternalServerError, "could not record the test")
-			return
-		}
+	if err := s.store.RecordTest(r.Context(), t.id, res.OK, headSHA, time.Now()); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not record the test")
+		return
 	}
 	writeJSON(w, http.StatusOK, res)
 }
