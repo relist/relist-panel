@@ -26,8 +26,8 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 21 {
-		t.Fatalf("migration version = %d, want 21", version)
+	if version != 22 {
+		t.Fatalf("migration version = %d, want 22", version)
 	}
 
 	var one int
@@ -551,5 +551,27 @@ func TestSSHKeysMigrationDiscardsSourceKeys(t *testing.T) {
 	}
 	if keys != 0 {
 		t.Fatalf("ssh_keys has %d rows, want 0", keys)
+	}
+}
+
+func TestVulnerabilityScansMigrationSeedsSettings(t *testing.T) {
+	db, err := OpenAndMigrate(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatalf("OpenAndMigrate() error = %v", err)
+	}
+	defer db.Close()
+	for _, table := range []string{"scan_settings", "scan_queue", "image_scans", "image_findings", "vulnerability_first_seen"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("table %s: count %d, err %v", table, n, err)
+		}
+	}
+	var enabled, minute int
+	var image, active string
+	if err := db.QueryRow(`SELECT enabled, daily_minute, scanner_image, active_image FROM scan_settings WHERE id = 1`).Scan(&enabled, &minute, &image, &active); err != nil {
+		t.Fatalf("read scan_settings: %v", err)
+	}
+	if enabled != 0 || minute != 180 || image != "" || active != "" {
+		t.Fatalf("scan_settings = %d %d %q %q", enabled, minute, image, active)
 	}
 }
