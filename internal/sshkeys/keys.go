@@ -1,4 +1,4 @@
-package sources
+package sshkeys
 
 import (
 	"crypto/ed25519"

@@ -19,7 +19,8 @@ func TestSnapshotSecretsRemainPrivateAcrossDeploymentAPIs(t *testing.T) {
 	}{
 		{`INSERT INTO environment_variables (environment_id, key, value, secret) VALUES (?, 'ENV_TOKEN', ?, 1)`, []any{f.env.ID, secrets[0]}},
 		{`INSERT INTO compose_variables (compose_id, key, value, secret) VALUES (?, 'APP_TOKEN', ?, 1)`, []any{f.compose.ID, secrets[1]}},
-		{`UPDATE compose_sources SET ssh_private_key = ? WHERE compose_id = ?`, []any{secrets[2], f.compose.ID}},
+		{`INSERT INTO ssh_keys (id, name, private_key, public_key, created_at) VALUES (1, 'privacy', ?, 'ssh-ed25519 AAAA', 1)`, []any{secrets[2]}},
+		{`UPDATE compose_sources SET ssh_key_id = 1 WHERE compose_id = ?`, []any{f.compose.ID}},
 	} {
 		if _, err := server.db.Exec(query.sql, query.args...); err != nil {
 			t.Fatal(err)

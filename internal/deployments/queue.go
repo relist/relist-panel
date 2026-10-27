@@ -105,6 +105,7 @@ const (
 	reasonComposeDeleted = "compose deleted"
 	reasonNoSource       = "compose has no source"
 	reasonNoBranch       = "no branch configured"
+	reasonNoKey          = "Choose an SSH key for this Source"
 	reasonInternal       = "internal error"
 
 	stepFetch  = "fetch"
@@ -790,6 +791,10 @@ func (j *job) fetchAndBuild() (outcome, bool) {
 		if src.Branch == "" {
 			j.step = stepFetch
 			return failed(stepFetch, reasonNoBranch), false
+		}
+		if src.PrivateKey == "" {
+			j.step = stepFetch
+			return failed(stepFetch, reasonNoKey), false
 		}
 	}
 

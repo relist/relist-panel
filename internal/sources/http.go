@@ -39,6 +39,7 @@ type Gate interface {
 
 // Service serves the /source routes of a Compose.
 type Service struct {
+	db        *sql.DB
 	store     *Store
 	composes  *composes.Service
 	git       Git
@@ -48,7 +49,7 @@ type Service struct {
 }
 
 func New(db *sql.DB, composes *composes.Service, git Git, locker SourceLocker, gate Gate) *Service {
-	return &Service{store: NewStore(db), composes: composes, git: git, locker: locker, gate: gate, maxUpload: maxUploadBytes}
+	return &Service{db: db, store: NewStore(db), composes: composes, git: git, locker: locker, gate: gate, maxUpload: maxUploadBytes}
 }
 
 const base = "/api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/source"
@@ -57,7 +58,6 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+base, s.get)
 	mux.HandleFunc("PUT "+base, s.put)
 	mux.HandleFunc("DELETE "+base, s.delete)
-	mux.HandleFunc("POST "+base+"/key", s.regenerateKey)
 	mux.HandleFunc("POST "+base+"/test", s.test)
 	mux.HandleFunc("POST "+base+"/known-hosts/reset", s.resetKnownHosts)
 	mux.HandleFunc("POST "+base+"/upload", s.upload)
@@ -76,13 +76,19 @@ type zipJSON struct {
 	UploadedAt time.Time `json:"uploadedAt"`
 }
 
+type sshKeyJSON struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	PublicKey string `json:"publicKey"`
+}
+
 // sourceJSON is the Source as the API shows it. It has no private key field.
 type sourceJSON struct {
 	Kind       Kind          `json:"kind"`
 	RepoURL    string        `json:"repoUrl"`
 	Branch     string        `json:"branch"`
 	Submodules bool          `json:"submodules"`
-	PublicKey  string        `json:"publicKey"`
+	SSHKey     *sshKeyJSON   `json:"sshKey"`
 	HeadSHA    string        `json:"headSha"`
 	LastTest   *lastTestJSON `json:"lastTest"`
 	Zip        *zipJSON      `json:"zip"`
@@ -91,7 +97,10 @@ type sourceJSON struct {
 func toJSON(src Source) sourceJSON {
 	j := sourceJSON{
 		Kind: src.Kind, RepoURL: src.RepoURL, Branch: src.Branch, Submodules: src.Submodules,
-		PublicKey: src.PublicKey, HeadSHA: src.HeadSHA,
+		HeadSHA: src.HeadSHA,
+	}
+	if src.SSHKeyID != nil {
+		j.SSHKey = &sshKeyJSON{ID: *src.SSHKeyID, Name: src.SSHKeyName, PublicKey: src.PublicKey}
 	}
 	if src.LastTestAt != nil && src.LastTestOK != nil {
 		j.LastTest = &lastTestJSON{At: *src.LastTestAt, OK: *src.LastTestOK}
@@ -175,9 +184,8 @@ type putInput struct {
 	RepoURL    string `json:"repoUrl"`
 	Branch     string `json:"branch"`
 	Submodules bool   `json:"submodules"`
+	SSHKeyID   *int64 `json:"sshKeyId"`
 }
-
-func keyComment(composeID int64) string { return fmt.Sprintf("relist-c%d", composeID) }
 
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	t, ok := s.resolve(w, r)
@@ -203,6 +211,17 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if in.SSHKeyID != nil {
+		var found int
+		err := s.db.QueryRowContext(r.Context(), `SELECT 1 FROM ssh_keys WHERE id = ?`, *in.SSHKeyID).Scan(&found)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusBadRequest, "unknown SSH key")
+			return
+		} else if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not check the SSH key")
+			return
+		}
+	}
 	unlock, ok := s.lock(w, t.id)
 	if !ok {
 		return
@@ -221,7 +240,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load source")
 		return
 	}
-	next := Source{ComposeID: t.id, Kind: KindGit, RepoURL: repoURL, Branch: branch, Submodules: in.Submodules}
+	next := Source{ComposeID: t.id, Kind: KindGit, RepoURL: repoURL, Branch: branch, Submodules: in.Submodules, SSHKeyID: in.SSHKeyID}
 	if err == nil && existing.Kind == KindZip {
 		// An uploaded tree may carry its own .git/config; git init must never
 		// run inside it. EnsureOwnedSrc above already vouched that src/ is ours.
@@ -231,20 +250,13 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err == nil && existing.Kind == KindGit {
-		next.PrivateKey, next.PublicKey, next.CreatedAt = existing.PrivateKey, existing.PublicKey, existing.CreatedAt
-		// A test and its commit describe the repository and branch they ran against.
-		if existing.RepoURL == repoURL {
+		next.CreatedAt = existing.CreatedAt
+		// A test and its commit describe the repository, key and branch they ran against.
+		if existing.RepoURL == repoURL && sameKey(existing.SSHKeyID, in.SSHKeyID) {
 			next.LastTestAt, next.LastTestOK = existing.LastTestAt, existing.LastTestOK
 			if existing.Branch == branch {
 				next.HeadSHA = existing.HeadSHA
 			}
-		}
-	}
-	if next.PrivateKey == "" {
-		next.PrivateKey, next.PublicKey, err = GenerateKey(keyComment(t.id))
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "could not generate deploy key")
-			return
 		}
 	}
 	if err := s.store.Save(r.Context(), next); err != nil {
@@ -252,6 +264,10 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respond(w, r, t.id)
+}
+
+func sameKey(a, b *int64) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }
 
 // respond answers with the stored Source.
@@ -295,47 +311,6 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Service) regenerateKey(w http.ResponseWriter, r *http.Request) {
-	t, ok := s.resolve(w, r)
-	if !ok {
-		return
-	}
-	unlock, ok := s.lock(w, t.id)
-	if !ok {
-		return
-	}
-	defer unlock()
-	src, err := s.store.Get(r.Context(), t.id)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "compose has no source")
-		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not load source")
-		return
-	}
-	if src.Kind != KindGit {
-		writeError(w, http.StatusBadRequest, "only a git source has a deploy key")
-		return
-	}
-	src.PrivateKey, src.PublicKey, err = GenerateKey(keyComment(t.id))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not generate deploy key")
-		return
-	}
-	// The old test used the old key.
-	src.LastTestAt, src.LastTestOK, src.HeadSHA = nil, nil, ""
-	src.UpdatedAt = time.Time{}
-	if err := s.store.Save(r.Context(), src); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not save source")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"publicKey": src.PublicKey})
-}
-
-type testInput struct {
-	RepoURL string `json:"repoUrl"`
-}
-
 type testResult struct {
 	OK       bool     `json:"ok"`
 	Branches []string `json:"branches"`
@@ -347,11 +322,8 @@ func (s *Service) test(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var in testInput
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, http.StatusBadRequest, "request body must be JSON")
-		return
-	}
+	// The test always runs against the saved URL, so the stored key is never
+	// offered to a host the Source does not name. Any body is ignored.
 	src, err := s.store.Get(r.Context(), t.id)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && src.Kind != KindGit {
 		writeError(w, http.StatusNotFound, "compose has no git source")
@@ -360,14 +332,9 @@ func (s *Service) test(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load source")
 		return
 	}
-	// A URL in the body is tried with the stored key and never saved, so its
-	// outcome says nothing about the stored Source.
-	record := in.RepoURL == ""
-	if !record {
-		if src.RepoURL, err = ValidateRepoURL(in.RepoURL); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
+	if src.PrivateKey == "" {
+		writeError(w, http.StatusBadRequest, "Choose an SSH key first")
+		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), testTimeout)
 	defer cancel()
@@ -383,11 +350,9 @@ func (s *Service) test(w http.ResponseWriter, r *http.Request) {
 			headSHA = b.SHA
 		}
 	}
-	if record {
-		if err := s.store.RecordTest(r.Context(), t.id, res.OK, headSHA, time.Now()); err != nil {
-			writeError(w, http.StatusInternalServerError, "could not record the test")
-			return
-		}
+	if err := s.store.RecordTest(r.Context(), t.id, res.OK, headSHA, time.Now()); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not record the test")
+		return
 	}
 	writeJSON(w, http.StatusOK, res)
 }

@@ -47,7 +47,7 @@ const source: ComposeSource = {
   headSha: '',
   kind: 'git',
   lastTest: null,
-  publicKey: 'ssh-ed25519 AAAA relist-compose-7',
+  sshKey: { id: 1, name: 'ci', publicKey: 'ssh-ed25519 AAAA relist-ci' },
   repoUrl: 'git@github.com:acme/old.git',
   submodules: false,
   zip: null,
@@ -117,6 +117,21 @@ describe('Compose Source loading', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect((screen.getByRole('button', { name: /Deploy$/ }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+});
+
+describe('Source card key warning', () => {
+  it('warns when a git Source has no SSH key', async () => {
+    vi.spyOn(api, 'getSource').mockResolvedValue({ ...source, sshKey: null });
+    renderPage();
+    expect(await screen.findByText('No SSH key — choose one before deploying.')).toBeTruthy();
+  });
+
+  it('shows no warning when the Source has a key', async () => {
+    vi.spyOn(api, 'getSource').mockResolvedValue(source);
+    renderPage();
+    await screen.findByText(/acme\/old/);
+    expect(screen.queryByText('No SSH key — choose one before deploying.')).toBeNull();
   });
 });
 

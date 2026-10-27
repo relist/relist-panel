@@ -3,12 +3,16 @@ package deployments
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +20,7 @@ import (
 
 	"relist-panel/internal/composes"
 	"relist-panel/internal/sources"
+	"relist-panel/internal/sshkeys"
 )
 
 // recorder keeps an ordered, goroutine-safe list of what the fakes saw.
@@ -189,6 +194,7 @@ func (g *fakeGate) AcquireVolumes(ctx context.Context, projectID int64) (func(),
 
 type harness struct {
 	t       *testing.T
+	db      *sql.DB
 	store   *Store
 	srcs    *sources.Store
 	rec     *recorder
@@ -209,7 +215,7 @@ func newHarness(t *testing.T) *harness {
 	db, a, b := newDB(t)
 	rec := &recorder{}
 	h := &harness{
-		t: t, store: NewStore(db), srcs: sources.NewStore(db), rec: rec, a: a, b: b,
+		t: t, db: db, store: NewStore(db), srcs: sources.NewStore(db), rec: rec, a: a, b: b,
 		fetch: &fakeFetcher{rec: rec}, build: &fakeBuilder{rec: rec}, gate: &fakeGate{rec: rec},
 		comp: &fakeComposes{
 			rec:  rec,
@@ -256,7 +262,11 @@ func (h *harness) stop() {
 
 func (h *harness) gitSource(id int64) {
 	h.t.Helper()
-	err := h.srcs.Save(context.Background(), sources.Source{ComposeID: id, Kind: sources.KindGit, RepoURL: "git@example.com:a/b.git", Branch: "main"})
+	key, err := sshkeys.NewStore(h.db).Create(context.Background(), fmt.Sprintf("harness-%d", id))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	err = h.srcs.Save(context.Background(), sources.Source{ComposeID: id, Kind: sources.KindGit, RepoURL: "git@example.com:a/b.git", Branch: "main", SSHKeyID: &key.ID})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -1172,5 +1182,80 @@ func TestPanicInDeploySettlesFailedAndWorkerContinues(t *testing.T) {
 	}
 	if h.q.IsRunning(h.a) {
 		t.Fatal("run state not cleared")
+	}
+}
+
+func (h *harness) postDeployment(mode string) *httptest.ResponseRecorder {
+	h.t.Helper()
+	h.newQueue()
+	mux := http.NewServeMux()
+	NewAPI(h.q, apiComposes{h.comp}).RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	url := "/api/projects/1/environments/1/composes/" + strconv.FormatInt(h.a, 10) + "/deployments"
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, url, strings.NewReader(`{"mode":"`+mode+`"}`)))
+	return rec
+}
+
+func TestBuildWithoutKeyIs400(t *testing.T) {
+	h := newHarness(t)
+	if err := h.srcs.Save(context.Background(), sources.Source{ComposeID: h.a, Kind: sources.KindGit, RepoURL: "git@example.com:a/b.git", Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := h.postDeployment("build")
+	var body map[string]string
+	if rec.Code != http.StatusBadRequest || json.Unmarshal(rec.Body.Bytes(), &body) != nil || body["error"] != "Choose an SSH key for this Source" {
+		t.Fatalf("build without key = %d %s", rec.Code, rec.Body)
+	}
+	if rec := h.postDeployment("skip-build"); rec.Code == http.StatusBadRequest {
+		t.Fatalf("skip-build refused: %s", rec.Body)
+	}
+}
+
+func TestZipBuildIsNotRefusedForKey(t *testing.T) {
+	h := newHarness(t)
+	h.zipSource(h.a)
+	if rec := h.postDeployment("build"); rec.Code == http.StatusBadRequest {
+		t.Fatalf("zip build refused: %s", rec.Body)
+	}
+}
+
+func TestQueuedBuildKeepsKeyAfterDelete(t *testing.T) {
+	h := newHarness(t)
+	h.gitSource(h.a)
+	src, err := h.srcs.Get(context.Background(), h.a)
+	if err != nil || src.PrivateKey == "" {
+		t.Fatalf("source key: %v %q", err, src.PrivateKey)
+	}
+	var got string
+	h.fetch.onFetch = func(_ context.Context, s sources.Source, _ string, _ io.Writer) (sources.Ref, error) {
+		got = s.PrivateKey
+		return sources.Ref{SHA: "abc123"}, nil
+	}
+	d := h.enqueue(h.a, ModeBuild)
+	if err := sshkeys.NewStore(h.db).Delete(context.Background(), *src.SSHKeyID); err != nil {
+		t.Fatal(err)
+	}
+	h.start()
+	if done := h.waitSettled(h.a, d.Number); done.Status != StatusSucceeded {
+		t.Fatalf("status = %s %q", done.Status, done.Reason)
+	}
+	if got != src.PrivateKey {
+		t.Fatalf("fetch saw key %q, want the queued one", got)
+	}
+}
+
+func TestLegacyResumeWithoutKeyFailsAtFetch(t *testing.T) {
+	h := newHarness(t)
+	if err := h.srcs.Save(context.Background(), sources.Source{ComposeID: h.a, Kind: sources.KindGit, RepoURL: "git@example.com:a/b.git", Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	d, _, err := h.store.Enqueue(context.Background(), h.a, ModeBuild, false, false, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.start()
+	got := h.waitSettled(h.a, d.Number)
+	if got.Status != StatusFailed || got.FailedStep != "fetch" || got.Reason != "Choose an SSH key for this Source" {
+		t.Fatalf("legacy no key = %+v", got)
 	}
 }

@@ -15,8 +15,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"relist-panel/internal/composes"
+	"relist-panel/internal/sshkeys"
 )
 
 type stubLocker struct {
@@ -127,7 +129,6 @@ func TestWritesAnswer409WhenTheSourceIsLocked(t *testing.T) {
 	}{
 		{"PUT", http.MethodPut, f.base, put},
 		{"DELETE", http.MethodDelete, f.base, ""},
-		{"regenerate", http.MethodPost, f.base + "/key", ""},
 		{"known-hosts reset", http.MethodPost, f.base + "/known-hosts/reset", ""},
 	}
 	for _, c := range cases {
@@ -238,20 +239,98 @@ func TestPutGitOverZipRemovesTheUploadedTree(t *testing.T) {
 	}
 }
 
-func TestPutGeneratesAKeyCommentedWithTheComposeID(t *testing.T) {
-	f := newHTTPFixture(t)
-	put := `{"kind":"git","repoUrl":"git@github.com:a/b.git","branch":"main","submodules":false}`
-	rec := f.serve(httptest.NewRequest(http.MethodPut, f.base, strings.NewReader(put)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
-	}
-	var body struct {
-		PublicKey string `json:"publicKey"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+func (f *httpFixture) newKey(t *testing.T, name string) sshkeys.Key {
+	t.Helper()
+	k, err := sshkeys.NewStore(f.db).Create(t.Context(), name)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if want := fmt.Sprintf(" relist-c%d", f.compose); !strings.HasSuffix(body.PublicKey, want) {
-		t.Fatalf("public key %q does not end in %q", body.PublicKey, want)
+	return k
+}
+
+func (f *httpFixture) putSource(t *testing.T, keyID *int64, repo string) (int, map[string]any) {
+	t.Helper()
+	in := map[string]any{"kind": "git", "repoUrl": repo, "branch": "main", "submodules": false}
+	if keyID != nil {
+		in["sshKeyId"] = *keyID
+	}
+	raw, _ := json.Marshal(in)
+	rec := f.serve(httptest.NewRequest(http.MethodPut, f.base, bytes.NewReader(raw)))
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	return rec.Code, body
+}
+
+const repoA = "git@github.com:a/b.git"
+
+func TestPutWithKeyAndWithout(t *testing.T) {
+	f := newHTTPFixture(t)
+	k := f.newKey(t, "ci")
+	code, body := f.putSource(t, &k.ID, repoA)
+	sk, _ := body["sshKey"].(map[string]any)
+	if code != http.StatusOK || sk == nil || int64(sk["id"].(float64)) != k.ID || sk["name"] != "ci" || sk["publicKey"] != k.PublicKey {
+		t.Fatalf("PUT with key = %d %v", code, body)
+	}
+	code, body = f.putSource(t, nil, repoA)
+	if v, present := body["sshKey"]; code != http.StatusOK || !present || v != nil {
+		t.Fatalf("PUT without key = %d %v, want sshKey null", code, body)
+	}
+}
+
+func TestPutUnknownKeyIs400(t *testing.T) {
+	f := newHTTPFixture(t)
+	id := int64(999)
+	if code, body := f.putSource(t, &id, repoA); code != http.StatusBadRequest || body["error"] != "unknown SSH key" {
+		t.Fatalf("PUT unknown key = %d %v", code, body)
+	}
+}
+
+func TestChangingKeyClearsTheTest(t *testing.T) {
+	f := newHTTPFixture(t)
+	k1, k2 := f.newKey(t, "one"), f.newKey(t, "two")
+	f.putSource(t, &k1.ID, repoA)
+	if err := f.svc.store.RecordTest(t.Context(), f.compose, true, "abc123", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, body := f.putSource(t, &k1.ID, repoA); body["lastTest"] == nil || body["headSha"] != "abc123" {
+		t.Fatalf("same key and URL lost the test: %v", body)
+	}
+	if _, body := f.putSource(t, &k2.ID, repoA); body["lastTest"] != nil || body["headSha"] != "" {
+		t.Fatalf("another key kept the test: %v", body)
+	}
+}
+
+func TestTestWithoutKeyIs400(t *testing.T) {
+	f := newHTTPFixture(t)
+	marker := filepath.Join(t.TempDir(), "called")
+	bin := filepath.Join(t.TempDir(), "git")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.git = Git{Bin: bin}
+	f.putSource(t, nil, repoA)
+	rec := f.serve(httptest.NewRequest(http.MethodPost, f.base+"/test", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Choose an SSH key first") {
+		t.Fatalf("test = %d %s", rec.Code, rec.Body)
+	}
+	if exists(marker) {
+		t.Fatal("git was called")
+	}
+}
+
+func TestKeyRouteIsGone(t *testing.T) {
+	f := newHTTPFixture(t)
+	k := f.newKey(t, "ci")
+	// With a saved Source, a surviving regenerate route would answer 200.
+	if code, _ := f.putSource(t, &k.ID, repoA); code != http.StatusOK {
+		t.Fatalf("setup PUT = %d", code)
+	}
+	rec := f.serve(httptest.NewRequest(http.MethodPost, f.base+"/key", nil))
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /key = %d %s, want 404 or 405", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	if json.Unmarshal(rec.Body.Bytes(), &body) == nil && body["publicKey"] != nil {
+		t.Fatalf("POST /key returned a public key: %s", rec.Body)
 	}
 }

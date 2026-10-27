@@ -13,6 +13,7 @@ import (
 
 	"relist-panel/internal/composes"
 	"relist-panel/internal/sources"
+	"relist-panel/internal/sshkeys"
 )
 
 type fakeMounts struct {
@@ -202,7 +203,11 @@ func TestSnapshotGCKeepsMaterializedTree(t *testing.T) {
 	}
 	localGit(t, work, "add", ".")
 	localGit(t, work, "commit", "-m", "first")
-	if err := f.sources.Save(context.Background(), sources.Source{ComposeID: f.id, Kind: sources.KindGit, RepoURL: "file://" + work, Branch: "main"}); err != nil {
+	key, err := sshkeys.NewStore(f.db).Create(context.Background(), "gc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.sources.Save(context.Background(), sources.Source{ComposeID: f.id, Kind: sources.KindGit, RepoURL: "file://" + work, Branch: "main", SSHKeyID: &key.ID}); err != nil {
 		t.Fatal(err)
 	}
 	f.q.d.Fetcher = &countedGit{}

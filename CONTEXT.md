@@ -37,12 +37,12 @@ A Docker image present on the host, listed and loaded from the Images page. A Co
 _Avoid_: Build, Artifact
 
 **Source**:
-The source code of one Compose, from a Git repository or an uploaded zip, kept in `<compose dir>/src/`. A Compose has at most one. What to build from it is the Compose file's own `build:` (ADR-0016).
+The source code of one Compose, from a Git repository or an uploaded zip, kept in `<compose dir>/src/`. A Compose has at most one. A Git Source chooses an SSH key. What to build from it is the Compose file's own `build:` (ADR-0016).
 _Avoid_: Repo (a zip Source has none), App, Application
 
-**Deploy key**:
-The SSH key pair the panel generates for one Compose's Git Source; the operator adds its public half to the repository as a read-only deploy key. One per Compose, because Git hosts refuse the same deploy key on two repositories.
-_Avoid_: SSH key (as the entity name), Credential
+**SSH key**:
+An SSH key pair the panel generates and keeps in the host-wide SSH keys library. A Git Source chooses one; one key may serve many Composes. The operator adds its public half to each repository as a read-only deploy key (ADR-0020).
+_Avoid_: Credential, Deploy key (the per-Compose key of ADR-0016)
 
 **Deployment**:
 One queued run that brings a Compose's Containers up to date: fetch the Source, build each Service that has `build:` one at a time, then `up`. A newly queued Deployment keeps the configuration selected when it was queued, independently of later edits. Numbered per Compose, with status, steps and a log. All Deployments on the host share one queue and run one at a time.

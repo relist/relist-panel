@@ -508,3 +508,19 @@ describe('listImages', () => {
     expect(fetch.mock.calls[0][0]).toBe('/api/images');
   });
 });
+
+describe('createSshKey', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('POSTs the name as JSON to /api/ssh-keys', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{}', { status: 201 }));
+    vi.stubGlobal('fetch', fetch);
+
+    await api.createSshKey('ci');
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/ssh-keys');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe('{"name":"ci"}');
+  });
+});

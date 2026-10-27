@@ -15,6 +15,7 @@ import (
 
 	"relist-panel/internal/composes"
 	"relist-panel/internal/sources"
+	"relist-panel/internal/sshkeys"
 )
 
 func TestEnqueuePersistsConfigurationAcrossQueueRestart(t *testing.T) {
@@ -118,7 +119,13 @@ func TestConcurrentDedupSkipsRedundantFailedSourceCapture(t *testing.T) {
 func TestDeploymentLogAndHistoryRedactSnapshotSecrets(t *testing.T) {
 	h := newHarness(t)
 	h.gitSource(h.a)
-	if err := h.srcs.Save(context.Background(), sources.Source{ComposeID: h.a, Kind: sources.KindGit, RepoURL: "git@example.com:a/b", Branch: "main", PrivateKey: "never-expose-private-key"}); err != nil {
+	key, err := sshkeys.NewStore(h.db).Create(context.Background(), "snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One body line of the key, which must not reach any log or history.
+	secretLine := strings.Split(key.PrivateKey, "\n")[1]
+	if err := h.srcs.Save(context.Background(), sources.Source{ComposeID: h.a, Kind: sources.KindGit, RepoURL: "git@example.com:a/b", Branch: "main", SSHKeyID: &key.ID}); err != nil {
 		t.Fatal(err)
 	}
 	h.comp.snapshotSecrets = []string{"never-expose-token"}
@@ -136,7 +143,8 @@ func TestDeploymentLogAndHistoryRedactSnapshotSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(toJSON(got))
-	if strings.Contains(content, "never-expose") || strings.Contains(string(raw), "never-expose") {
+	if strings.Contains(content, "never-expose") || strings.Contains(string(raw), "never-expose") ||
+		strings.Contains(content, secretLine) || strings.Contains(string(raw), secretLine) {
 		t.Fatalf("secret exposed: log=%q history=%s", content, raw)
 	}
 	mux := http.NewServeMux()
@@ -144,7 +152,7 @@ func TestDeploymentLogAndHistoryRedactSnapshotSecrets(t *testing.T) {
 	api.RegisterRoutes(mux)
 	response := httptest.NewRecorder()
 	mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/deployments", nil))
-	if strings.Contains(response.Body.String(), "never-expose") {
+	if strings.Contains(response.Body.String(), "never-expose") || strings.Contains(response.Body.String(), secretLine) {
 		t.Fatalf("global history leaked snapshot: %s", response.Body.String())
 	}
 }

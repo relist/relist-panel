@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/sources"
+	"relist-panel/internal/sshkeys"
 )
 
 type snapshotRunner struct {
@@ -177,7 +178,11 @@ func TestGitSnapshotBuildThenOfflineSkipKeepsPinnedRuntimeFiles(t *testing.T) {
 			localGit(t, work, "commit", "-m", "first")
 			sha := localGit(t, work, "rev-parse", "HEAD")
 			sourceStore := sources.NewStore(db)
-			if err := sourceStore.Save(context.Background(), sources.Source{ComposeID: id, Kind: sources.KindGit, RepoURL: "file://" + work, Branch: "main"}); err != nil {
+			key, err := sshkeys.NewStore(db).Create(context.Background(), "integration")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := sourceStore.Save(context.Background(), sources.Source{ComposeID: id, Kind: sources.KindGit, RepoURL: "file://" + work, Branch: "main", SSHKeyID: &key.ID}); err != nil {
 				t.Fatal(err)
 			}
 			runner := &snapshotRunner{}

@@ -635,7 +635,7 @@ export interface ComposeSource {
   repoUrl: string;
   branch: string;
   submodules: boolean;
-  publicKey: string;
+  sshKey: { id: number; name: string; publicKey: string } | null;
   headSha: string;
   lastTest: { at: string; ok: boolean } | null;
   zip: { name: string; size: number; files: number; uploadedAt: string } | null;
@@ -646,6 +646,23 @@ export interface SourceInput {
   repoUrl: string;
   branch: string;
   submodules: boolean;
+  sshKeyId: number | null;
+}
+
+export interface SshKeyUse {
+  projectId: number;
+  projectName: string;
+  environmentId: number;
+  composeId: number;
+  composeName: string;
+}
+
+export interface SshKey {
+  id: number;
+  name: string;
+  publicKey: string;
+  createdAt: string;
+  usedBy: SshKeyUse[];
 }
 
 export interface SourceTestResult {

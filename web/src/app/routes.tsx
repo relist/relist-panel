@@ -12,6 +12,7 @@ import { NotFoundPage } from '../pages/NotFoundPage';
 import { OverviewPage } from '../pages/OverviewPage';
 import { ProjectPage } from '../pages/ProjectPage';
 import { ProjectsPage } from '../pages/ProjectsPage';
+import { SshKeysPage } from '../pages/SshKeysPage';
 import { VolumeExplorerPage } from '../pages/VolumeExplorerPage';
 import { AppShell } from './AppShell';
 import { routePaths } from './paths';
@@ -31,6 +32,7 @@ const elements: Record<string, ReactElement> = {
   '/': <OverviewPage />,
   'account': <AccountPage />,
   'images': <ImagesPage />,
+  'ssh-keys': <SshKeysPage />,
   'docker': <DockerPage />,
   'deployments': <DeploymentsPage />,
   'monitoring': <MonitoringPage />,
