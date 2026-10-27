@@ -30,6 +30,7 @@ import (
 	"relist-panel/internal/variablesets"
 	"relist-panel/internal/volumeapi"
 	"relist-panel/internal/volumes"
+	"relist-panel/internal/vulnscan"
 	"relist-panel/internal/webassets"
 )
 
@@ -61,6 +62,10 @@ type Deps struct {
 	Migration *migration.Options
 	// Docker adds host reports and confirmed cleanup.
 	Docker dockerhost.Engine
+	// VulnScanner and VulnInUse add vulnerability scanning (ADR-0021). Both
+	// nil leaves the feature out.
+	VulnScanner vulnscan.Scanner
+	VulnInUse   vulnscan.InUse
 	// PanelDomain is the install's RELIST_DOMAIN. A Domain cannot take this
 	// host, or Traefik could route the panel's own traffic to an app. Empty
 	// means unknown and refuses nothing.
@@ -92,6 +97,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	// Without a Runner that can list container mounts, source snapshots are
 	// never collected.
 	mounts, _ := runner.(deployments.MountLister)
+	var vulnService *vulnscan.Service
 	queue := deployments.NewQueue(deployments.Deps{
 		Maintenance: hostGuard,
 		Store:       deployments.NewStore(db),
@@ -103,6 +109,13 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		Mounts:      mounts,
 		Timeout:     60 * time.Minute,
 		Keep:        20,
+		OnSucceeded: func(composeID int64) {
+			if vulnService != nil {
+				if err := vulnService.ScanCompose(context.WithoutCancel(ctx), composeID); err != nil {
+					log.Printf("vulnscan: queue the images of compose %d: %v", composeID, err)
+				}
+			}
+		},
 	})
 	composesService.SetDeploymentCanceler(queue)
 	deployments.NewAPI(queue, composesService).RegisterRoutes(mux)
@@ -112,6 +125,19 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		defer worker.Done()
 		queue.Run(ctx)
 	}()
+	if d.VulnScanner != nil && d.VulnInUse != nil {
+		vulnService = vulnscan.New(vulnscan.Deps{Store: vulnscan.NewStore(db), Scanner: d.VulnScanner, InUse: d.VulnInUse, Gate: queue})
+		vulnService.RegisterRoutes(mux)
+		worker.Add(2)
+		go func() {
+			defer worker.Done()
+			vulnService.Run(ctx)
+		}()
+		go func() {
+			defer worker.Done()
+			vulnService.RunScheduler(ctx)
+		}()
+	}
 	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
 	sshkeys.New(db).RegisterRoutes(mux)
 	domains.New(db).WithPanelHost(d.PanelDomain).RegisterRoutes(mux)
@@ -135,6 +161,15 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		}
 		owners := func(ctx context.Context) (dockerhost.Ownership, error) {
 			projects, volumes, images, err := composesService.DockerOwnership(ctx)
+			if err == nil && vulnService != nil && images != nil && volumes != nil {
+				var ref string
+				if ref, err = vulnService.ScannerImage(ctx); err == nil {
+					for _, r := range vulnscan.ScannerRefs(ref) {
+						images[r] = vulnscan.OwnerName
+					}
+					volumes[vulnscan.CacheVolume] = vulnscan.OwnerName
+				}
+			}
 			return dockerhost.Ownership{Projects: projects, Volumes: volumes, Images: images}, err
 		}
 		dockerhost.NewAPI(d.Docker, hostGuard, pending, owners).RegisterRoutes(mux)

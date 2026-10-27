@@ -33,8 +33,20 @@ One running instance of a Service, created by a deploy. Its identity is not stab
 _Avoid_: Instance
 
 **Image**:
-A Docker image present on the host, listed and loaded from the Images page. A Compose references one by name in its file, or builds one from its Source; the panel builds images only from a Source and never pulls one itself.
+A Docker image present on the host, listed and loaded from the Images page. A Compose references one by name in its file, or builds one from its Source; the panel builds images only from a Source and never pulls one itself — except the Scanner's own image (ADR-0021).
 _Avoid_: Build, Artifact
+
+**Scanner**:
+The vulnerability scanner the panel runs (Trivy), as a short-lived, locked-down container from the Scanner image, which is named by digest. It never holds the Docker socket (ADR-0021).
+_Avoid_: Scout, Agent
+
+**Vulnerability scan**:
+One run of the Scanner over one Image, keyed by image ID. Only the latest result per Image is kept. Scans run one at a time in the host-wide scan queue, which never runs while a Deployment is running.
+_Avoid_: Job, Audit
+
+**Finding**:
+One CVE matched against one package in one Image: severity, installed version, fixed version. A Finding is *fixable* when it has a fixed version.
+_Avoid_: Issue, Alert
 
 **Source**:
 The source code of one Compose, from a Git repository or an uploaded zip, kept in `<compose dir>/src/`. A Compose has at most one. A Git Source chooses an SSH key. What to build from it is the Compose file's own `build:` (ADR-0016).

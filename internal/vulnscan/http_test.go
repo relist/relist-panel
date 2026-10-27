@@ -316,3 +316,14 @@ func TestScannerTagsHubDown(t *testing.T) {
 		t.Fatalf("code = %d", code)
 	}
 }
+
+func TestScannerRefs(t *testing.T) {
+	got := ScannerRefs("aquasec/trivy:0.76.1@sha256:" + hex64)
+	if len(got) != 2 || got[0] != "aquasec/trivy:0.76.1" || got[1] != "aquasec/trivy@sha256:"+hex64 {
+		t.Fatalf("refs = %v", got)
+	}
+	got = ScannerRefs("localhost:5000/trivy@sha256:" + hex64)
+	if len(got) != 1 || got[0] != "localhost:5000/trivy@sha256:"+hex64 {
+		t.Fatalf("refs = %v", got)
+	}
+}

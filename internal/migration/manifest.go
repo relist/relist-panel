@@ -310,10 +310,11 @@ func (b ManifestBuilder) dataDirSizes() (dbSize, dirSize int64, err error) {
 }
 
 // skipInDataDir reports the data directory paths the data-dir item leaves
-// out: the database, which is its own item, and the Migration's scratch.
+// out: the database, which is its own item, the Migration's scratch, and the
+// images exported for a vulnerability scan.
 func skipInDataDir(rel string) bool {
 	switch rel {
-	case "panel.db", "panel.db-journal", "panel.db-wal", "panel.db-shm", ".migration", ".migration-out":
+	case "panel.db", "panel.db-journal", "panel.db-wal", "panel.db-shm", ".migration", ".migration-out", ".scan-work":
 		return true
 	}
 	return false

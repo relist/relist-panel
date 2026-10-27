@@ -12,7 +12,7 @@ import (
 
 // The Scanner's fixed names and limits (ADR-0021).
 const (
-	trivyCacheVolume = "relist-trivy-cache"
+	trivyCacheVolume = vulnscan.CacheVolume
 	trivyLabel       = "relist.vulnscan=1"
 	trivyUser        = "65532:65532"
 	trivyTmpfs       = "/tmp:rw,noexec,nosuid,size=512m,uid=65532"

@@ -397,3 +397,11 @@ func TestStartClosesTerminalSessions(t *testing.T) {
 		t.Fatalf("CloseAll calls = %q, want one naming the migration", terminals.reasons)
 	}
 }
+
+func TestVulnerabilitiesGatedByLock(t *testing.T) {
+	for _, path := range []string{"/api/vulnerabilities/settings", "/api/vulnerabilities/scans"} {
+		if allowedWhileLocked(path) {
+			t.Fatalf("%s allowed under the Migration lock", path)
+		}
+	}
+}

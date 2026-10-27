@@ -10,6 +10,13 @@ type DBInfo struct {
 	Version string // the DB's UpdatedAt, RFC 3339
 }
 
+const (
+	// CacheVolume holds the Scanner's DB and layer cache.
+	CacheVolume = "relist-trivy-cache"
+	// OwnerName is who a prune plan says the Scanner image and cache belong to.
+	OwnerName = "Vulnerability scanner"
+)
+
 var (
 	ErrNoDB      = errors.New("vulnerability DB not downloaded yet")
 	ErrImageGone = errors.New("image no longer exists")
