@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
 
 	"relist-panel/internal/vulnscan"
@@ -19,12 +18,10 @@ const (
 	trivyTmpfs       = "/tmp:rw,noexec,nosuid,size=512m,uid=65532"
 )
 
-var scannerRefPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/:-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$`)
-
 // ValidScannerRef reports whether ref names an image by digest, the only
 // form the panel pulls and runs as its Scanner.
 func ValidScannerRef(ref string) bool {
-	return scannerRefPattern.MatchString(ref)
+	return vulnscan.ValidScannerRef(ref)
 }
 
 type trivyOutput struct {

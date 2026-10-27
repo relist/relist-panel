@@ -6,6 +6,7 @@ package vulnscan
 import (
 	"context"
 	"database/sql"
+	"regexp"
 	"time"
 )
 
@@ -13,6 +14,14 @@ import (
 // chosen one. A release that bumps it upgrades every install that kept the
 // default.
 const DefaultScannerImage = "aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c"
+
+var scannerRefPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/:-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$`)
+
+// ValidScannerRef reports whether ref names an image by digest, the only
+// form the panel pulls and runs as its Scanner.
+func ValidScannerRef(ref string) bool {
+	return scannerRefPattern.MatchString(ref)
+}
 
 type Settings struct {
 	Enabled, AfterDeploy, Daily bool

@@ -102,13 +102,19 @@ func (s *Store) Unstart(ctx context.Context) (int, error) {
 	return int(n), err
 }
 
-// QueueState reports the running task, if any, and how many wait behind it.
+// QueueState reports the running task, if any, and how many wait behind it,
+// read in one transaction so the two agree.
 func (s *Store) QueueState(ctx context.Context) (*Task, int, error) {
-	var queued int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM scan_queue WHERE started_at IS NULL`).Scan(&queued); err != nil {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
 		return nil, 0, err
 	}
-	t, err := scanTask(s.db.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM scan_queue WHERE started_at IS NOT NULL LIMIT 1`))
+	defer tx.Rollback()
+	var queued int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM scan_queue WHERE started_at IS NULL`).Scan(&queued); err != nil {
+		return nil, 0, err
+	}
+	t, err := scanTask(tx.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM scan_queue WHERE started_at IS NOT NULL LIMIT 1`))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, queued, nil
 	}
