@@ -14,6 +14,7 @@ import { ProjectPage } from '../pages/ProjectPage';
 import { ProjectsPage } from '../pages/ProjectsPage';
 import { SshKeysPage } from '../pages/SshKeysPage';
 import { VolumeExplorerPage } from '../pages/VolumeExplorerPage';
+import { VulnerabilitiesPage } from '../pages/VulnerabilitiesPage';
 import { AppShell } from './AppShell';
 import { routePaths } from './paths';
 import { RequireAuth } from './RequireAuth';
@@ -33,6 +34,7 @@ const elements: Record<string, ReactElement> = {
   'account': <AccountPage />,
   'images': <ImagesPage />,
   'ssh-keys': <SshKeysPage />,
+  'vulnerabilities': <VulnerabilitiesPage />,
   'docker': <DockerPage />,
   'deployments': <DeploymentsPage />,
   'monitoring': <MonitoringPage />,

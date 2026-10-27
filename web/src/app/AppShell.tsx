@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SyncOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyOutlined, SyncOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -24,6 +24,8 @@ import { DiskPressureFooter } from '../components/DiskPressureFooter';
 import { PasswordFromEnvBanner } from '../components/PasswordFromEnvBanner';
 import { useDiskPressure } from '../data/useDiskPressure';
 import { useGlobalDeploymentQueue } from '../data/useGlobalDeploymentQueue';
+import { useVulnSummary } from '../data/useVulnSummary';
+import { summaryBadge } from '../pages/vulnerabilities-view';
 import { usePanel } from '../data/store';
 import { composeState, projectComposes, summarize } from '../data/types';
 import { COMPOSE_STATE_META, LAYOUT } from './theme';
@@ -49,6 +51,8 @@ export function AppShell() {
   const { data: deploymentQueue } = useGlobalDeploymentQueue(auth.authenticated);
   const diskPressure = useDiskPressure(auth.authenticated);
   const queuedCount = deploymentQueue?.filter((d) => d.status === 'queued').length ?? 0;
+  const { data: vulnSummary } = useVulnSummary({}, auth.authenticated);
+  const criticalCount = summaryBadge(vulnSummary)?.critical ?? 0;
   const [loadError, setLoadError] = useState<string>();
   const [refreshing, setRefreshing] = useState(false);
   const [mobileSidebar, setMobileSidebar] = useState(false);
@@ -90,6 +94,8 @@ export function AppShell() {
             ? 'images'
           : resolved.pattern === 'ssh-keys'
             ? 'ssh-keys'
+          : resolved.pattern === 'vulnerabilities'
+            ? 'vulnerabilities'
           : resolved.pattern === '/'
             ? 'overview'
             : undefined
@@ -121,6 +127,10 @@ export function AppShell() {
     { key: 'monitoring', icon: <DashboardOutlined />, label: 'Monitoring' },
     { key: 'docker', icon: <CloudServerOutlined />, label: 'Docker' },
     { key: 'images', icon: <ContainerOutlined />, label: 'Images' },
+    {
+      key: 'vulnerabilities', icon: <SafetyOutlined />,
+      label: <Flex align="center" justify="space-between" gap={8}><span>Vulnerabilities</span>{criticalCount > 0 && <Badge count={criticalCount} color={token.colorError} title={`${criticalCount} Critical vulnerabilities`} />}</Flex>,
+    },
     { key: 'ssh-keys', icon: <KeyOutlined />, label: 'SSH keys' },
     {
       type: 'group',
@@ -150,6 +160,7 @@ export function AppShell() {
     if (key === 'docker') return navigate(paths.docker);
     if (key === 'images') return navigate(paths.images);
     if (key === 'ssh-keys') return navigate(paths.sshKeys);
+    if (key === 'vulnerabilities') return navigate(paths.vulnerabilities);
     const projectId = Number(String(key).replace('project-', ''));
     if (Number.isFinite(projectId)) void navigate(paths.project(projectId));
   };
@@ -171,6 +182,8 @@ export function AppShell() {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Images' });
       } else if (resolved?.pattern === 'ssh-keys') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'SSH keys' });
+      } else if (resolved?.pattern === 'vulnerabilities') {
+        trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Vulnerabilities' });
       }
       return trail;
     }

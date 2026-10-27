@@ -16,6 +16,7 @@ export const paths = {
   deployments: '/deployments',
   images: '/images',
   sshKeys: '/ssh-keys',
+  vulnerabilities: '/vulnerabilities',
   docker: '/docker',
   environment: (projectId: number | string, environmentId: number | string, tab = 'composes') =>
     `/projects/${projectId}/env/${environmentId}/${tab}`,
@@ -55,6 +56,7 @@ export const routePaths = [
   { path: 'monitoring' },
   { path: 'images' },
   { path: 'ssh-keys' },
+  { path: 'vulnerabilities' },
   { path: 'docker' },
   { path: 'deployments' },
   { path: 'account' },
