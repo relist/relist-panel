@@ -28,6 +28,15 @@ import type {
   SourceInput,
   SourceTestResult,
   SshKey,
+  ScannerTag,
+  VulnCvePage,
+  VulnCveQuery,
+  VulnFinding,
+  VulnImage,
+  VulnSettings,
+  VulnSettingsResponse,
+  VulnStatus,
+  VulnSummary,
   Domain,
   DomainInput,
   Environment,
@@ -345,6 +354,17 @@ export const api = {
   createSshKey: (name: string) => request<SshKey>('/api/ssh-keys', jsonInit('POST', { name })),
   renameSshKey: (id: number, name: string) => request<SshKey>(`/api/ssh-keys/${id}`, jsonInit('PATCH', { name })),
   deleteSshKey: (id: number) => request<void>(`/api/ssh-keys/${id}`, { method: 'DELETE' }),
+  // Vulnerability scanning (ADR-0021).
+  vulnSettings: () => request<VulnSettingsResponse>(`${VULN_URL}/settings`),
+  saveVulnSettings: (settings: VulnSettings) => request<VulnSettingsResponse>(`${VULN_URL}/settings`, jsonInit('PUT', settings)),
+  vulnStatus: () => request<VulnStatus>(`${VULN_URL}/status`),
+  vulnScannerTags: () => request<{ tags: ScannerTag[] }>(`${VULN_URL}/scanner-tags`),
+  vulnScan: (imageId?: string) => request<{ queued: number }>(`${VULN_URL}/scans`, jsonInit('POST', imageId ? { imageId } : {})),
+  vulnDeleteCache: () => request<void>(`${VULN_URL}/cache`, { method: 'DELETE' }),
+  vulnImages: () => request<VulnImage[]>(`${VULN_URL}/images`),
+  vulnFindings: (imageId: string) => request<VulnFinding[]>(vulnFindingsUrl(imageId)),
+  vulnCves: (query: VulnCveQuery) => request<VulnCvePage>(vulnCvesUrl(query)),
+  vulnSummary: (scope: VulnScope) => request<VulnSummary>(vulnSummaryUrl(scope)),
   /** Tries the saved repository with the Source's SSH key and lists its branches. */
   testSource: (location: ComposePath) =>
     request<SourceTestResult>(`${composePath(location)}/source/test`, { method: 'POST' }),
@@ -629,6 +649,36 @@ export function volumeAccessQuery(access?: VolumeAccess): string {
   }
   const encoded = query.toString();
   return encoded ? `&${encoded}` : '';
+}
+
+export const VULN_URL = '/api/vulnerabilities';
+
+export interface VulnScope {
+  projectId?: number;
+  composeId?: number;
+}
+
+export function vulnFindingsUrl(imageId: string): string {
+  return `${VULN_URL}/images/${encodeURIComponent(imageId)}/findings`;
+}
+
+export function vulnCvesUrl(query: VulnCveQuery): string {
+  const params = new URLSearchParams();
+  if (query.projectId !== undefined) params.set('projectId', String(query.projectId));
+  if (query.composeId !== undefined) params.set('composeId', String(query.composeId));
+  if (query.severity.length > 0) params.set('severity', query.severity.join(','));
+  if (query.fixable) params.set('fixable', '1');
+  if (query.new) params.set('new', '1');
+  if (query.q) params.set('q', query.q);
+  params.set('page', String(query.page));
+  params.set('pageSize', String(query.pageSize));
+  return `${VULN_URL}/cves?${params}`;
+}
+
+export function vulnSummaryUrl(scope: VulnScope): string {
+  if (scope.composeId !== undefined) return `${VULN_URL}/summary?composeId=${scope.composeId}`;
+  if (scope.projectId !== undefined) return `${VULN_URL}/summary?projectId=${scope.projectId}`;
+  return `${VULN_URL}/summary`;
 }
 
 export const IMAGES_URL = '/api/images';

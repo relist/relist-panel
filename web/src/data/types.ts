@@ -701,3 +701,122 @@ export type DockerReport = {
 export type DockerPruneSkip = { name: string; compose?: string; reason: string };
 export type DockerPruneResult = { kind: DockerPruneKind; spaceReclaimed: number; deleted: string[]; skipped?: DockerPruneSkip[] };
 export type DockerPrunePlan = { kind: DockerPruneKind; delete: { name: string; size: number | null }[]; skip: DockerPruneSkip[] };
+
+// Vulnerability scanning (ADR-0021).
+
+export type VulnSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
+
+export interface VulnCounts {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  unknown: number;
+  fixable: number;
+}
+
+export interface VulnSettings {
+  enabled: boolean;
+  afterDeploy: boolean;
+  daily: boolean;
+  /** `HH:MM` in the panel's time zone. */
+  dailyTime: string;
+  /** `''` means the built-in default. */
+  scannerImage: string;
+}
+
+export interface VulnSettingsResponse extends VulnSettings {
+  defaultScannerImage: string;
+  activeImage: string;
+}
+
+export interface VulnStatus {
+  enabled: boolean;
+  running: { kind: 'db_update' | 'image'; imageId?: string; imageRef?: string } | null;
+  queued: number;
+  db: { version: string; updatedAt: string | null; stale: boolean; error: string };
+  lastDailyAt: string | null;
+  nextDailyAt: string | null;
+  timeZone: string;
+  cacheBytes: number;
+}
+
+export interface VulnImageUser {
+  kind: 'service' | 'panel' | 'traefik' | 'scanner';
+  projectId?: number;
+  environmentId?: number;
+  composeId?: number;
+  service?: string;
+}
+
+export interface VulnImage {
+  imageId: string;
+  refs: string[];
+  users: VulnImageUser[];
+  os: string;
+  /** Null until the image has been scanned successfully. */
+  counts: VulnCounts | null;
+  scannedAt: string | null;
+  attemptedAt: string | null;
+  error: string;
+}
+
+export interface VulnFinding {
+  vulnId: string;
+  pkgName: string;
+  pkgPath: string;
+  installedVersion: string;
+  fixedVersion: string;
+  severity: VulnSeverity;
+  title: string;
+  url: string;
+  firstSeenAt: string;
+  new: boolean;
+}
+
+export interface VulnCve {
+  vulnId: string;
+  severity: VulnSeverity;
+  title: string;
+  fixable: boolean;
+  firstSeenAt: string;
+  new: boolean;
+  imageIds: string[];
+}
+
+export interface VulnCvePage {
+  items: VulnCve[];
+  total: number;
+}
+
+export interface VulnCveQuery {
+  projectId?: number;
+  composeId?: number;
+  severity: VulnSeverity[];
+  fixable: boolean;
+  new: boolean;
+  q: string;
+  page: number;
+  pageSize: number;
+}
+
+export interface VulnServiceCounts {
+  service: string;
+  imageId: string;
+  counts: VulnCounts;
+}
+
+export interface VulnSummary {
+  enabled: boolean;
+  counts?: VulnCounts;
+  services?: VulnServiceCounts[];
+}
+
+export interface ScannerTag {
+  tag: string;
+  digest: string;
+  ref: string;
+  pushedAt: string;
+  ageDays: number;
+  young: boolean;
+}
