@@ -2,6 +2,7 @@
 /.data/
 /node_modules/
 /web/node_modules/
+/web/*.tsbuildinfo
 /.claude/
 /.task/
 /.superpowers/
