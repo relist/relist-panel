@@ -41,7 +41,7 @@ func New(composeService *composes.Service, resolver *volumes.Resolver, runner vo
 // upload or edit and DELETE for a file or a tree, directory and file answer
 // PUT to create one entry (never replacing an existing one), and restore
 // answers PUT for a tar.gz streamed into extract — never GET, so the
-// SameSite=Lax session cookie keeps them CSRF-safe.
+// SameSite=Lax cookie and the panel's cross-origin check keep them CSRF-safe.
 func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes", s.list)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/list", s.listFiles)
