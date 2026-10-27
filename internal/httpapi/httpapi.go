@@ -193,7 +193,11 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		}
 	}
 	mux.Handle("/", webassets.Handler())
-	return authService.Middleware(inner), worker.Wait
+	// The session cookie is SameSite=Lax, and a sibling subdomain (an app this
+	// panel deployed, say) is the same site, so its pages could write with the
+	// admin's cookie. Writes from another origin are refused; requests with no
+	// browser headers, like the migration pull, pass.
+	return http.NewCrossOriginProtection().Handler(authService.Middleware(inner)), worker.Wait
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
