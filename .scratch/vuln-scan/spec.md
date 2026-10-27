@@ -334,7 +334,7 @@ and JSON error shape, and are registered on the stdlib `ServeMux`.
 | `GET /settings` | | `{enabled, afterDeploy, daily, dailyTime: "03:00", scannerImage, defaultScannerImage}` |
 | `PUT /settings` | the same fields | `200` with the new settings. `422` with `{error}` if the image fails to pull or verify. Runs synchronously with a 2-minute timeout. |
 | `GET /scanner-tags` | | `{tags: [{tag, digest, pushedAt, ageDays, young}]}`. See below. `502` if Docker Hub fails. |
-| `GET /status` | | `{enabled, running: {kind, imageRef}?, queued, db: {version, updatedAt, stale, error}, lastDailyAt, nextDailyAt}` |
+| `GET /status` | | `{enabled, running: {kind, imageRef}?, queued, db: {version, updatedAt, stale, error}, lastDailyAt, nextDailyAt, timeZone, cacheBytes}`. `timeZone` is the panel process's zone, which is UTC in the container unless `TZ` is set. |
 | `POST /scans` | `{imageId?}` | `202`. `409` if scanning is off. |
 | `DELETE /cache` | | `204`. `409` if scanning is on. |
 | `GET /images` | | One row per in-use image: `{imageId, refs, users: [{kind: "service"\|"panel"\|"traefik"\|"scanner", projectId?, composeId?, service?}], counts, fixable, scannedAt, error}` |
