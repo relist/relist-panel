@@ -21,6 +21,9 @@ type fakeScanner struct {
 	scannerID  string
 	onScan     func(imageID string)
 	cacheBytes int64
+	// blockScan makes Scan wait for its context, like a scan a shutdown interrupts.
+	blockScan bool
+	scanning  chan string
 }
 
 func newFakeScanner() *fakeScanner {
@@ -79,8 +82,15 @@ func (f *fakeScanner) DBInfo(context.Context, string) (DBInfo, error) {
 	return DBInfo{Version: f.dbVersion}, nil
 }
 
-func (f *fakeScanner) Scan(_ context.Context, _ string, imageID string) (Report, error) {
+func (f *fakeScanner) Scan(ctx context.Context, _ string, imageID string) (Report, error) {
 	f.record("scan " + imageID)
+	if f.blockScan {
+		if f.scanning != nil {
+			f.scanning <- imageID
+		}
+		<-ctx.Done()
+		return Report{}, ctx.Err()
+	}
 	if f.onScan != nil {
 		f.onScan(imageID)
 	}

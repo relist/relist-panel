@@ -282,3 +282,40 @@ func TestUsedImagesAddsScanner(t *testing.T) {
 		t.Fatalf("used = %s", fmt.Sprint(used))
 	}
 }
+
+func TestWorkerShutdownKeepsTheRunningTask(t *testing.T) {
+	h := newHarness(t)
+	h.enable()
+	h.scanner.blockScan, h.scanner.scanning = true, make(chan string, 1)
+	h.start()
+	h.svc.ScanImage(context.Background(), "sha256:app", ReasonManual)
+	select {
+	case <-h.scanner.scanning:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scan did not start")
+	}
+	h.stop() // a graceful shutdown cancels the worker mid-scan
+	if _, _, found, _ := h.store.ScanState(context.Background(), "sha256:app"); found {
+		t.Fatal("an interrupted scan was recorded as a failure")
+	}
+	task, ok, _ := h.store.Next(context.Background())
+	if !ok || task.ImageID != "sha256:app" || !task.Started {
+		t.Fatalf("interrupted task lost: %+v %v", task, ok)
+	}
+	// The next start runs it again, once.
+	h.scanner.blockScan = false
+	h.svc = New(Deps{Store: h.store, Scanner: h.scanner, InUse: h.inUse, Gate: h.gate, Now: func() time.Time { return t0 }, Tick: 5 * time.Millisecond})
+	h.start()
+	eventually(t, "queue drained", h.queueEmpty)
+	if n := h.scanner.count("scan sha256:app"); n != 2 {
+		t.Fatalf("scan ran %d times, want 2 (interrupted + rerun)", n)
+	}
+}
+
+func TestRunQueuesDBUpdateWhenTheCacheIsEmpty(t *testing.T) {
+	h := newHarness(t)
+	h.enable() // db_version is recorded, as after a Migration
+	h.scanner.dbVersion = ""
+	h.start()
+	eventually(t, "DB updated", func() bool { return h.scanner.count("update") == 1 })
+}

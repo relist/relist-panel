@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 const (
 	scanTimeout     = 10 * time.Minute
 	dbUpdateTimeout = 5 * time.Minute
+	ensureTimeout   = 2 * time.Minute
 	exportHeadroom  = 512 << 20
 )
 
@@ -34,14 +36,17 @@ var imageIDPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 type TrivyScanner struct {
 	client  *http.Client
 	dataDir string
-	run     func(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) error
-	free    func(path string) (uint64, error)
+	// Bounds on one scan, one DB update, and one pull-and-check.
+	scanTimeout, dbUpdateTimeout, ensureTimeout time.Duration
+	run                                         func(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) error
+	free                                        func(path string) (uint64, error)
 }
 
 var _ vulnscan.Scanner = (*TrivyScanner)(nil)
 
 func NewTrivyScanner(socketPath, dataDir string) *TrivyScanner {
-	return &TrivyScanner{client: newSocketClient(socketPath), dataDir: dataDir, run: execDocker, free: freeBytes}
+	return &TrivyScanner{client: newSocketClient(socketPath), dataDir: dataDir, run: execDocker, free: freeBytes,
+		scanTimeout: scanTimeout, dbUpdateTimeout: dbUpdateTimeout, ensureTimeout: ensureTimeout}
 }
 
 func freeBytes(path string) (uint64, error) {
@@ -89,29 +94,37 @@ func (s *TrivyScanner) EnsureImage(ctx context.Context, ref string) error {
 	if !ValidScannerRef(ref) {
 		return fmt.Errorf("invalid scanner image %q", ref)
 	}
+	ctx, cancel := context.WithTimeout(ctx, s.ensureTimeout)
+	defer cancel()
 	if _, err := s.docker(ctx, "image", "inspect", ref); err != nil {
 		if _, err := s.docker(ctx, "pull", ref); err != nil {
 			return fmt.Errorf("pull %s: %w", ref, err)
 		}
 	}
-	if _, err := s.docker(ctx, append(lockedDown("relist-vulnscan-check"), "--network", "none", ref, "--version")...); err != nil {
+	if _, err := s.docker(ctx, append(lockedDown(""), "--network", "none", ref, "--version")...); err != nil {
 		return fmt.Errorf("run %s: %w", ref, err)
 	}
+	// Only a volume created here needs its owner set, so root runs once per
+	// volume rather than on every check.
 	if _, err := s.docker(ctx, "volume", "inspect", trivyCacheVolume); err != nil {
 		if _, err := s.docker(ctx, "volume", "create", trivyCacheVolume); err != nil {
 			return fmt.Errorf("create %s: %w", trivyCacheVolume, err)
 		}
-	}
-	if _, err := s.docker(ctx, chownArgv(ref)...); err != nil {
-		return fmt.Errorf("prepare %s: %w", trivyCacheVolume, err)
+		if _, err := s.docker(ctx, chownArgv(ref)...); err != nil {
+			return fmt.Errorf("prepare %s: %w", trivyCacheVolume, err)
+		}
 	}
 	return nil
 }
 
 func (s *TrivyScanner) UpdateDB(ctx context.Context, ref string) (vulnscan.DBInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, dbUpdateTimeout)
+	ctx, cancel := context.WithTimeout(ctx, s.dbUpdateTimeout)
 	defer cancel()
 	if _, err := s.docker(ctx, dbUpdateArgv(ref)...); err != nil {
+		if ctx.Err() != nil {
+			s.removeContainer(dbUpdateName)
+			return vulnscan.DBInfo{}, fmt.Errorf("update vulnerability DB: %w", ctx.Err())
+		}
 		return vulnscan.DBInfo{}, fmt.Errorf("update vulnerability DB: %w", err)
 	}
 	return s.DBInfo(ctx, ref)
@@ -120,7 +133,7 @@ func (s *TrivyScanner) UpdateDB(ctx context.Context, ref string) (vulnscan.DBInf
 // DBInfo asks Trivy which DB is in the cache, offline. No DB means no
 // VulnerabilityDB in its answer.
 func (s *TrivyScanner) DBInfo(ctx context.Context, ref string) (vulnscan.DBInfo, error) {
-	out, err := s.docker(ctx, append(lockedDown("relist-vulnscan-dbinfo"), "--network", "none", ref,
+	out, err := s.docker(ctx, append(lockedDown(""), "--network", "none", ref,
 		"--cache-dir", "/cache", "version", "-f", "json")...)
 	if err != nil {
 		return vulnscan.DBInfo{}, err
@@ -143,7 +156,8 @@ func (s *TrivyScanner) Scan(ctx context.Context, ref, imageID string) (vulnscan.
 	if !imageIDPattern.MatchString(imageID) {
 		return vulnscan.Report{}, fmt.Errorf("invalid image id %q", imageID)
 	}
-	ctx, cancel := context.WithTimeout(ctx, scanTimeout)
+	parent := ctx
+	ctx, cancel := context.WithTimeout(ctx, s.scanTimeout)
 	defer cancel()
 	var image struct {
 		Size int64 `json:"Size"`
@@ -178,6 +192,11 @@ func (s *TrivyScanner) Scan(ctx context.Context, ref, imageID string) (vulnscan.
 	io.Copy(io.Discard, pr)
 	if err := <-done; err != nil {
 		if ctx.Err() != nil {
+			// Killing the CLI leaves the container running: remove it too.
+			s.removeContainer(scanName(hex))
+			if parent.Err() != nil {
+				return vulnscan.Report{}, parent.Err()
+			}
 			return vulnscan.Report{}, errors.New("scan timed out")
 		}
 		return vulnscan.Report{}, dockerError(err, stderr.String())
@@ -238,6 +257,16 @@ func (s *TrivyScanner) engineJSON(ctx context.Context, path string, out any) err
 		return fmt.Errorf("docker api %s: decode: %w", path, err)
 	}
 	return nil
+}
+
+// removeContainer force-removes a Scanner container whose CLI was killed,
+// with a context of its own, since the caller's has ended.
+func (s *TrivyScanner) removeContainer(name string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := s.docker(ctx, "rm", "-f", name); err != nil && !strings.Contains(err.Error(), "No such container") {
+		log.Printf("vulnscan: remove %s: %v", name, err)
+	}
 }
 
 func (s *TrivyScanner) ImageID(ctx context.Context, ref string) (string, error) {

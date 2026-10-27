@@ -120,14 +120,18 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	composesService.SetDeploymentCanceler(queue)
 	deployments.NewAPI(queue, composesService).RegisterRoutes(mux)
 	var worker sync.WaitGroup
+	// vulnService is set before the queue starts, so OnSucceeded never reads
+	// it while it is being written.
+	if d.VulnScanner != nil && d.VulnInUse != nil {
+		vulnService = vulnscan.New(vulnscan.Deps{Store: vulnscan.NewStore(db), Scanner: d.VulnScanner, InUse: d.VulnInUse, Gate: queue})
+		vulnService.RegisterRoutes(mux)
+	}
 	worker.Add(1)
 	go func() {
 		defer worker.Done()
 		queue.Run(ctx)
 	}()
-	if d.VulnScanner != nil && d.VulnInUse != nil {
-		vulnService = vulnscan.New(vulnscan.Deps{Store: vulnscan.NewStore(db), Scanner: d.VulnScanner, InUse: d.VulnInUse, Gate: queue})
-		vulnService.RegisterRoutes(mux)
+	if vulnService != nil {
 		worker.Add(2)
 		go func() {
 			defer worker.Done()

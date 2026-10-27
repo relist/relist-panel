@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"relist-panel/internal/vulnscan"
 )
@@ -59,12 +60,19 @@ type fakeDocker struct {
 	mu      sync.Mutex
 	calls   [][]string
 	respond func(argv []string, stdout io.Writer) error
+	// hang makes matching invocations wait for their context, as a stuck CLI
+	// would until exec.CommandContext kills it.
+	hang func(argv []string) bool
 }
 
-func (f *fakeDocker) run(_ context.Context, argv []string, _ io.Reader, stdout, _ io.Writer) error {
+func (f *fakeDocker) run(ctx context.Context, argv []string, _ io.Reader, stdout, _ io.Writer) error {
 	f.mu.Lock()
 	f.calls = append(f.calls, argv)
 	f.mu.Unlock()
+	if f.hang != nil && f.hang(argv) {
+		<-ctx.Done()
+		return exitCode(137)
+	}
 	if f.respond == nil {
 		return nil
 	}
@@ -189,7 +197,7 @@ func TestEnsureImagePullsOnlyWhenMissing(t *testing.T) {
 	if err := s.EnsureImage(context.Background(), testScannerRef); err != nil {
 		t.Fatal(err)
 	}
-	if present.called("pull") != 0 || present.called("--version") != 1 || present.called("chown") != 1 {
+	if present.called("pull") != 0 || present.called("--version") != 1 || present.called("chown") != 0 {
 		t.Fatalf("calls = %v", present.calls)
 	}
 
@@ -307,5 +315,109 @@ func TestTrivyScannerIntegration(t *testing.T) {
 	}
 	if left := workFiles(t, filepath.Join(dataDir, ".scan-work")); len(left) != 0 {
 		t.Fatalf("left %v", left)
+	}
+}
+
+func TestEnsureImageChownsOnlyANewVolume(t *testing.T) {
+	d := &fakeDocker{respond: func(argv []string, _ io.Writer) error {
+		if len(argv) > 2 && argv[1] == "volume" && argv[2] == "inspect" {
+			return exitCode(1)
+		}
+		return nil
+	}}
+	s, _ := newTestScanner(t, fakeEngine(t, 0, false), d, 1<<40)
+	if err := s.EnsureImage(context.Background(), testScannerRef); err != nil {
+		t.Fatal(err)
+	}
+	if d.called("volume create relist-trivy-cache") != 1 || d.called("--entrypoint chown") != 1 {
+		t.Fatalf("calls = %v", d.calls)
+	}
+}
+
+func TestChecksRunWithoutFixedNames(t *testing.T) {
+	d := &fakeDocker{respond: func(argv []string, stdout io.Writer) error {
+		io.WriteString(stdout, `{"Version":"0.76.1","VulnerabilityDB":{"UpdatedAt":"x"}}`)
+		return nil
+	}}
+	s, _ := newTestScanner(t, fakeEngine(t, 0, false), d, 1<<40)
+	s.EnsureImage(context.Background(), testScannerRef)
+	s.DBInfo(context.Background(), testScannerRef)
+	for _, c := range d.calls {
+		joined := strings.Join(c, " ")
+		if (strings.Contains(joined, "--version") || strings.Contains(joined, "version -f json")) && strings.Contains(joined, "--name") {
+			t.Fatalf("a check run takes a fixed name another run can collide with: %v", c)
+		}
+	}
+}
+
+func TestScanCancelRemovesTheContainer(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &fakeDocker{}
+	d.respond = func(argv []string, _ io.Writer) error {
+		if argv[1] == "run" && strings.Contains(strings.Join(argv, " "), "--input") {
+			cancel() // the panel shuts down while the CLI waits on the container
+			return exitCode(137)
+		}
+		return nil
+	}
+	s, _ := newTestScanner(t, fakeEngine(t, 1000, false), d, 1<<40)
+	_, err := s.Scan(ctx, testScannerRef, testImageID)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if d.called("rm -f relist-vulnscan-"+strings.TrimPrefix(testImageID, "sha256:")[:12]) != 1 {
+		t.Fatalf("container left running: %v", d.calls)
+	}
+}
+
+func TestScanTimeoutSaysSoAndRemovesTheContainer(t *testing.T) {
+	d := &fakeDocker{}
+	s, _ := newTestScanner(t, fakeEngine(t, 1000, false), d, 1<<40)
+	s.scanTimeout = 20 * time.Millisecond
+	d.hang = func(argv []string) bool {
+		return argv[1] == "run" && strings.Contains(strings.Join(argv, " "), "--input")
+	}
+	_, err := s.Scan(context.Background(), testScannerRef, testImageID)
+	if err == nil || err.Error() != "scan timed out" {
+		t.Fatalf("err = %v", err)
+	}
+	if d.called("rm -f relist-vulnscan-") != 1 {
+		t.Fatalf("container left running: %v", d.calls)
+	}
+}
+
+func TestUpdateDBTimeoutRemovesTheContainer(t *testing.T) {
+	d := &fakeDocker{}
+	s, _ := newTestScanner(t, fakeEngine(t, 0, false), d, 1<<40)
+	s.dbUpdateTimeout = 20 * time.Millisecond
+	d.hang = func(argv []string) bool { return strings.Contains(strings.Join(argv, " "), "--download-db-only") }
+	if _, err := s.UpdateDB(context.Background(), testScannerRef); err == nil {
+		t.Fatal("want error")
+	}
+	if d.called("rm -f relist-vulnscan-db") != 1 {
+		t.Fatalf("container left running: %v", d.calls)
+	}
+}
+
+func TestEnsureImageIsBounded(t *testing.T) {
+	d := &fakeDocker{}
+	s, _ := newTestScanner(t, fakeEngine(t, 0, false), d, 1<<40)
+	s.ensureTimeout = 20 * time.Millisecond
+	d.respond = func(argv []string, _ io.Writer) error {
+		if argv[1] == "image" {
+			return exitCode(1) // missing, so it pulls
+		}
+		return nil
+	}
+	d.hang = func(argv []string) bool { return argv[1] == "pull" }
+	done := make(chan error, 1)
+	go func() { done <- s.EnsureImage(context.Background(), testScannerRef) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("want error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("EnsureImage not bounded")
 	}
 }

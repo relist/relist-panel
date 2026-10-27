@@ -1,7 +1,7 @@
 import { ReloadOutlined, SafetyOutlined, SettingOutlined } from '@ant-design/icons';
 import { Alert, App, Button, Card, Checkbox, Descriptions, Flex, Input, Select, Table, Tabs, Tag, Tooltip, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import useSWR from 'swr';
 
@@ -80,7 +80,18 @@ export function VulnerabilitiesPage() {
   const status = useSWR(VULN_STATUS_KEY, () => api.vulnStatus(), {
     refreshInterval: (data) => (data?.running || (data?.queued ?? 0) > 0 ? 5000 : 60000),
   });
-  const images = useSWR(VULN_IMAGES_KEY, () => api.vulnImages(), { refreshInterval: status.data?.running ? 5000 : 0 });
+  const busy = Boolean(status.data?.running) || (status.data?.queued ?? 0) > 0;
+  const images = useSWR(VULN_IMAGES_KEY, () => api.vulnImages(), { refreshInterval: busy ? 5000 : 0 });
+  // The last scan in a run finishes between polls: reload once the queue
+  // drains so its results show.
+  const wasBusy = useRef(false);
+  const reloadImages = images.mutate;
+  useEffect(() => {
+    if (wasBusy.current && !busy) {
+      void reloadImages();
+    }
+    wasBusy.current = busy;
+  }, [busy, reloadImages]);
   const enabled = status.data?.enabled ?? false;
   const tab = params.get('tab') === 'cves' ? 'cves' : 'images';
 

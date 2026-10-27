@@ -133,6 +133,18 @@ describe('VulnerabilitiesPage', () => {
     expect(api.vulnCves).toHaveBeenLastCalledWith({ composeId: 3, severity: ['CRITICAL'], fixable: true, new: false, q: '', page: 1, pageSize: 20 });
   });
 
+  it('reloads the images when the queue goes idle', async () => {
+    api.vulnStatus
+      .mockResolvedValueOnce(status({ queued: 1 }))
+      .mockResolvedValue(status());
+    api.vulnScan.mockResolvedValue({ queued: 1 });
+    show();
+    await screen.findByText('shop-web:latest');
+    await waitFor(() => expect(api.vulnImages).toHaveBeenCalledTimes(1));
+    await userEvent.setup().click(screen.getByRole('button', { name: /Scan now/ }));
+    await waitFor(() => expect(api.vulnImages).toHaveBeenCalledTimes(2));
+  });
+
   it('shows a failed scan next to its last results', async () => {
     api.vulnImages.mockResolvedValue([{ ...appImage, error: 'scanner ran out of memory (1 GB limit)' }]);
     show();

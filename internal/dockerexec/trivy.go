@@ -79,16 +79,27 @@ func ParseTrivy(r io.Reader) (vulnscan.Report, error) {
 // lockedDown is the part of every Scanner run that keeps it powerless: no
 // capabilities, a read-only root, a non-root user, bounded CPU and memory,
 // and only the cache volume mounted. It never mounts the Docker socket.
+// An empty name lets Docker pick one, for short checks that may overlap.
 func lockedDown(name string) []string {
-	return []string{"run", "--rm", "--name", name, "--label", trivyLabel,
+	argv := []string{"run", "--rm"}
+	if name != "" {
+		argv = append(argv, "--name", name)
+	}
+	return append(argv, "--label", trivyLabel,
 		"--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--user", trivyUser, "--cpus", "1", "--memory", "1g",
-		"--tmpfs", trivyTmpfs, "-v", trivyCacheVolume + ":/cache"}
+		"--tmpfs", trivyTmpfs, "-v", trivyCacheVolume+":/cache")
+}
+
+const dbUpdateName = "relist-vulnscan-db"
+
+func scanName(imageHex string) string {
+	return "relist-vulnscan-" + imageHex[:min(12, len(imageHex))]
 }
 
 // scanArgv scans the exported image at tarPath with no network at all.
 func scanArgv(ref, imageHex, tarPath string) []string {
-	argv := lockedDown("relist-vulnscan-" + imageHex[:min(12, len(imageHex))])
+	argv := lockedDown(scanName(imageHex))
 	argv = append(argv, "--network", "none", "-v", tarPath+":/work/image.tar:ro", ref,
 		"--cache-dir", "/cache", "image", "--input", "/work/image.tar", "--scanners", "vuln",
 		"--skip-db-update", "--skip-java-db-update", "--offline-scan", "-f", "json", "-q")
@@ -98,7 +109,7 @@ func scanArgv(ref, imageHex, tarPath string) []string {
 // dbUpdateArgv downloads the vulnerability DB. It is the one run with network,
 // and it holds no image.
 func dbUpdateArgv(ref string) []string {
-	return append(lockedDown("relist-vulnscan-db"), ref,
+	return append(lockedDown(dbUpdateName), ref,
 		"--cache-dir", "/cache", "image", "--download-db-only", "--no-progress")
 }
 
@@ -107,5 +118,6 @@ func dbUpdateArgv(ref string) []string {
 func chownArgv(ref string) []string {
 	return []string{"run", "--rm", "--label", trivyLabel, "--user", "0", "--read-only",
 		"--cap-drop", "ALL", "--cap-add", "CHOWN", "--security-opt", "no-new-privileges", "--network", "none",
+		"--memory", "64m", "--pids-limit", "16",
 		"-v", trivyCacheVolume + ":/v", "--entrypoint", "chown", ref, trivyUser, "/v"}
 }

@@ -48,6 +48,11 @@ func (s *Service) Run(ctx context.Context) {
 			continue
 		}
 		s.process(ctx, task)
+		if ctx.Err() != nil {
+			// A shutdown interrupted the task: it stays started, so the next
+			// start requeues it instead of recording a failure it did not have.
+			return
+		}
 		if err := s.d.Store.Done(context.WithoutCancel(ctx), task.ID); err != nil {
 			logf("finish task %d: %v", task.ID, err)
 			sleep(ctx, 5*time.Second)
@@ -88,16 +93,16 @@ func (s *Service) startup(ctx context.Context) {
 		}
 		s.enqueueScanner(ctx, ref, ReasonSetup)
 	}
-	if st.DBVersion == "" {
-		info, err := s.d.Scanner.DBInfo(ctx, ref)
-		switch {
-		case errors.Is(err, ErrNoDB):
-			s.d.Store.Enqueue(ctx, KindDBUpdate, "", ReasonSetup, s.d.Now())
-		case err != nil:
-			logf("read the vulnerability DB: %v", err)
-		default:
-			s.d.Store.SetDB(ctx, info.Version, s.d.Now(), "")
-		}
+	// Ask the cache itself: after a Migration, or a volume removed outside
+	// the panel, db_version is recorded but the cache is empty.
+	info, err := s.d.Scanner.DBInfo(ctx, ref)
+	switch {
+	case errors.Is(err, ErrNoDB):
+		s.d.Store.Enqueue(ctx, KindDBUpdate, "", ReasonSetup, s.d.Now())
+	case err != nil:
+		logf("read the vulnerability DB: %v", err)
+	case info.Version != st.DBVersion:
+		s.d.Store.SetDB(ctx, info.Version, s.d.Now(), "")
 	}
 }
 
@@ -126,7 +131,9 @@ func (s *Service) updateDB(ctx context.Context, ref string) {
 	}
 	info, err := s.d.Scanner.UpdateDB(ctx, ref)
 	if err != nil {
-		s.d.Store.SetDB(ctx, "", s.d.Now(), err.Error())
+		if ctx.Err() == nil {
+			s.d.Store.SetDB(ctx, "", s.d.Now(), err.Error())
+		}
 		return
 	}
 	if err := s.d.Store.SetDB(ctx, info.Version, s.d.Now(), ""); err != nil {
@@ -155,7 +162,9 @@ func (s *Service) scanImage(ctx context.Context, st Settings, ref string, task T
 	}
 	report, err := s.d.Scanner.Scan(ctx, ref, task.ImageID)
 	if err != nil {
-		s.d.Store.RecordFailure(bg, task.ImageID, imageRef, err.Error(), s.d.Now())
+		if ctx.Err() == nil {
+			s.d.Store.RecordFailure(bg, task.ImageID, imageRef, err.Error(), s.d.Now())
+		}
 		return
 	}
 	if err := s.d.Store.RecordScan(bg, task.ImageID, imageRef, report, dbVersion, s.d.Now()); err != nil {
