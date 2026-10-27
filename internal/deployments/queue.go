@@ -466,6 +466,17 @@ func (q *Queue) Running() (composeID int64, number int, ok bool) {
 	return 0, 0, false
 }
 
+// Busy reports whether a Deployment is running or the queue is held for a
+// Migration, when other heavy work on the host should wait (ADR-0021).
+func (q *Queue) Busy() bool {
+	if q.isHeld() {
+		return true
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.running) > 0
+}
+
 // IsRunning reports whether a Deployment of the Compose has started and not
 // yet settled.
 func (q *Queue) IsRunning(composeID int64) bool {

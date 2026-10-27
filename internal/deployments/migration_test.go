@@ -90,3 +90,22 @@ func TestHoldRefusesEnqueueUntilRelease(t *testing.T) {
 		t.Fatalf("Enqueue after Release = %v, %v", created, err)
 	}
 }
+
+func TestQueueBusy(t *testing.T) {
+	h := newHarness(t)
+	h.newQueue()
+	if h.q.Busy() {
+		t.Fatal("idle queue is busy")
+	}
+	h.q.Hold()
+	if !h.q.Busy() {
+		t.Fatal("held queue is not busy")
+	}
+	h.q.Release()
+	h.q.mu.Lock()
+	h.q.running[h.a] = &activeRun{}
+	h.q.mu.Unlock()
+	if !h.q.Busy() {
+		t.Fatal("queue running a Deployment is not busy")
+	}
+}

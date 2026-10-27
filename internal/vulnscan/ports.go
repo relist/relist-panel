@@ -29,3 +29,39 @@ type Scanner interface {
 	// Cleanup removes Scanner containers and exported tars a restart left.
 	Cleanup(ctx context.Context) error
 }
+
+type UserKind string
+
+const (
+	UserService UserKind = "service"
+	UserPanel   UserKind = "panel"
+	UserTraefik UserKind = "traefik"
+	UserScanner UserKind = "scanner"
+)
+
+// ImageUser is what runs an image: a Service of a Compose, or one of the
+// panel's own containers.
+type ImageUser struct {
+	Kind          UserKind `json:"kind"`
+	ProjectID     int64    `json:"projectId,omitempty"`
+	EnvironmentID int64    `json:"environmentId,omitempty"`
+	ComposeID     int64    `json:"composeId,omitempty"`
+	Service       string   `json:"service,omitempty"`
+}
+
+type UsedImage struct {
+	ImageID string
+	Refs    []string
+	Users   []ImageUser
+}
+
+// InUse reads which images the running containers use, live from Docker.
+type InUse interface {
+	Images(ctx context.Context) ([]UsedImage, error)
+}
+
+// DeployGate is the Deployment queue as the scan worker sees it.
+type DeployGate interface {
+	// Busy is true while a Deployment runs or the queue is held for a Migration.
+	Busy() bool
+}
