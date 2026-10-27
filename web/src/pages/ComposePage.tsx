@@ -76,12 +76,15 @@ import { insertBuildBlocks } from '../data/build-insert';
 import { yamlServices } from '../data/source-view';
 import { deploymentButtonLabel, isActive } from '../data/deployments-view';
 import { usePanel } from '../data/store';
-import type { BuildTarget, ComposeVariable, DetectedDockerfile, ComposeVolumes, DeploymentRequest, OrphanVolume } from '../data/types';
+import type { BuildTarget, ComposeVariable, DetectedDockerfile, ComposeVolumes, DeploymentRequest, OrphanVolume, VulnSummary } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
 import { effectiveVariableCount } from '../components/variables-view';
 import { activeComposeTab, composeDeployIdentity, internalHostnamePattern, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
 import { useComposeSource } from './useComposeSource';
 import { useDeploymentHistory } from './useDeploymentHistory';
+import { VulnBadges } from '../components/VulnBadges';
+import { useVulnSummary } from '../data/useVulnSummary';
+import { summaryBadge, vulnLink } from './vulnerabilities-view';
 
 const { Text, Paragraph, Title } = Typography;
 
@@ -140,6 +143,7 @@ export function ComposePage() {
   const screens = Grid.useBreakpoint();
   const [logsText, setLogsText] = useState<string>();
   const [logServices, setLogServices] = useState<string[]>([]);
+  const { data: vulnSummary } = useVulnSummary({ composeId });
   const [logLines, setLogLines] = useState(200);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [freshOpen, setFreshOpen] = useState(false);
@@ -671,6 +675,7 @@ export function ComposePage() {
         tags={
           <>
             <ComposeStatusTag lastDeployedAt={compose.lastDeployedAt} status={compose.status} />
+            <VulnBadges badge={summaryBadge(vulnSummary)} to={vulnLink({ composeId: compose.id })} />
             {dirty && (
               <Tag color="processing" variant="filled">
                 Unsaved changes
@@ -838,6 +843,7 @@ export function ComposePage() {
                                 </Flex>
                                 <ServiceStateTag service={service} />
                               </Flex>
+                              <ServiceVulnBadges name={service.name} summary={vulnSummary} />
                               <Text ellipsis style={{ display: 'block', fontFamily: CODE_FONT_STACK, fontSize: 11 }} type="secondary">
                                 {service.image}
                               </Text>
@@ -1293,5 +1299,18 @@ export function ComposePage() {
         title="Delete this Compose?"
       />
     </>
+  );
+}
+
+/** A Service's own counts in the rail, from the Compose's summary. */
+function ServiceVulnBadges({ name, summary }: { name: string; summary?: VulnSummary }) {
+  const row = summary?.enabled ? summary.services?.find((s) => s.service === name) : undefined;
+  if (!row) {
+    return null;
+  }
+  return (
+    <div style={{ marginTop: 4 }}>
+      <VulnBadges badge={{ critical: row.counts.critical, high: row.counts.high, fixable: row.counts.fixable }} />
+    </div>
   );
 }

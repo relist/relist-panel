@@ -10,6 +10,7 @@ import {
   summaryBadge,
   tagChoiceNeedsConfirm,
   usedByLabel,
+  vulnLink,
 } from './vulnerabilities-view';
 
 const counts = { critical: 2, high: 5, medium: 1, low: 0, unknown: 0, fixable: 3 };
@@ -99,5 +100,13 @@ describe('parseDailyTime', () => {
     ['', null],
   ])('%s', (value, minutes) => {
     expect(parseDailyTime(value)).toBe(minutes);
+  });
+});
+
+describe('vulnLink', () => {
+  it('opens the CVEs tab with the scope', () => {
+    expect(vulnLink({})).toBe('/vulnerabilities?tab=cves');
+    expect(vulnLink({ projectId: 4 })).toBe('/vulnerabilities?tab=cves&projectId=4');
+    expect(vulnLink({ composeId: 7 })).toBe('/vulnerabilities?tab=cves&composeId=7');
   });
 });

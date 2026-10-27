@@ -109,3 +109,11 @@ export function parseDailyTime(value: string): number | null {
   const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
   return m ? Number(m[1]) * 60 + Number(m[2]) : null;
 }
+
+/** The CVEs tab filtered to a Project or a Compose, where the badges link. */
+export function vulnLink(scope: { projectId?: number; composeId?: number }): string {
+  const params = new URLSearchParams({ tab: 'cves' });
+  if (scope.projectId !== undefined) params.set('projectId', String(scope.projectId));
+  if (scope.composeId !== undefined) params.set('composeId', String(scope.composeId));
+  return `/vulnerabilities?${params}`;
+}

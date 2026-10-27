@@ -36,6 +36,9 @@ import { DangerModal } from '../components/DangerModal';
 import { VariablesPanel } from '../components/VariablesPanel';
 import { YamlEditor } from '../components/YamlEditor';
 import { ComposeStatusInline, ComposeStatusTag, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
+import { VulnBadges } from '../components/VulnBadges';
+import { useVulnSummary } from '../data/useVulnSummary';
+import { summaryBadge, vulnLink } from './vulnerabilities-view';
 import { usePanel } from '../data/store';
 import type { Compose } from '../data/types';
 import { composeState, projectComposes, summarize } from '../data/types';
@@ -67,6 +70,7 @@ const STARTER_YAML = `services:
 export function ProjectPage() {
   const { environmentId, projectId: projectParam, tab } = useParams();
   const projectId = Number(projectParam);
+  const { data: vulnSummary } = useVulnSummary({ projectId }, Number.isFinite(projectId));
   const navigate = useNavigate();
   const {
     addEnvironment,
@@ -278,6 +282,7 @@ export function ProjectPage() {
             />
             <Tag>{environments.length} Environments</Tag>
             <Tag>{rollup.composes} Composes</Tag>
+            <VulnBadges badge={summaryBadge(vulnSummary)} to={vulnLink({ projectId: project.id })} />
           </>
         }
         title={project.name}

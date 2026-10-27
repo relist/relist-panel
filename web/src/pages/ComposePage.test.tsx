@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '../test/dom-setup';
 
-import { act, render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from 'antd';
 import { useEffect } from 'react';
@@ -194,5 +194,30 @@ describe('Delete confirmation', () => {
     expect(confirm.disabled).toBe(false);
     await user.click(confirm);
     expect(deleteCompose).toHaveBeenCalled();
+  });
+});
+
+describe('Compose vulnerability badges', () => {
+  it('renders vulnerability badges in the header and per Service', async () => {
+    vi.spyOn(api, 'listServices').mockResolvedValue([
+      { service: 'api', containerId: 'c1', containerName: 'x-api-1', image: 'shop-web:latest', state: 'running', health: 'none', ports: [] },
+    ]);
+    vi.spyOn(api, 'vulnSummary').mockResolvedValue({
+      enabled: true,
+      counts: { critical: 3, high: 8, medium: 0, low: 0, unknown: 0, fixable: 5 },
+      services: [{ service: 'api', imageId: 'sha256:a', counts: { critical: 1, high: 2, medium: 0, low: 0, unknown: 0, fixable: 1 } }],
+    });
+    renderPage(7);
+    const header = await screen.findByRole('link', { name: '3 Critical, 8 High, 5 fixable vulnerabilities' });
+    expect(header.getAttribute('href')).toBe('/vulnerabilities?tab=cves&composeId=7');
+    expect(await screen.findByText('1 Critical')).toBeTruthy();
+    expect(api.vulnSummary).toHaveBeenCalledWith({ composeId: 7 });
+  });
+
+  it('hides vulnerability badges when scanning is off', async () => {
+    vi.spyOn(api, 'vulnSummary').mockResolvedValue({ enabled: false });
+    renderPage(8);
+    await waitFor(() => expect(api.vulnSummary).toHaveBeenCalledWith({ composeId: 8 }));
+    expect(screen.queryByText(/ Critical$/)).toBeNull();
   });
 });
