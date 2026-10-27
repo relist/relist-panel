@@ -1,7 +1,7 @@
 # Spec — Background vulnerability scanning of images in use
 
 Date: 2026-10-28.
-Status: needs-triage
+Status: ready-for-human
 
 ## Problem
 
