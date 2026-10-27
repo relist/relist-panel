@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -27,6 +28,9 @@ type Deps struct {
 type Service struct {
 	d    Deps
 	wake chan struct{}
+	// hubBase and hubClient reach the Docker Hub API for the tag list.
+	hubBase   string
+	hubClient *http.Client
 	// mu serializes changes to the switches and the Scanner image.
 	mu sync.Mutex
 }
@@ -38,7 +42,7 @@ func New(d Deps) *Service {
 	if d.Tick <= 0 {
 		d.Tick = 2 * time.Second
 	}
-	return &Service{d: d, wake: make(chan struct{}, 1)}
+	return &Service{d: d, wake: make(chan struct{}, 1), hubBase: "https://hub.docker.com", hubClient: &http.Client{Timeout: 10 * time.Second}}
 }
 
 func logf(format string, args ...any) { log.Printf("vulnscan: "+format, args...) }
