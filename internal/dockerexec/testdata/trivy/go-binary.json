@@ -1,0 +1,6 @@
+{"SchemaVersion":2,"ArtifactName":"/work/image.tar","Metadata":{"OS":{"Family":"alpine","Name":"3.22.1"}},
+"Results":[{"Target":"/work/image.tar (alpine 3.22.1)","Class":"os-pkgs","Type":"alpine"},
+{"Target":"usr/local/bin/relist-panel","Class":"lang-pkgs","Type":"gobinary","Vulnerabilities":[
+{"VulnerabilityID":"CVE-2026-2001","PkgName":"golang.org/x/net","PkgPath":"usr/local/bin/relist-panel","InstalledVersion":"v0.40.0","FixedVersion":"0.41.0","Status":"fixed","PrimaryURL":"https://avd.aquasec.com/nvd/cve-2026-2001","Title":"x/net: html parse","Severity":"HIGH"},
+{"VulnerabilityID":"CVE-2026-2002","PkgName":"stdlib","PkgPath":"usr/local/bin/relist-panel","InstalledVersion":"v1.27.2","FixedVersion":"1.27.3","Status":"fixed","Title":"crypto/x509: distrust","Severity":"CRITICAL"},
+{"VulnerabilityID":"CVE-2026-2002","PkgName":"stdlib","PkgPath":"usr/local/bin/relist-volhelper","InstalledVersion":"v1.27.2","FixedVersion":"1.27.3","Status":"fixed","Title":"crypto/x509: distrust","Severity":"CRITICAL"}]}]}
