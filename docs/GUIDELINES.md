@@ -193,10 +193,10 @@ The core screen. Tabs in the path so each is linkable and the back button works:
 (`…/compose/:composeId/terminal`) and **Monitor** (`…/compose/:composeId/monitor`).
 An unknown segment falls back to Editor rather than a not-found page. Layout of the Editor tab:
 editor on the left, status rail on the right, both in normal document
-flow — the page scrolls as one, no nested scrollers. The two columns stretch to the same height, so
-the editor is exactly as tall as the status rail beside it, with `LAYOUT.editorMinHeight`
-(`clamp(640px, 80vh, 1000px)`) as the floor for when the rail is short. Monaco needs a bounded
-height; it gets one from the rail rather than from a hard-coded number.
+flow — the page scrolls as one. The editor sizes itself to its content (Monaco's content height),
+clamped between `LAYOUT.editorAutoMinHeight` (320px) and `LAYOUT.editorAutoMaxHeight` (`80vh`);
+past the cap it scrolls inside, and the mouse wheel passes through to the page at its edges. The
+rail keeps its own height beside it.
 
 **Variables tab** has three cards, in this order:
 
@@ -563,9 +563,8 @@ One vocabulary, everywhere a Compose state appears. Derived entirely from the AP
   bottom border.
 - Cards group; they do not decorate. A card holding one line of text should not be a card.
 - Editor screens are the exception to max-width: the Compose screen uses the whole 1280px column,
-  with the editor stretched to the rail's height — `LAYOUT.editorMinHeight`
-  (`clamp(640px, 80vh, 1000px)`) is the floor, so the file stays readable when the rail is short.
-  Do not pass `align="top"` to that `Row`: stretching is what makes the match work.
+  with the editor sized to its content, between `LAYOUT.editorAutoMinHeight` and
+  `LAYOUT.editorAutoMaxHeight`.
 - No nested scrollers. Pages scroll with the document; the only bounded boxes are the editor, the logs
   viewer and the terminal, where a bounded box *is* the feature. The terminal's height is
   `LAYOUT.terminalHeight` (`clamp(420px, 65vh, 800px)`), because a shell needs a viewport but the page

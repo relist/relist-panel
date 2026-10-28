@@ -1,6 +1,6 @@
 import Editor from '@monaco-editor/react';
 import type { editor as MonacoEditorApi } from 'monaco-editor';
-import { useContext } from 'react';
+import { useContext, useState } from 'react';
 import { CODE_FONT_STACK, MONACO_THEME, ThemeModeContext } from '../app/theme';
 import '../monaco';
 
@@ -26,6 +26,7 @@ export const MONACO_OPTIONS = {
  * model the first editor is still showing.
  */
 export function YamlEditor({
+  autoHeight,
   height = '100%',
   keepCurrentModel,
   onChange,
@@ -34,6 +35,8 @@ export function YamlEditor({
   readOnly,
   value,
 }: {
+  /** Size the editor to its content, clamped to `[min, max]` (a CSS length). Overrides `height`. */
+  autoHeight?: { max: string; min: number };
   height?: number | string;
   keepCurrentModel?: boolean;
   onChange?: (value: string) => void;
@@ -45,16 +48,28 @@ export function YamlEditor({
   // Monaco is themed separately from antd, so it takes the mode from context
   // rather than from a token (see `monacoThemeData` in app/theme.ts).
   const mode = useContext(ThemeModeContext);
+  const [contentHeight, setContentHeight] = useState(0);
+  const resolvedHeight = autoHeight ? `clamp(${autoHeight.min}px, ${contentHeight}px, ${autoHeight.max})` : height;
 
   return (
     <Editor
-      height={height}
+      height={resolvedHeight}
       keepCurrentModel={keepCurrentModel}
       language="yaml"
       loading={<span>Loading editor…</span>}
       onChange={(next) => onChange?.(next ?? '')}
-      onMount={(editor) => onMount?.(editor)}
-      options={{ ...MONACO_OPTIONS, readOnly }}
+      onMount={(editor) => {
+        if (autoHeight) {
+          setContentHeight(editor.getContentHeight());
+          editor.onDidContentSizeChange((e) => setContentHeight(e.contentHeight));
+        }
+        onMount?.(editor);
+      }}
+      options={{
+        ...MONACO_OPTIONS,
+        ...(autoHeight && { automaticLayout: true, scrollbar: { alwaysConsumeMouseWheel: false } }),
+        readOnly,
+      }}
       path={path}
       theme={MONACO_THEME[mode]}
       value={value}

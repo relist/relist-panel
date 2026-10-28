@@ -27,14 +27,12 @@ export const LAYOUT = {
   gutter: 24,
   gutterSmall: 16,
   /**
-   * Monaco needs a bounded box, so the editor is the one surface with a set
-   * height — but it does not pick that height itself: the two Compose columns
-   * stretch to the same height, so the editor grows with the status rail next
-   * to it. This is the floor (and the height when the rail is short), keeping
-   * YAML readable without scrolling inside a short box. The page around it
-   * scrolls with the document — no nested scrollers.
+   * The Compose editor sizes itself to its content (Monaco still needs a bounded
+   * box, so it is given the content height), between this floor — short files
+   * stay a usable box — and the cap below, past which it scrolls inside.
    */
-  editorMinHeight: 'clamp(640px, 80vh, 1000px)',
+  editorAutoMinHeight: 320,
+  editorAutoMaxHeight: '80vh',
   /**
    * The Terminal tab's xterm box (GUIDELINES §6, §4.6): a bounded box because
    * a terminal *is* the feature, tall enough for `vim` and `top` without

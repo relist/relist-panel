@@ -99,9 +99,9 @@ const { Text, Paragraph, Title } = Typography;
  * Compose resolves to and offers each one's tar.gz backup — read-only, and
  * hidden outright when the panel cannot run the feature at all.
  *
- * The page scrolls as one document. The editor and the rail stretch to the same
- * height, so the editor is as tall as the status rail next to it (never shorter
- * than `LAYOUT.editorMinHeight`); the rail simply continues below the fold.
+ * The page scrolls as one document. The editor sizes itself to its content,
+ * between `LAYOUT.editorAutoMinHeight` and `LAYOUT.editorAutoMaxHeight`, and
+ * scrolls inside past the cap; the rail keeps its own height beside it.
  */
 export function ComposePage() {
   const { composeId: composeParam, environmentId: environmentParam, projectId: projectParam, tab } = useParams();
@@ -715,13 +715,10 @@ export function ComposePage() {
         items={[
           {
             children: (
-              // No `align="top"` here: the columns stretch to the same height, which is
-              // what lets the editor follow the rail instead of picking a height itself.
               <Row gutter={[LAYOUT.gutter, LAYOUT.gutter]}>
                 <Col lg={15} xs={24}>
                   <Card
-                    style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: LAYOUT.editorMinHeight }}
-                    styles={{ body: { display: 'flex', flex: 1, flexDirection: 'column', minHeight: 0, padding: 0 } }}
+                    styles={{ body: { padding: 0 } }}
                     title={
                       <Flex align="center" gap={8} justify="space-between" style={{ width: '100%' }}>
                         <Flex align="center" gap={8}>
@@ -786,8 +783,9 @@ export function ComposePage() {
                         type="warning"
                       />
                     )}
-                    <div style={{ flex: 1, minHeight: 0 }}>
+                    <div>
                       <YamlEditor
+                        autoHeight={{ max: LAYOUT.editorAutoMaxHeight, min: LAYOUT.editorAutoMinHeight }}
                         onChange={setDraft}
                         path={`${project.id}-${environment.id}-${compose.id}.yml`}
                         value={draft}
