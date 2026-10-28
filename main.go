@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"relist-panel/internal/auth"
+	"relist-panel/internal/certificates"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/config"
 	"relist-panel/internal/database"
@@ -126,6 +127,13 @@ func main() {
 	// between ReplaceSrc's renames leaves src/ missing; settle both before any
 	// request can touch a Source. A failure is logged, never fatal.
 	cleanSourceStaging(ctx, db, cfg.DataDir)
+
+	// Traefik's certificate files follow panel.db (ADR-0022): rewrite them
+	// after a rebuild, a restore or a Migration. A failure is logged, never
+	// fatal.
+	if err := certificates.Reconcile(ctx, certificates.NewStore(db), cfg.DataDir); err != nil {
+		log.Printf("reconcile certificates: %v", err)
+	}
 
 	// The metrics loop (ADR-0006): one sampler for the panel's lifetime,
 	// with the 30s container sweep and the 5-minute docker df refresh

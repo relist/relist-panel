@@ -229,7 +229,11 @@ function StatusBar({ onOpenSettings, status }: { onOpenSettings: () => void; sta
       </Card>
       {status.db.error && (
         <Alert
-          description="Scans carry on with the DB already downloaded."
+          description={
+            freshness === 'missing'
+              ? 'Scans fail until a DB is downloaded. The next scan retries the download.'
+              : 'Scans carry on with the DB already downloaded. Retry from the settings with Update vulnerability DB now.'
+          }
           showIcon
           style={{ marginBottom: 16 }}
           title={`The last vulnerability DB update failed: ${status.db.error}`}

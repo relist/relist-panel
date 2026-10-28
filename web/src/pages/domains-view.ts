@@ -21,7 +21,7 @@ export function domainFormValues(domain?: Domain): DomainFormValues {
       port: 80,
       entrypoint: '',
       https: false,
-      certProvider: 'letsencrypt',
+      certProvider: 'none',
       certResolver: '',
       middlewares: [],
       customEntrypoint: false,
@@ -36,9 +36,9 @@ export function domainFormValues(domain?: Domain): DomainFormValues {
     port: domain.port,
     entrypoint: domain.entrypoint,
     https: domain.https,
-    // An HTTP domain is stored with provider "none"; default to Let's Encrypt so
-    // switching HTTPS on starts from the spec's default.
-    certProvider: domain.https ? domain.certProvider : 'letsencrypt',
+    // An HTTP domain is stored with provider "none", so switching HTTPS on
+    // starts from None, the default (ADR-0022).
+    certProvider: domain.https ? domain.certProvider : 'none',
     certResolver: domain.https ? domain.certResolver : '',
     middlewares: [...domain.middlewares],
     customEntrypoint: domain.entrypoint !== '',
@@ -115,7 +115,7 @@ export function httpsTag(domain: Domain): string {
     case 'custom':
       return `custom: ${domain.certResolver}`;
     default:
-      return 'TLS (default cert)';
+      return 'TLS';
   }
 }
 

@@ -59,8 +59,8 @@ func freeBytes(path string) (uint64, error) {
 
 func (s *TrivyScanner) workDir() string { return filepath.Join(s.dataDir, ".scan-work") }
 
-// docker runs the CLI and returns its stdout, or an error carrying the first
-// line of its stderr.
+// docker runs the CLI and returns its stdout, or an error carrying the line
+// of its stderr that names the failure.
 func (s *TrivyScanner) docker(ctx context.Context, args ...string) (string, error) {
 	var stdout, stderr bytes.Buffer
 	if err := s.run(ctx, append([]string{"docker"}, args...), nil, &stdout, &stderr); err != nil {
@@ -74,10 +74,27 @@ func dockerError(err error, stderr string) error {
 	if errors.As(err, &coded) && coded.ExitCode() == 137 {
 		return errors.New("scanner ran out of memory (1 GB limit)")
 	}
-	if line := firstLine(stderr); line != "" {
+	if line := errorLine(stderr); line != "" {
 		return errors.New(line)
 	}
 	return err
+}
+
+// errorLine is Trivy's last FATAL or ERROR log line, without its timestamp:
+// Trivy logs INFO lines first, so the first line rarely says what failed.
+// Other CLI output keeps its first line, since Docker ends with usage hints.
+func errorLine(stderr string) string {
+	found := ""
+	for _, line := range strings.Split(stderr, "\n") {
+		fields := strings.Split(strings.TrimSpace(line), "\t")
+		if len(fields) > 2 && (fields[1] == "FATAL" || fields[1] == "ERROR") {
+			found = strings.Join(fields[2:], ": ")
+		}
+	}
+	if found != "" {
+		return found
+	}
+	return firstLine(stderr)
 }
 
 func firstLine(s string) string {
@@ -101,11 +118,9 @@ func (s *TrivyScanner) EnsureImage(ctx context.Context, ref string) error {
 			return fmt.Errorf("pull %s: %w", ref, err)
 		}
 	}
-	if _, err := s.docker(ctx, append(lockedDown(""), "--network", "none", ref, "--version")...); err != nil {
-		return fmt.Errorf("run %s: %w", ref, err)
-	}
 	// Only a volume created here needs its owner set, so root runs once per
-	// volume rather than on every check.
+	// volume rather than on every check. This comes before any run that
+	// mounts the volume, which would create it owned by root.
 	if _, err := s.docker(ctx, "volume", "inspect", trivyCacheVolume); err != nil {
 		if _, err := s.docker(ctx, "volume", "create", trivyCacheVolume); err != nil {
 			return fmt.Errorf("create %s: %w", trivyCacheVolume, err)
@@ -113,6 +128,9 @@ func (s *TrivyScanner) EnsureImage(ctx context.Context, ref string) error {
 		if _, err := s.docker(ctx, chownArgv(ref)...); err != nil {
 			return fmt.Errorf("prepare %s: %w", trivyCacheVolume, err)
 		}
+	}
+	if _, err := s.docker(ctx, append(lockedDown(""), "--network", "none", ref, "--version")...); err != nil {
+		return fmt.Errorf("run %s: %w", ref, err)
 	}
 	return nil
 }

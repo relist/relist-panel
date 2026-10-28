@@ -51,11 +51,11 @@ describe('domainInput', () => {
 });
 
 describe('domainFormValues', () => {
-  it('defaults an http domain to lets encrypt so switching https on is sensible', () => {
+  it('starts an http domain switched to https on provider none, the default', () => {
     const http: Domain = { ...domain, https: false, certProvider: 'none', certResolver: '' };
     const form = domainFormValues(http);
     expect(form.https).toBe(false);
-    expect(form.certProvider).toBe('letsencrypt');
+    expect(form.certProvider).toBe('none');
     expect(form.certResolver).toBe('');
   });
 
@@ -69,7 +69,7 @@ describe('domainFormValues', () => {
       port: 80,
       entrypoint: '',
       https: false,
-      certProvider: 'letsencrypt',
+      certProvider: 'none',
       certResolver: '',
       middlewares: [],
       customEntrypoint: false,
@@ -127,7 +127,7 @@ describe('httpsTag', () => {
     expect(httpsTag({ ...domain, https: false, certProvider: 'none', certResolver: '' })).toBe('HTTP');
     expect(httpsTag({ ...domain, https: true, certProvider: 'letsencrypt', certResolver: '' })).toBe("Let's Encrypt");
     expect(httpsTag({ ...domain, https: true, certProvider: 'custom', certResolver: 'dns' })).toBe('custom: dns');
-    expect(httpsTag({ ...domain, https: true, certProvider: 'none', certResolver: '' })).toBe('TLS (default cert)');
+    expect(httpsTag({ ...domain, https: true, certProvider: 'none', certResolver: '' })).toBe('TLS');
   });
 });
 

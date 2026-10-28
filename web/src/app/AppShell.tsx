@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyOutlined, SyncOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -94,6 +94,8 @@ export function AppShell() {
             ? 'images'
           : resolved.pattern === 'ssh-keys'
             ? 'ssh-keys'
+          : resolved.pattern === 'certificates'
+            ? 'certificates'
           : resolved.pattern === 'vulnerabilities'
             ? 'vulnerabilities'
           : resolved.pattern === '/'
@@ -132,6 +134,7 @@ export function AppShell() {
       label: <Flex align="center" justify="space-between" gap={8}><span>Vulnerabilities</span>{criticalCount > 0 && <Badge count={criticalCount} color={token.colorError} title={`${criticalCount} Critical vulnerabilities`} />}</Flex>,
     },
     { key: 'ssh-keys', icon: <KeyOutlined />, label: 'SSH keys' },
+    { key: 'certificates', icon: <SafetyCertificateOutlined />, label: 'Certificates' },
     {
       type: 'group',
       label: 'Recent Projects',
@@ -160,6 +163,7 @@ export function AppShell() {
     if (key === 'docker') return navigate(paths.docker);
     if (key === 'images') return navigate(paths.images);
     if (key === 'ssh-keys') return navigate(paths.sshKeys);
+    if (key === 'certificates') return navigate(paths.certificates);
     if (key === 'vulnerabilities') return navigate(paths.vulnerabilities);
     const projectId = Number(String(key).replace('project-', ''));
     if (Number.isFinite(projectId)) void navigate(paths.project(projectId));
@@ -182,6 +186,8 @@ export function AppShell() {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Images' });
       } else if (resolved?.pattern === 'ssh-keys') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'SSH keys' });
+      } else if (resolved?.pattern === 'certificates') {
+        trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Certificates' });
       } else if (resolved?.pattern === 'vulnerabilities') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Vulnerabilities' });
       }

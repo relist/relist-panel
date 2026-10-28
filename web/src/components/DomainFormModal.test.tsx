@@ -56,8 +56,11 @@ async function choose(user: ReturnType<typeof userEvent.setup>, label: string, o
   await user.click(await screen.findByTitle(option));
 }
 
+const NONE_HELP =
+  'Traefik serves an uploaded certificate (Certificates page) that covers this host, otherwise its default self-signed certificate.';
+
 describe('DomainFormModal', () => {
-  it('hides Certificate Provider until HTTPS is on, then defaults to Let’s Encrypt', async () => {
+  it('hides Certificate Provider until HTTPS is on, then defaults to None', async () => {
     const user = userEvent.setup();
     renderModal();
     await screen.findByRole('dialog');
@@ -67,7 +70,8 @@ describe('DomainFormModal', () => {
 
     const provider = await screen.findByRole('combobox', { name: 'Certificate Provider' });
     expect(provider).toBeTruthy();
-    expect(screen.getByTitle("Let's Encrypt")).toBeTruthy();
+    expect(screen.getByTitle('None')).toBeTruthy();
+    expect(screen.getByText(NONE_HELP)).toBeTruthy();
   });
 
   it('shows Resolver name with its help only for the Custom provider', async () => {
@@ -83,7 +87,7 @@ describe('DomainFormModal', () => {
     await choose(user, 'Certificate Provider', 'None');
     await waitFor(() => expect(screen.queryByText('Resolver name')).toBeNull());
     expect(
-      screen.getByText('Traefik serves a certificate matching this host if it has one, otherwise its default self-signed certificate.'),
+      screen.getByText(NONE_HELP),
     ).toBeTruthy();
   });
 

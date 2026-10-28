@@ -332,6 +332,17 @@ func TestEnsureImageChownsOnlyANewVolume(t *testing.T) {
 	if d.called("volume create relist-trivy-cache") != 1 || d.called("--entrypoint chown") != 1 {
 		t.Fatalf("calls = %v", d.calls)
 	}
+	// A run that mounts the volume before it is created would create it owned
+	// by root, and the inspect would then skip the chown.
+	for _, c := range d.calls {
+		line := strings.Join(c, " ")
+		if strings.Contains(line, "--entrypoint chown") {
+			break
+		}
+		if strings.Contains(line, "relist-trivy-cache:/cache") {
+			t.Fatalf("mounted the cache before preparing it: %v", d.calls)
+		}
+	}
 }
 
 func TestChecksRunWithoutFixedNames(t *testing.T) {
@@ -419,5 +430,20 @@ func TestEnsureImageIsBounded(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("EnsureImage not bounded")
+	}
+}
+
+func TestDockerErrorNamesTrivysFailure(t *testing.T) {
+	for _, tc := range []struct{ stderr, want string }{
+		{"2026-10-28T17:34:39Z\tINFO\t[vulndb] Need to update DB\n" +
+			"2026-10-28T17:34:39Z\tINFO\t[vulndb] Downloading vulnerability DB...\n" +
+			"2026-10-28T17:34:44Z\tFATAL\tFatal error\tinit error: DB error: failed to download vulnerability DB\n",
+			"Fatal error: init error: DB error: failed to download vulnerability DB"},
+		{"docker: Error response from daemon: conflict.\nRun 'docker run --help' for more information\n",
+			"docker: Error response from daemon: conflict."},
+	} {
+		if err := dockerError(errors.New("exit status 1"), tc.stderr); err.Error() != tc.want {
+			t.Errorf("err = %q, want %q", err, tc.want)
+		}
 	}
 }

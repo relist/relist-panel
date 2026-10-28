@@ -665,6 +665,19 @@ export interface SshKey {
   usedBy: SshKeyUse[];
 }
 
+/** An uploaded TLS certificate. The API never returns its PEM or private key. */
+export interface Certificate {
+  id: number;
+  name: string;
+  sans: string[];
+  issuer: string;
+  notAfter: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CertificateInput = { name: string; certificate: string; privateKey: string };
+
 export interface SourceTestResult {
   ok: boolean;
   branches: string[];

@@ -112,6 +112,21 @@ func TestScansWhileOff(t *testing.T) {
 	}
 }
 
+func TestPostDBUpdate(t *testing.T) {
+	h := newHarness(t)
+	if code, body := call(t, h.mux(), "POST", "/api/vulnerabilities/db-update", ""); code != 409 || body["error"] != "Scanning is off" {
+		t.Fatalf("%d %v", code, body)
+	}
+	h.enable() // a fresh DB, which a scan request would leave alone
+	if code, _ := call(t, h.mux(), "POST", "/api/vulnerabilities/db-update", ""); code != 202 {
+		t.Fatalf("%d", code)
+	}
+	task, ok, _ := h.store.Next(context.Background())
+	if !ok || task.Kind != KindDBUpdate || task.Reason != ReasonManual {
+		t.Fatalf("task = %+v", task)
+	}
+}
+
 func TestDeleteCacheWhileOn(t *testing.T) {
 	h := newHarness(t)
 	h.enable()
