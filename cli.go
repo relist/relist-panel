@@ -205,6 +205,104 @@ func runCreateAdmin(args []string, stdin io.Reader, stdout, stderr io.Writer, tt
 	return 0
 }
 
+const resetPasswordUsage = "usage: relist-panel reset-password [--email ADDRESS] [--generate | --password-stdin]"
+
+// runResetPassword implements `relist-panel reset-password`, the recovery path
+// for a lost password. Prompts and hints go to stderr, so stdout holds only the
+// result and, when generated, the password. It returns the exit code: 0 on
+// success, 1 for a failed reset, 2 for a usage error.
+func runResetPassword(args []string, stdin io.Reader, stdout, stderr io.Writer, tty console) int {
+	flags := flag.NewFlagSet("reset-password", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.Usage = func() {
+		fmt.Fprintln(stderr, resetPasswordUsage)
+	}
+	email := flags.String("email", "", "email of the admin account to reset")
+	generate := flags.Bool("generate", false, "generate the password and print it once")
+	passwordStdin := flags.Bool("password-stdin", false, "read the password from the first line of stdin")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() > 0 || (*generate && *passwordStdin) {
+		fmt.Fprintln(stderr, resetPasswordUsage)
+		return 2
+	}
+	if !tty.isTerminal && !*passwordStdin && !*generate {
+		fmt.Fprintln(stderr, "reset-password: stdin is not a terminal; pass --password-stdin or --generate")
+		return 2
+	}
+
+	var password string
+	var err error
+	switch {
+	case *passwordStdin:
+		if password, err = readLine(bufio.NewReader(stdin)); err != nil {
+			fmt.Fprintf(stderr, "reset-password: read the password: %v\n", err)
+			return 1
+		}
+	case !*generate:
+		fmt.Fprint(stderr, "New password (leave empty to generate one): ")
+		password, err = tty.readPassword()
+		fmt.Fprintln(stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "reset-password: read the password: %v\n", err)
+			return 1
+		}
+		if password != "" {
+			fmt.Fprint(stderr, "Confirm password: ")
+			confirm, err := tty.readPassword()
+			fmt.Fprintln(stderr)
+			if err != nil {
+				fmt.Fprintf(stderr, "reset-password: read the password: %v\n", err)
+				return 1
+			}
+			if confirm != password {
+				fmt.Fprintln(stderr, "reset-password: passwords do not match")
+				return 1
+			}
+		}
+	}
+	generated := password == ""
+	if generated {
+		if password, err = auth.GeneratePassword(); err != nil {
+			fmt.Fprintf(stderr, "reset-password: %v\n", err)
+			return 1
+		}
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(stderr, "reset-password: %v\n", err)
+		return 1
+	}
+	db, err := database.OpenAndMigrate(cfg.DatabasePath())
+	if err != nil {
+		fmt.Fprintf(stderr, "reset-password: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	result, err := auth.ResetPassword(context.Background(), db, *email, password)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrAccountNotFound):
+			fmt.Fprintf(stderr, "reset-password: no admin account matches %q\n", *email)
+		case errors.Is(err, auth.ErrEmailRequired):
+			fmt.Fprintln(stderr, "reset-password: more than one admin account exists; pass --email")
+		default:
+			fmt.Fprintf(stderr, "reset-password: %v\n", err)
+		}
+		return 1
+	}
+	fmt.Fprintf(stdout, "Reset password for %s; revoked %d sessions.\n", result.Email, result.SessionsRevoked)
+	if generated {
+		fmt.Fprintf(stdout, "Password: %s\n", password)
+		fmt.Fprintln(stderr, "Sign in, then change it in Account.")
+	}
+	return 0
+}
+
 // readLine reads one line, without its line ending; a last line with no
 // newline counts.
 func readLine(r *bufio.Reader) (string, error) {

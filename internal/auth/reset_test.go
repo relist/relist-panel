@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"relist-panel/internal/database"
 )
 
@@ -148,5 +150,66 @@ func TestResetTwoFactorWhenNotEnabledStillUnlocks(t *testing.T) {
 	}
 	if lockedUntil.Valid {
 		t.Fatalf("locked_until = %+v, want NULL", lockedUntil)
+	}
+}
+
+func TestResetPasswordReplacesHashAndRevokesSessions(t *testing.T) {
+	db := openResetDatabase(t)
+	seedResetAdmin(t, db, sql.NullString{String: "SECRET", Valid: true})
+	seedResetSession(t, db, "session-one")
+	seedResetSession(t, db, "session-two")
+
+	result, err := ResetPassword(context.Background(), db, "admin@example.com", "a brand new password")
+	if err != nil {
+		t.Fatalf("ResetPassword() error = %v", err)
+	}
+	want := ResetResult{Email: "admin@example.com", WasEnabled: true, SessionsRevoked: 2}
+	if result != want {
+		t.Fatalf("ResetPassword() = %+v, want %+v", result, want)
+	}
+
+	var hash string
+	var secret sql.NullString
+	var failed int
+	var locked sql.NullInt64
+	var fromEnv bool
+	if err := db.QueryRow("SELECT password_hash, totp_secret, failed_attempts, locked_until, password_from_env FROM admin_credentials WHERE id = 1").
+		Scan(&hash, &secret, &failed, &locked, &fromEnv); err != nil {
+		t.Fatalf("read admin: %v", err)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte("a brand new password")) != nil {
+		t.Fatal("stored hash does not match the new password")
+	}
+	if !secret.Valid {
+		t.Fatal("two-factor was cleared; a password reset must keep it")
+	}
+	if failed != 0 || locked.Valid || fromEnv {
+		t.Fatalf("failed = %d, locked = %v, fromEnv = %v; want a clean account", failed, locked, fromEnv)
+	}
+	var sessions int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&sessions); err != nil || sessions != 0 {
+		t.Fatalf("sessions = %d, err = %v; want 0", sessions, err)
+	}
+}
+
+func TestResetPasswordRejectsShortPassword(t *testing.T) {
+	db := openResetDatabase(t)
+	seedResetAdmin(t, db, sql.NullString{})
+
+	if _, err := ResetPassword(context.Background(), db, "", "short"); err == nil {
+		t.Fatal("ResetPassword() accepted a short password")
+	}
+	var hash string
+	if err := db.QueryRow("SELECT password_hash FROM admin_credentials").Scan(&hash); err != nil || hash != "hash" {
+		t.Fatalf("hash = %q, err = %v; want it untouched", hash, err)
+	}
+}
+
+func TestResetPasswordUnknownEmail(t *testing.T) {
+	db := openResetDatabase(t)
+	seedResetAdmin(t, db, sql.NullString{})
+
+	if _, err := ResetPassword(context.Background(), db, "nobody@example.com", "long enough pw"); !errors.Is(err, ErrAccountNotFound) {
+		t.Fatalf("ResetPassword() error = %v, want ErrAccountNotFound", err)
 	}
 }

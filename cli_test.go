@@ -255,3 +255,77 @@ func TestCreateAdminInteractive(t *testing.T) {
 		}
 	})
 }
+
+func runResetPw(t *testing.T, args []string, stdin string, term console) (int, string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := runResetPassword(args, strings.NewReader(stdin), &stdout, &stderr, term)
+	return code, stdout.String(), stderr.String()
+}
+
+func TestResetPasswordCommandFromStdin(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+	seedCLIAdmin(t)
+
+	code, stdout, stderr := runResetPw(t, []string{"--password-stdin"}, "long enough pw\n", noTerminal)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %q", code, stderr)
+	}
+	if stdout != "Reset password for admin@example.com; revoked 2 sessions.\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	_, hash, _ := storedAdmin(t)
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte("long enough pw")) != nil {
+		t.Fatal("stored hash does not match the password from stdin")
+	}
+}
+
+func TestResetPasswordCommandGenerated(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+	seedCLIAdmin(t)
+
+	code, stdout, stderr := runResetPw(t, []string{"--generate"}, "", noTerminal)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %q", code, stderr)
+	}
+	_, password, found := strings.Cut(stdout, "Password: ")
+	password = strings.TrimSpace(password)
+	if !found || password == "" {
+		t.Fatalf("stdout = %q, want the generated password", stdout)
+	}
+	_, hash, _ := storedAdmin(t)
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
+		t.Fatal("stored hash does not match the printed password")
+	}
+}
+
+func TestResetPasswordCommandPromptMismatch(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+	seedCLIAdmin(t)
+
+	code, _, stderr := runResetPw(t, nil, "", fakeTerminal("long enough pw", "something else"))
+	if code != 1 || !strings.Contains(stderr, "do not match") {
+		t.Fatalf("exit code = %d, stderr = %q; want 1 and a mismatch", code, stderr)
+	}
+	if _, hash, _ := storedAdmin(t); hash != "hash" {
+		t.Fatal("hash changed despite the mismatch")
+	}
+}
+
+func TestResetPasswordCommandNeedsAModeWithoutTerminal(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+
+	if code, _, stderr := runResetPw(t, nil, "", noTerminal); code != 2 {
+		t.Fatalf("exit code = %d, want 2; stderr = %q", code, stderr)
+	}
+}
+
+func TestResetPasswordCommandUnknownEmail(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+	seedCLIAdmin(t)
+
+	code, _, stderr := runResetPw(t, []string{"--email", "nobody@example.com", "--generate"}, "", noTerminal)
+	if code != 1 || !strings.Contains(stderr, "nobody@example.com") {
+		t.Fatalf("exit code = %d, stderr = %q; want 1 and the email", code, stderr)
+	}
+}
