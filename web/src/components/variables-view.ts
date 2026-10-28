@@ -117,6 +117,21 @@ export function replacePlan(current: readonly { key: string }[], rows: readonly 
 }
 
 /**
+ * The secret flag each pasted row is written with. A `.env` carries no flag, so
+ * a key the list already has keeps its stored one (a re-paste must not unmask
+ * it), and a new key takes the create form's guess from its name.
+ */
+export function pasteSecretFlags(
+  current: readonly { key: string; secret: boolean }[],
+  rows: readonly DotEnvRow[],
+): { key: string; value: string; secret: boolean }[] {
+  return rows.map((row) => ({
+    ...row,
+    secret: current.find((variable) => variable.key === row.key)?.secret ?? isSecretKey(row.key),
+  }));
+}
+
+/**
  * The Environment Variable a Compose Variable overrides, if any: the one with
  * the same key. Matching is exact — keys are case-sensitive in `.env`.
  */

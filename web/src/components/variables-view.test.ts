@@ -11,6 +11,7 @@ import {
   overrideHint,
   overriddenVariable,
   parseDotEnv,
+  pasteSecretFlags,
   replacePlan,
   visibleVariables,
 } from './variables-view';
@@ -147,6 +148,26 @@ describe('replacePlan', () => {
   it('replaces everything when the Environment is empty, and empties it when the paste is', () => {
     expect(replacePlan([], parseDotEnv('A=1'))).toEqual({ added: ['A'], removed: [], updated: [] });
     expect(replacePlan([{ key: 'A' }], [])).toEqual({ added: [], removed: ['A'], updated: [] });
+  });
+});
+
+describe('pasteSecretFlags', () => {
+  it('keeps the stored flag of a key the list already has, whatever its name says', () => {
+    const current = [
+      { key: 'DB_PASSWORD', secret: false },
+      { key: 'SIGNING', secret: true },
+    ];
+    expect(pasteSecretFlags(current, parseDotEnv('DB_PASSWORD=x\nSIGNING=y'))).toEqual([
+      { key: 'DB_PASSWORD', secret: false, value: 'x' },
+      { key: 'SIGNING', secret: true, value: 'y' },
+    ]);
+  });
+
+  it("guesses a new key's flag from its name", () => {
+    expect(pasteSecretFlags([], parseDotEnv('API_TOKEN=t\nLOG_LEVEL=info'))).toEqual([
+      { key: 'API_TOKEN', secret: true, value: 't' },
+      { key: 'LOG_LEVEL', secret: false, value: 'info' },
+    ]);
   });
 });
 
