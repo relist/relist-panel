@@ -12,7 +12,8 @@ describe('LAYOUT', () => {
       contentMaxWidth: 1280,
       gutter: 24,
       gutterSmall: 16,
-      editorMinHeight: 'clamp(640px, 80vh, 1000px)',
+      editorAutoMinHeight: 320,
+      editorAutoMaxHeight: '80vh',
       terminalHeight: 'clamp(420px, 65vh, 800px)',
     });
   });
