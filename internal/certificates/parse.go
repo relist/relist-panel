@@ -3,6 +3,7 @@
 package certificates
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/tls"
 	"crypto/x509"
@@ -63,6 +64,11 @@ func Parse(certPEM, keyPEM string, now time.Time) (Parsed, *FieldError) {
 		}
 		certs = append(certs, cert)
 		certOut.Write(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: block.Bytes}))
+	}
+	// pem.Decode skips a block with bad base64 and stops at one with no END
+	// line, so a damaged chain would otherwise lose a certificate silently.
+	if begun := bytes.Count(trimLines(certPEM), []byte("-----BEGIN CERTIFICATE-----")); begun > len(certs) {
+		return Parsed{}, &FieldError{"certificate", fmt.Sprintf("certificate %d does not parse; check it was copied whole, from BEGIN to END", len(certs)+1)}
 	}
 	if len(certs) == 0 {
 		return Parsed{}, &FieldError{"certificate", "no CERTIFICATE block found; paste the PEM starting with -----BEGIN CERTIFICATE-----"}

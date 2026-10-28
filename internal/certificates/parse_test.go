@@ -184,6 +184,8 @@ func TestParseRefuses(t *testing.T) {
 		{"encrypted proc-type", good.cert, procType, "privateKey", "encrypted"},
 		{"key from another pair", good.cert, other.key, "privateKey", "does not match"},
 		{"chain CA first", good.chain + good.cert, good.key, "privateKey", "server certificate first"},
+		{"chain block with bad base64", good.cert + "-----BEGIN CERTIFICATE-----\n!!!not base64!!!\n-----END CERTIFICATE-----\n", good.key, "certificate", "does not parse"},
+		{"truncated chain block", good.cert + good.chain[:len(good.chain)/2], good.key, "certificate", "does not parse"},
 		{"key too large", good.cert, good.key + strings.Repeat("x", 16*1024), "privateKey", "16 KiB"},
 	}
 	for _, tc := range cases {
