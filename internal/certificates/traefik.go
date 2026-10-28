@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -103,11 +104,22 @@ func writeFile(dir, name string, c Certificate) error {
 	return os.Rename(tmp.Name(), filepath.Join(dir, name))
 }
 
+// reconcileListed runs between Reconcile's List and its writes; tests pause
+// there.
+var reconcileListed = func() {}
+
+// reconcileMu makes Reconciles run one at a time, so one that listed before
+// another write landed cannot then remove or overwrite that write's file.
+var reconcileMu sync.Mutex
+
 // Reconcile rewrites Traefik's certificate files from the database.
 func Reconcile(ctx context.Context, store *Store, dataDir string) error {
+	reconcileMu.Lock()
+	defer reconcileMu.Unlock()
 	certs, err := store.List(ctx)
 	if err != nil {
 		return err
 	}
+	reconcileListed()
 	return WriteDir(DynamicDir(dataDir), certs)
 }

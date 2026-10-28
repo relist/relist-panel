@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -201,5 +202,43 @@ func TestReplaceWhenFileWriteFails(t *testing.T) {
 	raw, _ := os.ReadFile(ts.file(id))
 	if !strings.Contains(string(raw), strings.Split(strings.TrimSpace(body["certificate"]), "\n")[1]) {
 		t.Error("Reconcile did not write the replaced certificate")
+	}
+}
+
+// A Reconcile that listed before another write landed must not then remove
+// that write's file: Reconciles run one at a time.
+func TestReconcileDoesNotDropAConcurrentWrite(t *testing.T) {
+	ts := newService(t)
+	ctx := context.Background()
+	late := make(chan error, 1)
+	var paused atomic.Bool
+	reconcileListed = func() {
+		if paused.Swap(true) {
+			return
+		}
+		func() {
+			go func() {
+				if _, err := ts.store.Create(ctx, "late", parsed(t, "late.example.com")); err != nil {
+					late <- err
+					return
+				}
+				late <- Reconcile(ctx, ts.store, ts.dataDir)
+			}()
+			// Without the lock the late write finishes here, before this
+			// Reconcile writes its stale list; with it, it waits.
+			time.Sleep(200 * time.Millisecond)
+		}()
+	}
+
+	if err := Reconcile(ctx, ts.store, ts.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-late; err != nil {
+		t.Fatal(err)
+	}
+	reconcileListed = func() {}
+	entries, _ := os.ReadDir(DynamicDir(ts.dataDir))
+	if len(entries) != 1 {
+		t.Fatalf("%d files, want the late certificate's file", len(entries))
 	}
 }
