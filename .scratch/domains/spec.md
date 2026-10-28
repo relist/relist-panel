@@ -22,6 +22,7 @@ plain HTTP unless the operator reconfigures Traefik by hand (README, "Volume fil
 - A Compose page has a **Domains** tab. The operator adds a domain with a form, modelled on
   Dokploy's domain dialog: Host, Path, Internal Path, Strip Path, **Service**, Container Port,
   Custom Entrypoint, HTTPS, Certificate Provider (None / Let's Encrypt / Custom), Middlewares.
+  2026-10-28: the default is now None — see `.scratch/certificates/spec.md`.
 - On the next deploy the panel injects the matching Traefik labels into the resolved Compose file.
   The YAML the operator wrote stays untouched.
 - A domain with HTTPS and Let's Encrypt serves a valid certificate on a public host, and plain HTTP

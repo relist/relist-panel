@@ -24,6 +24,10 @@ _Avoid_: Container (a Service is the definition; a Container is one running inst
 A host and path that Traefik routes to one Service's port in a Compose, managed on the Compose's Domains tab and applied on deploy.
 _Avoid_: Route, Hostname (as the entity name)
 
+**Certificate**:
+A TLS certificate and its private key, uploaded by the operator to the host-wide Certificates page and handed to Traefik's file provider. Traefik serves it to any HTTPS Domain on provider None whose host it covers, chosen by SNI; the panel does not link a Certificate to a Domain (ADR-0022).
+_Avoid_: SSL, Cert (as the entity name), Certificate resolver (that is how Traefik obtains certificates, e.g. Let's Encrypt)
+
 **Internal hostname**:
 A `.internal` alias a Service answers to on `relist-network`, injected on deploy (ADR-0014): the stable `<service>.<docker compose project>.internal` and the readable `<service>.<compose>.<environment>.<project>.internal`. Only Services with a Domain, Traefik labels or an explicit `relist-network` get them.
 _Avoid_: Service name (the bare name is ambiguous across Composes), DNS name

@@ -126,6 +126,22 @@ uses the same host as a Domain is not detected, and Traefik picks one of the
 two routers by priority. A custom resolver name that
 Traefik does not know shows only in Traefik's log.
 
+### Certificates
+
+To serve a certificate you already have (bought, or a wildcard issued
+elsewhere), upload it on the **Certificates** page: a name, the certificate
+with its chain (server certificate first), and an unencrypted private key, both
+as PEM. The panel writes each one into Traefik's file-provider directory,
+`RELIST_DATA_DIR/.traefik/dynamic/`, and Traefik picks it up at once, with no
+redeploy. Traefik serves it to any HTTPS Domain set to Certificate Provider
+**None** whose host it covers, chosen by SNI, wildcards included; the panel does
+not link a certificate to a Domain and does not check that one covers a host. A
+Domain with no covering certificate gets Traefik's self-signed default. New
+HTTPS Domains start on **None**. To renew, use **Replace** on the same
+certificate rather than adding a second one: when two certificates cover a host,
+Traefik picks either. Check what a host serves with
+`openssl s_client -servername <host> -connect <host>:443`.
+
 Image uploads through the domain must finish within one hour: Traefik's read
 timeout on the `web` and `websecure` entrypoints is set to `3600s` (this applies
 to every app on those entrypoints, not only the panel), and 10 GiB needs roughly
@@ -167,6 +183,11 @@ TLS. Recreate the panel container so the new binding applies (`docker compose
 up -d` does it once `docker-compose.yml` is updated). Anything that reached
 `http://<host>:8888/` from another machine must use the panel's domain or an SSH
 tunnel instead.
+
+Uploaded certificates need Traefik's file provider
+(`--providers.file.directory=/letsencrypt/dynamic`). With an older install
+`docker-compose.yml`, Traefik ignores every uploaded certificate and nothing
+says so: update the file and run `docker compose up -d` so Traefik is recreated.
 
 `RELIST_ADMIN_EMAIL` and `RELIST_ADMIN_PASSWORD` are no longer read; the
 admin they created stays. Remove them from `.env`, and if **Account** still
