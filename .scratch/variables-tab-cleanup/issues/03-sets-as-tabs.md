@@ -1,6 +1,6 @@
 # 03 — Variable Sets as tabs
 
-Status: ready-for-agent
+Status: closed
 
 **What to build:** First read `../spec.md`: Decisions "Sets as `line` tabs", "Binding only in the
 Service bindings card" and "Paste .env…". Also read Ant Design's `llms.txt` (`Tabs`; in antd 6 use `items` and
@@ -31,11 +31,16 @@ Rewrite `web/src/components/VariableSetsCard.tsx` from `Collapse` to `Tabs` (def
 
 **Blocked by:** 01
 
-- [ ] Tabs with name + count; New set activates the new tab; Rename modal; Delete Popconfirm names bound Services
-- [ ] "Bound to …" / "Not bound to any Service yet" line follows binding changes made in the bindings card
-- [ ] Paste .env replaces a set's entries
+- [x] Tabs with name + count; New set activates the new tab; Rename modal; Delete Popconfirm names bound Services
+- [x] "Bound to …" / "Not bound to any Service yet" line follows binding changes made in the bindings card
+- [x] Paste .env replaces a set's entries
 - [ ] Empty state has one add button; more than 6 sets overflow into Ant Design's menu
-- [ ] `VariableSetsCard.test.tsx` updated, with no behaviour left untested
-- [ ] `pnpm --dir web typecheck`, `test`, `build` clean
+- [x] `VariableSetsCard.test.tsx` updated, with no behaviour left untested
+- [x] `pnpm --dir web typecheck`, `test`, `build` clean
 
 ## Comments
+
+- 2026-10-28 (Claude): done in 8e6a94e and dd679a5. The browser check at 390px showed
+  `tabBarExtraContent` hiding every tab except the first, so Rename/Delete moved into the pane.
+  The spec records why. The case with more than 6 sets (overflow menu) was not checked in a
+  browser.

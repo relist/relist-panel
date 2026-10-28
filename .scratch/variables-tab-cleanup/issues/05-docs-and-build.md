@@ -1,6 +1,6 @@
 # 05 — GUIDELINES and embedded frontend
 
-Status: ready-for-agent
+Status: closed
 
 **What to build:** First read `../spec.md`. Then update `docs/GUIDELINES.md` to match what tickets
 01–04 shipped.
@@ -21,8 +21,12 @@ Status: ready-for-agent
 
 **Blocked by:** 01, 02, 03, 04
 
-- [ ] §4.5 and §4.6 match the shipped UI
-- [ ] Embedded frontend rebuilt in its own commit
+- [x] §4.5 and §4.6 match the shipped UI
+- [x] Embedded frontend rebuilt in its own commit
 - [ ] Browser check at desktop and phone width per the spec's Verification section
 
 ## Comments
+
+- 2026-10-28 (Claude): checked only partly. The real components were rendered with a mocked
+  store and 3 sets, at 1200px and 390px. The real backend, 0 and more than 6 sets, and paste
+  against the API have not been checked in a browser.

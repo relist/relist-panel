@@ -1,6 +1,6 @@
 # 02 — Compose variables card: ⓘ title, override tag, Paste .env
 
-Status: ready-for-agent
+Status: closed
 
 **What to build:** First read `../spec.md`: Decisions "Override shown as a tag", "Paste .env for
 Compose Variables and set entries" and "Card titles with ⓘ".
@@ -20,10 +20,10 @@ Compose Variables and set entries" and "Card titles with ⓘ".
 
 **Blocked by:** 01
 
-- [ ] Card title with ⓘ tooltip; no description paragraph
-- [ ] Override tag on one line; tooltip value masked for a secret Environment variable
-- [ ] Paste .env replaces Compose Variables (adds, updates, removes) and the banner appears
-- [ ] Tests in `ComposeVariablesTab.test.tsx` updated or added for the tag and paste
-- [ ] `pnpm --dir web typecheck`, `test`, `build` clean
+- [x] Card title with ⓘ tooltip; no description paragraph
+- [x] Override tag on one line; tooltip value masked for a secret Environment variable
+- [x] Paste .env replaces Compose Variables (adds, updates, removes) and the banner appears
+- [x] Tests in `ComposeVariablesTab.test.tsx` updated or added for the tag and paste
+- [x] `pnpm --dir web typecheck`, `test`, `build` clean
 
 ## Comments

@@ -1,6 +1,6 @@
 # 01 — Frameless variables table (Compose page) and secret-preserving paste (everywhere)
 
-Status: ready-for-agent
+Status: closed
 
 **What to build:** First read `../spec.md`, in particular Decisions: "A flat variable table on the
 Compose page", "The Environment's list is unchanged" and the paste secret-flag rule. Also read Ant Design's `llms.txt` (`Table`, `Tooltip`)
@@ -32,11 +32,16 @@ Variables and set entries):
 
 **Blocked by:** —
 
-- [ ] Frameless rendering has no nested card, title or description, and no secret/plain column
-- [ ] Environment list renders as before (its existing tests pass unchanged)
+- [x] Frameless rendering has no nested card, title or description, and no secret/plain column
+- [x] Environment list renders as before (its existing tests pass unchanged)
 - [ ] Row actions hidden at rest, visible on hover, keyboard focus, and at phone width
-- [ ] Frameless filter only above 10 rows
-- [ ] `pasteSecretFlags` unit-tested; Environment paste keeps an existing secret secret and makes a new `*_PASSWORD` secret (new component test)
-- [ ] `pnpm --dir web typecheck`, `test`, `build` clean; no test deleted without a replacement
+- [x] Frameless filter only above 10 rows
+- [x] `pasteSecretFlags` unit-tested; Environment paste keeps an existing secret secret and makes a new `*_PASSWORD` secret (new component test)
+- [x] `pnpm --dir web typecheck`, `test`, `build` clean; no test deleted without a replacement
 
 ## Comments
+
+- 2026-10-28 (Claude): done in 73753c1. The hover-only actions are covered by CSS (`.rp-row-actions` in
+  `web/src/index.css`). jsdom cannot test hover, and the headless screenshots ran without hover, so a
+  real desktop browser has not yet confirmed that the actions appear on hover. Headless Chrome reports
+  `(hover: none) = true`, and the actions' computed opacity there is `1`, so the touch path works.

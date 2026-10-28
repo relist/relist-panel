@@ -1,6 +1,6 @@
 # 04 — Service bindings card as a table
 
-Status: ready-for-agent
+Status: closed
 
 **What to build:** First read `../spec.md`, Decision "Service bindings card as a table".
 
@@ -20,9 +20,9 @@ In `web/src/components/ComposeBindingsCard.tsx`:
 
 **Blocked by:** —
 
-- [ ] Table layout; Effective env is an icon button with the accessible name `Effective env for <service>`
-- [ ] Rapid-pick binding and stale Remove still work
-- [ ] `ComposeBindingsCard.test.tsx` queries updated (`/Effective env for web/`); nothing deleted
-- [ ] `pnpm --dir web typecheck`, `test`, `build` clean
+- [x] Table layout; Effective env is an icon button with the accessible name `Effective env for <service>`
+- [x] Rapid-pick binding and stale Remove still work
+- [x] `ComposeBindingsCard.test.tsx` queries updated (`/Effective env for web/`); nothing deleted
+- [x] `pnpm --dir web typecheck`, `test`, `build` clean
 
 ## Comments
