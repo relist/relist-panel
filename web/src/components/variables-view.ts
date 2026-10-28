@@ -139,17 +139,24 @@ export function overriddenVariable<T extends { key: string }>(key: string, envir
   return environmentVariables.find((variable) => variable.key === key);
 }
 
-/** The Compose Variables row's hint, or `null` when nothing is overridden. A secret's value stays masked. */
+/**
+ * The Compose Variables row's override mark, or `null` when nothing is
+ * overridden: the tag's text, and the shadowed value for its tooltip. A
+ * secret's value stays masked.
+ */
 export function overrideHint(
   key: string,
   environmentName: string,
   environmentVariables: readonly Pick<EnvironmentVariable, 'key' | 'secret' | 'value'>[],
-): string | null {
+): { label: string; detail: string } | null {
   const overridden = overriddenVariable(key, environmentVariables);
   if (!overridden) {
     return null;
   }
-  return `overrides ${environmentName}: ${overridden.secret ? '••••' : overridden.value}`;
+  return {
+    detail: `${environmentName}: ${overridden.secret ? '••••' : overridden.value}`,
+    label: `overrides ${environmentName}`,
+  };
 }
 
 /** How many distinct keys a deploy writes: the Environment's, plus the Compose-only ones. */

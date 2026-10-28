@@ -13,6 +13,10 @@ vi.mock('./api', async (importOriginal) => {
     ...original,
     api: {
       authStatus: vi.fn(),
+      createComposeVariable: vi.fn(),
+      deleteComposeVariable: vi.fn(),
+      listComposeVariables: vi.fn(),
+      updateComposeVariable: vi.fn(),
       createSetEntry: vi.fn(),
       createVariableSet: vi.fn(),
       deleteSetEntry: vi.fn(),
@@ -105,5 +109,58 @@ describe('Variable Set writes', () => {
       await hook.result.current.deleteSetEntry(7, 5, 1);
     });
     expect(mocked.deleteSetEntry).toHaveBeenCalled();
+  });
+});
+
+describe('.env replace', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocked.authStatus.mockResolvedValue({ authenticated: true } as never);
+    mocked.listProjects.mockResolvedValue([{ id: 1, name: 'p' }] as never);
+    mocked.listEnvironments.mockResolvedValue([{ id: 2, name: 'e' }] as never);
+    mocked.listComposes.mockResolvedValue([{ id: 7, name: 'a' }] as never);
+    mocked.getCompose.mockResolvedValue({ id: 7, name: 'a' } as never);
+  });
+
+  const location = { composeId: 7, environmentId: 2, projectId: 1 };
+  const rows = [
+    { key: 'KEEP', secret: true, value: 'new' },
+    { key: 'ADDED', secret: false, value: '1' },
+  ];
+
+  it('replaces the Compose variables against the server list: drops, updates, adds, then refreshes once', async () => {
+    mocked.listComposeVariables.mockResolvedValue([
+      { composeId: 7, id: 1, key: 'KEEP', secret: true, value: 'old' },
+      { composeId: 7, id: 2, key: 'DROPPED', secret: false, value: 'x' },
+    ] as never);
+    const hook = await loadedPanel();
+    await act(async () => {
+      await hook.result.current.replaceComposeVariables(7, rows);
+    });
+    expect(mocked.deleteComposeVariable).toHaveBeenCalledWith(location, 2);
+    expect(mocked.updateComposeVariable).toHaveBeenCalledWith(location, 1, rows[0]);
+    expect(mocked.createComposeVariable).toHaveBeenCalledWith(location, rows[1]);
+    expect(mocked.getCompose).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces one set's entries and leaves the other sets alone", async () => {
+    mocked.listVariableSets.mockResolvedValue([
+      { entries: [{ id: 9, key: 'OTHER' }], id: 4 },
+      {
+        entries: [
+          { id: 1, key: 'KEEP' },
+          { id: 2, key: 'DROPPED' },
+        ],
+        id: 5,
+      },
+    ] as never);
+    const hook = await loadedPanel();
+    await act(async () => {
+      await hook.result.current.replaceSetEntries(7, 5, rows);
+    });
+    expect(mocked.deleteSetEntry).toHaveBeenCalledTimes(1);
+    expect(mocked.deleteSetEntry).toHaveBeenCalledWith(location, 5, 2);
+    expect(mocked.updateSetEntry).toHaveBeenCalledWith(location, 5, 1, rows[0]);
+    expect(mocked.createSetEntry).toHaveBeenCalledWith(location, 5, rows[1]);
   });
 });

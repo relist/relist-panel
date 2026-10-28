@@ -89,7 +89,7 @@ export type VariablesEditorProps = {
   emptyDescription: string;
   /** Shown in the delete confirmation. */
   deleteNote: string;
-  /** Extra content under a row's value, e.g. the override hint. */
+  /** Extra content beside a row's value, e.g. the override tag. */
   annotate?: (variable: VariableRow) => ReactNode;
   footer?: ReactNode;
   /** True: while the list is empty the card header drops its add button, leaving the empty state's as the only one. */
@@ -245,10 +245,10 @@ export function VariablesEditor({
           dataIndex: 'value',
           key: 'value',
           render: (_value, variable) => (
-            <>
+            <Flex align="center" gap={8} wrap>
               <ValueCell variable={variable} />
               {annotate?.(variable)}
-            </>
+            </Flex>
           ),
           title: 'Value',
         },

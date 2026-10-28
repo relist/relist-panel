@@ -177,14 +177,17 @@ describe('overrideHint', () => {
     { key: 'API_TOKEN', secret: true, value: 'hunter2' },
   ];
 
-  it('names the Environment and shows a plain value', () => {
-    expect(overrideHint('LOG_LEVEL', 'production', environmentVariables)).toBe('overrides production: info');
+  it('names the Environment on the tag and shows a plain value in the detail', () => {
+    expect(overrideHint('LOG_LEVEL', 'production', environmentVariables)).toEqual({
+      detail: 'production: info',
+      label: 'overrides production',
+    });
   });
 
   it('masks a secret Environment Variable, whatever its length', () => {
     const hint = overrideHint('API_TOKEN', 'production', environmentVariables);
-    expect(hint).toBe('overrides production: ••••');
-    expect(hint).not.toContain('hunter2');
+    expect(hint?.detail).toBe('production: ••••');
+    expect(JSON.stringify(hint)).not.toContain('hunter2');
   });
 
   it('is null when no Environment Variable has the key, and follows it coming and going', () => {
