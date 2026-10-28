@@ -421,3 +421,18 @@ func TestEnsureImageIsBounded(t *testing.T) {
 		t.Fatal("EnsureImage not bounded")
 	}
 }
+
+func TestDockerErrorNamesTrivysFailure(t *testing.T) {
+	for _, tc := range []struct{ stderr, want string }{
+		{"2026-10-28T17:34:39Z\tINFO\t[vulndb] Need to update DB\n" +
+			"2026-10-28T17:34:39Z\tINFO\t[vulndb] Downloading vulnerability DB...\n" +
+			"2026-10-28T17:34:44Z\tFATAL\tFatal error\tinit error: DB error: failed to download vulnerability DB\n",
+			"Fatal error: init error: DB error: failed to download vulnerability DB"},
+		{"docker: Error response from daemon: conflict.\nRun 'docker run --help' for more information\n",
+			"docker: Error response from daemon: conflict."},
+	} {
+		if err := dockerError(errors.New("exit status 1"), tc.stderr); err.Error() != tc.want {
+			t.Errorf("err = %q, want %q", err, tc.want)
+		}
+	}
+}
