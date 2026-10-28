@@ -78,6 +78,9 @@ services:
       - "${TRAEFIK_HTTPS_PORT:-443}:443"
     volumes:
       - ${RELIST_DATA_DIR:-/var/lib/relist-panel}/.traefik:/letsencrypt
+      # Mounted on its own so Docker creates it before Traefik starts: the
+      # file provider never retries a directory missing at start (ADR-0022).
+      - ${RELIST_DATA_DIR:-/var/lib/relist-panel}/.traefik/dynamic:/letsencrypt/dynamic
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - relist-network
