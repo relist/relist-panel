@@ -332,6 +332,17 @@ func TestEnsureImageChownsOnlyANewVolume(t *testing.T) {
 	if d.called("volume create relist-trivy-cache") != 1 || d.called("--entrypoint chown") != 1 {
 		t.Fatalf("calls = %v", d.calls)
 	}
+	// A run that mounts the volume before it is created would create it owned
+	// by root, and the inspect would then skip the chown.
+	for _, c := range d.calls {
+		line := strings.Join(c, " ")
+		if strings.Contains(line, "--entrypoint chown") {
+			break
+		}
+		if strings.Contains(line, "relist-trivy-cache:/cache") {
+			t.Fatalf("mounted the cache before preparing it: %v", d.calls)
+		}
+	}
 }
 
 func TestChecksRunWithoutFixedNames(t *testing.T) {

@@ -118,11 +118,9 @@ func (s *TrivyScanner) EnsureImage(ctx context.Context, ref string) error {
 			return fmt.Errorf("pull %s: %w", ref, err)
 		}
 	}
-	if _, err := s.docker(ctx, append(lockedDown(""), "--network", "none", ref, "--version")...); err != nil {
-		return fmt.Errorf("run %s: %w", ref, err)
-	}
 	// Only a volume created here needs its owner set, so root runs once per
-	// volume rather than on every check.
+	// volume rather than on every check. This comes before any run that
+	// mounts the volume, which would create it owned by root.
 	if _, err := s.docker(ctx, "volume", "inspect", trivyCacheVolume); err != nil {
 		if _, err := s.docker(ctx, "volume", "create", trivyCacheVolume); err != nil {
 			return fmt.Errorf("create %s: %w", trivyCacheVolume, err)
@@ -130,6 +128,9 @@ func (s *TrivyScanner) EnsureImage(ctx context.Context, ref string) error {
 		if _, err := s.docker(ctx, chownArgv(ref)...); err != nil {
 			return fmt.Errorf("prepare %s: %w", trivyCacheVolume, err)
 		}
+	}
+	if _, err := s.docker(ctx, append(lockedDown(""), "--network", "none", ref, "--version")...); err != nil {
+		return fmt.Errorf("run %s: %w", ref, err)
 	}
 	return nil
 }
