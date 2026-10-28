@@ -40,8 +40,10 @@ type dynamicCertificate struct {
 	KeyFile  string `yaml:"keyFile"`
 }
 
-// WriteDir makes dir hold exactly one file per certificate: it writes each
-// and removes every cert-<id>.yml with no certificate.
+// WriteDir makes dir hold exactly one file per certificate. It removes every
+// cert-<id>.yml with no certificate first, so a deleted one stops being
+// served even when a write fails, and it attempts every write before
+// returning their joined errors.
 func WriteDir(dir string, certs []Certificate) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -51,25 +53,27 @@ func WriteDir(dir string, certs []Certificate) error {
 	}
 	keep := map[string]bool{}
 	for _, c := range certs {
-		name := fileName(c.ID)
-		keep[name] = true
-		if err := writeFile(dir, name, c); err != nil {
-			return fmt.Errorf("write %s: %w", name, err)
-		}
+		keep[fileName(c.ID)] = true
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, e := range entries {
 		if !certFilePattern.MatchString(e.Name()) || keep[e.Name()] {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	for _, c := range certs {
+		if err := writeFile(dir, fileName(c.ID), c); err != nil {
+			errs = append(errs, fmt.Errorf("write %s: %w", fileName(c.ID), err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // writeFile writes through a temporary file and a rename, so Traefik's

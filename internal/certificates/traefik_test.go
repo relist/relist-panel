@@ -125,3 +125,23 @@ func TestDynamicDir(t *testing.T) {
 		t.Errorf("DynamicDir = %s", got)
 	}
 }
+
+// A deleted certificate must stop being served even when another file
+// cannot be written in the same pass.
+func TestWriteDirRemovesStaleAndWritesTheRestWhenOneWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cert-9.yml"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A directory where cert-1.yml goes makes its rename fail.
+	if err := os.MkdirAll(filepath.Join(dir, "cert-1.yml", "block"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := WriteDir(dir, []Certificate{{ID: 1, CertificatePEM: "c", PrivateKeyPEM: "k"}, {ID: 2, CertificatePEM: "c", PrivateKeyPEM: "k"}})
+	if err == nil || !strings.Contains(err.Error(), "cert-1.yml") {
+		t.Fatalf("err = %v, want the cert-1.yml failure", err)
+	}
+	if got := strings.Join(readDir(t, dir), ","); got != "cert-1.yml,cert-2.yml" {
+		t.Errorf("files = %s, want cert-9.yml removed and cert-2.yml written", got)
+	}
+}
