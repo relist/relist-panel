@@ -242,3 +242,23 @@ func TestReconcileDoesNotDropAConcurrentWrite(t *testing.T) {
 		t.Fatalf("%d files, want the late certificate's file", len(entries))
 	}
 }
+
+func TestDeleteWhenFileWriteFailsSaysTheChangeWasSaved(t *testing.T) {
+	ts := newService(t)
+	created := decode(t, ts.do("POST", "/api/certificates", pairBody(t, "shop", "shop.example.com")))
+	dir := DynamicDir(ts.dataDir)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := ts.do("DELETE", fmt.Sprintf("/api/certificates/%d", int64(created["id"].(float64))), nil)
+	if rec.Code != 500 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	msg, _ := decode(t, rec)["error"].(string)
+	if !strings.HasPrefix(msg, "the change was saved but Traefik's certificate files could not be written") {
+		t.Errorf("error = %q", msg)
+	}
+}

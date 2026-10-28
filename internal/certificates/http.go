@@ -138,7 +138,7 @@ func (s *Service) reconcileAndWrite(w http.ResponseWriter, r *http.Request, stat
 }
 
 func writeReconcileError(w http.ResponseWriter, err error) {
-	writeError(w, http.StatusInternalServerError, "certificate saved but Traefik's certificate files could not be written: "+err.Error(), "")
+	writeError(w, http.StatusInternalServerError, "the change was saved but Traefik's certificate files could not be written: "+err.Error(), "")
 }
 
 func readID(w http.ResponseWriter, r *http.Request) (int64, bool) {
