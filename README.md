@@ -71,6 +71,15 @@ docker compose exec -T panel relist-panel create-admin --email admin@example.com
 
 The command refuses when an admin already exists.
 
+If you lose the password, reset it from the same terminal. It takes the same
+options as `create-admin` (`--email` is only needed with more than one admin),
+keeps two-factor on, clears any sign-in lock and signs every session out:
+
+```sh
+docker compose exec panel relist-panel reset-password
+docker compose exec -T panel relist-panel reset-password --generate
+```
+
 Override the defaults via environment variables (or a `.env` file next to
 `docker-compose.yml`):
 

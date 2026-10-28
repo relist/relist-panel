@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -50,6 +52,61 @@ func ResetTwoFactor(ctx context.Context, db *sql.DB, email string) (ResetResult,
 		    locked_until = NULL
 		WHERE id = ?
 	`, account.id); err != nil {
+		return ResetResult{}, err
+	}
+
+	deleted, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE admin_id = ?", account.id)
+	if err != nil {
+		return ResetResult{}, err
+	}
+	revoked, err := deleted.RowsAffected()
+	if err != nil {
+		return ResetResult{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return ResetResult{}, err
+	}
+
+	return ResetResult{
+		Email:           account.email,
+		WasEnabled:      account.totpSecret.Valid,
+		SessionsRevoked: revoked,
+	}, nil
+}
+
+// ResetPassword is the recovery path for a lost password. It replaces the
+// account's hash, clears its sign-in lock and revokes every session; two-factor
+// stays on. All writes share one transaction. Email selection is as in
+// ResetTwoFactor; WasEnabled reports whether two-factor is on.
+func ResetPassword(ctx context.Context, db *sql.DB, email, password string) (ResetResult, error) {
+	if err := validatePassword(password); err != nil {
+		return ResetResult{}, err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return ResetResult{}, err
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return ResetResult{}, err
+	}
+	defer tx.Rollback()
+
+	account, err := findResetTarget(ctx, tx, email)
+	if err != nil {
+		return ResetResult{}, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE admin_credentials
+		SET password_hash = ?,
+		    password_from_env = 0,
+		    failed_attempts = 0,
+		    locked_until = NULL
+		WHERE id = ?
+	`, string(hash), account.id); err != nil {
 		return ResetResult{}, err
 	}
 
