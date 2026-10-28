@@ -173,6 +173,13 @@ func (s *Service) UsedImages(ctx context.Context) ([]UsedImage, error) {
 	return append(used, UsedImage{ImageID: id, Refs: []string{ref}, Users: []ImageUser{scanner}}), nil
 }
 
+// dbMaxAge is how old the DB may get before a scan request refreshes it.
+const dbMaxAge = 24 * time.Hour
+
+// enabled reports ErrDisabled when scanning is off. When it is on, it
+// queues a DB update ahead of the scans about to be queued if there is no
+// DB, or the last good update is older than dbMaxAge. A failed update keeps
+// the old time, so every request retries it until one succeeds.
 func (s *Service) enabled(ctx context.Context) error {
 	st, err := s.d.Store.Settings(ctx)
 	if err != nil {
@@ -181,6 +188,33 @@ func (s *Service) enabled(ctx context.Context) error {
 	if !st.Enabled {
 		return ErrDisabled
 	}
+	s.queueDBIfOld(ctx, st)
+	return nil
+}
+
+func (s *Service) queueDBIfOld(ctx context.Context, st Settings) {
+	if st.DBVersion != "" && st.DBUpdatedAt != nil && s.d.Now().Sub(*st.DBUpdatedAt) <= dbMaxAge {
+		return
+	}
+	if _, err := s.d.Store.Enqueue(ctx, KindDBUpdate, "", ReasonSetup, s.d.Now()); err != nil {
+		logf("queue a DB update: %v", err)
+	}
+}
+
+// UpdateDB queues a DB update whatever the DB's age. Trivy still skips the
+// download when its cached DB is current.
+func (s *Service) UpdateDB(ctx context.Context) error {
+	st, err := s.d.Store.Settings(ctx)
+	if err != nil {
+		return err
+	}
+	if !st.Enabled {
+		return ErrDisabled
+	}
+	if _, err := s.d.Store.Enqueue(ctx, KindDBUpdate, "", ReasonManual, s.d.Now()); err != nil {
+		return err
+	}
+	s.wakeUp()
 	return nil
 }
 
@@ -220,6 +254,7 @@ func (s *Service) ScanCompose(ctx context.Context, composeID int64) error {
 	if err != nil || !st.Enabled || !st.AfterDeploy {
 		return err
 	}
+	s.queueDBIfOld(ctx, st)
 	used, err := s.d.InUse.Images(ctx)
 	if err != nil {
 		return err

@@ -22,6 +22,7 @@ const api = vi.hoisted(() => ({
   vulnScannerTags: vi.fn(),
   vulnSettings: vi.fn(),
   vulnStatus: vi.fn(),
+  vulnUpdateDB: vi.fn(),
 }));
 
 vi.mock('../data/api', async (importOriginal) => ({
@@ -181,5 +182,21 @@ describe('VulnerabilitiesPage', () => {
     expect(api.saveVulnSettings).toHaveBeenCalledWith({
       enabled: true, afterDeploy: true, daily: true, dailyTime: '03:00', scannerImage: 'aquasec/trivy:9.9.9@sha256:' + '2'.repeat(64),
     });
+  });
+  it('queues a DB update from the settings', async () => {
+    api.vulnUpdateDB.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    show();
+    await user.click(await screen.findByRole('button', { name: /Settings/ }));
+    await user.click(await screen.findByRole('button', { name: /Update vulnerability DB now/ }));
+    expect(await screen.findByText('Queued a vulnerability DB update')).toBeTruthy();
+    expect(api.vulnUpdateDB).toHaveBeenCalledTimes(1);
+  });
+
+  it('says scans fail when no DB was ever downloaded', async () => {
+    api.vulnStatus.mockResolvedValue(status({ db: { version: '', updatedAt: null, stale: true, error: 'Fatal error: boom' } }));
+    show();
+    expect(await screen.findByText('The last vulnerability DB update failed: Fatal error: boom')).toBeTruthy();
+    expect(screen.getByText('Scans fail until a DB is downloaded. The next scan retries the download.')).toBeTruthy();
   });
 });

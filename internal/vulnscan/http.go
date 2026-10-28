@@ -28,6 +28,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+base+"/scanner-tags", s.getScannerTags)
 	mux.HandleFunc("GET "+base+"/status", s.getStatus)
 	mux.HandleFunc("POST "+base+"/scans", s.postScans)
+	mux.HandleFunc("POST "+base+"/db-update", s.postDBUpdate)
 	mux.HandleFunc("DELETE "+base+"/cache", s.deleteCache)
 	mux.HandleFunc("GET "+base+"/images", s.getImages)
 	mux.HandleFunc("GET "+base+"/images/{id}/findings", s.getFindings)
@@ -241,6 +242,19 @@ func (s *Service) postScans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]int{"queued": queued})
+}
+
+func (s *Service) postDBUpdate(w http.ResponseWriter, r *http.Request) {
+	err := s.UpdateDB(r.Context())
+	if errors.Is(err, ErrDisabled) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not queue the DB update")
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (s *Service) deleteCache(w http.ResponseWriter, r *http.Request) {

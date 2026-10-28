@@ -367,6 +367,7 @@ export const api = {
   vulnStatus: () => request<VulnStatus>(`${VULN_URL}/status`),
   vulnScannerTags: () => request<{ tags: ScannerTag[] }>(`${VULN_URL}/scanner-tags`),
   vulnScan: (imageId?: string) => request<{ queued: number }>(`${VULN_URL}/scans`, jsonInit('POST', imageId ? { imageId } : {})),
+  vulnUpdateDB: () => request<void>(`${VULN_URL}/db-update`, { method: 'POST' }),
   vulnDeleteCache: () => request<void>(`${VULN_URL}/cache`, { method: 'DELETE' }),
   vulnImages: () => request<VulnImage[]>(`${VULN_URL}/images`),
   vulnFindings: (imageId: string) => request<VulnFinding[]>(vulnFindingsUrl(imageId)),

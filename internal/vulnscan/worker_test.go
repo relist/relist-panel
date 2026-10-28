@@ -319,3 +319,65 @@ func TestRunQueuesDBUpdateWhenTheCacheIsEmpty(t *testing.T) {
 	h.start()
 	eventually(t, "DB updated", func() bool { return h.scanner.count("update") == 1 })
 }
+
+func TestScanRequestsQueueAnOldOrMissingDB(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		version string
+		at      time.Time
+		want    bool
+	}{
+		{"fresh", "db1", t0.Add(-dbMaxAge), false},
+		{"old", "db1", t0.Add(-dbMaxAge - time.Second), true},
+		{"missing", "", t0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.enable()
+			h.store.SetDB(ctx, tc.version, tc.at, "")
+			if err := h.svc.ScanImage(ctx, "sha256:app", ReasonManual); err != nil {
+				t.Fatal(err)
+			}
+			task, _, _ := h.store.Next(ctx)
+			if got := task.Kind == KindDBUpdate; got != tc.want {
+				t.Fatalf("next task = %+v, want a DB update %v", task, tc.want)
+			}
+		})
+	}
+}
+
+func TestScanRequestsRetryAFailedDBUpdate(t *testing.T) {
+	h := newHarness(t)
+	h.enable()
+	ctx := context.Background()
+	h.store.db.Exec(`UPDATE scan_settings SET db_version = NULL, db_updated_at = NULL`)
+	h.scanner.dbVersion = ""
+	h.scanner.updateErr = errBoom
+	h.start()
+	eventually(t, "the start's update failed", func() bool { return h.scanner.count("update") == 1 && h.queueEmpty() })
+	h.svc.ScanAll(ctx, ReasonManual)
+	eventually(t, "a retry", func() bool { return h.scanner.count("update") == 2 })
+	eventually(t, "queue drained", h.queueEmpty)
+	h.scanner.mu.Lock()
+	h.scanner.updateErr = nil
+	h.scanner.mu.Unlock()
+	h.svc.ScanImage(ctx, "sha256:app", ReasonManual)
+	eventually(t, "the update succeeded", func() bool {
+		st, _ := h.store.Settings(ctx)
+		return st.DBVersion == "db1" && st.DBError == ""
+	})
+}
+
+func TestScanComposeQueuesAMissingDB(t *testing.T) {
+	h := newHarness(t)
+	h.enable()
+	ctx := context.Background()
+	h.store.db.Exec(`UPDATE scan_settings SET db_version = NULL`)
+	if err := h.svc.ScanCompose(ctx, 3); err != nil {
+		t.Fatal(err)
+	}
+	if task, _, _ := h.store.Next(ctx); task.Kind != KindDBUpdate {
+		t.Fatalf("next task = %+v", task)
+	}
+}
