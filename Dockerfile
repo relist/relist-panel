@@ -23,7 +23,9 @@ RUN CGO_ENABLED=0 go build -o /out/relist-volhelper ./cmd/relist-volhelper
 
 # docker:*-cli already bundles the docker CLI and the docker compose plugin,
 # which the panel shells out to over the mounted host socket (ADR-0002).
-FROM docker:27-cli
+FROM docker:29-cli
+# Picks up Alpine security fixes released after the base image was built.
+RUN apk upgrade --no-cache
 COPY --from=go-builder /out/relist-panel /usr/local/bin/relist-panel
 COPY --from=go-builder /out/relist-volhelper /usr/local/bin/relist-volhelper
 EXPOSE 8080
