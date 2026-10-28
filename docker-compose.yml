@@ -69,6 +69,10 @@ services:
       - --certificatesresolvers.letsencrypt.acme.email=${RELIST_ACME_EMAIL:-}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      # Uploaded Certificates (ADR-0022): the panel writes one file per
+      # certificate here from panel.db; Traefik serves them by SNI.
+      - --providers.file.directory=/letsencrypt/dynamic
+      - --providers.file.watch=true
     ports:
       - "${TRAEFIK_HTTP_PORT:-80}:80"
       - "${TRAEFIK_HTTPS_PORT:-443}:443"

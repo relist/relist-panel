@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"relist-panel/internal/auth"
+	"relist-panel/internal/certificates"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/composevariables"
 	"relist-panel/internal/deployments"
@@ -144,6 +145,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	}
 	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
 	sshkeys.New(db).RegisterRoutes(mux)
+	certificates.New(db, dataDir).RegisterRoutes(mux)
 	domains.New(db).WithPanelHost(d.PanelDomain).RegisterRoutes(mux)
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
