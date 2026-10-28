@@ -28,6 +28,8 @@ import type {
   SourceInput,
   SourceTestResult,
   SshKey,
+  Certificate,
+  CertificateInput,
   ScannerTag,
   VulnCvePage,
   VulnCveQuery,
@@ -354,6 +356,11 @@ export const api = {
   createSshKey: (name: string) => request<SshKey>('/api/ssh-keys', jsonInit('POST', { name })),
   renameSshKey: (id: number, name: string) => request<SshKey>(`/api/ssh-keys/${id}`, jsonInit('PATCH', { name })),
   deleteSshKey: (id: number) => request<void>(`/api/ssh-keys/${id}`, { method: 'DELETE' }),
+  listCertificates: () => request<Certificate[]>('/api/certificates'),
+  createCertificate: (input: CertificateInput) => request<Certificate>('/api/certificates', jsonInit('POST', input)),
+  replaceCertificate: (id: number, input: Omit<CertificateInput, 'name'>) =>
+    request<Certificate>(`/api/certificates/${id}`, jsonInit('PUT', input)),
+  deleteCertificate: (id: number) => request<void>(`/api/certificates/${id}`, { method: 'DELETE' }),
   // Vulnerability scanning (ADR-0021).
   vulnSettings: () => request<VulnSettingsResponse>(`${VULN_URL}/settings`),
   saveVulnSettings: (settings: VulnSettings) => request<VulnSettingsResponse>(`${VULN_URL}/settings`, jsonInit('PUT', settings)),

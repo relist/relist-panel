@@ -13,6 +13,7 @@ import { OverviewPage } from '../pages/OverviewPage';
 import { ProjectPage } from '../pages/ProjectPage';
 import { ProjectsPage } from '../pages/ProjectsPage';
 import { SshKeysPage } from '../pages/SshKeysPage';
+import { CertificatesPage } from '../pages/CertificatesPage';
 import { VolumeExplorerPage } from '../pages/VolumeExplorerPage';
 import { VulnerabilitiesPage } from '../pages/VulnerabilitiesPage';
 import { AppShell } from './AppShell';
@@ -34,6 +35,7 @@ const elements: Record<string, ReactElement> = {
   'account': <AccountPage />,
   'images': <ImagesPage />,
   'ssh-keys': <SshKeysPage />,
+  'certificates': <CertificatesPage />,
   'vulnerabilities': <VulnerabilitiesPage />,
   'docker': <DockerPage />,
   'deployments': <DeploymentsPage />,
