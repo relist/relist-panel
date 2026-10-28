@@ -13,6 +13,9 @@ import {
   volumeReadApiUrl,
   volumeReadUrl,
   volumeRestoreUrl,
+  vulnCvesUrl,
+  vulnFindingsUrl,
+  vulnSummaryUrl,
 } from './api';
 
 /**
@@ -522,5 +525,23 @@ describe('createSshKey', () => {
     expect(url).toBe('/api/ssh-keys');
     expect(init?.method).toBe('POST');
     expect(init?.body).toBe('{"name":"ci"}');
+  });
+});
+
+describe('vulnerability URLs', () => {
+  it('builds the CVE query with only the filters set', () => {
+    expect(vulnCvesUrl({ composeId: 9, severity: ['CRITICAL', 'HIGH'], fixable: true, new: false, q: 'open ssl', page: 2, pageSize: 20 })).toBe(
+      '/api/vulnerabilities/cves?composeId=9&severity=CRITICAL%2CHIGH&fixable=1&q=open+ssl&page=2&pageSize=20',
+    );
+  });
+
+  it('scopes the summary to a Project, a Compose or the host', () => {
+    expect(vulnSummaryUrl({})).toBe('/api/vulnerabilities/summary');
+    expect(vulnSummaryUrl({ projectId: 4 })).toBe('/api/vulnerabilities/summary?projectId=4');
+    expect(vulnSummaryUrl({ composeId: 7 })).toBe('/api/vulnerabilities/summary?composeId=7');
+  });
+
+  it('encodes an image id in the findings path', () => {
+    expect(vulnFindingsUrl('sha256:abc')).toBe('/api/vulnerabilities/images/sha256%3Aabc/findings');
   });
 });

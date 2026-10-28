@@ -62,6 +62,9 @@ type Deps struct {
 	Timeout     time.Duration // 60 * time.Minute in production
 	Keep        int           // 20
 	Now         func() time.Time
+	// OnSucceeded, if set, is called in its own goroutine once a Deployment
+	// is recorded as succeeded, outside the Project gate.
+	OnSucceeded func(composeID int64)
 }
 
 type Request struct {
@@ -466,6 +469,17 @@ func (q *Queue) Running() (composeID int64, number int, ok bool) {
 	return 0, 0, false
 }
 
+// Busy reports whether a Deployment is running or the queue is held for a
+// Migration, when other heavy work on the host should wait (ADR-0021).
+func (q *Queue) Busy() bool {
+	if q.isHeld() {
+		return true
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.running) > 0
+}
+
 // IsRunning reports whether a Deployment of the Compose has started and not
 // yet settled.
 func (q *Queue) IsRunning(composeID int64) bool {
@@ -680,6 +694,9 @@ func (j *job) execute() error {
 	finishErr := finishWithRetry(j.ctx, q.d.Store, j.d.ID, o, q.d.Now())
 	if finishErr != nil {
 		return finishErr
+	}
+	if o.status == StatusSucceeded && q.d.OnSucceeded != nil {
+		go q.d.OnSucceeded(j.d.ComposeID)
 	}
 	removed, err := q.d.Store.Prune(j.bg, j.d.ComposeID, q.d.Keep)
 	if err != nil {

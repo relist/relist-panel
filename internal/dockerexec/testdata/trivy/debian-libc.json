@@ -1,0 +1,5 @@
+{"SchemaVersion":2,"ArtifactName":"/work/image.tar","Metadata":{"OS":{"Family":"debian","Name":"12.11"}},
+"Results":[{"Target":"/work/image.tar (debian 12.11)","Class":"os-pkgs","Type":"debian","Vulnerabilities":[
+{"VulnerabilityID":"CVE-2013-7445","PkgName":"linux-libc-dev","InstalledVersion":"6.1.140-1","Status":"affected","Title":"kernel: memory","Severity":"HIGH"},
+{"VulnerabilityID":"CVE-2026-4001","PkgName":"libc6","InstalledVersion":"2.36-9+deb12u10","Status":"will_not_fix","Title":"glibc","Severity":"LOW"},
+{"VulnerabilityID":"CVE-2026-4002","PkgName":"perl-base","InstalledVersion":"5.36.0-7+deb12u2","FixedVersion":"5.36.0-7+deb12u3","Status":"fixed","Title":"perl","Severity":"CRITICAL"}]}]}

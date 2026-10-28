@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '../test/dom-setup';
 
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from 'antd';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -69,5 +69,33 @@ describe('Deployments navigation', () => {
     expect(screen.getByText('Panel data disk is nearly full')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Monitoring' }).getAttribute('href')).toBe('/monitoring');
     expect(api.hostMetrics).toHaveBeenCalledExactlyOnceWith('15m');
+  });
+  it('shows the host Critical count on Vulnerabilities and hides it when scanning is off', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true });
+    vi.spyOn(api, 'account').mockResolvedValue({ email: 'admin@example.com', passwordFromEnv: false, twoFactorEnabled: false });
+    vi.spyOn(api, 'listProjects').mockResolvedValue([]);
+    vi.spyOn(api, 'globalDeploymentQueue').mockResolvedValue([]);
+    const summary = vi.spyOn(api, 'vulnSummary').mockResolvedValue({
+      enabled: true, counts: { critical: 4, high: 9, medium: 0, low: 0, unknown: 0, fixable: 2 },
+    });
+    const router = createMemoryRouter([{ element: <AppShell />, children: [
+      { path: '/', element: <h1>Home</h1> },
+      { path: '/vulnerabilities', element: <h1>All vulnerabilities</h1> },
+    ] }]);
+    const { unmount } = render(<SWRConfig value={{ provider: () => new Map() }}><App><PanelProvider><RouterProvider router={router} /></PanelProvider></App></SWRConfig>);
+    const item = await screen.findByRole('menuitem', { name: /Vulnerabilities/ });
+    expect(await within(item).findByText('4')).toBeTruthy();
+    await userEvent.setup().click(item);
+    expect(await screen.findByRole('heading', { name: 'All vulnerabilities' })).toBeTruthy();
+    expect(item.className).toContain('ant-menu-item-selected');
+    expect(screen.getByText('Vulnerabilities', { selector: '.ant-breadcrumb-link' })).toBeTruthy();
+    unmount();
+
+    summary.mockResolvedValue({ enabled: false });
+    render(<SWRConfig value={{ provider: () => new Map() }}><App><PanelProvider><RouterProvider router={createMemoryRouter([{ element: <AppShell />, children: [{ path: '/', element: <h1>Home</h1> }] }])} /></PanelProvider></App></SWRConfig>);
+    const quiet = await screen.findByRole('menuitem', { name: /Vulnerabilities/ });
+    await waitFor(() => expect(summary).toHaveBeenCalledTimes(2));
+    expect(within(quiet).queryByText('4')).toBeNull();
+    expect(quiet.querySelector('.ant-badge-count')).toBeNull();
   });
 });

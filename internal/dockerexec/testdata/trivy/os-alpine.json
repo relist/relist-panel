@@ -1,0 +1,4 @@
+{"SchemaVersion":2,"ArtifactName":"/work/image.tar","ArtifactType":"container_image","Metadata":{"OS":{"Family":"alpine","Name":"3.22.1"}},
+"Results":[{"Target":"/work/image.tar (alpine 3.22.1)","Class":"os-pkgs","Type":"alpine","Vulnerabilities":[
+{"VulnerabilityID":"CVE-2026-1001","PkgID":"busybox@1.37.0-r18","PkgName":"busybox","InstalledVersion":"1.37.0-r18","FixedVersion":"1.37.0-r19","Status":"fixed","SeveritySource":"nvd","PrimaryURL":"https://avd.aquasec.com/nvd/cve-2026-1001","Title":"busybox: overflow","Severity":"HIGH"},
+{"VulnerabilityID":"CVE-2026-1002","PkgID":"libssl3@3.5.1-r0","PkgName":"libssl3","InstalledVersion":"3.5.1-r0","Status":"affected","PrimaryURL":"https://avd.aquasec.com/nvd/cve-2026-1002","Title":"openssl: timing","Severity":"MEDIUM"}]}]}

@@ -14,6 +14,9 @@ import { useNavigate } from 'react-router';
 
 import { paths } from '../app/paths';
 import { ComposeStatusInline, ComposeStatusTag, EmptyState, PageHeader, RelativeTime, StatCard } from '../components/primitives';
+import { VulnBadges } from '../components/VulnBadges';
+import { useVulnSummary } from '../data/useVulnSummary';
+import { summaryBadge, vulnLink } from './vulnerabilities-view';
 import { usePanel } from '../data/store';
 import { attentionRows, composeComparators, degradationNotes, flattenComposes, overviewStats } from './overview-view';
 import type { FlatCompose } from './overview-view';
@@ -35,6 +38,8 @@ export function OverviewPage() {
   const [refreshing, setRefreshing] = useState(false);
 
   const flat = useMemo(() => flattenComposes(projects), [projects]);
+  const { data: vulnSummary } = useVulnSummary({});
+  const vulnBadge = summaryBadge(vulnSummary);
   const stats = overviewStats(projects);
   const attention = useMemo(() => attentionRows(flat, services), [flat, services]);
 
@@ -140,6 +145,13 @@ export function OverviewPage() {
               />
             </Col>
           </Row>
+
+          {vulnBadge && (
+            <Flex align="center" gap={8} wrap>
+              <Text type="secondary">Vulnerabilities in the images in use</Text>
+              <VulnBadges badge={vulnBadge} to={vulnLink({})} />
+            </Flex>
+          )}
 
           <Card
             extra={

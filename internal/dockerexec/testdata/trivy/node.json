@@ -1,0 +1,4 @@
+{"SchemaVersion":2,"ArtifactName":"/work/image.tar","Metadata":{"OS":{"Family":"alpine","Name":"3.21.4"}},
+"Results":[{"Target":"Node.js","Class":"lang-pkgs","Type":"node-pkg","Vulnerabilities":[
+{"VulnerabilityID":"GHSA-xxxx-yyyy-zzzz","PkgName":"cross-spawn","PkgPath":"usr/local/lib/node_modules/npm/node_modules/cross-spawn/package.json","InstalledVersion":"7.0.3","FixedVersion":"7.0.5, 6.0.6","Status":"fixed","Title":"cross-spawn ReDoS","Severity":"HIGH"},
+{"VulnerabilityID":"CVE-2026-3001","PkgName":"brace-expansion","PkgPath":"app/node_modules/brace-expansion/package.json","InstalledVersion":"2.0.1","Status":"affected","Title":"brace-expansion ReDoS","Severity":"LOW"}]}]}

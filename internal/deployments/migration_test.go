@@ -90,3 +90,59 @@ func TestHoldRefusesEnqueueUntilRelease(t *testing.T) {
 		t.Fatalf("Enqueue after Release = %v, %v", created, err)
 	}
 }
+
+func TestQueueBusy(t *testing.T) {
+	h := newHarness(t)
+	h.newQueue()
+	if h.q.Busy() {
+		t.Fatal("idle queue is busy")
+	}
+	h.q.Hold()
+	if !h.q.Busy() {
+		t.Fatal("held queue is not busy")
+	}
+	h.q.Release()
+	h.q.mu.Lock()
+	h.q.running[h.a] = &activeRun{}
+	h.q.mu.Unlock()
+	if !h.q.Busy() {
+		t.Fatal("queue running a Deployment is not busy")
+	}
+}
+
+func TestOnSucceededCalledOnlyOnSuccess(t *testing.T) {
+	h := newHarness(t)
+	calls := make(chan int64, 4)
+	h.q = NewQueue(Deps{
+		Store: h.store, Sources: h.srcs, Composes: h.comp, Fetcher: h.fetch, Builder: h.build, Gate: h.gate,
+		Timeout: h.timeout, Keep: h.keep, OnSucceeded: func(id int64) { calls <- id },
+	})
+	h.comp.onDeploy = func(_ context.Context, id int64, _ composes.DeployOptions) ([]string, error) {
+		if id == h.b {
+			return nil, errors.New("up failed")
+		}
+		return nil, nil
+	}
+	failedRun := h.enqueue(h.b, ModeDeploy)
+	h.start()
+	if got := h.waitSettled(h.b, failedRun.Number); got.Status != StatusFailed {
+		t.Fatalf("status = %s", got.Status)
+	}
+	ok := h.enqueue(h.a, ModeDeploy)
+	if got := h.waitSettled(h.a, ok.Number); got.Status != StatusSucceeded {
+		t.Fatalf("status = %s %q", got.Status, got.Reason)
+	}
+	select {
+	case id := <-calls:
+		if id != h.a {
+			t.Fatalf("OnSucceeded(%d), want %d", id, h.a)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnSucceeded not called")
+	}
+	select {
+	case id := <-calls:
+		t.Fatalf("extra OnSucceeded(%d)", id)
+	case <-time.After(50 * time.Millisecond):
+	}
+}

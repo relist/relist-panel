@@ -354,3 +354,12 @@ func TestHostPathCandidatesSizeSystemPathsThatCanMove(t *testing.T) {
 		t.Fatalf("sizes = %v, want /etc/ssl sized and /proc/cpuinfo not", sizes)
 	}
 }
+
+func TestSkipInDataDirScanWork(t *testing.T) {
+	if !skipInDataDir(".scan-work") {
+		t.Fatal(".scan-work would be copied by a Migration")
+	}
+	if skipInDataDir("projects") {
+		t.Fatal("projects skipped")
+	}
+}

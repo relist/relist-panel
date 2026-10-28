@@ -27,6 +27,7 @@ import (
 	"relist-panel/internal/sources"
 	"relist-panel/internal/terminal"
 	"relist-panel/internal/volumes"
+	"relist-panel/internal/vulnscan"
 )
 
 func main() {
@@ -178,6 +179,8 @@ func main() {
 			Control:  control,
 		},
 		Docker:      dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
+		VulnScanner: dockerexec.NewTrivyScanner(dockerexec.DefaultSocketPath, cfg.DataDir),
+		VulnInUse:   dockerexec.NewInUse(dockerexec.DefaultSocketPath, composeIdentities(db), os.Hostname),
 		PanelDomain: cfg.Install.Domain,
 	})
 	server := newServer(cfg.Address(), handler)
@@ -293,6 +296,34 @@ func knownComposeProjects(db *sql.DB) hostmetrics.KnownProjects {
 				return nil, err
 			}
 			known[compose.DeployProjectName()] = true
+		}
+		return known, rows.Err()
+	}
+}
+
+// composeIdentities maps every Compose's deploy identity to its IDs, so the
+// vulnerability scanner can say which Service runs an image.
+func composeIdentities(db *sql.DB) dockerexec.ComposeIdentities {
+	return func(ctx context.Context) (map[string]vulnscan.ImageUser, error) {
+		rows, err := db.QueryContext(ctx, `
+			SELECT c.id, c.project_slug, c.env_slug, c.name, c.identity_version, e.id, e.project_id
+			FROM composes c JOIN environments e ON e.id = c.environment_id
+		`)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		known := make(map[string]vulnscan.ImageUser)
+		for rows.Next() {
+			var compose composes.Compose
+			var user vulnscan.ImageUser
+			if err := rows.Scan(&compose.ID, &compose.ProjectSlug, &compose.EnvSlug, &compose.Name, &compose.IdentityVersion,
+				&user.EnvironmentID, &user.ProjectID); err != nil {
+				return nil, err
+			}
+			user.Kind, user.ComposeID = vulnscan.UserService, compose.ID
+			known[compose.DeployProjectName()] = user
 		}
 		return known, rows.Err()
 	}

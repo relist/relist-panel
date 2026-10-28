@@ -471,6 +471,57 @@ remove eligible resources without opening a terminal.
   commands as copyable code, `… relist-panel migration serve` on this server and
   `… relist-panel migration pull` on the new one. It calls no API and offers no token (ADR-0019).
 
+### 4.14 Vulnerabilities (`/vulnerabilities`)
+
+Known CVEs in the images this host runs: the panel's Composes, the panel itself, Traefik and
+the Scanner (ADR-0021). The page answers two questions: "what should I rebuild?" and "how exposed
+is the host?". It sits below Images in the side menu, and its badge is the host's Critical count.
+The badge is hidden while scanning is off, because hidden is not 0.
+
+- **Header:** **Refresh**, **Settings** (a right Drawer) and **Scan now**. Scan now is disabled
+  with a tooltip while scanning is off.
+- **Status bar:** when scanning is off, an info `Alert` reading `Scanning is off`, with
+  **Open settings**. When it is on:
+  - the queue: running, how many are waiting, or "waiting for deployments to finish";
+  - the vulnerability DB date, tagged `Out of date` when it is older than 7 days or the last
+    update failed;
+  - the next daily run.
+
+  A failed DB update is a warning `Alert` in the server's words. Scans carry on with the old DB.
+- **Images tab:** one row per image in use.
+  - **Columns:**
+    - Image: refs and OS;
+    - Used by: Services link to their Compose; Panel / Traefik / Scanner (Trivy) are plain text;
+    - Critical / High / fixable tags;
+    - Scanned;
+    - a small **Scan** button.
+  - **Expanding a row** lists its findings: ID linked to the advisory, a `New` tag, severity,
+    package and path, and `installed → fixed` or `(no fix yet)`.
+  - **Failed scan:** the row shows `Last scan failed: <reason>` beside the last good counts,
+    never instead of them.
+- **CVEs tab:**
+  - **Filters:** severity, Project, Compose, fixable only, new in 7 days, and a search. All of
+    them live in the URL, so the badges on Overview, Project and Compose link straight into a
+    filtered view. A filter that matches nothing says so.
+  - **Table:** unique CVEs, server-paginated, with severity, title, fix, first seen and the
+    images they affect.
+- **Settings drawer:**
+  - **Switches:** the master switch, plus after-deploy and daily, which are disabled while
+    scanning is off. The daily time shows the panel's time zone.
+  - **Scanner image:** the field takes `repo[:tag]@sha256:…`. **Use default** fills in the
+    built-in default. **Pick from recent tags** lists Docker Hub release tags from the last 14
+    days plus the newest older one. Picking a tag younger than 14 days asks
+    `This tag is less than 14 days old. Use it anyway?`.
+  - **Save:** the button holds the spinner while a new image is pulled. A pull failure shows
+    under the image field in Docker's words.
+  - **Delete scanner cache:** a `Popconfirm` that names the size, enabled only while scanning
+    is off. The cache can be downloaded again, so it gets no typed confirmation.
+- **Badges elsewhere** (`VulnBadges`): `N Critical · N High · N fixable` tags.
+  - **Where:** in the Overview card, the Project header and the Compose header. The Compose
+    page also adds a column to its Services table.
+  - **Links:** each links to this page with `?tab=cves&projectId=` or `&composeId=`.
+  - **When off:** badges render nothing while scanning is off.
+
 ## 5. Status vocabulary
 
 One vocabulary, everywhere a Compose state appears. Derived entirely from the API's
