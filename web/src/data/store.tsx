@@ -82,6 +82,8 @@ type PanelValue = {
   loadComposeVariables: (composeId: number) => Promise<ComposeVariable[]>;
   saveComposeVariable: (composeId: number, variable: NewVariable, variableId?: number) => Promise<void>;
   deleteComposeVariable: (composeId: number, variableId: number) => Promise<void>;
+  /** A pasted `.env` replaces the Compose's variables: keys the paste drops are deleted. */
+  replaceComposeVariables: (composeId: number, rows: NewVariable[]) => Promise<void>;
   /** The Compose's Variable Sets with their entries and bound Services. Sets live on the API, not in the tree; each write refreshes the Compose. */
   loadVariableSets: (composeId: number) => Promise<VariableSet[]>;
   createVariableSet: (composeId: number, name: string) => Promise<void>;
@@ -89,6 +91,8 @@ type PanelValue = {
   deleteVariableSet: (composeId: number, setId: number) => Promise<void>;
   saveSetEntry: (composeId: number, setId: number, entry: NewVariable, entryId?: number) => Promise<void>;
   deleteSetEntry: (composeId: number, setId: number, entryId: number) => Promise<void>;
+  /** A pasted `.env` replaces a set's entries: keys the paste drops are deleted. */
+  replaceSetEntries: (composeId: number, setId: number, rows: NewVariable[]) => Promise<void>;
   /** The Compose's Service bindings. Saving refreshes the Compose, so `variablesChangedAt` reaches the page. */
   loadBindings: (composeId: number) => Promise<ServiceBindings[]>;
   saveBindings: (composeId: number, service: string, setIds: number[]) => Promise<void>;
@@ -752,6 +756,26 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [domainLocation, refreshStatus, track],
   );
 
+  // No bulk endpoint, as for the Environment: a paste is composed from the
+  // per-row calls against the list as the server has it now, then one refresh.
+  const replaceComposeVariables = useCallback(
+    (composeId: number, rows: NewVariable[]) =>
+      track(`bulk-compose-variables:${composeId}`, async () => {
+        const location = domainLocation(composeId);
+        const current = await api.listComposeVariables(location);
+        for (const existing of current) {
+          if (!rows.some((row) => row.key === existing.key)) await api.deleteComposeVariable(location, existing.id);
+        }
+        for (const row of rows) {
+          const existing = current.find((candidate) => candidate.key === row.key);
+          if (existing) await api.updateComposeVariable(location, existing.id, row);
+          else await api.createComposeVariable(location, row);
+        }
+        await refreshStatus(composeId);
+      }),
+    [domainLocation, refreshStatus, track],
+  );
+
   // The Compose's sets. A write that can stamp `variablesChangedAt` (an entry
   // write, a delete) refreshes this Compose so the banner follows; create and
   // rename refresh too, which is harmless. The write already succeeded, so a
@@ -817,6 +841,25 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     (composeId: number, setId: number, entryId: number) =>
       track(`delete-set-entry:${entryId}`, async () => {
         await api.deleteSetEntry(domainLocation(composeId), setId, entryId);
+        await refreshQuietly(composeId);
+      }),
+    [domainLocation, refreshQuietly, track],
+  );
+
+  const replaceSetEntries = useCallback(
+    (composeId: number, setId: number, rows: NewVariable[]) =>
+      track(`bulk-set-entries:${setId}`, async () => {
+        const location = domainLocation(composeId);
+        const sets = await api.listVariableSets(location);
+        const current = sets.find((set) => set.id === setId)?.entries ?? [];
+        for (const existing of current) {
+          if (!rows.some((row) => row.key === existing.key)) await api.deleteSetEntry(location, setId, existing.id);
+        }
+        for (const row of rows) {
+          const existing = current.find((candidate) => candidate.key === row.key);
+          if (existing) await api.updateSetEntry(location, setId, existing.id, row);
+          else await api.createSetEntry(location, setId, row);
+        }
         await refreshQuietly(composeId);
       }),
     [domainLocation, refreshQuietly, track],
@@ -1018,6 +1061,8 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteDomain,
       deleteComposeVariable,
       loadComposeVariables,
+      replaceComposeVariables,
+      replaceSetEntries,
       saveComposeVariable,
       loadVariableSets,
       createVariableSet,
@@ -1076,6 +1121,8 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteDomain,
       deleteComposeVariable,
       loadComposeVariables,
+      replaceComposeVariables,
+      replaceSetEntries,
       saveComposeVariable,
       loadVariableSets,
       createVariableSet,

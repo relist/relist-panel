@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '../test/dom-setup';
 
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +17,8 @@ const panel = vi.hoisted(() => ({
   deleteSetEntry: vi.fn(),
   deleteVariableSet: vi.fn(),
   loadVariableSets: vi.fn(),
+  replaceComposeVariables: vi.fn(),
+  replaceSetEntries: vi.fn(),
   renameVariableSet: vi.fn(),
   saveSetEntry: vi.fn(),
   saveComposeVariable: vi.fn(),
@@ -79,12 +81,30 @@ describe('ComposeVariablesTab', () => {
     panel.loadDomains.mockResolvedValue({ domains: [], services: [] });
   });
 
-  it('shows only the empty state and one add button when there are no Compose variables', () => {
+  it('shows one empty line, one add link and a paste link when there are no Compose variables', async () => {
     renderTab();
-    expect(screen.getByText('No Compose variables yet')).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: /New Variable|Add a Variable/ })).toHaveLength(1);
-    expect(screen.getByRole('button', { name: /Add a Variable/ })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Paste/ })).toBeNull();
+    await screen.findByText('No Variable Sets yet');
+    expect(screen.getByText(/Values only this Compose needs/)).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: /Add variable/ })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: /Paste .env/ })).toHaveLength(1);
+  });
+
+  it('replaces the Compose variables from a pasted .env, keeping a secret secret, then refetches', async () => {
+    panel.replaceComposeVariables.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    const { onChanged } = renderTab({ variables: [composeVar(1, 'SIGNING', 'old', true)] });
+
+    await user.click(screen.getByRole('button', { name: /Paste .env/ }));
+    fireEvent.change(screen.getByPlaceholderText(/DATABASE_URL=/), { target: { value: 'SIGNING=new\nLOG_LEVEL=debug' } });
+    await user.click(screen.getByRole('button', { name: /Replace 1 variable with 2/ }));
+
+    await waitFor(() =>
+      expect(panel.replaceComposeVariables).toHaveBeenCalledWith(7, [
+        { key: 'SIGNING', secret: true, value: 'new' },
+        { key: 'LOG_LEVEL', secret: false, value: 'debug' },
+      ]),
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });
 
   it('shows the override hint with the Environment Variable value, masking a secret one', () => {
@@ -92,10 +112,22 @@ describe('ComposeVariablesTab', () => {
       environment: environment([envVar('LOG_LEVEL', 'info'), envVar('API_TOKEN', 'hunter2', true)]),
       variables: [composeVar(1, 'LOG_LEVEL', 'debug'), composeVar(2, 'API_TOKEN', 'x'), composeVar(3, 'ONLY_HERE', '1')],
     });
-    expect(screen.getByText('overrides production: info')).toBeTruthy();
-    expect(screen.getByText('overrides production: ••••')).toBeTruthy();
+    expect(screen.getAllByText('overrides production')).toHaveLength(2);
     expect(screen.queryByText(/hunter2/)).toBeNull();
-    expect(screen.getAllByText(/overrides production/)).toHaveLength(2);
+  });
+
+  it('shows the shadowed Environment value in the tag tooltip, masking a secret one', async () => {
+    const user = userEvent.setup();
+    renderTab({
+      environment: environment([envVar('LOG_LEVEL', 'info'), envVar('API_TOKEN', 'hunter2', true)]),
+      variables: [composeVar(1, 'API_TOKEN', 'x'), composeVar(2, 'LOG_LEVEL', 'debug')],
+    });
+    const [secretTag, plainTag] = screen.getAllByText('overrides production');
+    await user.hover(secretTag);
+    expect(await screen.findByText('production: ••••')).toBeTruthy();
+    await user.hover(plainTag);
+    expect(await screen.findByText('production: info')).toBeTruthy();
+    expect(screen.queryByText(/hunter2/)).toBeNull();
   });
 
   it('adds and drops the hint as the matching Environment Variable comes and goes', () => {
@@ -109,7 +141,7 @@ describe('ComposeVariablesTab', () => {
       </App>
     );
     rerender(tab(environment([envVar('LOG_LEVEL', 'info')])));
-    expect(screen.getByText('overrides production: info')).toBeTruthy();
+    expect(screen.getByText('overrides production')).toBeTruthy();
     rerender(tab(environment([])));
     expect(screen.queryByText(/^overrides /)).toBeNull();
   });
@@ -118,7 +150,6 @@ describe('ComposeVariablesTab', () => {
     const user = userEvent.setup();
     renderTab({ variables: [composeVar(1, 'DB_PASSWORD', 'p4ssw0rd', true)] });
     expect(screen.queryByText('p4ssw0rd')).toBeNull();
-    expect(screen.getByText('secret')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Reveal value' }));
     expect(screen.getByText('p4ssw0rd')).toBeTruthy();
   });
@@ -128,7 +159,7 @@ describe('ComposeVariablesTab', () => {
     const user = userEvent.setup();
     const { onChanged } = renderTab();
 
-    await user.click(screen.getByRole('button', { name: /Add a Variable/ }));
+    await user.click(screen.getByRole('button', { name: /Add variable/ }));
     const dialog = await screen.findByRole('dialog');
     await user.type(within(dialog).getByLabelText('Key'), 'API_TOKEN');
     await user.type(within(dialog).getByLabelText('Value'), 'abc');

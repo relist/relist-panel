@@ -6,7 +6,18 @@ import { CODE_FONT_STACK } from '../app/theme';
 import { usePanel, type NewVariable } from '../data/store';
 import type { Environment } from '../data/types';
 import { EmptyState, RelativeTime } from './primitives';
-import { duplicateKeys, invalidKeys, isSecret, isSecretKey, maskedValue, parseDotEnv, replacePlan, VARIABLE_KEY_PATTERN, visibleVariables } from './variables-view';
+import {
+  duplicateKeys,
+  invalidKeys,
+  isSecret,
+  isSecretKey,
+  maskedValue,
+  parseDotEnv,
+  pasteSecretFlags,
+  replacePlan,
+  VARIABLE_KEY_PATTERN,
+  visibleVariables,
+} from './variables-view';
 
 const { Text, Paragraph } = Typography;
 
@@ -78,15 +89,29 @@ export type VariablesEditorProps = {
   emptyDescription: string;
   /** Shown in the delete confirmation. */
   deleteNote: string;
-  /** Extra content under a row's value, e.g. the override hint. */
+  /** Extra content beside a row's value, e.g. the override tag. */
   annotate?: (variable: VariableRow) => ReactNode;
   footer?: ReactNode;
   /** True: while the list is empty the card header drops its add button, leaving the empty state's as the only one. */
   singleAddWhenEmpty?: boolean;
+  /**
+   * True: the table alone, for a list that sits in someone else's card or tab
+   * (the Compose page). No card, title, description, notice, footer or type
+   * column; row actions show on hover; add and paste are links under the
+   * table; the filter waits for more than {@link BARE_FILTER_THRESHOLD} rows.
+   */
+  bare?: boolean;
+  /** The bare rendering's add link, e.g. "Add entry". */
+  addLabel?: string;
 };
 
+/** How many rows a bare list holds before it offers the key filter. */
+export const BARE_FILTER_THRESHOLD = 10;
+
 export function VariablesEditor({
+  addLabel = 'Add variable',
   annotate,
+  bare = false,
   deleteNote,
   description,
   emptyDescription,
@@ -178,9 +203,7 @@ export function VariablesEditor({
     // A keyed notification (GUIDELINES §8): the waiting line is replaced by the
     // outcome rather than stacked on top of it.
     message.open({ content: `Replacing ${noun}…`, key: 'bulk-variables', type: 'loading' });
-    // The paste format carries no flag, so every row lands plain — a per-row
-    // toggle afterwards is the correction path.
-    onReplace(parsed.map((row) => ({ ...row, secret: false })))
+    onReplace(pasteSecretFlags(variables, parsed))
       .then(() => {
         setBulkOpen(false);
         message.open({
@@ -194,6 +217,275 @@ export function VariablesEditor({
         setBulkError(reason instanceof Error ? reason.message : 'Something went wrong');
       });
   };
+
+  const filter = (bare ? variables.length > BARE_FILTER_THRESHOLD : variables.length > 0) && (
+    <Input
+      allowClear
+      onChange={(event) => setQuery(event.target.value)}
+      placeholder="Filter by key"
+      prefix={<SearchOutlined />}
+      style={{ marginBottom: bare ? 12 : 16, maxWidth: 280 }}
+      value={query}
+    />
+  );
+
+  const table = (
+    <Table<VariableRow>
+      columns={[
+        {
+          dataIndex: 'key',
+          key: 'key',
+          render: (key: string) => (
+            <Text style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }}>{key}</Text>
+          ),
+          title: 'Key',
+          width: 260,
+        },
+        {
+          dataIndex: 'value',
+          key: 'value',
+          render: (_value, variable) => (
+            <Flex align="center" gap={8} wrap>
+              <ValueCell variable={variable} />
+              {annotate?.(variable)}
+            </Flex>
+          ),
+          title: 'Value',
+        },
+        // The bare list drops the tag: the mask and its eye already say which values are secret.
+        ...(bare
+          ? []
+          : [
+              {
+                key: 'type',
+                render: (_value: unknown, variable: VariableRow) =>
+                  isSecret(variable) ? (
+                    <Tag color="gold" variant="filled">
+                      secret
+                    </Tag>
+                  ) : (
+                    <Tag variant="outlined">plain</Tag>
+                  ),
+                title: '',
+                width: 90,
+              },
+            ]),
+        ...(variables.some((variable) => variable.updatedAt)
+          ? [
+              {
+                dataIndex: 'updatedAt',
+                key: 'updatedAt',
+                render: (value?: string) =>
+                  value ? (
+                    <Text type="secondary">
+                      <RelativeTime value={value} />
+                    </Text>
+                  ) : null,
+                title: 'Updated',
+                width: 140,
+              },
+            ]
+          : []),
+        {
+          key: 'actions',
+          render: (_value, variable) => (
+            <Space className={bare ? 'rp-row-actions' : undefined} size={4}>
+              <Button aria-label={`Edit ${variable.key}`} icon={<EditOutlined />} onClick={() => openEdit(variable)} size="small" type="text" />
+              <Popconfirm
+                cancelText="Keep"
+                description={deleteNote}
+                okButtonProps={{ danger: true }}
+                okText="Delete"
+                onConfirm={() => void remove(variable)}
+                title={`Delete ${variable.key}?`}
+              >
+                <Button aria-label={`Delete ${variable.key}`} danger icon={<DeleteOutlined />} loading={isDeleting(variable)} size="small" type="text" />
+              </Popconfirm>
+            </Space>
+          ),
+          title: '',
+          width: 90,
+        },
+      ]}
+      dataSource={visible}
+      locale={{ emptyText: <Text type="secondary">No keys match “{query}”.</Text> }}
+      pagination={false}
+      rowKey="id"
+      // At phone width the table scrolls inside the card rather than crushing the value column.
+      scroll={{ x: 'max-content' }}
+      size={bare ? 'small' : 'middle'}
+    />
+  );
+
+  const modals = (
+    <>
+  <Modal
+    confirmLoading={saving}
+    destroyOnHidden
+    okText={editing ? 'Save changes' : 'Add Variable'}
+    onCancel={() => setModalOpen(false)}
+    onOk={() => form.submit()}
+    open={modalOpen}
+    title={editing ? `Edit ${editing.key}` : 'New Variable'}
+  >
+    {formError && (
+      <Alert title={formError} showIcon style={{ marginBottom: 16 }} type="error" />
+    )}
+    <Form
+      form={form}
+      initialValues={{ secret: false }}
+      layout="vertical"
+      onFinish={(values) => void submit(values)}
+      onValuesChange={(changed) => {
+        if (changed.secret !== undefined) {
+          secretTouched.current = true;
+        }
+        // While creating, the toggle defaults to the heuristic's answer
+        // for the typed key — the guess's only job — until the user
+        // answers it themselves. Editing starts from the stored flag and
+        // the key cannot re-suggest.
+        if (!editing && changed.key !== undefined && !secretTouched.current) {
+          form.setFieldsValue({ secret: isSecretKey(changed.key) });
+        }
+      }}
+      requiredMark={false}
+    >
+      <Form.Item
+        extra="Uppercase with underscores, as your Compose files reference it: ${KEY}"
+        label="Key"
+        name="key"
+        rules={[
+          { message: 'Enter a key', required: true },
+          { max: 255, message: 'Use 255 characters or fewer' },
+          { message: 'Use letters, digits and underscores only', pattern: VARIABLE_KEY_PATTERN },
+        ]}
+      >
+        <Input autoFocus placeholder="DATABASE_URL" style={{ fontFamily: CODE_FONT_STACK }} />
+      </Form.Item>
+      <Form.Item label="Value" name="value" rules={[{ message: 'Enter a value', required: true }]}>
+        <Input placeholder="postgres://user:pass@db:5432/app" style={{ fontFamily: CODE_FONT_STACK }} />
+      </Form.Item>
+      <Form.Item
+        extra="Masks the value on screen — a display tier, not encryption. The value is stored and served as any other."
+        label="Secret"
+        name="secret"
+        valuePropName="checked"
+      >
+        <Switch checkedChildren="secret" unCheckedChildren="plain" />
+      </Form.Item>
+    </Form>
+  </Modal>
+
+  <Modal
+    confirmLoading={replacing}
+    destroyOnHidden
+    okButtonProps={{ disabled: bulkBlocked }}
+    okText={`Replace ${variables.length} variable${variables.length === 1 ? '' : 's'} with ${parsed.length}`}
+    onCancel={() => setBulkOpen(false)}
+    onOk={replaceAll}
+    open={bulkOpen}
+    title="Paste a .env file"
+    width={720}
+  >
+    <Paragraph type="secondary">
+      One <Text code>KEY=value</Text> per line. Comments and blank lines are ignored, quotes are stripped. This
+      <strong> replaces</strong> the existing variables — keys missing from the paste are removed.
+    </Paragraph>
+    <Input.TextArea
+      onChange={(event) => setBulkText(event.target.value)}
+      placeholder={'DATABASE_URL=postgres://app:pw@db:5432/app\nLOG_LEVEL=info\n# comments are ignored\nTZ="Asia/Bangkok"'}
+      rows={8}
+      style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }}
+      value={bulkText}
+    />
+    {duplicated.length > 0 && (
+      <Alert
+        title={`Duplicate keys: ${duplicated.join(', ')}`}
+        showIcon
+        style={{ marginTop: 12 }}
+        type="error"
+      />
+    )}
+    {invalid.length > 0 && (
+      <Alert
+        title={`Keys a Compose file cannot reference: ${invalid.join(', ')}`}
+        description="Use letters, digits and underscores, not starting with a digit — otherwise ${KEY} cannot pick the value up."
+        showIcon
+        style={{ marginTop: 12 }}
+        type="error"
+      />
+    )}
+    {bulkError && (
+      <Alert title={bulkError} showIcon style={{ marginTop: 12 }} type="error" />
+    )}
+    {parsed.length > 0 && !bulkBlocked && (
+      <div style={{ marginTop: 12 }}>
+        <Text strong>Will write {parsed.length} variables</Text>
+        {(plan.added.length > 0 || plan.removed.length > 0) && (
+          <Text style={{ display: 'block', fontSize: 12 }} type="secondary">
+            {plan.added.length > 0 && `${plan.added.length} added`}
+            {plan.added.length > 0 && plan.removed.length > 0 && ' · '}
+            {plan.removed.length > 0 && (
+              <>
+                removes {plan.removed.join(', ')}
+              </>
+            )}
+          </Text>
+        )}
+        <Table
+          columns={[
+            { dataIndex: 'key', key: 'key', render: (key: string) => <Text style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }}>{key}</Text>, title: 'Key', width: 240 },
+            {
+              dataIndex: 'value',
+              key: 'value',
+              render: (value: string) => (
+                <Text style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }} type="secondary">
+                  {value.length > 40 ? `${value.slice(0, 40)}…` : value || '—'}
+                </Text>
+              ),
+              title: 'Value',
+            },
+          ]}
+          dataSource={parsed}
+          pagination={false}
+          rowKey={(row) => row.key}
+          scroll={{ y: 220 }}
+          size="small"
+          style={{ marginTop: 8 }}
+        />
+      </div>
+    )}
+  </Modal>
+    </>
+  );
+
+  if (bare) {
+    return (
+      <>
+        {filter}
+        {loading && variables.length === 0 ? (
+          <Flex justify="center" style={{ padding: '24px 0' }}>
+            <Spin />
+          </Flex>
+        ) : variables.length === 0 ? (
+          <Text type="secondary">{emptyDescription}</Text>
+        ) : (
+          table
+        )}
+        <Flex gap={16} style={{ marginTop: 8 }} wrap>
+          <Button icon={<PlusOutlined />} onClick={openCreate} size="small" style={{ paddingInline: 0 }} type="link">
+            {addLabel}
+          </Button>
+          {onReplace && (
+            <Button icon={<SnippetsOutlined />} onClick={openBulk} size="small" style={{ paddingInline: 0 }} type="link">
+              Paste .env
+            </Button>
+          )}
+        </Flex>
+        {modals}
+      </>
+    );
+  }
 
   return (
     <Card
@@ -218,16 +510,7 @@ export function VariablesEditor({
 
       {notice && <Alert title={notice} showIcon style={{ marginBottom: 16 }} type="info" />}
 
-      {variables.length > 0 && (
-        <Input
-          allowClear
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Filter by key"
-          prefix={<SearchOutlined />}
-          style={{ marginBottom: 16, maxWidth: 280 }}
-          value={query}
-        />
-      )}
+      {filter}
 
       {loading && variables.length === 0 ? (
         <Flex justify="center" style={{ padding: '48px 0' }}>
@@ -251,225 +534,10 @@ export function VariablesEditor({
           title={emptyTitle}
         />
       ) : (
-        <Table<VariableRow>
-          columns={[
-            {
-              dataIndex: 'key',
-              key: 'key',
-              render: (key: string) => (
-                <Text style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }}>{key}</Text>
-              ),
-              title: 'Key',
-              width: 260,
-            },
-            {
-              dataIndex: 'value',
-              key: 'value',
-              render: (_value, variable) => (
-                <>
-                  <ValueCell variable={variable} />
-                  {annotate?.(variable)}
-                </>
-              ),
-              title: 'Value',
-            },
-            {
-              key: 'type',
-              render: (_value, variable) =>
-                isSecret(variable) ? (
-                  <Tag color="gold" variant="filled">
-                    secret
-                  </Tag>
-                ) : (
-                  <Tag variant="outlined">plain</Tag>
-                ),
-              title: '',
-              width: 90,
-            },
-            ...(variables.some((variable) => variable.updatedAt)
-              ? [
-                  {
-                    dataIndex: 'updatedAt',
-                    key: 'updatedAt',
-                    render: (value?: string) =>
-                      value ? (
-                        <Text type="secondary">
-                          <RelativeTime value={value} />
-                        </Text>
-                      ) : null,
-                    title: 'Updated',
-                    width: 140,
-                  },
-                ]
-              : []),
-            {
-              key: 'actions',
-              render: (_value, variable) => (
-                <Space size={4}>
-                  <Button aria-label={`Edit ${variable.key}`} icon={<EditOutlined />} onClick={() => openEdit(variable)} size="small" type="text" />
-                  <Popconfirm
-                    cancelText="Keep"
-                    description={deleteNote}
-                    okButtonProps={{ danger: true }}
-                    okText="Delete"
-                    onConfirm={() => void remove(variable)}
-                    title={`Delete ${variable.key}?`}
-                  >
-                    <Button aria-label={`Delete ${variable.key}`} danger icon={<DeleteOutlined />} loading={isDeleting(variable)} size="small" type="text" />
-                  </Popconfirm>
-                </Space>
-              ),
-              title: '',
-              width: 90,
-            },
-          ]}
-          dataSource={visible}
-          locale={{ emptyText: <Text type="secondary">No keys match “{query}”.</Text> }}
-          pagination={false}
-          rowKey="id"
-          // At phone width the table scrolls inside the card rather than crushing the value column.
-          scroll={{ x: 'max-content' }}
-          size="middle"
-        />
+        table
       )}
 
-      <Modal
-        confirmLoading={saving}
-        destroyOnHidden
-        okText={editing ? 'Save changes' : 'Add Variable'}
-        onCancel={() => setModalOpen(false)}
-        onOk={() => form.submit()}
-        open={modalOpen}
-        title={editing ? `Edit ${editing.key}` : 'New Variable'}
-      >
-        {formError && (
-          <Alert title={formError} showIcon style={{ marginBottom: 16 }} type="error" />
-        )}
-        <Form
-          form={form}
-          initialValues={{ secret: false }}
-          layout="vertical"
-          onFinish={(values) => void submit(values)}
-          onValuesChange={(changed) => {
-            if (changed.secret !== undefined) {
-              secretTouched.current = true;
-            }
-            // While creating, the toggle defaults to the heuristic's answer
-            // for the typed key — the guess's only job — until the user
-            // answers it themselves. Editing starts from the stored flag and
-            // the key cannot re-suggest.
-            if (!editing && changed.key !== undefined && !secretTouched.current) {
-              form.setFieldsValue({ secret: isSecretKey(changed.key) });
-            }
-          }}
-          requiredMark={false}
-        >
-          <Form.Item
-            extra="Uppercase with underscores, as your Compose files reference it: ${KEY}"
-            label="Key"
-            name="key"
-            rules={[
-              { message: 'Enter a key', required: true },
-              { max: 255, message: 'Use 255 characters or fewer' },
-              { message: 'Use letters, digits and underscores only', pattern: VARIABLE_KEY_PATTERN },
-            ]}
-          >
-            <Input autoFocus placeholder="DATABASE_URL" style={{ fontFamily: CODE_FONT_STACK }} />
-          </Form.Item>
-          <Form.Item label="Value" name="value" rules={[{ message: 'Enter a value', required: true }]}>
-            <Input placeholder="postgres://user:pass@db:5432/app" style={{ fontFamily: CODE_FONT_STACK }} />
-          </Form.Item>
-          <Form.Item
-            extra="Masks the value on screen — a display tier, not encryption. The value is stored and served as any other."
-            label="Secret"
-            name="secret"
-            valuePropName="checked"
-          >
-            <Switch checkedChildren="secret" unCheckedChildren="plain" />
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal
-        confirmLoading={replacing}
-        destroyOnHidden
-        okButtonProps={{ disabled: bulkBlocked }}
-        okText={`Replace ${variables.length} variable${variables.length === 1 ? '' : 's'} with ${parsed.length}`}
-        onCancel={() => setBulkOpen(false)}
-        onOk={replaceAll}
-        open={bulkOpen}
-        title="Paste a .env file"
-        width={720}
-      >
-        <Paragraph type="secondary">
-          One <Text code>KEY=value</Text> per line. Comments and blank lines are ignored, quotes are stripped. This
-          <strong> replaces</strong> the existing variables — keys missing from the paste are removed.
-        </Paragraph>
-        <Input.TextArea
-          onChange={(event) => setBulkText(event.target.value)}
-          placeholder={'DATABASE_URL=postgres://app:pw@db:5432/app\nLOG_LEVEL=info\n# comments are ignored\nTZ="Asia/Bangkok"'}
-          rows={8}
-          style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }}
-          value={bulkText}
-        />
-        {duplicated.length > 0 && (
-          <Alert
-            title={`Duplicate keys: ${duplicated.join(', ')}`}
-            showIcon
-            style={{ marginTop: 12 }}
-            type="error"
-          />
-        )}
-        {invalid.length > 0 && (
-          <Alert
-            title={`Keys a Compose file cannot reference: ${invalid.join(', ')}`}
-            description="Use letters, digits and underscores, not starting with a digit — otherwise ${KEY} cannot pick the value up."
-            showIcon
-            style={{ marginTop: 12 }}
-            type="error"
-          />
-        )}
-        {bulkError && (
-          <Alert title={bulkError} showIcon style={{ marginTop: 12 }} type="error" />
-        )}
-        {parsed.length > 0 && !bulkBlocked && (
-          <div style={{ marginTop: 12 }}>
-            <Text strong>Will write {parsed.length} variables</Text>
-            {(plan.added.length > 0 || plan.removed.length > 0) && (
-              <Text style={{ display: 'block', fontSize: 12 }} type="secondary">
-                {plan.added.length > 0 && `${plan.added.length} added`}
-                {plan.added.length > 0 && plan.removed.length > 0 && ' · '}
-                {plan.removed.length > 0 && (
-                  <>
-                    removes {plan.removed.join(', ')}
-                  </>
-                )}
-              </Text>
-            )}
-            <Table
-              columns={[
-                { dataIndex: 'key', key: 'key', render: (key: string) => <Text style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }}>{key}</Text>, title: 'Key', width: 240 },
-                {
-                  dataIndex: 'value',
-                  key: 'value',
-                  render: (value: string) => (
-                    <Text style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }} type="secondary">
-                      {value.length > 40 ? `${value.slice(0, 40)}…` : value || '—'}
-                    </Text>
-                  ),
-                  title: 'Value',
-                },
-              ]}
-              dataSource={parsed}
-              pagination={false}
-              rowKey={(row) => row.key}
-              scroll={{ y: 220 }}
-              size="small"
-              style={{ marginTop: 8 }}
-            />
-          </div>
-        )}
-      </Modal>
+      {modals}
       <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, marginTop: 16, paddingTop: 12 }}>
         <Text type="secondary" style={{ fontSize: 12 }}>
           {variables.length} variable{variables.length === 1 ? '' : 's'}

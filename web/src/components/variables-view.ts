@@ -117,6 +117,21 @@ export function replacePlan(current: readonly { key: string }[], rows: readonly 
 }
 
 /**
+ * The secret flag each pasted row is written with. A `.env` carries no flag, so
+ * a key the list already has keeps its stored one (a re-paste must not unmask
+ * it), and a new key takes the create form's guess from its name.
+ */
+export function pasteSecretFlags(
+  current: readonly { key: string; secret: boolean }[],
+  rows: readonly DotEnvRow[],
+): { key: string; value: string; secret: boolean }[] {
+  return rows.map((row) => ({
+    ...row,
+    secret: current.find((variable) => variable.key === row.key)?.secret ?? isSecretKey(row.key),
+  }));
+}
+
+/**
  * The Environment Variable a Compose Variable overrides, if any: the one with
  * the same key. Matching is exact — keys are case-sensitive in `.env`.
  */
@@ -124,17 +139,24 @@ export function overriddenVariable<T extends { key: string }>(key: string, envir
   return environmentVariables.find((variable) => variable.key === key);
 }
 
-/** The Compose Variables row's hint, or `null` when nothing is overridden. A secret's value stays masked. */
+/**
+ * The Compose Variables row's override mark, or `null` when nothing is
+ * overridden: the tag's text, and the shadowed value for its tooltip. A
+ * secret's value stays masked.
+ */
 export function overrideHint(
   key: string,
   environmentName: string,
   environmentVariables: readonly Pick<EnvironmentVariable, 'key' | 'secret' | 'value'>[],
-): string | null {
+): { label: string; detail: string } | null {
   const overridden = overriddenVariable(key, environmentVariables);
   if (!overridden) {
     return null;
   }
-  return `overrides ${environmentName}: ${overridden.secret ? '••••' : overridden.value}`;
+  return {
+    detail: `${environmentName}: ${overridden.secret ? '••••' : overridden.value}`,
+    label: `overrides ${environmentName}`,
+  };
 }
 
 /** How many distinct keys a deploy writes: the Environment's, plus the Compose-only ones. */

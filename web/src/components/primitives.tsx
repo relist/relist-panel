@@ -1,3 +1,4 @@
+import { InfoCircleOutlined } from '@ant-design/icons';
 import { Badge, Breadcrumb, Card, Flex, Tag, Tooltip, Typography, theme } from 'antd';
 import type { ReactNode } from 'react';
 import dayjs from 'dayjs';
@@ -15,6 +16,19 @@ export function RelativeTime({ value }: { value: string }) {
     <Tooltip title={dayjs(value).format('D MMM YYYY, HH:mm:ss')}>
       <span>{dayjs(value).fromNow()}</span>
     </Tooltip>
+  );
+}
+
+/** A card title whose standing explanation waits in an ⓘ tooltip instead of a paragraph under it. */
+export function InfoTitle({ info, title }: { info: ReactNode; title: ReactNode }) {
+  const { token } = theme.useToken();
+  return (
+    <Flex align="center" gap={6}>
+      {title}
+      <Tooltip title={info}>
+        <InfoCircleOutlined aria-label="About this card" style={{ color: token.colorTextTertiary, fontSize: 13 }} />
+      </Tooltip>
+    </Flex>
   );
 }
 

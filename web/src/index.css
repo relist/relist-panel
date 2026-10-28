@@ -68,3 +68,23 @@ body {
     flex-direction: column;
   }
 }
+
+/*
+ * A bare variable list (the Compose page) keeps its row actions out of sight until the row is
+ * pointed at or an action has focus; without hover (touch) they always show.
+ */
+.rp-row-actions {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.ant-table-row:hover .rp-row-actions,
+.rp-row-actions:focus-within {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .rp-row-actions {
+    opacity: 1;
+  }
+}

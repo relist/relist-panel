@@ -1,9 +1,10 @@
-import { Typography } from 'antd';
+import { Card, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { usePanel } from '../data/store';
 import type { Compose, ComposeVariable, Environment, VariableSet } from '../data/types';
 import { ComposeBindingsCard } from './ComposeBindingsCard';
+import { InfoTitle } from './primitives';
 import { RedeployBanner } from './RedeployBanner';
 import { VariableSetsCard } from './VariableSetsCard';
 import { VariablesEditor } from './VariablesPanel';
@@ -41,7 +42,7 @@ export function ComposeVariablesTab({
   /** `undefined` while the first load is in flight. */
   variables?: ComposeVariable[];
 }) {
-  const { deleteComposeVariable, isPending, loadVariableSets, saveComposeVariable } = usePanel();
+  const { deleteComposeVariable, isPending, loadVariableSets, replaceComposeVariables, saveComposeVariable } = usePanel();
   const composeId = compose.id;
   const [setsData, setSetsData] = useState<{ composeId: number; sets?: VariableSet[]; error?: string }>();
   const request = useRef(0);
@@ -68,45 +69,65 @@ export function ComposeVariablesTab({
   return (
     <>
       <RedeployBanner compose={compose} deploying={deploying} onDeploy={onDeploy} />
-      <VariablesEditor
-        annotate={(variable) => {
-          const hint = overrideHint(variable.key, environment.name, environment.variables);
-          return hint ? (
-            <Text style={{ display: 'block', fontSize: 12 }} type="secondary">
-              {hint}
-            </Text>
-          ) : null;
-        }}
-        deleteNote="The Environment Variable of the same key, if any, applies again on the next deploy."
-        description={
-          <>
-            Only for this Compose, usable as <Text code>{'${VAR}'}</Text>. A key that is also an Environment Variable
-            overrides it here. Changes take effect on the next deploy.
-          </>
+      <Card
+        size="small"
+        title={
+          <InfoTitle
+            info={
+              <>
+                Only for this Compose, usable as <Text code>{'${VAR}'}</Text> and given to every container. A key that is also an
+                Environment Variable overrides it here.
+              </>
+            }
+            title="Compose variables"
+          />
         }
-        emptyDescription={
-          loadError
-            ? `Could not load this Compose's variables: ${loadError}`
-            : 'Values only this Compose needs, or that replace an Environment Variable for it.'
-        }
-        emptyTitle={loadError ? 'Variables unavailable' : 'No Compose variables yet'}
-        isDeleting={(variable) => isPending(`delete-compose-variable:${variable.id}`)}
-        loading={variables === undefined && !loadError}
-        noun="Compose variables"
-        onDelete={async (variable) => {
-          await deleteComposeVariable(compose.id, variable.id);
-          onChanged();
-        }}
-        onError={onError}
-        onSave={async (values, id) => {
-          await saveComposeVariable(compose.id, values, id);
-          onChanged();
-        }}
-        singleAddWhenEmpty
-        saving={isPending(`save-compose-variable:${compose.id}`)}
-        title="Compose variables"
-        variables={variables ?? []}
-      />
+        variant="outlined"
+      >
+        <VariablesEditor
+          annotate={(variable) => {
+            const hint = overrideHint(variable.key, environment.name, environment.variables);
+            return hint ? (
+              <Tooltip title={hint.detail}>
+                <Tag style={{ marginInlineEnd: 0 }}>{hint.label}</Tag>
+              </Tooltip>
+            ) : null;
+          }}
+          bare
+          deleteNote="The Environment Variable of the same key, if any, applies again on the next deploy."
+          description={null}
+          emptyDescription={
+            loadError
+              ? `Could not load this Compose's variables: ${loadError}`
+              : 'Values only this Compose needs, or that replace an Environment Variable for it.'
+          }
+          emptyTitle={loadError ? 'Variables unavailable' : 'No Compose variables yet'}
+          isDeleting={(variable) => isPending(`delete-compose-variable:${variable.id}`)}
+          loading={variables === undefined && !loadError}
+          noun="Compose variables"
+          onDelete={async (variable) => {
+            await deleteComposeVariable(compose.id, variable.id);
+            onChanged();
+          }}
+          onError={onError}
+          onReplace={async (rows) => {
+            try {
+              await replaceComposeVariables(compose.id, rows);
+            } finally {
+              // A replace that failed partway still wrote some rows: show what the server has.
+              onChanged();
+            }
+          }}
+          onSave={async (values, id) => {
+            await saveComposeVariable(compose.id, values, id);
+            onChanged();
+          }}
+          replacing={isPending(`bulk-compose-variables:${compose.id}`)}
+          saving={isPending(`save-compose-variable:${compose.id}`)}
+          title="Compose variables"
+          variables={variables ?? []}
+        />
+      </Card>
       <VariableSetsCard compose={compose} error={current?.error} onError={onError} onReload={reloadSets} sets={current?.sets} />
       <ComposeBindingsCard compose={compose} onChanged={() => void reloadSets()} onError={onError} sets={current?.sets} />
     </>

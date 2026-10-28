@@ -11,6 +11,7 @@ import {
   overrideHint,
   overriddenVariable,
   parseDotEnv,
+  pasteSecretFlags,
   replacePlan,
   visibleVariables,
 } from './variables-view';
@@ -150,20 +151,43 @@ describe('replacePlan', () => {
   });
 });
 
+describe('pasteSecretFlags', () => {
+  it('keeps the stored flag of a key the list already has, whatever its name says', () => {
+    const current = [
+      { key: 'DB_PASSWORD', secret: false },
+      { key: 'SIGNING', secret: true },
+    ];
+    expect(pasteSecretFlags(current, parseDotEnv('DB_PASSWORD=x\nSIGNING=y'))).toEqual([
+      { key: 'DB_PASSWORD', secret: false, value: 'x' },
+      { key: 'SIGNING', secret: true, value: 'y' },
+    ]);
+  });
+
+  it("guesses a new key's flag from its name", () => {
+    expect(pasteSecretFlags([], parseDotEnv('API_TOKEN=t\nLOG_LEVEL=info'))).toEqual([
+      { key: 'API_TOKEN', secret: true, value: 't' },
+      { key: 'LOG_LEVEL', secret: false, value: 'info' },
+    ]);
+  });
+});
+
 describe('overrideHint', () => {
   const environmentVariables = [
     { key: 'LOG_LEVEL', secret: false, value: 'info' },
     { key: 'API_TOKEN', secret: true, value: 'hunter2' },
   ];
 
-  it('names the Environment and shows a plain value', () => {
-    expect(overrideHint('LOG_LEVEL', 'production', environmentVariables)).toBe('overrides production: info');
+  it('names the Environment on the tag and shows a plain value in the detail', () => {
+    expect(overrideHint('LOG_LEVEL', 'production', environmentVariables)).toEqual({
+      detail: 'production: info',
+      label: 'overrides production',
+    });
   });
 
   it('masks a secret Environment Variable, whatever its length', () => {
     const hint = overrideHint('API_TOKEN', 'production', environmentVariables);
-    expect(hint).toBe('overrides production: ••••');
-    expect(hint).not.toContain('hunter2');
+    expect(hint?.detail).toBe('production: ••••');
+    expect(JSON.stringify(hint)).not.toContain('hunter2');
   });
 
   it('is null when no Environment Variable has the key, and follows it coming and going', () => {
