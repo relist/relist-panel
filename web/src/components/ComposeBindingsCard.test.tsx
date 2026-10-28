@@ -44,7 +44,7 @@ describe('ComposeBindingsCard', () => {
     renderCard([]);
     expect(await screen.findByText('No Variable Sets to bind')).toBeTruthy();
     expect(screen.getByText(/in the Variable Sets card above/)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Effective env' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Effective env/ })).toBeNull();
   });
 
   it('reloads the bindings when the sets change, and tells the tab after a binding write', async () => {
@@ -72,7 +72,8 @@ describe('ComposeBindingsCard', () => {
     expect(screen.getByText('worker')).toBeTruthy();
     const tags = Array.from(document.querySelectorAll('.ant-select-selection-item-content')).map((node) => node.textContent);
     expect(tags).toEqual(['cache', 'db']);
-    expect(screen.getAllByRole('button', { name: /Effective env/ })).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Effective env for web' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Effective env for worker' })).toBeTruthy();
   });
 
   it('binds a set by saving the Service full ordered id list', async () => {
@@ -119,7 +120,7 @@ describe('ComposeBindingsCard', () => {
     const user = userEvent.setup();
     renderCard();
     await screen.findByText('web');
-    await user.click(screen.getAllByRole('button', { name: /Effective env/ })[0]);
+    await user.click(screen.getByRole('button', { name: 'Effective env for web' }));
     const dialog = await screen.findByRole('dialog');
     expect(await within(dialog).findByText('DB_PASSWORD')).toBeTruthy();
     expect(panel.loadEffectiveVariables).toHaveBeenCalledWith(7, 'web');

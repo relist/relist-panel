@@ -1,13 +1,13 @@
 import { ThunderboltOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Flex, Select, Skeleton, Typography, theme } from 'antd';
+import { Alert, App, Button, Card, Flex, Select, Skeleton, Table, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { CODE_FONT_STACK } from '../app/theme';
 import { usePanel } from '../data/store';
 import type { Compose, ServiceBindings, VariableSet } from '../data/types';
-import { bindingRows, setName } from './bindings-view';
+import { bindingRows, setName, type BindingRow } from './bindings-view';
 import { EffectiveEnvModal } from './EffectiveEnvModal';
-import { EmptyState } from './primitives';
+import { EmptyState, InfoTitle } from './primitives';
 
 const { Text } = Typography;
 
@@ -119,62 +119,105 @@ export function ComposeBindingsCard({
   } else {
     const { live, stale } = bindingRows(current.services, current.bindings);
     const options = sets.map((set) => ({ label: set.name, value: set.id }));
-    const rowStyle = { borderBottom: `1px solid ${token.colorBorderSecondary}`, padding: '12px 0' };
+    const rows: (BindingRow & { stale: boolean })[] = [
+      ...live.map((row) => ({ ...row, stale: false })),
+      ...stale.map((row) => ({ ...row, stale: true })),
+    ];
     body = (
       <>
         {error && <Alert showIcon style={{ marginBottom: 12 }} title={error} type="error" />}
-        {live.map((row) => (
-          <Flex align="center" gap={12} key={row.service} style={rowStyle} wrap>
-            <Text strong style={{ fontFamily: CODE_FONT_STACK, minWidth: 120 }}>
-              {row.service}
-            </Text>
-            <Select<number[]>
-              aria-label={`Variable Sets for ${row.service}`}
-              loading={isPending(`save-bindings:${composeId}:${row.service}`)}
-              mode="multiple"
-              onChange={(ids) => bind(row.service, ids)}
-              optionFilterProp="label"
-              options={options}
-              placeholder="No sets bound"
-              style={{ flex: '1 1 240px', minWidth: 0 }}
-              value={draft[row.service] ?? row.setIds}
-            />
-            <Button icon={<ThunderboltOutlined />} onClick={() => setEffectiveFor(row.service)}>
-              Effective env
-            </Button>
-          </Flex>
-        ))}
-        {stale.map((row) => (
-          <Flex align="center" gap={12} key={row.service} style={rowStyle} wrap>
-            <Flex align="center" gap={6} style={{ minWidth: 120 }}>
-              <WarningOutlined style={{ color: token.colorWarning }} />
-              <Text strong style={{ fontFamily: CODE_FONT_STACK }}>
-                {row.service}
-              </Text>
-            </Flex>
-            <Text style={{ flex: '1 1 240px' }} type="warning">
-              not in YAML · bound to {row.setIds.map((id) => setName(sets, id)).join(', ')}
-            </Text>
-            <Button
-              danger
-              loading={isPending(`save-bindings:${composeId}:${row.service}`)}
-              onClick={() => bind(row.service, [])}
-            >
-              Remove
-            </Button>
-          </Flex>
-        ))}
+        <Table<BindingRow & { stale: boolean }>
+          columns={[
+            {
+              dataIndex: 'service',
+              key: 'service',
+              render: (service: string, row) =>
+                row.stale ? (
+                  <Flex align="center" gap={6}>
+                    <WarningOutlined style={{ color: token.colorWarning }} />
+                    <Text strong style={{ fontFamily: CODE_FONT_STACK }}>
+                      {service}
+                    </Text>
+                  </Flex>
+                ) : (
+                  <Text strong style={{ fontFamily: CODE_FONT_STACK }}>
+                    {service}
+                  </Text>
+                ),
+              title: 'Service',
+              width: '25%',
+            },
+            {
+              key: 'sets',
+              render: (_value, row) =>
+                row.stale ? (
+                  <Text type="warning">not in YAML · bound to {row.setIds.map((id) => setName(sets, id)).join(', ')}</Text>
+                ) : (
+                  <Select<number[]>
+                    aria-label={`Variable Sets for ${row.service}`}
+                    loading={isPending(`save-bindings:${composeId}:${row.service}`)}
+                    mode="multiple"
+                    onChange={(ids) => bind(row.service, ids)}
+                    optionFilterProp="label"
+                    options={options}
+                    placeholder="No sets bound"
+                    style={{ minWidth: 200, width: '100%' }}
+                    value={draft[row.service] ?? row.setIds}
+                    variant="borderless"
+                  />
+                ),
+              title: 'Sets, in order',
+            },
+            {
+              align: 'end',
+              key: 'action',
+              render: (_value, row) =>
+                row.stale ? (
+                  <Button
+                    danger
+                    loading={isPending(`save-bindings:${composeId}:${row.service}`)}
+                    onClick={() => bind(row.service, [])}
+                    size="small"
+                  >
+                    Remove
+                  </Button>
+                ) : (
+                  <Tooltip title="Effective env">
+                    <Button
+                      aria-label={`Effective env for ${row.service}`}
+                      icon={<ThunderboltOutlined />}
+                      onClick={() => setEffectiveFor(row.service)}
+                      size="small"
+                      type="text"
+                    />
+                  </Tooltip>
+                ),
+              width: 90,
+            },
+          ]}
+          dataSource={rows}
+          pagination={false}
+          rowKey="service"
+          scroll={{ x: 'max-content' }}
+          size="small"
+        />
       </>
     );
   }
 
   return (
     <>
-      <Card style={{ marginTop: 16 }} title="Service bindings" variant="outlined">
-        <Text style={{ display: 'block', marginBottom: 12 }} type="secondary">
-          Variable Sets delivered to a Service's containers, later sets overriding earlier ones. Tag order is binding order. Changes
-          take effect on the next deploy.
-        </Text>
+      <Card
+        size="small"
+        style={{ marginTop: 16 }}
+        title={
+          <InfoTitle
+            info="Variable Sets delivered to a Service's containers. Tag order is binding order: a later set overrides an earlier one for the same key."
+            title="Service bindings"
+          />
+        }
+        variant="outlined"
+      >
         {body}
       </Card>
       <EffectiveEnvModal composeId={composeId} onClose={() => setEffectiveFor(undefined)} service={effectiveFor} />
