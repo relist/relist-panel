@@ -186,6 +186,7 @@ func TestParseRefuses(t *testing.T) {
 		{"chain CA first", good.chain + good.cert, good.key, "privateKey", "server certificate first"},
 		{"chain block with bad base64", good.cert + "-----BEGIN CERTIFICATE-----\n!!!not base64!!!\n-----END CERTIFICATE-----\n", good.key, "certificate", "does not parse"},
 		{"truncated chain block", good.cert + good.chain[:len(good.chain)/2], good.key, "certificate", "does not parse"},
+		{"openssh key", good.cert, "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n", "privateKey", "PKCS#8"},
 		{"key too large", good.cert, good.key + strings.Repeat("x", 16*1024), "privateKey", "16 KiB"},
 	}
 	for _, tc := range cases {

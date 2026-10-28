@@ -124,7 +124,11 @@ func findKey(keyPEM string) (*pem.Block, *FieldError) {
 		if block.Type == "ENCRYPTED PRIVATE KEY" || strings.Contains(block.Headers["Proc-Type"], "ENCRYPTED") {
 			return nil, &FieldError{"privateKey", "private key is encrypted; remove its passphrase first"}
 		}
-		return block, nil
+		switch block.Type {
+		case "PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY":
+			return block, nil
+		}
+		return nil, &FieldError{"privateKey", fmt.Sprintf("%s is not supported; paste a PEM private key in PKCS#8, PKCS#1 (RSA) or EC form", block.Type)}
 	}
 }
 
