@@ -148,7 +148,7 @@ export function DomainFormModal({
           <Form.Item
             extra={
               certProvider === 'none'
-                ? 'Traefik serves a certificate matching this host if it has one, otherwise its default self-signed certificate.'
+                ? 'Traefik serves an uploaded certificate (Certificates page) that covers this host, otherwise its default self-signed certificate.'
                 : undefined
             }
             label="Certificate Provider"
