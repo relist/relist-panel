@@ -60,7 +60,10 @@ export function CertificatesPage() {
       close();
       reload();
     } catch (reason: unknown) {
-      setSaveError(asApiError(reason));
+      const failure = asApiError(reason);
+      setSaveError(failure);
+      // A 5xx may come after the certificate was stored; show it.
+      if (failure.status >= 500) reload();
     } finally {
       setSaving(false);
     }

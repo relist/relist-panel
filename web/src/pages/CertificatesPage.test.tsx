@@ -142,4 +142,24 @@ describe('CertificatesPage', () => {
 
     await waitFor(() => expect(api.deleteCertificate).toHaveBeenCalledWith(1));
   });
+
+  it('reloads the list after a server error, since the certificate may be saved', async () => {
+    api.listCertificates.mockResolvedValue([]);
+    api.createCertificate.mockRejectedValue(new ApiError(500, 'the change was saved but Traefik failed'));
+    const user = userEvent.setup();
+    show();
+    await screen.findByText('No certificates yet');
+    const calls = api.listCertificates.mock.calls.length;
+
+    await user.click(screen.getAllByRole('button', { name: /add certificate/i })[0]);
+    await user.type(await screen.findByLabelText('Certificate Name'), 'shop');
+    await user.click(screen.getByLabelText('Certificate Data'));
+    await user.paste(CERT);
+    await user.click(screen.getByLabelText('Private Key'));
+    await user.paste(KEY);
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+
+    expect(await screen.findByText('the change was saved but Traefik failed')).toBeTruthy();
+    await waitFor(() => expect(api.listCertificates.mock.calls.length).toBeGreaterThan(calls));
+  });
 });
