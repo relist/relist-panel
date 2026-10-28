@@ -71,8 +71,10 @@ code.
 tab bar has no built-in add or close buttons:
 - **New set** is a small default button in the Variable Sets card's `extra`. It opens the existing
   name form (same rules: `^[a-z][a-z0-9-]{0,62}$`). After a create, the new set's tab is active.
-- **Rename** and **Delete** apply to the active set and sit in the tab bar's
-  `tabBarExtraContent`. Both are small `text` buttons with an icon, and Delete is `danger`.
+- **Rename** and **Delete** sit at the top of each set's pane, on the line with "Bound to". Both
+  are small `text` buttons with an icon, and Delete is `danger`. They were first specified for
+  `tabBarExtraContent`, but at phone width that hid every tab except the first (found in the
+  browser check, 2026-10-28).
 - Rename opens a small modal with the same name field and rules. It replaces today's in-place
   rename in the Collapse header.
 - Delete keeps today's `Popconfirm` and wording (`deleteSetNote` in

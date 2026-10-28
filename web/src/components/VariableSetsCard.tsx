@@ -22,8 +22,8 @@ const nameRules = [
 /**
  * The Compose's Variable Sets, one tab per set (GUIDELINES §4.6): the open
  * set's bound Services as a line of text, then the bare key-value table of its
- * entries. New set sits in the card header; Rename and Delete act on the open
- * tab. Binding happens only in the Service bindings card. The list belongs to
+ * entries. New set sits in the card header; Rename and Delete sit in each
+ * tab's pane. Binding happens only in the Service bindings card. The list belongs to
  * the Variables tab (the bindings card reads it too); every write asks the tab
  * to reload it, since a write also changes counts and "bound to".
  */
@@ -114,27 +114,21 @@ export function VariableSetsCard({
     await reload();
   };
 
-  const tabActions = activeSet && (
+  // In the pane, not the tab bar: at phone width the bar needs every pixel for the tabs themselves.
+  const setActions = (set: VariableSet) => (
     <Space size={4}>
-      <Button aria-label={`Rename ${activeSet.name}`} icon={<EditOutlined />} onClick={() => openRename(activeSet)} size="small" type="text">
+      <Button aria-label={`Rename ${set.name}`} icon={<EditOutlined />} onClick={() => openRename(set)} size="small" type="text">
         Rename
       </Button>
       <Popconfirm
         cancelText="Keep"
-        description={deleteSetNote(activeSet.boundServices)}
+        description={deleteSetNote(set.boundServices)}
         okButtonProps={{ danger: true }}
         okText="Delete"
-        onConfirm={() => void remove(activeSet)}
-        title={`Delete ${activeSet.name}?`}
+        onConfirm={() => void remove(set)}
+        title={`Delete ${set.name}?`}
       >
-        <Button
-          aria-label={`Delete ${activeSet.name}`}
-          danger
-          icon={<DeleteOutlined />}
-          loading={isPending(`delete-variable-set:${activeSet.id}`)}
-          size="small"
-          type="text"
-        >
+        <Button aria-label={`Delete ${set.name}`} danger icon={<DeleteOutlined />} loading={isPending(`delete-variable-set:${set.id}`)} size="small" type="text">
           Delete
         </Button>
       </Popconfirm>
@@ -184,21 +178,24 @@ export function VariableSetsCard({
           items={sets.map((set) => ({
             children: (
               <>
-                <Text style={{ display: 'block', marginBottom: 8 }} type="secondary">
-                  {set.boundServices.length === 0 ? (
-                    'Not bound to any Service yet'
-                  ) : (
-                    <>
-                      Bound to{' '}
-                      {set.boundServices.map((service, index) => (
-                        <span key={service}>
-                          {index > 0 && ', '}
-                          <Text style={{ fontFamily: CODE_FONT_STACK }}>{service}</Text>
-                        </span>
-                      ))}
-                    </>
-                  )}
-                </Text>
+                <Flex align="center" gap={8} justify="space-between" style={{ marginBottom: 8 }} wrap>
+                  <Text type="secondary">
+                    {set.boundServices.length === 0 ? (
+                      'Not bound to any Service yet'
+                    ) : (
+                      <>
+                        Bound to{' '}
+                        {set.boundServices.map((service, index) => (
+                          <span key={service}>
+                            {index > 0 && ', '}
+                            <Text style={{ fontFamily: CODE_FONT_STACK }}>{service}</Text>
+                          </span>
+                        ))}
+                      </>
+                    )}
+                  </Text>
+                  {setActions(set)}
+                </Flex>
                 <VariablesEditor
                   addLabel="Add entry"
                   bare
@@ -244,7 +241,6 @@ export function VariableSetsCard({
             ),
           }))}
           onChange={setActive}
-          tabBarExtraContent={tabActions}
         />
       )}
 

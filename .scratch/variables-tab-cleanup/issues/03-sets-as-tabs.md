@@ -16,9 +16,9 @@ Rewrite `web/src/components/VariableSetsCard.tsx` from `Collapse` to `Tabs` (def
 - One tab per set. The label is the name in `CODE_FONT_STACK` followed by the entry count in
   secondary text. The active tab is component state. After a create, the new set is active. After a
   delete or a reload that removes the active set, the first set is active.
-- `tabBarExtraContent`: **Rename** (`EditOutlined`, `type="text"`), which opens a modal with the
+- At the top of the pane, on the "Bound to" line (moved out of `tabBarExtraContent`, which hid tabs at phone width): **Rename** (`EditOutlined`, `type="text"`), which opens a modal with the
   existing name field and rules, and **Delete** (`DeleteOutlined`, `danger`, `type="text"`) inside
-  the existing `Popconfirm` with `deleteSetNote` text. Both act on the active set.
+  the existing `Popconfirm` with `deleteSetNote` text. Both act on that pane's set.
 - Tab content:
   - A read-only secondary line from the set's `boundServices`: "Bound to worker, db" (Service names
     in the code font), or "Not bound to any Service yet". There is no binding control here; binding
