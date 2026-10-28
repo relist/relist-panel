@@ -182,7 +182,9 @@ trouble?" without ssh'ing in — and be honest about what the panel can and cann
   tag marks intent.
 - Key filter, `New Variable` modal (key validation: `[A-Za-z_][A-Za-z0-9_]*`).
 - **Paste a `.env` file**: textarea, live parse preview, duplicate-key error, and an explicit
-  "replace N variables with M" confirm — because operators have the file already.
+  "replace N variables with M" confirm — because operators have the file already. A `.env` carries
+  no secret flag, so a key the list already has keeps its own, and a new key takes the create
+  form's guess from its name: a re-paste never unmasks a secret.
 - Standing note: changes apply on the next deploy of each Compose in the Environment.
 - No Variable Sets card: sets belong to a Compose and are managed only on the Compose's Variables tab (ADR-0015).
 
@@ -198,21 +200,31 @@ clamped between `LAYOUT.editorAutoMinHeight` (320px) and `LAYOUT.editorAutoMaxHe
 past the cap it scrolls inside, and the mouse wheel passes through to the page at its edges. The
 rail keeps its own height beside it.
 
-**Variables tab** has three cards, in this order:
+**Variables tab** has three small cards, in this order. Each card's explanation sits in an ⓘ tooltip beside
+its title, and none repeats "next deploy": the banner below says it once. The two variable lists are the §4.5
+editor in its **bare** form: the table alone (Key, Value, row actions; no `secret` / `plain` tag, the mask and its
+eye already tell), row actions shown on hover or keyboard focus and always on touch devices, "+ Add" and
+**Paste .env** as links under the table (the §4.5 paste, with its flag rule), and the key filter only above ten rows.
 
-1. **Compose variables**: the Compose's own variables in the §4.5 editor (add, edit, delete, secret flag, reveal,
-copy; no paste-in). A row whose key is also an Environment Variable shows `overrides <environment>: <value>`,
-masked as `••••` when that Environment Variable is secret. The Editor tab's Environment card counts distinct keys
-across both.
-2. **Variable Sets**: the Compose's named sets (ADR-0015), each a collapsible row with its name, entry count and the
-Services that bind it. Expanding a row shows the §4.5 key-value editor for its entries. A set is created, renamed and
-deleted here only. Deleting a set shows a `Popconfirm` naming the bound Services ("Unbinds it from
-api, worker. Takes effect on the next deploy.") and removes its bindings with it; an unbound set's confirmation reads "Its entries are deleted with it."
-3. **Service bindings**: one row per Service in the saved YAML (the list the Domains form uses) with a multi-select of
-this Compose's Variable Sets (ADR-0015); tag order is binding order and a later set wins. Bindings for a Service the YAML no longer declares are listed apart and can only be removed. Each Service row
-opens an **Effective env** modal: the Service's winning value per key, its source (Environment, Compose, or a set), the
-layers it shadows, and the YAML's own `environment:` keys as `defined in the YAML` rows, with an `overridden by YAML` tag
-on a merged row whose key the YAML also sets. Values follow the §4.5 masking.
+1. **Compose variables**: the Compose's own variables (add, edit, delete, secret flag, reveal, copy, paste). A row
+whose key is also an Environment Variable carries an `overrides <environment>` tag on the same line; its tooltip
+shows the Environment value, masked as `••••` when that Environment Variable is secret. The Editor tab's
+Environment card counts distinct keys across both.
+2. **Variable Sets**: the Compose's named sets (ADR-0015), one `line` tab per set labelled with its name and entry
+count. **New set** sits in the card header (the empty state's button alone while there are none); a new set's
+tab opens once it is created. Each pane starts with a line naming the Services that bind the set ("Bound to db,
+worker" or "Not bound to any Service yet") with **Rename** (a modal) and **Delete** beside it, then the bare
+editor for its entries. Binding happens only in the next card. A set is created, renamed and deleted here only.
+Deleting a set shows a `Popconfirm` naming the bound Services ("Unbinds it from api, worker. Takes effect on the
+next deploy.") and removes its bindings with it; an unbound set's confirmation reads "Its entries are deleted
+with it."
+3. **Service bindings**: a table with one row per Service in the saved YAML (the list the Domains form uses) and a
+borderless multi-select of this Compose's Variable Sets (ADR-0015); tag order is binding order and a later set
+wins. Bindings for a Service the YAML no longer declares are listed after them with a warning icon and can only be
+removed. Each Service row's icon button (⚡, "Effective env for <service>") opens an **Effective env** modal: the
+Service's winning value per key, its source (Environment, Compose, or a set), the layers it shadows, and the
+YAML's own `environment:` keys as `defined in the YAML` rows, with an `overridden by YAML` tag on a merged row
+whose key the YAML also sets. Values follow the §4.5 masking.
 
 The "changes apply on the next deploy" banner, shared with Domains, shows when a Compose Variable, a domain, a
 binding, or an entry of a bound Variable Set changed since the last deploy (a set rename does not count). Every write
