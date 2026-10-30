@@ -1,6 +1,6 @@
 # Zero-downtime Deploy Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use subagent-driven-development (recommended) or executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Plan every Deployment before running it (Part 0, no behaviour change), then let a Service with a Domain opt into a rollout that replaces its Container with no downtime (Part 1).
 
@@ -133,7 +133,7 @@
   - Keep the phases, `interrupted()` checks and `stepFailed` exactly where they were relative to each step.
 - [ ] **Step 4: Run everything.** Run `go test ./internal/deployments/...` and then `task test`. All must PASS. If an existing test asserted a progressive step list, update it to the full list and name it in the commit body. No other test may change.
 - [ ] **Step 5: Commit.** `refactor: run each deployment from its plan`
-- [ ] **Step 6: Open PR 1** (`refactor: plan each deployment before running it`) from a branch cut at this commit. The spec commits on `feat/zero-downtime-deploy` come along. Part 1 continues on `feat/zero-downtime-deploy`.
+- [ ] **Step 6: When the user asks, open PR 1** (`refactor: plan each deployment before running it`) from a branch cut at this commit. The spec commits on `feat/zero-downtime-deploy` come along. Part 1 continues on `feat/zero-downtime-deploy`.
 
 ---
 
@@ -317,29 +317,40 @@ Server Migration copies `panel.db` whole (`internal/migration/finalize.go`), so 
   func (s *Service) WithEngine(e ContainerEngine) *Service
   // ExecutionSnapshot gains ZeroDowntime []string: switched-on Services that have ≥1 Domain, in YAML order.
   type DeployOptions struct { FreshVolumes, Build bool; Exclude []string; Out io.Writer }
-  // Exclude non-empty: up --no-deps --remove-orphans <all services minus Exclude>, or, if none remain,
+  // Exclude non-empty: up --no-deps --remove-orphans <active services minus Exclude>, or, if none remain,
   // remove orphans through the engine; no markDeployed (the caller calls MarkDeployed).
+  // "Active services" are the keys of `services` in Config() of the written files, which drops
+  // services whose profile is not enabled. Naming one on the up command line would start it
+  // (verified on Compose v5.5.1).
   func (s *Service) MarkDeployed(ctx context.Context, t DeployTarget) error
   type ZeroDowntimeStatus struct { Service string `json:"service"`; Enabled bool `json:"enabled"`; Reasons []string `json:"reasons"` }
-  // ZeroDowntimeProblems checks t.Snapshot.ZeroDowntime against compose config of the snapshot's files, staged in a temp dir.
+  // ZeroDowntimeProblems checks t.Snapshot.ZeroDowntime against compose config of the snapshot's files,
+  // staged in the Compose dir under unique names (see stageCheck).
   func (s *Service) ZeroDowntimeProblems(ctx context.Context, t DeployTarget) ([]zerodowntime.Problem, error)
   // ZeroDowntimeServices captures t from the current YAML, then lists every Service with a Domain.
   func (s *Service) ZeroDowntimeServices(ctx context.Context, t DeployTarget) ([]ZeroDowntimeStatus, error)
-  func serviceNames(yamlContent string) ([]string, error) // every service key, file order
+  func serviceNames(yamlContent string) ([]string, error) // every service key, file order: used only to tell orphans apart
+  // stageCheck writes the snapshot's YAML, env file and set files into the Compose dir as
+  // .zd-check-<random>.yml, .zd-check-<random>.env and .zd-check-<random>-sets/. Relative env_file,
+  // include and extends paths then resolve as they do on deploy, and a running build's
+  // .build-* files are never touched. cleanup removes all three.
+  func stageCheck(t DeployTarget) (req RunRequest, cleanup func(), err error)
   ```
 
 - [ ] **Step 1: Write the failing tests** with a fake runner and fake engine.
   - `TestCaptureRecordsZeroDowntime`: rows `web` (has a Domain) and `worker` (no Domain) → `Snapshot.ZeroDowntime == ["web"]`, and the snapshot YAML has `web`'s retry label.
   - `TestCaptureIgnoresRowWithoutDomain`: the row is `old` and `old` is not in the YAML → `ZeroDowntime == []`, and there is no retry label anywhere.
-  - `TestZeroDowntimeProblemsUsesConfig`: the fake `Config` returns JSON where `web` has no healthcheck → `[{web, ["has no healthcheck"]}]`. The fake must have been called with a staged `RunRequest` whose files exist during the call and are gone after it.
-  - `TestRunDeployExcludeRunsSubset`: services `web, worker, db`, `Exclude: ["web"]` → one `Up` with `Services: ["worker","db"]`, and `markDeployed` is not called.
+  - `TestZeroDowntimeProblemsUsesConfig`: the fake `Config` returns JSON where `web` has no healthcheck → `[{web, ["has no healthcheck"]}]`. The fake must have been called with a `RunRequest` whose files are in the Compose dir, are named `.zd-check-*`, exist during the call and are gone after it.
+  - `TestStageCheckLeavesBuildFilesAlone`: pre-create `.build-compose.yml`, `.build.env` and `.build-sets/x.env` in the Compose dir, then run `ZeroDowntimeProblems`. All three must be unchanged afterwards.
+  - `TestStageCheckResolvesRelativeEnvFile` (needs Docker; skip when `docker` is absent, as the other dockerexec integration tests do): the YAML has `env_file: ./app.env`, and `app.env` exists in the Compose dir. A real `Runner.Config` on the staged request succeeds.
+  - `TestRunDeployExcludeRunsSubset`: services `web, worker, db` plus `tool` with `profiles: [tools]`. The fake `Config` lists only `web, worker, db` as active. With `Exclude: ["web"]` → one `Up` with `Services: ["worker","db"]` (no `tool`), and `markDeployed` is not called.
   - `TestRunDeployExcludeAllRemovesOrphansViaEngine`: `Exclude` covers every service. The engine lists `p-web-1` (service `web`) and `p-old-1` (service `old`). Expect no `Up`, and `Stop`+`Remove(force=false, volumes=false)` on `p-old-1` only.
   - `TestRunDeployWritesTransportFile`: `Snapshot.ZeroDowntime` is non-empty → the transport file exists after `RunDeploy`. When the write fails (make the dir read-only), it fails with message `could not write Traefik transport file` and the runner is untouched.
 - [ ] **Step 2: Run them.** `go test ./internal/composes/ -run 'ZeroDowntime|Exclude|TransportFile'` must FAIL.
 - [ ] **Step 3: Implement.**
-  - `resolveForDeploy` loads `zerodowntime.Store.Enabled` and passes the set to `resolveCompose` → `domains.Inject`. That way preview shows the labels too.
-  - `Capture` fills `ZeroDowntime` with the enabled names that have a Domain.
-  - Extract `stageSnapshot(t DeployTarget, dir string) (RunRequest, func(), error)` from `prepareSnapshotBuild` and use it in both places.
+  - Read the switch set **once** per capture. `prepareDeployFiles` loads `zerodowntime.Store.Enabled` once, passes it to `resolveCompose` → `domains.Inject`, and returns it in `deployFiles`. `Capture` fills `ZeroDowntime` from that same value: the enabled names that have a Domain, in YAML order. A toggle between two reads could otherwise roll out a Service without its retry label. Preview goes through the same path, so it shows the labels too.
+  - Add `TestCaptureReadsSwitchesOnce`: a store wrapper counts `Enabled` calls → exactly 1 per `Capture`.
+  - Extract the file-writing part of `prepareSnapshotBuild` into a helper that takes the target names. Builds keep the `.build-*` names, and `stageCheck` uses its `.zd-check-<random>` names.
 - [ ] **Step 4: Run them.** `go test ./internal/composes/ ./internal/httpapi/` must PASS.
 - [ ] **Step 5: Commit.** `feat: snapshot zero-downtime services and deploy the rest as a subset`
 
@@ -578,4 +589,4 @@ Server Migration copies `panel.db` whole (`internal/migration/finalize.go`), so 
   2. Deploy once. Expect the drift warning, because the switch was just turned on.
   3. Run `while true; do curl -s -o /dev/null -w '%{http_code}\n' https://<domain>/; sleep 0.05; done | sort | uniq -c` during a code-only deploy. Expect only `200`.
   4. Edit the Domain's path and deploy. Expect the warning and about 2s of `404`.
-- [ ] **Step 6: Open PR 2** (`feat: zero-downtime deploy for services with a domain`) with the live-check results.
+- [ ] **Step 6: When the user asks, open PR 2** (`feat: zero-downtime deploy for services with a domain`) with the live-check results.
