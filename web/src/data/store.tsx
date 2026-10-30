@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { api } from './api';
 import type { LoginResult, ProjectInput } from './api';
-import type { Compose, ComposeDomains, DeploymentRequest, ComposeVariable, ComposePreview, EffectiveVariable, ServiceBindings, VariableSet, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeListing, VolumeAccess } from './types';
+import type { Compose, ComposeDomains, DeploymentRequest, ComposeVariable, ComposePreview, EffectiveVariable, ServiceBindings, VariableSet, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeListing, VolumeAccess, ZeroDowntimeService } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
 /**
@@ -72,6 +72,9 @@ type PanelValue = {
   deleteOrphanVolume: (composeId: number, name: string) => Promise<void>;
   /** The Compose's domains and the Services a domain can name. */
   loadDomains: (composeId: number) => Promise<ComposeDomains>;
+  /** The Compose's Services with a Domain and their zero-downtime switches (ADR-0023). */
+  loadZeroDowntime: (composeId: number) => Promise<ZeroDowntimeService[]>;
+  setZeroDowntime: (composeId: number, service: string, enabled: boolean) => Promise<void>;
   /** The resolved file a deploy would write for `yamlContent`, which need not be saved. */
   previewCompose: (composeId: number, yamlContent: string) => Promise<ComposePreview>;
   /** Each domain mutation refreshes the Compose afterwards, so `domainsChangedAt` reaches the page. */
@@ -692,6 +695,20 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [domainLocation, track],
   );
 
+  const loadZeroDowntime = useCallback(
+    (composeId: number) =>
+      track(`zero-downtime:${composeId}`, () => api.listZeroDowntime(domainLocation(composeId))),
+    [domainLocation, track],
+  );
+
+  const setZeroDowntime = useCallback(
+    (composeId: number, service: string, enabled: boolean) =>
+      track(`zero-downtime-save:${composeId}:${service}`, () =>
+        api.setZeroDowntime(domainLocation(composeId), service, enabled),
+      ),
+    [domainLocation, track],
+  );
+
   const previewCompose = useCallback(
     (composeId: number, yamlContent: string) =>
       track(`preview:${composeId}`, () => api.previewCompose(domainLocation(composeId), yamlContent)),
@@ -1074,6 +1091,8 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       saveBindings,
       loadEffectiveVariables,
       loadDomains,
+      loadZeroDowntime,
+      setZeroDowntime,
       previewCompose,
       updateDomain,
       deployCompose,
@@ -1134,6 +1153,8 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       saveBindings,
       loadEffectiveVariables,
       loadDomains,
+      loadZeroDowntime,
+      setZeroDowntime,
       previewCompose,
       updateDomain,
       deployCompose,

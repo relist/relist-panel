@@ -11,7 +11,13 @@ export function stepLabel(step: string): string {
 }
 
 function activeStepWord(step: string): string {
-  return step.startsWith('build:') ? 'building' : stepLabel(step).toLowerCase();
+  if (step.startsWith('build:')) {
+    return 'building';
+  }
+  if (step.startsWith('rollout:')) {
+    return 'rolling out';
+  }
+  return stepLabel(step).toLowerCase();
 }
 
 /** The one line a Deployment shows for itself: where it waits, what it does, or how it ended. */
@@ -24,6 +30,9 @@ export function deploymentHeadline(d: Deployment, active?: ActiveDeployment): st
     case 'running':
       if (d.step.startsWith('build:')) {
         return `Building ${d.step.slice('build:'.length)}`;
+      }
+      if (d.step.startsWith('rollout:')) {
+        return `Rolling out ${d.step.slice('rollout:'.length)}`;
       }
       return d.step ? stepLabel(d.step) : 'Starting';
     case 'failed':

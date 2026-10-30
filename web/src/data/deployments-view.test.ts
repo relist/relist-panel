@@ -29,6 +29,7 @@ describe('stepLabel', () => {
     expect(stepLabel('fetch')).toBe('Fetch');
     expect(stepLabel('build:api')).toBe('Build api');
     expect(stepLabel('deploy')).toBe('Deploy');
+    expect(stepLabel('rollout:web')).toBe('Rollout web');
   });
 });
 
@@ -51,6 +52,7 @@ describe('deploymentHeadline', () => {
   it('names the running step', () => {
     expect(deploymentHeadline(deployment({ status: 'running', step: 'build:api' }))).toBe('Building api');
     expect(deploymentHeadline(deployment({ status: 'running', step: 'fetch' }))).toBe('Fetch');
+    expect(deploymentHeadline(deployment({ status: 'running', step: 'rollout:web' }))).toBe('Rolling out web');
   });
 
   it('names the failed step', () => {

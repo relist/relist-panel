@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ApiError,
+  ZeroDowntimeRefusedError,
   IMAGES_URL,
   api,
   listImages,
@@ -239,6 +240,35 @@ describe('deployments, sources and orphan volumes', () => {
     expect(url).toBe('/api/projects/1/environments/2/composes/3/deployments');
     expect(init?.method).toBe('POST');
     expect(JSON.parse(String(init?.body))).toEqual({ mode: 'deploy', freshVolumes: true, confirmName: 'web' });
+  });
+
+  it('turns a 422 naming zero-downtime problems into ZeroDowntimeRefusedError', async () => {
+    const body = { error: "zero-downtime deploy is on for services that can't be rolled out", zeroDowntime: [{ service: 'web', reasons: ['has no healthcheck'] }] };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status: 422 })));
+    const err = await api.enqueueDeployment(location, { mode: 'deploy' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ZeroDowntimeRefusedError);
+    expect(err).toMatchObject({ status: 422, message: body.error, problems: body.zeroDowntime });
+  });
+
+  it('keeps any other 422 a plain ApiError', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"compose is blank"}', { status: 422 })));
+    const err = await api.enqueueDeployment(location, { mode: 'deploy' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).not.toBeInstanceOf(ZeroDowntimeRefusedError);
+    expect(err).toMatchObject({ status: 422, message: 'compose is blank' });
+  });
+
+  it('lists and sets zero-downtime switches', async () => {
+    const fetch = vi.fn(async (url: string, _init?: RequestInit) =>
+      url.endsWith('/zero-downtime') ? new Response('[{"service":"web","enabled":true,"reasons":[]}]') : new Response(null, { status: 204 }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    await expect(api.listZeroDowntime(location)).resolves.toEqual([{ service: 'web', enabled: true, reasons: [] }]);
+    await api.setZeroDowntime(location, 'web', false);
+    const [url, init] = fetch.mock.calls[1];
+    expect(url).toBe('/api/projects/1/environments/2/composes/3/zero-downtime/web');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({ enabled: false });
   });
 
   it('accepts a cancel answered 202 with an empty body', async () => {
