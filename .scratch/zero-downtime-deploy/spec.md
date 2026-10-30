@@ -45,8 +45,9 @@ The UI help text under the switch says these, and so does the README:
 - **Other Services still restart.** If a deploy recreates `db`, the app may return
   errors of its own while `db` is down. Compose only recreates `db` when its image or
   configuration changed.
-- **A deploy that changes the Service's Traefik labels has a short outage** of about
-  2 s, logged as a warning. This covers an edited Domain, the first deploy after the
+- **A deploy that changes the Service's Traefik labels has a short outage**, logged as
+  a warning. The spike measured 1.9–2.0 s of 404 over 3 runs, with the old Container
+  stopped as soon as the new one was healthy. This covers an edited Domain, the first deploy after the
   switch is turned on, and edited hand-written `traefik.*` labels. See "Label drift".
 
 ## Out of scope
@@ -105,7 +106,8 @@ stacks under the session scratchpad.
    define the same router or middleware with different values, Traefik logs `defined
    multiple times with different configurations` and drops the router. The Domain
    returned 404 for the whole overlap (79 of ~230 requests). With identical labels:
-   210/210 OK.
+   210/210 OK. When the old Container is stopped as soon as the new one is healthy, the
+   404s last 1.9–2.0 s (3 runs, 34–35 requests each).
 9. **`docker pause` on the old Container doesn't drain it.** Traefik kept routing to it,
    which made things worse.
 
@@ -185,9 +187,11 @@ traefik.http.middlewares.<n>-retry.retry.attempts=4
 traefik.http.services.<n>.loadbalancer.serversTransport=relist-fastdial@file
 ```
 
-It also puts `<n>-retry` first in the router's `middlewares` chain, ahead of strip,
-prefix and the user's own middlewares, so the retry covers the whole chain. The
-HTTP→HTTPS redirect router doesn't get it. Services with the switch off get no new
+It also puts `<n>-retry` **last** in the router's `middlewares` chain, after strip,
+prefix and the user's own middlewares, right in front of the service. Only the dial to
+the backend needs retrying. In last place, a retried attempt can't run stripprefix or
+addprefix twice on a request that was already changed, and it can't call the user's
+forwardAuth or rateLimit twice. The HTTP→HTTPS redirect router doesn't get it. Services with the switch off get no new
 labels, so their resolved file stays byte-for-byte what it is today.
 
 The set of Services with the switch on is read when the Deployment is queued and stored
@@ -197,8 +201,16 @@ afterwards does not affect a Deployment that is already queued.
 ## Checks when queueing
 
 These run in `POST …/deployments` after `CheckDeployable`, against the same resolved
-YAML that goes into the snapshot. That covers the Compose page, Redeploy and a Project
+files that go into the snapshot. That covers the Compose page, Redeploy and a Project
 deploy alike.
+
+The stored YAML keeps `${VAR}` references, and Compose fills them in from the `.env`
+file the panel writes. So the checks never parse the raw YAML. They read the output of
+`docker compose config --format json` run over the snapshot's files: YAML, env file and
+Variable Set files, staged in a temporary directory, as the build plan already stages
+them. The panel already runs `compose config` for volume plans. `ports:
+["${PORT}:80"]` and `deploy.replicas: ${N}` are therefore checked with their real
+values.
 
 For each Service with the switch on and at least one Domain:
 
@@ -207,7 +219,7 @@ For each Service with the switch on and at least one Domain:
 | no `healthcheck`, `healthcheck.disable: true`, or `test: ["NONE"]` | "has no healthcheck" |
 | `container_name` set | "sets container_name; two Containers can't share a name" |
 | a `ports:` entry that publishes a fixed host port (`"8080:80"`, long syntax with `published`) | "publishes host port 8080; two Containers can't bind it" |
-| `deploy.replicas` greater than 1 | "sets deploy.replicas; rollout supports one replica" |
+| `deploy.replicas` or `scale` greater than 1 | "runs more than one replica; rollout supports one" |
 
 If any Service fails, the endpoint answers **422** and creates no Deployment:
 
@@ -250,9 +262,11 @@ passes. The example: `web` has the switch on, `worker` and `db` don't.
       `com.docker.compose.oneoff=False`, in state `running`. Call this set OLD.
       - If OLD is empty, run `dc up -d <build flag> --no-deps web`, record the "no
         running container" warning, and end the step.
-   2. Through the Engine API, read the `traefik.*` labels of one OLD Container and
-      compare them with the Service's labels in the resolved file. If they differ, the
-      step is in **drift mode** (see below).
+   2. Through the Engine API, read the `traefik.*` labels of one OLD Container. Compare
+      them with the Service's `traefik.*` labels from `dc config --format json` on the
+      files just written. Both sides are interpolated values, so a hand-written label
+      such as ``Host(`${HOST}`)`` doesn't count as drift when the value is the same. If
+      they differ, the step is in **drift mode** (see below).
    3. Run `dc up -d <build flag> --no-deps --no-recreate --scale web=<len(OLD)+1> web`.
    4. List again. NEW is the one Container that isn't in OLD. If there isn't exactly
       one, the step fails ("could not identify the new container").
@@ -277,6 +291,12 @@ Container brings the Service back to one.
 **Wait limit** = `start_period + (interval + timeout) × retries + 10s`. Unset fields use
 Docker's defaults (interval 30 s, timeout 30 s, retries 3, start_period 0). The limit is
 also capped by the Deploy step's existing deadline.
+
+**Cleanup context.** Removing NEW after a failure, and stopping and removing OLD, run on
+a context that is not tied to the Deploy step's deadline. Each Engine call gets its own
+timeout instead: 30 s, or `StopTimeout` + 30 s for a stop. If the deadline ends the
+health wait, the removal of NEW still runs. The log says "kept the previous container"
+only when that removal succeeded. If it failed, the log names the leftover container.
 
 **Drift mode** shortens the overlap, because during the overlap the conflicting labels
 make Traefik drop the router. The step log says: "web's Traefik labels changed (Domain
@@ -354,7 +374,8 @@ pages, as AGENTS.md requires, and follow `docs/GUIDELINES.md`.
 | Transport file write fails during a deploy | Deploy step fails before any Container changes |
 | `--scale` command fails | step fails; OLD untouched; any Container it did create is found by listing and removed |
 | NEW not identified | step fails; every non-OLD Container of the Service is removed |
-| NEW unhealthy, exited or over the wait limit | NEW removed, OLD keeps serving, Deployment failed |
+| NEW unhealthy, exited or over the wait limit | NEW removed (on the cleanup context, even past the deadline), OLD keeps serving, Deployment failed |
+| Removing NEW fails | Deployment failed. The log names NEW's ID; OLD and NEW both stay in Traefik until the next deploy counts both as OLD |
 | Stop or remove of OLD fails | step fails with the Engine error. NEW is serving, so OLD is left for the next deploy to clear, which counts it as OLD |
 | Panel stops mid-rollout | the next deploy finds ≥2 running Containers, counts them all as OLD and converges |
 | Transport file deleted by hand | the panel rewrites it at the next startup or deploy. Until then the Domains of Services with the switch on return 404 (spike-proven) |
@@ -362,10 +383,13 @@ pages, as AGENTS.md requires, and follow `docs/GUIDELINES.md`.
 ## Testing
 
 - **domains labels**: switch on → retry middleware and transport label on every Domain
-  of the Service, retry first in the chain, none on the `-http` redirect router. Switch
+  of the Service, retry last in the chain (after strip, prefix and the user's own
+  middlewares), none on the `-http` redirect router. Switch
   off → the generated labels are identical to today's, pinned with a golden test.
 - **Checks**: each reason (no healthcheck, `disable`, `NONE`, `container_name`,
-  short/long published port, unpublished port allowed, replicas > 1). Switch on without
+  short/long published port, unpublished port allowed, `deploy.replicas` or `scale`
+  > 1), including values that come from `${VAR}`. Drift: a hand-written label with a
+  `${VAR}` whose value is unchanged is not drift. Switch on without
   a Domain is ignored. A renamed Service's row is ignored.
 - **Snapshot**: the switch set is frozen at enqueue. Toggling after enqueue doesn't
   change the Deployment. An old snapshot without the field deploys with every switch
@@ -389,6 +413,14 @@ pages, as AGENTS.md requires, and follow `docs/GUIDELINES.md`.
 - **Manual check on a real install** before merge: rerun the spike's load loop against a
   Domain on the live panel's Traefik for one code-only deploy (expect 0 errors) and one
   deploy after a Domain edit (expect the warning and an outage of about 2 s).
+
+## Open question
+
+- **What happens to OLD's anonymous volumes.** Each rollout as written (`v=false`)
+  leaves OLD's anonymous volumes on the host, unreachable, and they accumulate one set
+  per deploy. Today's recreate passes them on to the new Container instead. The choice
+  is between `v=true` with a log line, which deletes data nobody can reach any more, and
+  keeping them, which uses more disk. The operator decides this.
 
 ## Resolved questions
 
