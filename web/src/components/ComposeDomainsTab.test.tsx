@@ -11,6 +11,8 @@ const panel = vi.hoisted(() => ({
   createDomain: vi.fn(),
   deleteDomain: vi.fn(),
   loadDomains: vi.fn(),
+  loadZeroDowntime: vi.fn(),
+  setZeroDowntime: vi.fn(),
   updateDomain: vi.fn(),
 }));
 
@@ -61,11 +63,12 @@ function deferred<T>() {
 }
 
 function renderTab(overrides: Partial<Compose> = {}) {
-  return render(<ComposeDomainsTab compose={{ ...compose, ...overrides }} deploying={false} onDeploy={() => undefined} />);
+  return render(<ComposeDomainsTab compose={{ ...compose, ...overrides }} deploying={false} onDeploy={() => undefined} onOpenEditor={() => undefined} />);
 }
 
 beforeEach(() => {
   vi.resetAllMocks();
+  panel.loadZeroDowntime.mockResolvedValue([]);
 });
 
 describe('ComposeDomainsTab', () => {
@@ -175,7 +178,7 @@ describe('ComposeDomainsTab', () => {
     const { container, rerender } = renderTab();
     await screen.findByText('api.example.com/v1');
 
-    rerender(<ComposeDomainsTab compose={{ ...compose, id: 8 }} deploying={false} onDeploy={() => undefined} />);
+    rerender(<ComposeDomainsTab compose={{ ...compose, id: 8 }} deploying={false} onDeploy={() => undefined} onOpenEditor={() => undefined} />);
 
     expect(container.querySelector('.ant-skeleton')).not.toBeNull();
     expect(screen.queryByText('api.example.com/v1')).toBeNull();

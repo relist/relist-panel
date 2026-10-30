@@ -1001,6 +1001,7 @@ export function ComposePage() {
                 compose={compose}
                 deploying={isPending(`deploy:${compose.id}`)}
                 onDeploy={() => void deploy()}
+                onOpenEditor={() => navigate(paths.compose(project.id, environment.id, compose.id))}
               />
             ),
             key: 'domains',

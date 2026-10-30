@@ -9,6 +9,7 @@ import { domainUrl, httpsTag } from '../pages/domains-view';
 import { DomainFormModal } from './DomainFormModal';
 import { EmptyState } from './primitives';
 import { RedeployBanner } from './RedeployBanner';
+import { ZeroDowntimeCard } from './ZeroDowntimeCard';
 
 const { Text } = Typography;
 
@@ -26,10 +27,13 @@ export function ComposeDomainsTab({
   compose,
   deploying,
   onDeploy,
+  onOpenEditor,
 }: {
   compose: Compose;
   deploying: boolean;
   onDeploy: () => void;
+  /** Sends the operator to the Editor tab, where a zero-downtime problem is fixed. */
+  onOpenEditor: () => void;
 }) {
   const { createDomain, deleteDomain, loadDomains, updateDomain } = usePanel();
   const [data, setData] = useState<{ composeId: number; payload?: ComposeDomains; error?: string; refreshing?: boolean }>();
@@ -216,6 +220,7 @@ export function ComposeDomainsTab({
           />
         )}
       </Card>
+      <ZeroDowntimeCard compose={compose} onOpenEditor={onOpenEditor} />
       <DomainFormModal
         domain={modal?.domain}
         error={saveError}
