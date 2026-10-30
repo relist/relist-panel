@@ -135,17 +135,87 @@ func TestRolloutNewExited(t *testing.T) {
 	}
 }
 
+// The deadline passes while Compose is still scaling: the Container it
+// created must be found and removed even though ctx is done by then.
 func TestRolloutDeadlineStillRemovesNew(t *testing.T) {
 	f := newRollout(t, "b")
 	f.health("b", EngineState{Running: true, Health: "starting"})
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err := f.svc.RunRollout(ctx, f.target, "web", RolloutOptions{Deadline: time.Now().Add(-time.Second), Out: f.out})
+	defer cancel()
+	scale := f.runner.onScale
+	f.runner.onScale = func(o ScaleOptions) { scale(o); cancel() }
+	_, err := f.svc.RunRollout(ctx, f.target, "web", RolloutOptions{Out: f.out})
 	if err == nil {
 		t.Fatal("want a failure")
 	}
 	if calls := f.engine.recorded(); calls[len(calls)-1] != "remove b force=true v=true" {
 		t.Fatalf("engine calls = %v, want NEW removed after the deadline", calls)
+	}
+}
+
+// A new Container that crash-loops is "restarting", not running, when listed.
+func TestRolloutRemovesNewThatIsNotRunning(t *testing.T) {
+	f := newRollout(t)
+	f.runner.onScale = func(ScaleOptions) {
+		f.engine.mu.Lock()
+		defer f.engine.mu.Unlock()
+		f.engine.containers = append(f.engine.containers, EngineContainer{ID: "b", Name: "p-web-2", Service: "web"})
+	}
+	f.health("b", EngineState{Running: false})
+	if _, err := f.run(RolloutOptions{}); err == nil {
+		t.Fatal("want a failure")
+	}
+	if calls := f.engine.recorded(); calls[len(calls)-1] != "remove b force=true v=true" {
+		t.Fatalf("engine calls = %v, want the non-running NEW removed", calls)
+	}
+}
+
+// A stopped Container of the Service left by an earlier run would be reused
+// by --no-recreate instead of a new one from the current file.
+func TestRolloutRemovesStaleContainersBeforeScaling(t *testing.T) {
+	f := newRollout(t, "b")
+	f.engine.containers = append(f.engine.containers, EngineContainer{ID: "z", Name: "p-web-9", Service: "web"})
+	f.health("b", EngineState{Running: true, Health: "healthy"})
+	if _, err := f.run(RolloutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls := f.engine.recorded(); !reflect.DeepEqual(calls[:3], []string{"inspect a", "remove z force=true v=false", "inspect b"}) {
+		t.Fatalf("engine calls = %v, want the stale container removed before the scale", calls)
+	}
+	if got := f.runner.scales[0].Replicas; got != 2 {
+		t.Fatalf("scaled to %d, want 2", got)
+	}
+}
+
+// A Service whose profile is off is not in compose config; naming it in
+// `up` would start it.
+func TestRolloutSkipsServiceOutsideActiveProfiles(t *testing.T) {
+	f := newRollout(t, "b")
+	f.engine.containers = nil
+	f.runner.config = []byte(`{"services":{"db":{}}}`)
+	if _, err := f.run(RolloutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.runner.ups) != 0 || len(f.runner.scales) != 0 {
+		t.Fatalf("ups = %+v scales = %+v, want nothing started", f.runner.ups, f.runner.scales)
+	}
+	if !strings.Contains(f.out.String(), "web is not in the active profiles; skipped") {
+		t.Fatalf("log = %q", f.out.String())
+	}
+}
+
+// compose config escapes $ as $$; labels with a literal $ are not drift.
+func TestRolloutDollarLabelIsNotDrift(t *testing.T) {
+	f := newRollout(t, "b")
+	f.runner.config = []byte(`{"services":{"web":{"healthcheck":{"test":["CMD","true"]},"labels":{"traefik.http.middlewares.a.basicauth.users":"u:$$apr1$$x"}}}}`)
+	f.health("a", EngineState{Running: true, Health: "healthy", Labels: map[string]string{"traefik.http.middlewares.a.basicauth.users": "u:$apr1$x"}})
+	f.health("b", EngineState{Running: true, Health: "healthy"})
+	warnings, err := f.run(RolloutOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want no drift", warnings)
 	}
 }
 

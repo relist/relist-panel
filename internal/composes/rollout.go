@@ -2,6 +2,7 @@ package composes
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
@@ -50,9 +51,28 @@ func (s *Service) RunRollout(ctx context.Context, t DeployTarget, service string
 		return nil, failure(FailureInternal, errNoEngine.Error(), errNoEngine)
 	}
 	req := t.Request
-	old, err := s.serviceContainers(ctx, req.ProjectName, service, nil)
+	config, err := s.runner.Config(ctx, req)
+	if err != nil {
+		return nil, failure(FailureRunner, "could not read compose config: "+err.Error(), err)
+	}
+	if active, err := configHasService(config, service); err != nil {
+		return nil, failure(FailureInternal, err.Error(), err)
+	} else if !active {
+		// Naming it in `up` would start a Service whose profile is off.
+		fmt.Fprintf(out, "rollout %s: %s is not in the active profiles; skipped\n", service, service)
+		return nil, nil
+	}
+	all, err := s.serviceContainers(ctx, req.ProjectName, service, nil)
 	if err != nil {
 		return nil, failure(FailureRunner, "could not list containers: "+err.Error(), err)
+	}
+	var old, stale []EngineContainer
+	for _, c := range all {
+		if c.Running {
+			old = append(old, c)
+		} else {
+			stale = append(stale, c)
+		}
 	}
 	if len(old) == 0 {
 		warning := service + " had no running container; deployed without rollout"
@@ -80,10 +100,6 @@ func (s *Service) RunRollout(ctx context.Context, t DeployTarget, service string
 		}
 	}
 
-	config, err := s.runner.Config(ctx, req)
-	if err != nil {
-		return nil, failure(FailureRunner, "could not read compose config: "+err.Error(), err)
-	}
 	wanted, err := zerodowntime.TraefikLabels(config, service)
 	if err != nil {
 		return nil, failure(FailureInternal, err.Error(), err)
@@ -103,12 +119,27 @@ func (s *Service) RunRollout(ctx context.Context, t DeployTarget, service string
 		warnings = append(warnings, warning)
 	}
 
-	oldIDs := map[string]bool{}
-	for _, c := range old {
-		oldIDs[c.ID] = true
+	// A stopped Container left by an earlier run counts toward --scale, and
+	// --no-recreate would start it instead of a new one from the current file.
+	for _, c := range stale {
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		err := s.engine.Remove(cctx, c.ID, true, false)
+		cancel()
+		if err != nil {
+			return nil, failure(FailureRunner, "could not remove the stopped container "+c.Name+": "+err.Error(), err)
+		}
+		fmt.Fprintf(out, "rollout %s: removed the stopped container %s\n", service, c.Name)
+	}
+
+	before := map[string]bool{}
+	for _, c := range all {
+		before[c.ID] = true
 	}
 	scaleErr := s.runner.Scale(ctx, req, ScaleOptions{Service: service, Replicas: len(old) + 1, Build: opts.Build, Out: opts.Out})
-	started, listErr := s.serviceContainers(ctx, req.ProjectName, service, oldIDs)
+	// Listed past the deadline too, so whatever the scale created is removed.
+	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	started, listErr := s.serviceContainers(lctx, req.ProjectName, service, before)
+	cancel()
 	if scaleErr != nil || listErr != nil || len(started) != 1 {
 		s.removeNew(ctx, started)
 		switch {
@@ -157,7 +188,7 @@ func (s *Service) RunRollout(ctx context.Context, t DeployTarget, service string
 	return warnings, nil
 }
 
-// serviceContainers lists service's running Containers, leaving out skip.
+// serviceContainers lists service's Containers in any state, leaving out skip.
 func (s *Service) serviceContainers(ctx context.Context, project, service string, skip map[string]bool) ([]EngineContainer, error) {
 	all, err := s.engine.ProjectContainers(ctx, project)
 	if err != nil {
@@ -165,7 +196,7 @@ func (s *Service) serviceContainers(ctx context.Context, project, service string
 	}
 	var containers []EngineContainer
 	for _, c := range all {
-		if c.Service == service && c.Running && !skip[c.ID] {
+		if c.Service == service && !skip[c.ID] {
 			containers = append(containers, c)
 		}
 	}
@@ -211,6 +242,19 @@ func (s *Service) removeNew(ctx context.Context, containers []EngineContainer) e
 		cancel()
 	}
 	return first
+}
+
+// configHasService reports whether compose config lists service, which it
+// does not when the Service's profile is off.
+func configHasService(configJSON []byte, service string) (bool, error) {
+	var config struct {
+		Services map[string]json.RawMessage `json:"services"`
+	}
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return false, fmt.Errorf("read compose config: %w", err)
+	}
+	_, ok := config.Services[service]
+	return ok, nil
 }
 
 func traefikOnly(labels map[string]string) map[string]string {

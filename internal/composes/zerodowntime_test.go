@@ -29,13 +29,20 @@ type fakeEngine struct {
 	onScale    func() // runs when the runner scales; adds NEW
 }
 
-func (e *fakeEngine) ProjectContainers(context.Context, string) ([]EngineContainer, error) {
+// Like the real Engine, every call fails once its ctx is done.
+func (e *fakeEngine) ProjectContainers(ctx context.Context, _ string) ([]EngineContainer, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]EngineContainer(nil), e.containers...), nil
 }
 
-func (e *fakeEngine) Inspect(_ context.Context, id string) (EngineState, error) {
+func (e *fakeEngine) Inspect(ctx context.Context, id string) (EngineState, error) {
+	if err := ctx.Err(); err != nil {
+		return EngineState{}, err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.calls = append(e.calls, "inspect "+id)
@@ -50,14 +57,20 @@ func (e *fakeEngine) Inspect(_ context.Context, id string) (EngineState, error) 
 	return state, nil
 }
 
-func (e *fakeEngine) Stop(_ context.Context, id string) error {
+func (e *fakeEngine) Stop(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.calls = append(e.calls, "stop "+id)
 	return nil
 }
 
-func (e *fakeEngine) Remove(_ context.Context, id string, force, volumes bool) error {
+func (e *fakeEngine) Remove(ctx context.Context, id string, force, volumes bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.calls = append(e.calls, "remove "+id+" force="+boolString(force)+" v="+boolString(volumes))
@@ -346,7 +359,21 @@ func TestZeroDowntimeProblemsConfigFailureIsInvalid(t *testing.T) {
 	runner.configErr = errors.New("docker compose config: exit status 1: required variable X is missing a value\nmore")
 	_, err = svc.ZeroDowntimeProblems(context.Background(), captured)
 	var failure *DeployFailure
-	if !errors.As(err, &failure) || failure.Kind != FailureInvalid || failure.Message != "compose config failed: docker compose config: exit status 1: required variable X is missing a value" {
+	if !errors.As(err, &failure) || failure.Kind != FailureInvalid || failure.Message != "compose config failed: required variable X is missing a value" {
 		t.Fatalf("err = %#v", err)
+	}
+}
+
+// dockerexec wraps a failed command as "docker <argv>: exit status N: <stderr>",
+// and Compose prints its warnings before the error. The operator needs the error.
+func TestFirstErrorLineSkipsArgvAndWarnings(t *testing.T) {
+	err := errors.New("docker compose -p relist-c1 -f /data/p/e/c/.zd-check-0a1b.yml --env-file /data/p/e/c/.zd-check-0a1b.env config --format json: exit status 1: " +
+		"time=\"2026-10-31T10:00:00Z\" level=warning msg=\"The \\\"Y\\\" variable is not set. Defaulting to a blank string.\"\n" +
+		"required variable X is missing a value: X is required")
+	if got, want := firstErrorLine(err), "required variable X is missing a value: X is required"; got != want {
+		t.Fatalf("firstErrorLine = %q, want %q", got, want)
+	}
+	if got := firstErrorLine(errors.New("plain failure\nmore")); got != "plain failure" {
+		t.Fatalf("firstErrorLine(plain) = %q", got)
 	}
 }

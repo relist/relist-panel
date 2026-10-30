@@ -106,7 +106,8 @@ func (h *healthcheck) enabled() bool {
 	return h != nil && !h.Disable && len(h.Test) > 0 && h.Test[0] != "NONE"
 }
 
-// TraefikLabels returns service's labels whose key starts with "traefik.".
+// TraefikLabels returns service's labels whose key starts with "traefik.",
+// with compose config's $$ turned back into the $ a running Container holds.
 func TraefikLabels(configJSON []byte, service string) (map[string]string, error) {
 	c, err := parse(configJSON)
 	if err != nil {
@@ -115,7 +116,7 @@ func TraefikLabels(configJSON []byte, service string) (map[string]string, error)
 	labels := map[string]string{}
 	for k, v := range c.Services[service].Labels {
 		if strings.HasPrefix(k, "traefik.") {
-			labels[k] = v
+			labels[k] = strings.ReplaceAll(v, "$$", "$")
 		}
 	}
 	return labels, nil

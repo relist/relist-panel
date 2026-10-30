@@ -180,7 +180,21 @@ func (s *Service) removeOrphans(ctx context.Context, project, yamlContent string
 	return nil
 }
 
+// firstErrorLine is the line of a failed command's output that says what went
+// wrong: dockerexec's "docker <argv>: exit status N: " prefix is dropped, and
+// so are the warnings Compose prints before its error.
 func firstErrorLine(err error) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(err.Error()), "\n")
-	return line
+	text := strings.TrimSpace(err.Error())
+	if _, rest, ok := strings.Cut(text, ": exit status "); ok {
+		if _, stderr, ok := strings.Cut(rest, ": "); ok {
+			text = stderr
+		}
+	}
+	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" && !strings.Contains(line, "level=warning") {
+			return line
+		}
+	}
+	return strings.TrimSpace(lines[0])
 }

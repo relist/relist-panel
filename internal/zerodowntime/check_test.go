@@ -102,3 +102,17 @@ func TestWaitLimit(t *testing.T) {
 		}
 	}
 }
+
+// compose config writes a literal $ back as $$; the running Container's label
+// holds one $. Comparing the two must not see drift.
+func TestTraefikLabelsUnescapesDollar(t *testing.T) {
+	config := []byte(`{"services":{"web":{"labels":{"traefik.http.middlewares.auth.basicauth.users":"u:$$apr1$$abc","traefik.http.routers.r.rule":"PathRegexp(` + "`^/a$$`" + `)"}}}}`)
+	got, err := TraefikLabels(config, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"traefik.http.middlewares.auth.basicauth.users": "u:$apr1$abc", "traefik.http.routers.r.rule": "PathRegexp(`^/a$`)"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("TraefikLabels = %v, want %v", got, want)
+	}
+}
