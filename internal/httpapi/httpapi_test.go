@@ -2667,6 +2667,14 @@ func (f *fakeComposeRunner) Status(_ context.Context, req composes.RunRequest) (
 	return composes.ComposeStatus{Running: 1, Total: 1}, nil
 }
 
+func (f *fakeComposeRunner) Config(context.Context, composes.RunRequest) ([]byte, error) {
+	return []byte(`{"services":{}}`), nil
+}
+
+func (f *fakeComposeRunner) Scale(context.Context, composes.RunRequest, composes.ScaleOptions) error {
+	return nil
+}
+
 func (f *fakeComposeRunner) Logs(_ context.Context, req composes.RunRequest) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -58,7 +58,18 @@ type ComposeStatus struct {
 // set, receives the command's stdout and stderr as they arrive.
 type UpOptions struct {
 	Build bool
-	Out   io.Writer
+	// Services, when set, limits up to them, with --no-deps (ADR-0023).
+	Services []string
+	Out      io.Writer
+}
+
+// ScaleOptions starts one more Container of Service next to the running ones,
+// without recreating them: Replicas is how many there are afterwards.
+type ScaleOptions struct {
+	Service  string
+	Replicas int
+	Build    bool
+	Out      io.Writer
 }
 
 // BuildOptions tunes building one Service. Out, when set, receives the
@@ -82,6 +93,10 @@ type ComposeRunner interface {
 	Restart(ctx context.Context, req RunRequest) error
 	Status(ctx context.Context, req RunRequest) (ComposeStatus, error)
 	Logs(ctx context.Context, req RunRequest) (string, error)
+	// Config is `docker compose config --format json`: the file as Compose
+	// resolves it, interpolated and with inactive profiles dropped.
+	Config(ctx context.Context, req RunRequest) ([]byte, error)
+	Scale(ctx context.Context, req RunRequest, opts ScaleOptions) error
 }
 
 type Service struct {

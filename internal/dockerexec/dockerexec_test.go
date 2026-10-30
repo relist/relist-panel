@@ -13,24 +13,39 @@ import (
 )
 
 func TestUpArgsRemoveOrphanContainersButNeverVolumes(t *testing.T) {
-	got := upArgs(true)
+	got := upArgs(composes.UpOptions{Build: true})
 	want := []string{"up", "-d", "--build", "--remove-orphans"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("upArgs(true) = %v, want %v", got, want)
+		t.Fatalf("upArgs(build) = %v, want %v", got, want)
 	}
 	for _, arg := range got {
 		if arg == "-v" || arg == "--volumes" {
-			t.Fatalf("upArgs(true) contains %q; deploy must never remove volumes", arg)
+			t.Fatalf("upArgs(build) contains %q; deploy must never remove volumes", arg)
 		}
 	}
 }
 
 func TestUpArgs(t *testing.T) {
-	if got, want := upArgs(true), []string{"up", "-d", "--build", "--remove-orphans"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("upArgs(true) = %v, want %v", got, want)
+	if got, want := upArgs(composes.UpOptions{Build: true}), []string{"up", "-d", "--build", "--remove-orphans"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("upArgs(build) = %v, want %v", got, want)
 	}
-	if got, want := upArgs(false), []string{"up", "-d", "--no-build", "--remove-orphans"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("upArgs(false) = %v, want %v", got, want)
+	if got, want := upArgs(composes.UpOptions{}), []string{"up", "-d", "--no-build", "--remove-orphans"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("upArgs() = %v, want %v", got, want)
+	}
+	got := upArgs(composes.UpOptions{Services: []string{"worker", "db"}})
+	if want := []string{"up", "-d", "--no-build", "--no-deps", "--remove-orphans", "worker", "db"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("upArgs(services) = %v, want %v", got, want)
+	}
+}
+
+func TestScaleArgs(t *testing.T) {
+	got := scaleArgs(composes.ScaleOptions{Service: "web", Replicas: 2})
+	if want := []string{"up", "-d", "--no-build", "--no-deps", "--no-recreate", "--scale", "web=2", "web"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scaleArgs = %v, want %v", got, want)
+	}
+	got = scaleArgs(composes.ScaleOptions{Service: "web", Replicas: 3, Build: true})
+	if want := []string{"up", "-d", "--build", "--no-deps", "--no-recreate", "--scale", "web=3", "web"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scaleArgs(build) = %v, want %v", got, want)
 	}
 }
 

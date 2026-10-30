@@ -128,6 +128,12 @@ func (*snapshotRunner) Restart(context.Context, composes.RunRequest) error      
 func (*snapshotRunner) Status(context.Context, composes.RunRequest) (composes.ComposeStatus, error) {
 	return composes.ComposeStatus{}, nil
 }
+func (*snapshotRunner) Config(context.Context, composes.RunRequest) ([]byte, error) {
+	return []byte(`{"services":{}}`), nil
+}
+func (*snapshotRunner) Scale(context.Context, composes.RunRequest, composes.ScaleOptions) error {
+	return nil
+}
 func (*snapshotRunner) Logs(context.Context, composes.RunRequest) (string, error) { return "", nil }
 
 type countedGit struct {

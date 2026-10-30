@@ -51,7 +51,11 @@ func (r *recordingRunner) Restart(context.Context, RunRequest) error { return ni
 func (r *recordingRunner) Status(context.Context, RunRequest) (ComposeStatus, error) {
 	return ComposeStatus{}, nil
 }
-func (r *recordingRunner) Logs(context.Context, RunRequest) (string, error) { return "", nil }
+func (r *recordingRunner) Config(context.Context, RunRequest) ([]byte, error) {
+	return []byte(`{"services":{}}`), nil
+}
+func (r *recordingRunner) Scale(context.Context, RunRequest, ScaleOptions) error { return nil }
+func (r *recordingRunner) Logs(context.Context, RunRequest) (string, error)      { return "", nil }
 
 type recordingCanceler struct {
 	runner *recordingRunner
