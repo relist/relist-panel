@@ -20,6 +20,7 @@ import (
 	"relist-panel/internal/database"
 	"relist-panel/internal/dockerexec"
 	"relist-panel/internal/dockernet"
+	"relist-panel/internal/domains"
 	"relist-panel/internal/hostmetrics"
 	"relist-panel/internal/httpapi"
 	"relist-panel/internal/metrics"
@@ -133,6 +134,11 @@ func main() {
 	// fatal.
 	if err := certificates.Reconcile(ctx, certificates.NewStore(db), cfg.DataDir); err != nil {
 		log.Printf("reconcile certificates: %v", err)
+	}
+	// The transport zero-downtime Domains name (ADR-0023) must always exist:
+	// a Domain whose label names a missing one returns 404.
+	if err := domains.WriteTransportFile(certificates.DynamicDir(cfg.DataDir)); err != nil {
+		log.Printf("write traefik transport file: %v", err)
 	}
 
 	// The metrics loop (ADR-0006): one sampler for the panel's lifetime,

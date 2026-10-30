@@ -49,7 +49,7 @@ func labelsOf(t *testing.T, services map[string]any, name string) map[string]str
 func inject(t *testing.T, src string, ds ...domains.Domain) (map[string]any, []string) {
 	t.Helper()
 	services := parseServices(t, src)
-	warnings, err := domains.Inject(services, 12, ds, network)
+	warnings, err := domains.Inject(services, 12, ds, network, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestInjectRefusesMissingOrNetworkModeService(t *testing.T) {
 		{hosted, `domain a.example.com/ points at service "host", which sets network_mode and cannot take a domain`},
 	} {
 		services := parseServices(t, src)
-		_, err := domains.Inject(services, 12, []domains.Domain{base(), tc.domain}, network)
+		_, err := domains.Inject(services, 12, []domains.Domain{base(), tc.domain}, network, nil)
 		var target *domains.TargetError
 		if !errors.As(err, &target) {
 			t.Fatalf("err = %v, want *TargetError", err)
@@ -313,5 +313,59 @@ func TestInjectRefusesMissingOrNetworkModeService(t *testing.T) {
 		if _, ok := services["web"].(map[string]any)["labels"]; ok {
 			t.Error("services were mutated despite the refusal")
 		}
+	}
+}
+
+// zeroDowntimeDomain has every middleware the panel generates plus one of the
+// user's, so the retry's place at the end of the chain is visible.
+func zeroDowntimeDomain() domains.Domain {
+	d := base()
+	d.Path, d.StripPath, d.InternalPath = "/api", true, "/v1"
+	d.Middlewares = []string{"auth@file"}
+	d.HTTPS = true
+	return d
+}
+
+func TestInjectZeroDowntime(t *testing.T) {
+	services := parseServices(t, plain)
+	if _, err := domains.Inject(services, 12, []domains.Domain{zeroDowntimeDomain()}, network, map[string]bool{"web": true}); err != nil {
+		t.Fatal(err)
+	}
+	assertLabels(t, labelsOf(t, services, "web"), map[string]string{
+		"traefik.http.routers.relist-c12-d3.middlewares":                    "relist-c12-d3-strip,relist-c12-d3-prefix,auth@file,relist-c12-d3-retry",
+		"traefik.http.middlewares.relist-c12-d3-retry.retry.attempts":       "4",
+		"traefik.http.services.relist-c12-d3.loadbalancer.serversTransport": "relist-fastdial@file",
+		"traefik.http.routers.relist-c12-d3-http.middlewares":               "relist-c12-d3-redirect",
+	})
+}
+
+// TestInjectWithoutZeroDowntimeUnchanged pins every label a domain gets with
+// the switch off, so turning the feature on elsewhere can't change them.
+func TestInjectWithoutZeroDowntimeUnchanged(t *testing.T) {
+	services := parseServices(t, plain)
+	if _, err := domains.Inject(services, 12, []domains.Domain{zeroDowntimeDomain()}, network, map[string]bool{"api": true}); err != nil {
+		t.Fatal(err)
+	}
+	rule := "Host(`a.example.com`) && PathPrefix(`/api`)"
+	want := map[string]string{
+		"traefik.enable":         "true",
+		"traefik.docker.network": network,
+		"traefik.http.middlewares.relist-c12-d3-strip.stripprefix.prefixes":        "/api",
+		"traefik.http.middlewares.relist-c12-d3-prefix.addprefix.prefix":           "/v1",
+		"traefik.http.routers.relist-c12-d3.rule":                                  rule,
+		"traefik.http.routers.relist-c12-d3.entrypoints":                           "websecure",
+		"traefik.http.routers.relist-c12-d3.middlewares":                           "relist-c12-d3-strip,relist-c12-d3-prefix,auth@file",
+		"traefik.http.routers.relist-c12-d3.service":                               "relist-c12-d3",
+		"traefik.http.services.relist-c12-d3.loadbalancer.server.port":             "3000",
+		"traefik.http.routers.relist-c12-d3.tls":                                   "true",
+		"traefik.http.routers.relist-c12-d3-http.rule":                             rule,
+		"traefik.http.routers.relist-c12-d3-http.entrypoints":                      "web",
+		"traefik.http.routers.relist-c12-d3-http.middlewares":                      "relist-c12-d3-redirect",
+		"traefik.http.routers.relist-c12-d3-http.service":                          "relist-c12-d3",
+		"traefik.http.middlewares.relist-c12-d3-redirect.redirectscheme.scheme":    "https",
+		"traefik.http.middlewares.relist-c12-d3-redirect.redirectscheme.permanent": "true",
+	}
+	if got := labelsOf(t, services, "web"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("labels =\n%v\nwant\n%v", got, want)
 	}
 }

@@ -17,7 +17,7 @@ func TestRuleAndEntrypointMatchGeneratedLabels(t *testing.T) {
 	}
 	for _, d := range cases {
 		labels := readLabels(nil)
-		addDomain(labels, 9, d)
+		addDomain(labels, 9, d, false)
 		router := routerPrefix + RouterName(9, d.ID)
 		if rule, _ := labels.get(router + ".rule"); Rule(d) != rule {
 			t.Errorf("domain %d: Rule() = %q, label %q", d.ID, Rule(d), rule)

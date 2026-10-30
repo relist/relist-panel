@@ -1174,7 +1174,7 @@ func resolveCompose(yamlContent, networkName, envFilePath string, composeID int6
 	// their own Traefik labels.
 	joins := sharedNetworkJoins(services, networkName, ds)
 	// With no services at all, a domain still has to be refused.
-	warnings, err := domains.Inject(services, composeID, ds, networkName)
+	warnings, err := domains.Inject(services, composeID, ds, networkName, nil)
 	if err != nil {
 		return "", nil, nil, err
 	}
