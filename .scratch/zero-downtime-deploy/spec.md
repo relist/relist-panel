@@ -419,7 +419,8 @@ passes. The example: `web` has the switch on, `worker` and `db` don't.
       is an anonymous volume, the step fails here, before NEW is created. That catches
       a Dockerfile `VOLUME` nobody mounted over, which is invisible at queue time
       because the image may not be built yet. An anonymous volume is a mount of type
-      `volume` whose volume has no `com.docker.compose.volume` label. The error reads:
+      `volume` whose volume carries Docker's `com.docker.volume.anonymous` label (checked on
+      Docker 29.8.0: set on anonymous volumes, absent on named and external ones). The error reads:
       "web has an anonymous volume at /var/lib/app (from the image's VOLUME); mount a
       named volume there or turn off zero-downtime deploy". Nothing about `web` has
       changed. Other Services were already updated in step 2.3, as with any rollout
@@ -600,7 +601,7 @@ pages, as AGENTS.md requires, and follow `docs/GUIDELINES.md`.
     log, later Services not rolled
   - no OLD: plain `up` plus the warning
   - OLD with an anonymous volume mount: the step fails with nothing created; a named
-    volume (with the `com.docker.compose.volume` label) or a bind mount passes
+    volume, an external volume (no `com.docker.volume.anonymous` label) or a bind mount passes
   - two OLD Containers: scale to 3, remove both
   - Cancel during a rollout step: the step completes
 - **Transport file**: written at startup and on deploy, atomically, and not removed by
