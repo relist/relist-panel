@@ -1,7 +1,9 @@
 # Spec — Zero-downtime deploy for Services with a Domain
 
 Date: 2026-10-30.
-Status: open — spec under review, no branch yet
+Status: open — spec under review, branch feat/zero-downtime-deploy. Delivered as two
+PRs: **Part 0**, a refactor of the Deployment worker with no change in behaviour, then
+**Part 1**, zero-downtime deploy built on top of it.
 
 ## Problem
 
@@ -63,6 +65,151 @@ The UI help text under the switch says these, and so does the README:
   Container's anonymous volumes to the new one. A Container created by `--scale` gets
   new, empty ones instead, so after a rollout the app would see an empty directory.
 - Changing Traefik's static configuration.
+
+## Part 0 — Plan the Deployment, then run it (first PR, no behaviour change)
+
+### Why
+
+The worker decides what to do while it does it. Mode, Source and the two flags are read
+in several places:
+
+- `process` fails `skip-build` without a Source by setting `j.pre`
+  (`internal/deployments/queue.go`, `process`).
+- `runSteps` calls `fetchAndBuild` only for Mode `build`.
+- `fetchAndBuild` branches on the Source kind (Git or zip) and on a missing branch or
+  key. It calls `SetSteps` twice as it finds things out: `[fetch, deploy]`, then the
+  `build:*` steps once it has the build plan.
+- `deploy()` takes the volumes hold when `FreshVolumes` is set. It works out
+  `build := Mode == deploy && no Source`, and logs "compose has a source; deploying
+  without building".
+- `composes.RunDeploy` branches on `FreshVolumes` again.
+
+Part 1 adds more choices: which Services `up` covers, which ones roll out, and Fresh
+volumes skipping rollout. Later features would add steps too, such as hooks, a backup
+before Fresh volumes, or a scan gate. Each of those would mean another `if` in a
+different place. Part 0 moves every one of these choices into one pure function. The
+worker then runs the steps that function returns.
+
+### Shape
+
+```go
+// planDeployment decides every step of a Deployment from its inputs alone. It
+// touches nothing: no Docker, no disk, no database.
+func planDeployment(in planInput) plan
+
+type planInput struct {
+    mode          Mode
+    noCache       bool
+    freshVolumes  bool
+    source        *sources.Source // from the snapshot; nil when the Compose has none
+    buildServices []string        // Services with build:, from the snapshot
+}
+
+type plan struct {
+    fail    *outcome // known before anything runs (e.g. skip-build without a Source)
+    prepare []step   // outside the Project gate; Cancel and shutdown stop it
+    apply   []step   // inside the Project gate; shielded from Cancel and shutdown
+}
+
+type step struct {
+    kind         stepKind // stepFetch, stepBuild, stepDeploy (Part 1 adds stepRollout)
+    name         string   // as stored and shown: "fetch", "build:web", "deploy"
+    service      string   // stepBuild
+    noCache      bool     // stepBuild
+    build        bool     // stepDeploy: pass --build to up
+    freshVolumes bool     // stepDeploy
+    note         string   // a line logged when the step begins
+}
+```
+
+The two phases are the rule the worker already follows. `prepare` runs under the Source
+lock, with Cancel, the timeout and shutdown checked between steps, in phases `fetching`
+and `building`. `apply` waits for the Project gate in phase `waiting-gate`, plus the
+volumes hold when a step has `freshVolumes`. It then runs in phase `deploying` on a
+context that ignores Cancel and keeps the deadline. Part 0 moves none of that code. It
+only replaces what each phase runs with a loop over the steps the plan gives it.
+
+```go
+func (j *job) run(p plan) outcome {
+    if p.fail != nil {
+        return *p.fail
+    }
+    j.setSteps(p)                          // once, the full list
+    if o, ok := j.runPrepare(p.prepare); !ok {
+        return o
+    }
+    return j.runApply(p.apply)
+}
+```
+
+`runPrepare` and `runApply` each `switch` on `step.kind`, calling `runFetch`,
+`runBuild` or `runDeploy`. The bodies of those three are today's code, moved: the Git
+fetch and `SetSource`, `Builder.Build`, and `composes.RunDeploy`. Recording the
+materialization still happens after the last prepare step of a `build` Deployment.
+
+### `planDeployment` must reproduce today's behaviour
+
+| Input | `fail` | `prepare` | `apply` |
+|---|---|---|---|
+| `deploy`, no Source | — | — | `deploy` (build) |
+| `deploy`, Source | — | — | `deploy` (no build, note "compose has a source; deploying without building") |
+| `skip-build`, Source | — | — | `deploy` (no build) |
+| `skip-build`, no Source | `reasonNoSource` | | |
+| `build`, no Source | `reasonNoSource` | | |
+| `build`, Git, no branch | `reasonNoBranch` at step `fetch` | | |
+| `build`, Git, no key | `reasonNoKey` at step `fetch` | | |
+| `build`, Git | — | `fetch`, `build:<svc>`… | `deploy` (no build) |
+| `build`, zip | — | `build:<svc>`… | `deploy` (no build) |
+| `build`, no Service has `build:` | — | `fetch` (Git only) and the note "no Service has build:" | `deploy` (no build) |
+| any of the above + `freshVolumes` | same | same | `deploy` with `freshVolumes` |
+| `build` + `noCache` | same | each `build:<svc>` has `noCache` | same |
+
+Every input comes from the execution snapshot. The worker always has one: legacy rows
+get one captured in `process`. Each Deployment is therefore planned once, before it
+starts. `buildServices` is the snapshot's `Services`, the list `PrepareBuild` already
+reads. Working directories (`PrepareBuild`'s staged files, the snapshot's `SourceDir`)
+are still set up inside the steps, at run time.
+
+**The only visible difference** is that the step list is complete from the start.
+Today a Git `build` Deployment first shows `[fetch, deploy]` and adds the `build:*`
+steps only after fetching. A Deployment that fails before it starts still shows
+`[deploy]`, as it does today.
+
+### Part 0 tests
+
+- `planDeployment`: one table row per line of the table above, comparing the whole
+  `plan` value.
+- The existing tests in `internal/deployments` pass unchanged. The exception is
+  assertions on the progressive `SetSteps` sequence, which are updated to the full
+  list, each one named in the PR.
+- No change to the HTTP API, the database or the web, apart from the steps appearing
+  earlier.
+
+### How Part 1 uses it
+
+`planInput` gains `zeroDowntime []string`: the switched-on Services from the snapshot
+that have a Domain and pass the checks. `step` gains `services []string` (the subset
+`up` covers) and `stepRollout`. `planDeployment` then produces the apply list described
+in "Deploy sequence":
+
+| Input | `apply` |
+|---|---|
+| no switch on | `deploy` (all Services), as in Part 0 |
+| `web` on, `worker` and `db` off | `deploy` (`worker`, `db`), `rollout:web` |
+| `web` and `api` on, nothing else | `deploy` (no Services: write files and remove orphans only), `rollout:web`, `rollout:api` |
+| any switch on + `freshVolumes` | `deploy` (all Services, `freshVolumes`). No rollout |
+
+The `deploy` step always comes first in `apply`, even when every Service rolls out,
+because it writes the resolved files and removes orphans. When its Service list is not
+empty, `up --remove-orphans` handles orphans as today. When the list is empty, nothing
+runs `up`. The step instead removes orphans through the `ContainerEngine` port: it lists
+the project's Containers by the `com.docker.compose.project` label and stops and
+removes (`v=false`) those whose `com.docker.compose.service` is not in the resolved
+file. It doesn't use a `compose up` flag combination for this, because none was
+verified on Compose v5.5.1 to remove orphans without creating or starting anything.
+
+`runRollout` decides at run time what can't be planned: whether an OLD Container
+exists, and whether this deploy is in drift mode.
 
 ## Decisions and evidence
 
@@ -242,6 +389,10 @@ records a warning:
   modal adds a line: "Zero-downtime deploy doesn't apply to this deploy."
 
 ## Deploy sequence
+
+This section describes what Part 1's steps run. Fetch and Build are `prepare` steps. The
+Deploy step and each `rollout:<service>` step are `apply` steps. Which ones a
+Deployment gets is decided by `planDeployment` (Part 0).
 
 `dc` is `docker compose` with the project name and resolved file the runner already
 passes. The example: `web` has the switch on, `worker` and `db` don't.
