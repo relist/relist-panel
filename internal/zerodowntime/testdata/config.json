@@ -1,0 +1,236 @@
+{
+  "name": "zdcfg",
+  "networks": {
+    "default": {
+      "name": "zdcfg_default",
+      "ipam": {}
+    }
+  },
+  "services": {
+    "anon": {
+      "command": null,
+      "entrypoint": null,
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "true"
+        ]
+      },
+      "image": "busybox:1.37",
+      "networks": {
+        "default": null
+      },
+      "volumes": [
+        {
+          "type": "volume",
+          "target": "/data",
+          "volume": {}
+        }
+      ]
+    },
+    "defaults": {
+      "command": null,
+      "entrypoint": null,
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "true"
+        ]
+      },
+      "image": "busybox:1.37",
+      "networks": {
+        "default": null
+      }
+    },
+    "disabled": {
+      "command": null,
+      "entrypoint": null,
+      "healthcheck": {
+        "disable": true
+      },
+      "image": "busybox:1.37",
+      "networks": {
+        "default": null
+      }
+    },
+    "hostport": {
+      "command": null,
+      "entrypoint": null,
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "true"
+        ]
+      },
+      "image": "busybox:1.37",
+      "networks": {
+        "default": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "target": 80,
+          "published": "8080",
+          "protocol": "tcp"
+        }
+      ]
+    },
+    "longport": {
+      "command": null,
+      "entrypoint": null,
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "true"
+        ]
+      },
+      "image": "busybox:1.37",
+      "networks": {
+        "default": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "target": 80,
+          "published": "9000",
+          "protocol": "tcp"
+        }
+      ]
+    },
+    "named": {
+      "command": null,
+      "container_name": "fixed",
+      "entrypoint": null,
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "true"
+        ]
+      },
+      "image": "busybox:1.37",
+      "networks": {
+        "default": null
+      }
+    },
+    "nohc": {
+      "command": null,
+      "entrypoint": null,
+      "image": "busybox:1.37",
+      "networks": {
+        "default": null
+      }
+    },
+    "none": {
+      "command": null,
+      "entrypoint": null,
+      "healthcheck": {
+        "test": [
+          "NONE"
+        ]
+      },
+      "image": "busybox:1.37",
+      "networks": {
+        "default": null
+      }
+    },
+    "ok": {
+      "command": null,
+      "entrypoint": null,
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "true"
+        ],
+        "timeout": "2s",
+        "interval": "2s",
+        "retries": 3,
+        "start_period": "15s"
+      },
+      "image": "busybox:1.37",
+      "labels": {
+        "other": "x",
+        "traefik.enable": "true",
+        "traefik.http.routers.x.rule": "Host(`a.test`)"
+      },
+      "networks": {
+        "default": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "target": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "data",
+          "target": "/data",
+          "volume": {}
+        },
+        {
+          "type": "bind",
+          "source": "/srv/compose/site",
+          "target": "/site",
+          "bind": {}
+        }
+      ]
+    },
+    "replicas": {
+      "command": null,
+      "deploy": {
+        "replicas": 2,
+        "resources": {},
+        "placement": {}
+      },
+      "entrypoint": null,
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "true"
+        ]
+      },
+      "image": "busybox:1.37",
+      "networks": {
+        "default": null
+      }
+    },
+    "scaled": {
+      "command": null,
+      "entrypoint": null,
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "true"
+        ]
+      },
+      "image": "busybox:1.37",
+      "networks": {
+        "default": null
+      },
+      "scale": 2
+    },
+    "two": {
+      "command": null,
+      "container_name": "two",
+      "entrypoint": null,
+      "image": "busybox:1.37",
+      "networks": {
+        "default": null
+      },
+      "volumes": [
+        {
+          "type": "volume",
+          "target": "/cache",
+          "volume": {}
+        }
+      ]
+    }
+  },
+  "volumes": {
+    "data": {
+      "name": "zdcfg_data"
+    }
+  }
+}
