@@ -58,9 +58,10 @@ The UI help text under the switch says these, and so does the README:
 - Keeping router names stable while labels change (versioned router names per
   Deployment). Recorded as the rejected option in the ADR.
 - Rolling back to the old version once the new Container has passed its healthcheck.
-- Anonymous volumes. The new Container gets fresh ones. Compose's recreate, by
-  contrast, carries them over. The old Container's anonymous volumes are left on the
-  host, never deleted.
+- Rolling a Service that has anonymous volumes. It is refused (see "Checks when
+  queueing" and step 3.2 of the Deploy sequence). On recreate, Compose hands the old
+  Container's anonymous volumes to the new one. A Container created by `--scale` gets
+  new, empty ones instead, so after a rollout the app would see an empty directory.
 - Changing Traefik's static configuration.
 
 ## Decisions and evidence
@@ -220,6 +221,7 @@ For each Service with the switch on and at least one Domain:
 | `container_name` set | "sets container_name; two Containers can't share a name" |
 | a `ports:` entry that publishes a fixed host port (`"8080:80"`, long syntax with `published`) | "publishes host port 8080; two Containers can't bind it" |
 | `deploy.replicas` or `scale` greater than 1 | "runs more than one replica; rollout supports one" |
+| a `volumes:` entry of type `volume` with no `source` (e.g. `- /data`) | "has an anonymous volume at /data; mount a named volume there" |
 
 If any Service fails, the endpoint answers **422** and creates no Deployment:
 
@@ -262,21 +264,30 @@ passes. The example: `web` has the switch on, `worker` and `db` don't.
       `com.docker.compose.oneoff=False`, in state `running`. Call this set OLD.
       - If OLD is empty, run `dc up -d <build flag> --no-deps web`, record the "no
         running container" warning, and end the step.
-   2. Through the Engine API, read the `traefik.*` labels of one OLD Container. Compare
+   2. Through the Engine API, inspect the mounts of every OLD Container. If any of them
+      is an anonymous volume, the step fails here, before NEW is created. That catches
+      a Dockerfile `VOLUME` nobody mounted over, which is invisible at queue time
+      because the image may not be built yet. An anonymous volume is a mount of type
+      `volume` whose volume has no `com.docker.compose.volume` label. The error reads:
+      "web has an anonymous volume at /var/lib/app (from the image's VOLUME); mount a
+      named volume there or turn off zero-downtime deploy". Nothing about `web` has
+      changed. Other Services were already updated in step 2.3, as with any rollout
+      failure.
+   3. Through the Engine API, read the `traefik.*` labels of one OLD Container. Compare
       them with the Service's `traefik.*` labels from `dc config --format json` on the
       files just written. Both sides are interpolated values, so a hand-written label
       such as ``Host(`${HOST}`)`` doesn't count as drift when the value is the same. If
       they differ, the step is in **drift mode** (see below).
-   3. Run `dc up -d <build flag> --no-deps --no-recreate --scale web=<len(OLD)+1> web`.
-   4. List again. NEW is the one Container that isn't in OLD. If there isn't exactly
+   4. Run `dc up -d <build flag> --no-deps --no-recreate --scale web=<len(OLD)+1> web`.
+   5. List again. NEW is the one Container that isn't in OLD. If there isn't exactly
       one, the step fails ("could not identify the new container").
-   5. Inspect NEW once a second until `State.Health.Status` is `healthy`, it is
+   6. Inspect NEW once a second until `State.Health.Status` is `healthy`, it is
       `unhealthy`, `State.Status` is no longer `running`, or the wait limit passes.
-   6. If it's **healthy**: in drift mode, stop OLD straight away. Otherwise, wait 3 s so
+   7. If it's **healthy**: in drift mode, stop OLD straight away. Otherwise, wait 3 s so
       Traefik's config (rebuilt every 2 s) includes NEW, then stop OLD. Stop each OLD
       Container through the Engine API with no `t`, so Docker uses its `StopTimeout`,
       which Compose sets from `stop_grace_period`. Then remove it with `v=false`.
-   7. If it's **not healthy**: write the last health log entry
+   8. If it's **not healthy**: write the last health log entry
       (`State.Health.Log[-1].Output`, cut to 2 KB) to the Deployment log. Remove NEW
       with `force=true&v=true`; its anonymous volumes are new and empty. The step fails
       with "web did not become healthy in 41s; kept the previous container". Services
@@ -349,11 +360,31 @@ pages, as AGENTS.md requires, and follow `docs/GUIDELINES.md`.
 - **Domains tab** (`ComposeDomainsTab.tsx`): a "Zero-downtime deploy" card that lists
   each Service with a Domain, one `Switch` per Service. Help text:
   > New containers take traffic only once their healthcheck passes; the old one is then
-  > stopped. Needs a healthcheck that reports ready, no container_name, no fixed host
-  > ports, and an app that finishes in-flight requests on SIGTERM. Changing this
-  > Service's Domains makes the next deploy briefly unavailable.
+  > stopped. See the requirements under the YAML editor. Changing this Service's
+  > Domains makes the next deploy briefly unavailable.
 - If a Service has the switch on and `reasons` is not empty, a warning `Alert` under its
   row lists the reasons, with a link to the Editor tab.
+- **Note under the YAML editor** (`ComposeEditorGuide.tsx`, the low-emphasis note
+  already there): when at least one Service has the switch on, the note gains a
+  "Zero-downtime deploy" block. It lists the requirements, then one line per
+  switched-on Service: "web — ready" or "web — has no healthcheck; publishes host port
+  8080". Those lines come from `GET …/zero-downtime` and are reloaded after each save.
+  The requirements, in this order:
+  - a `healthcheck` that passes only once the app can serve requests
+  - no `container_name`
+  - no fixed host port in `ports:` (`"80"` is fine, `"8080:80"` is not)
+  - one replica (no `deploy.replicas` or `scale` above 1)
+  - no anonymous volumes: mount a named volume over every path the app writes to,
+    including paths the image declares with `VOLUME`
+  - the app finishes in-flight requests when it gets SIGTERM, within
+    `stop_grace_period`
+  - the app tolerates two copies running for a few seconds (no SQLite file shared
+    through a named volume, no migrations that lock out the old version)
+
+  The block keeps the note's existing secondary style. A Service that isn't ready shows
+  its line as `Text type="warning"`. No `Alert` is added here; the Domains tab's
+  `Alert` and the refusal Modal already raise these problems with more weight. When no
+  Service has the switch on, the note is exactly as it is today.
 - **Deploy refused**: when a deploy returns 422 with `zeroDowntime`, a `Modal` titled
   "Can't deploy with zero downtime" lists `service — reason`. It has **Open editor**
   (Editor tab), **Open domains** (Domains tab) and **Close**. The same modal is used
@@ -372,6 +403,7 @@ pages, as AGENTS.md requires, and follow `docs/GUIDELINES.md`.
 |---|---|
 | Queue-time check fails | 422; no Deployment is created |
 | Transport file write fails during a deploy | Deploy step fails before any Container changes |
+| OLD has an anonymous volume (image `VOLUME`) | step fails before NEW is created; `web` untouched; the log gives the path and the fix |
 | `--scale` command fails | step fails; OLD untouched; any Container it did create is found by listing and removed |
 | NEW not identified | step fails; every non-OLD Container of the Service is removed |
 | NEW unhealthy, exited or over the wait limit | NEW removed (on the cleanup context, even past the deadline), OLD keeps serving, Deployment failed |
@@ -388,7 +420,8 @@ pages, as AGENTS.md requires, and follow `docs/GUIDELINES.md`.
   off → the generated labels are identical to today's, pinned with a golden test.
 - **Checks**: each reason (no healthcheck, `disable`, `NONE`, `container_name`,
   short/long published port, unpublished port allowed, `deploy.replicas` or `scale`
-  > 1), including values that come from `${VAR}`. Drift: a hand-written label with a
+  > 1, an anonymous `volumes:` entry, with named volumes and bind mounts allowed),
+  including values that come from `${VAR}`. Drift: a hand-written label with a
   `${VAR}` whose value is unchanged is not drift. Switch on without
   a Domain is ignored. A renamed Service's row is ignored.
 - **Snapshot**: the switch set is frozen at enqueue. Toggling after enqueue doesn't
@@ -401,6 +434,8 @@ pages, as AGENTS.md requires, and follow `docs/GUIDELINES.md`.
   - unhealthy, exited and timeout paths: NEW removed with volumes, health output in the
     log, later Services not rolled
   - no OLD: plain `up` plus the warning
+  - OLD with an anonymous volume mount: the step fails with nothing created; a named
+    volume (with the `com.docker.compose.volume` label) or a bind mount passes
   - two OLD Containers: scale to 3, remove both
   - Cancel during a rollout step: the step completes
 - **Transport file**: written at startup and on deploy, atomically, and not removed by
@@ -408,22 +443,23 @@ pages, as AGENTS.md requires, and follow `docs/GUIDELINES.md`.
 - **API**: GET lists only Services with a Domain, with `reasons`. PUT returns 422 without
   a Domain. The deployments POST returns the 422 body.
 - **Web**: the switch card, the reasons Alert, and the refusal Modal from the Compose
-  page, Redeploy and Project deploy.
+  page, Redeploy and Project deploy. The editor note: unchanged when no switch is on;
+  with a switch on, the requirements list and per-Service lines ("ready" or the
+  reasons), reloaded after save; wraps at 320 px.
 - **Migration**: the table exists after `00024` and is carried by Server Migration.
 - **Manual check on a real install** before merge: rerun the spike's load loop against a
   Domain on the live panel's Traefik for one code-only deploy (expect 0 errors) and one
   deploy after a Domain edit (expect the warning and an outage of about 2 s).
 
-## Open question
-
-- **What happens to OLD's anonymous volumes.** Each rollout as written (`v=false`)
-  leaves OLD's anonymous volumes on the host, unreachable, and they accumulate one set
-  per deploy. Today's recreate passes them on to the new Container instead. The choice
-  is between `v=true` with a log line, which deletes data nobody can reach any more, and
-  keeping them, which uses more disk. The operator decides this.
-
 ## Resolved questions
 
+- Anonymous volumes block a rollout instead of being kept or deleted. A Container
+  created by `--scale` would get empty ones, so the app would lose sight of its data.
+  The `volumes:` form is refused at queue time. The image's `VOLUME` is caught at the
+  start of the rollout step, before anything is created. Since a Service that rolls out
+  has no anonymous volumes, OLD is still removed with `v=false`, and no data is deleted.
+- The requirements are also listed in the note under the YAML editor, together with
+  each switched-on Service's current status.
 - Opt-in per Service, not automatic for every Service with a Domain: apps that can't run
   two copies at once, such as SQLite on a volume or migrations at boot, would otherwise
   break quietly.
