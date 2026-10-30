@@ -32,6 +32,8 @@ type recordingRunner struct {
 	config   []byte
 	onConfig func(RunRequest)
 	scales   []ScaleOptions
+	onScale  func(ScaleOptions)
+	scaleErr error
 }
 
 func (r *recordingRunner) DownWithVolumesTracked(ctx context.Context, req RunRequest) (bool, error) {
@@ -69,7 +71,10 @@ func (r *recordingRunner) Config(_ context.Context, req RunRequest) ([]byte, err
 func (r *recordingRunner) Scale(_ context.Context, _ RunRequest, opts ScaleOptions) error {
 	r.calls = append(r.calls, "scale")
 	r.scales = append(r.scales, opts)
-	return nil
+	if r.onScale != nil {
+		r.onScale(opts)
+	}
+	return r.scaleErr
 }
 func (r *recordingRunner) Logs(context.Context, RunRequest) (string, error) { return "", nil }
 
