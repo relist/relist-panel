@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -98,7 +99,8 @@ func (s *Service) ZeroDowntimeProblems(ctx context.Context, t DeployTarget) ([]z
 	defer cleanup()
 	config, err := s.runner.Config(ctx, req)
 	if err != nil {
-		return nil, err
+		// Compose refusing the file is the operator's to fix, as a bad YAML is.
+		return nil, failure(FailureInvalid, "compose config failed: "+firstErrorLine(err), err)
 	}
 	return zerodowntime.Check(config, t.Snapshot.ZeroDowntime)
 }
@@ -176,4 +178,9 @@ func (s *Service) removeOrphans(ctx context.Context, project, yamlContent string
 		}
 	}
 	return nil
+}
+
+func firstErrorLine(err error) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(err.Error()), "\n")
+	return line
 }

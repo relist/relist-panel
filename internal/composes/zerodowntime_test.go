@@ -334,3 +334,19 @@ func TestStageCheckResolvesRelativeEnvFile(t *testing.T) {
 		t.Fatalf("compose config on staged files: %v\n%s", err, out)
 	}
 }
+
+func TestZeroDowntimeProblemsConfigFailureIsInvalid(t *testing.T) {
+	svc, runner, target, db := newDeployService(t, zdYAML)
+	seedDomain(t, db, "web")
+	switchOn(t, db, "web")
+	captured, err := svc.Capture(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.configErr = errors.New("docker compose config: exit status 1: required variable X is missing a value\nmore")
+	_, err = svc.ZeroDowntimeProblems(context.Background(), captured)
+	var failure *DeployFailure
+	if !errors.As(err, &failure) || failure.Kind != FailureInvalid || failure.Message != "compose config failed: docker compose config: exit status 1: required variable X is missing a value" {
+		t.Fatalf("err = %#v", err)
+	}
+}

@@ -29,11 +29,12 @@ type recordingRunner struct {
 	removed        bool
 	// config is what Config returns ({"services":{}} when nil); onConfig sees
 	// each request while its files are still on disk.
-	config   []byte
-	onConfig func(RunRequest)
-	scales   []ScaleOptions
-	onScale  func(ScaleOptions)
-	scaleErr error
+	config    []byte
+	onConfig  func(RunRequest)
+	scales    []ScaleOptions
+	onScale   func(ScaleOptions)
+	scaleErr  error
+	configErr error
 }
 
 func (r *recordingRunner) DownWithVolumesTracked(ctx context.Context, req RunRequest) (bool, error) {
@@ -62,6 +63,9 @@ func (r *recordingRunner) Config(_ context.Context, req RunRequest) ([]byte, err
 	r.calls = append(r.calls, "config")
 	if r.onConfig != nil {
 		r.onConfig(req)
+	}
+	if r.configErr != nil {
+		return nil, r.configErr
 	}
 	if r.config == nil {
 		return []byte(`{"services":{}}`), nil

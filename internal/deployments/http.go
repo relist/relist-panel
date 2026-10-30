@@ -167,6 +167,11 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 			writeQueuedConflict(w, conflict)
 			return
 		}
+		var refused *ZeroDowntimeError
+		if errors.As(err, &refused) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": refused.Error(), "zeroDowntime": refused.Problems})
+			return
+		}
 		var f *composes.DeployFailure
 		if errors.As(err, &f) && f.Kind == composes.FailureInvalid {
 			writeError(w, http.StatusBadRequest, err.Error())
