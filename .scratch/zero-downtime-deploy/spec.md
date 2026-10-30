@@ -362,6 +362,20 @@ pages, as AGENTS.md requires, and follow `docs/GUIDELINES.md`.
   > New containers take traffic only once their healthcheck passes; the old one is then
   > stopped. See the requirements under the YAML editor. Changing this Service's
   > Domains makes the next deploy briefly unavailable.
+- **Confirm on turning on**: turning a switch on doesn't save straight away. It opens a
+  `Modal` titled "Turn on zero-downtime deploy for web?". The modal:
+  - lists the seven requirements from the editor note, in the same words and order
+  - shows `web`'s current `reasons` in a warning `Alert`, if there are any, with the
+    line "Deploys will be refused until these are fixed"
+  - has **Cancel** and a primary **Accept and turn on** button
+
+  The `Switch` stays off while the modal is open. **Accept and turn on** sends the
+  `PUT`, the switch turns on when it returns 204, and the button shows loading in the
+  meantime. **Cancel**, Esc and the close icon change nothing. If the `PUT` fails, the
+  modal stays open with the error. Turning a switch off saves at once, with no modal.
+  The acceptance is not stored: the switch being on is the record. One component holds
+  the requirement list, and both the modal and the editor note render it, so the two
+  can't drift apart.
 - If a Service has the switch on and `reasons` is not empty, a warning `Alert` under its
   row lists the reasons, with a link to the Editor tab.
 - **Note under the YAML editor** (`ComposeEditorGuide.tsx`, the low-emphasis note
@@ -442,6 +456,10 @@ pages, as AGENTS.md requires, and follow `docs/GUIDELINES.md`.
   the Certificates reconcile.
 - **API**: GET lists only Services with a Domain, with `reasons`. PUT returns 422 without
   a Domain. The deployments POST returns the 422 body.
+- **Web confirm modal**: turning on opens the modal and sends no request. Cancel and Esc
+  leave the switch off with no request. Accept sends the PUT and turns the switch on
+  only after 204. A failed PUT keeps the modal open with the error. Current reasons
+  appear in the modal. Turning off sends the PUT with no modal.
 - **Web**: the switch card, the reasons Alert, and the refusal Modal from the Compose
   page, Redeploy and Project deploy. The editor note: unchanged when no switch is on;
   with a switch on, the requirements list and per-Service lines ("ready" or the
