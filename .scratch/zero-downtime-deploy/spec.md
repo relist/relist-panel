@@ -355,8 +355,9 @@ deploy alike.
 The stored YAML keeps `${VAR}` references, and Compose fills them in from the `.env`
 file the panel writes. So the checks never parse the raw YAML. They read the output of
 `docker compose config --format json` run over the snapshot's files: YAML, env file and
-Variable Set files, staged in a temporary directory, as the build plan already stages
-them. The panel already runs `compose config` for volume plans. `ports:
+Variable Set files, staged in the Compose's own directory under unique `.zd-check-*`
+names. That way relative `env_file:`, `include:` and `extends:` paths resolve as they do on
+deploy, and a running build's `.build-*` files are never touched. The panel already runs `compose config` for volume plans. `ports:
 ["${PORT}:80"]` and `deploy.replicas: ${N}` are therefore checked with their real
 values.
 
