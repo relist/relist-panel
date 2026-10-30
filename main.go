@@ -181,6 +181,7 @@ func main() {
 	handler, waitDeployments := httpapi.NewHandler(ctx, httpapi.Deps{
 		DB:             db,
 		Runner:         dockerexec.New(),
+		Engine:         dockerexec.NewEngine(dockerexec.DefaultSocketPath),
 		DataDir:        cfg.DataDir,
 		History:        sampler,
 		Services:       collector,

@@ -50,7 +50,7 @@ func TestMergeVariablesLayersAndKeepsEnvFileOrder(t *testing.T) {
 
 func TestResolveComposeMissingServiceBindingWarnsWithoutInjecting(t *testing.T) {
 	vars := deployVariables{Bindings: []setBinding{{Service: "old-api", Set: boundSet{ID: 4, Name: "db-creds"}}}}
-	resolved, used, warnings, err := resolveCompose("services:\n  web: {image: nginx}\n", testNetwork, "/data/.env", 12, nil, testIdentity, vars)
+	resolved, used, warnings, err := resolveCompose("services:\n  web: {image: nginx}\n", testNetwork, "/data/.env", 12, nil, testIdentity, vars, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,12 +65,12 @@ func TestResolveComposeMissingServiceBindingWarnsWithoutInjecting(t *testing.T) 
 
 func TestResolveComposeWithoutBindingsIsUnchanged(t *testing.T) {
 	const yamlContent = "services:\n  web:\n    image: nginx\n    env_file: ./own.env\n"
-	plain, _, warnings, err := resolveCompose(yamlContent, testNetwork, "/data/.env", 12, nil, testIdentity, deployVariables{})
+	plain, _, warnings, err := resolveCompose(yamlContent, testNetwork, "/data/.env", 12, nil, testIdentity, deployVariables{}, nil)
 	if err != nil || len(warnings) != 0 {
 		t.Fatalf("resolve = %v, %q", err, warnings)
 	}
 	withUnused := deployVariables{Environment: []environmentVariable{{Key: "A"}}, Compose: []environmentVariable{{Key: "B"}}}
-	again, _, _, _ := resolveCompose(yamlContent, testNetwork, "/data/.env", 12, nil, testIdentity, withUnused)
+	again, _, _, _ := resolveCompose(yamlContent, testNetwork, "/data/.env", 12, nil, testIdentity, withUnused, nil)
 	if again != plain || strings.Index(plain, "./own.env") > strings.Index(plain, "/data/.env") {
 		t.Fatalf("resolved differs or lost its own env_file first:\n%s\nvs\n%s", plain, again)
 	}

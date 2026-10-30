@@ -21,7 +21,7 @@ func webDomain() domains.Domain {
 // resolveServices resolves yamlContent and returns its services and warnings.
 func resolveServices(t *testing.T, yamlContent string, ds []domains.Domain, id networkIdentity) (map[string]map[string]any, []string) {
 	t.Helper()
-	resolved, _, warnings, err := resolveCompose(yamlContent, testNetwork, "/data/.env", 12, ds, id, deployVariables{})
+	resolved, _, warnings, err := resolveCompose(yamlContent, testNetwork, "/data/.env", 12, ds, id, deployVariables{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -27,6 +27,11 @@ type recordingRunner struct {
 	composeAtDown  string
 	downErr, upErr error
 	removed        bool
+	// config is what Config returns ({"services":{}} when nil); onConfig sees
+	// each request while its files are still on disk.
+	config   []byte
+	onConfig func(RunRequest)
+	scales   []ScaleOptions
 }
 
 func (r *recordingRunner) DownWithVolumesTracked(ctx context.Context, req RunRequest) (bool, error) {
@@ -51,11 +56,22 @@ func (r *recordingRunner) Restart(context.Context, RunRequest) error { return ni
 func (r *recordingRunner) Status(context.Context, RunRequest) (ComposeStatus, error) {
 	return ComposeStatus{}, nil
 }
-func (r *recordingRunner) Config(context.Context, RunRequest) ([]byte, error) {
-	return []byte(`{"services":{}}`), nil
+func (r *recordingRunner) Config(_ context.Context, req RunRequest) ([]byte, error) {
+	r.calls = append(r.calls, "config")
+	if r.onConfig != nil {
+		r.onConfig(req)
+	}
+	if r.config == nil {
+		return []byte(`{"services":{}}`), nil
+	}
+	return r.config, nil
 }
-func (r *recordingRunner) Scale(context.Context, RunRequest, ScaleOptions) error { return nil }
-func (r *recordingRunner) Logs(context.Context, RunRequest) (string, error)      { return "", nil }
+func (r *recordingRunner) Scale(_ context.Context, _ RunRequest, opts ScaleOptions) error {
+	r.calls = append(r.calls, "scale")
+	r.scales = append(r.scales, opts)
+	return nil
+}
+func (r *recordingRunner) Logs(context.Context, RunRequest) (string, error) { return "", nil }
 
 type recordingCanceler struct {
 	runner *recordingRunner
