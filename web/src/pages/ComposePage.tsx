@@ -76,7 +76,7 @@ import { insertBuildBlocks } from '../data/build-insert';
 import { yamlServices } from '../data/source-view';
 import { deploymentButtonLabel, isActive } from '../data/deployments-view';
 import { usePanel } from '../data/store';
-import type { BuildTarget, ComposeVariable, DetectedDockerfile, ComposeVolumes, DeploymentRequest, OrphanVolume, VulnSummary } from '../data/types';
+import type { BuildTarget, ComposeVariable, DetectedDockerfile, ComposeVolumes, DeploymentRequest, OrphanVolume, VulnSummary, ZeroDowntimeService } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
 import { effectiveVariableCount } from '../components/variables-view';
 import { activeComposeTab, composeDeployIdentity, internalHostnamePattern, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
@@ -121,6 +121,7 @@ export function ComposePage() {
     loadVariables,
     loadServices,
     loadVolumes,
+    loadZeroDowntime,
     projects,
     refreshStatus,
     restartCompose,
@@ -282,6 +283,28 @@ export function ComposePage() {
       loadLogs(logsComposeId).then(setLogsText).catch(fail);
     }
   }, [loadLogs, logsComposeId, onLogsTab]);
+
+  // The editor note's zero-downtime block: read on the Editor tab, and again
+  // after a save or a Domain change, so a switch flipped on the Domains tab
+  // shows on return. The note degrades to today's when the read fails.
+  const [zeroDowntimeStatus, setZeroDowntimeStatus] = useState<{ composeId: number; services: ZeroDowntimeService[] }>();
+  const onEditorTab = activeTab === 'editor';
+  const zeroDowntimeComposeId = compose?.id;
+  const composeUpdatedAt = compose?.updatedAt;
+  const composeDomainsChangedAt = compose?.domainsChangedAt;
+  useEffect(() => {
+    if (!onEditorTab || zeroDowntimeComposeId === undefined) {
+      return;
+    }
+    let live = true;
+    loadZeroDowntime(zeroDowntimeComposeId).then(
+      (services) => live && setZeroDowntimeStatus({ composeId: zeroDowntimeComposeId, services }),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [composeDomainsChangedAt, composeUpdatedAt, loadZeroDowntime, onEditorTab, zeroDowntimeComposeId]);
   // `available: false` means the feature cannot run at all — a bare binary, no
   // Docker socket — and the tab is hidden rather than shown dead. A URL that
   // still names it redirects to the Editor along with every other stale link.
@@ -791,7 +814,9 @@ export function ComposePage() {
                         value={draft}
                       />
                     </div>
-                    <ComposeEditorGuide />
+                    <ComposeEditorGuide
+                      zeroDowntime={zeroDowntimeStatus?.composeId === compose.id ? zeroDowntimeStatus.services : undefined}
+                    />
                   </Card>
                 </Col>
 
