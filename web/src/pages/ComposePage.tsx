@@ -54,6 +54,7 @@ import { ComposeTerminalTab } from '../components/ComposeTerminalTab';
 import { ComposeVariablesTab } from '../components/ComposeVariablesTab';
 import { ComposeVolumesTab } from '../components/ComposeVolumesTab';
 import { DangerModal } from '../components/DangerModal';
+import { ZeroDowntimeRefusalModal } from '../components/ZeroDowntimeRefusalModal';
 import { DetectDockerfilesModal } from '../components/DetectDockerfilesModal';
 import { FullscreenEditor } from '../components/FullscreenEditor';
 import {
@@ -70,7 +71,7 @@ import { ServiceMonitor } from '../components/ServiceMonitor';
 import { SourceCard } from '../components/SourceCard';
 import { SourceModal } from '../components/SourceModal';
 import { YamlEditor } from '../components/YamlEditor';
-import { ApiError, api, removalPlanPath } from '../data/api';
+import { ApiError, api, removalPlanPath, ZeroDowntimeRefusedError } from '../data/api';
 import { useRemovalPlan } from '../data/useRemovalPlan';
 import { insertBuildBlocks } from '../data/build-insert';
 import { yamlServices } from '../data/source-view';
@@ -156,6 +157,7 @@ export function ComposePage() {
   // Action failures stay on this screen as an Alert (GUIDELINES §8) — the
   // control that retries them is right there.
   const [actionError, setActionError] = useState<string>();
+  const [zeroDowntimeRefusal, setZeroDowntimeRefusal] = useState<ZeroDowntimeRefusedError['problems']>();
   const fail = (reason: unknown) =>
     setActionError(reason instanceof Error ? reason.message : 'Something went wrong');
 
@@ -284,16 +286,17 @@ export function ComposePage() {
     }
   }, [loadLogs, logsComposeId, onLogsTab]);
 
-  // The editor note's zero-downtime block: read on the Editor tab, and again
-  // after a save or a Domain change, so a switch flipped on the Domains tab
-  // shows on return. The note degrades to today's when the read fails.
+  // The zero-downtime switches, for the editor note and the Fresh volumes
+  // modal: read again on entering the Editor tab and after a save or a Domain
+  // change, so a switch flipped on the Domains tab shows on return. Both
+  // degrade to today's copy when the read fails.
   const [zeroDowntimeStatus, setZeroDowntimeStatus] = useState<{ composeId: number; services: ZeroDowntimeService[] }>();
   const onEditorTab = activeTab === 'editor';
   const zeroDowntimeComposeId = compose?.id;
   const composeUpdatedAt = compose?.updatedAt;
   const composeDomainsChangedAt = compose?.domainsChangedAt;
   useEffect(() => {
-    if (!onEditorTab || zeroDowntimeComposeId === undefined) {
+    if (zeroDowntimeComposeId === undefined) {
       return;
     }
     let live = true;
@@ -522,7 +525,11 @@ export function ComposePage() {
         }
       }
     } catch (reason: unknown) {
-      fail(reason);
+      if (reason instanceof ZeroDowntimeRefusedError) {
+        setZeroDowntimeRefusal(reason.problems);
+      } else {
+        fail(reason);
+      }
     } finally {
       if (fresh) {
         freshRunningRef.current = false;
@@ -1256,6 +1263,19 @@ export function ComposePage() {
         saving={isPending(`save-compose:${compose.id}`)}
       />
 
+      <ZeroDowntimeRefusalModal
+        onClose={() => setZeroDowntimeRefusal(undefined)}
+        onOpenDomains={() => {
+          setZeroDowntimeRefusal(undefined);
+          navigate(paths.compose(project.id, environment.id, compose.id, 'domains'));
+        }}
+        onOpenEditor={() => {
+          setZeroDowntimeRefusal(undefined);
+          navigate(paths.compose(project.id, environment.id, compose.id));
+        }}
+        problems={zeroDowntimeRefusal}
+      />
+
       <DangerModal
         confirmWord={compose.name}
         consequences={
@@ -1288,6 +1308,9 @@ export function ComposePage() {
               Volumes used only by Services behind a Compose profile may also be removed, even if they are not listed. A
               volume with an explicit <Text code>name:</Text> is removed even if another Compose uses it.
             </Paragraph>
+            {zeroDowntimeStatus?.composeId === compose.id && zeroDowntimeStatus.services.some((s) => s.enabled) && (
+              <Paragraph>Zero-downtime deploy doesn&apos;t apply to this deploy.</Paragraph>
+            )}
             <Paragraph type="secondary">
               Bind mounts are not deleted, and neither are volumes declared <Text code>external: true</Text>. To keep a copy first, download a tar.gz backup from the Volumes tab.
               {dirty ? ' Your unsaved changes are saved first.' : ''}

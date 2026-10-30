@@ -9,7 +9,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { paths } from '../app/paths';
-import { api } from '../data/api';
+import { api, ZeroDowntimeRefusedError } from '../data/api';
 import { PanelProvider, usePanel } from '../data/store';
 import type { Compose, ComposeSource } from '../data/types';
 import { ComposePage } from './ComposePage';
@@ -90,6 +90,7 @@ beforeEach(() => {
   vi.spyOn(api, 'listVolumes').mockResolvedValue({ available: false, services: [], volumes: [] });
   vi.spyOn(api, 'listOrphanVolumes').mockResolvedValue({ orphans: [] });
   vi.spyOn(api, 'listDeployments').mockResolvedValue([]);
+  vi.spyOn(api, 'listZeroDowntime').mockResolvedValue([]);
 });
 
 afterEach(() => { vi.restoreAllMocks(); });
@@ -151,6 +152,68 @@ describe('Fresh volumes confirmation', () => {
     expect(within(dialog).getByText(/Back up the volumes before continuing/)).toBeTruthy();
     expect(enqueue).not.toHaveBeenCalled();
     expect((within(dialog).getByRole('button', { name: 'Deploy with fresh volumes' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('Zero-downtime refusal', () => {
+  const problems = [{ service: 'api', reasons: ['has no healthcheck'] }];
+
+  async function deployRefused(error: Error) {
+    vi.spyOn(api, 'getSource').mockResolvedValue(null);
+    vi.spyOn(api, 'enqueueDeployment').mockRejectedValue(error);
+    const user = userEvent.setup();
+    const router = renderPage();
+    await screen.findByRole('heading', { name: 'Compose 7' });
+    await user.click(screen.getByRole('button', { name: /Deploy$/ }));
+    return { router, user };
+  }
+
+  it('opens the refusal modal instead of the error Alert', async () => {
+    await deployRefused(new ZeroDowntimeRefusedError("zero-downtime deploy is on for services that can't be rolled out", problems));
+    const dialog = await screen.findByRole('dialog', { name: "Can't deploy with zero downtime" });
+    expect(within(dialog).getByText('api — has no healthcheck')).toBeTruthy();
+    expect(screen.queryByText("zero-downtime deploy is on for services that can't be rolled out")).toBeNull();
+  });
+
+  it('still shows any other refusal as the error Alert', async () => {
+    await deployRefused(new Error('compose is blank'));
+    expect(await screen.findByText('compose is blank')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('opens the Domains tab, then the Editor tab', async () => {
+    const { router, user } = await deployRefused(new ZeroDowntimeRefusedError('refused', problems));
+    await user.click(await screen.findByRole('button', { name: 'Open domains' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe(paths.compose(1, 2, 7, 'domains')));
+    vi.mocked(api.enqueueDeployment).mockRejectedValue(new ZeroDowntimeRefusedError('refused', problems));
+    await user.click(screen.getByRole('button', { name: /Deploy$/ }));
+    await user.click(await screen.findByRole('button', { name: 'Open editor' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe(paths.compose(1, 2, 7)));
+  });
+});
+
+describe('Fresh volumes and zero-downtime', () => {
+  async function openFresh() {
+    vi.spyOn(api, 'getSource').mockResolvedValue(null);
+    vi.mocked(api.listVolumes).mockResolvedValue({ available: true, services: [], volumes: [] });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole('heading', { name: 'Compose 7' });
+    await user.click(screen.getByRole('button', { name: 'More deploy options' }));
+    await user.click(await screen.findByRole('menuitem', { name: /Deploy with fresh volumes/ }));
+    return screen.findByRole('dialog', { name: 'Deploy with fresh volumes?' });
+  }
+
+  it('says zero-downtime deploy does not apply when a switch is on', async () => {
+    vi.spyOn(api, 'listZeroDowntime').mockResolvedValue([{ service: 'api', enabled: true, reasons: [] }]);
+    const dialog = await openFresh();
+    expect(within(dialog).getByText("Zero-downtime deploy doesn't apply to this deploy.")).toBeTruthy();
+  });
+
+  it('leaves the line out when no switch is on', async () => {
+    vi.spyOn(api, 'listZeroDowntime').mockResolvedValue([{ service: 'api', enabled: false, reasons: [] }]);
+    const dialog = await openFresh();
+    expect(within(dialog).queryByText("Zero-downtime deploy doesn't apply to this deploy.")).toBeNull();
   });
 });
 

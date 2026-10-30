@@ -33,12 +33,14 @@ import { useNavigate, useParams } from 'react-router';
 
 import { paths } from '../app/paths';
 import { DangerModal } from '../components/DangerModal';
+import { ZeroDowntimeRefusalModal } from '../components/ZeroDowntimeRefusalModal';
 import { VariablesPanel } from '../components/VariablesPanel';
 import { YamlEditor } from '../components/YamlEditor';
 import { ComposeStatusInline, ComposeStatusTag, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { VulnBadges } from '../components/VulnBadges';
 import { useVulnSummary } from '../data/useVulnSummary';
 import { summaryBadge, vulnLink } from './vulnerabilities-view';
+import { ZeroDowntimeRefusedError } from '../data/api';
 import { usePanel } from '../data/store';
 import type { Compose } from '../data/types';
 import { composeState, projectComposes, summarize } from '../data/types';
@@ -96,6 +98,7 @@ export function ProjectPage() {
   const [actionError, setActionError] = useState<string>();
   const fail = (reason: unknown) =>
     setActionError(reason instanceof Error ? reason.message : 'Something went wrong');
+  const [zeroDowntimeRefusal, setZeroDowntimeRefusal] = useState<{ compose: Compose; problems: ZeroDowntimeRefusedError['problems'] }>();
 
   const project = projects.find((candidate) => candidate.id === projectId);
   const environments = project?.environments ?? [];
@@ -198,7 +201,11 @@ export function ProjectPage() {
       if (action === 'stop') await stopCompose(compose.id);
       message.success(`${action === 'restart' ? 'Restarted' : 'Stopped'} ${compose.name}`);
     } catch (reason: unknown) {
-      fail(reason);
+      if (reason instanceof ZeroDowntimeRefusedError) {
+        setZeroDowntimeRefusal({ compose, problems: reason.problems });
+      } else {
+        fail(reason);
+      }
     }
   };
 
@@ -573,6 +580,18 @@ export function ProjectPage() {
           type="info"
         />
       </Modal>
+
+      <ZeroDowntimeRefusalModal
+        compose={
+          zeroDowntimeRefusal && {
+            name: zeroDowntimeRefusal.compose.name,
+            onOpen: () =>
+              navigate(paths.compose(project.id, zeroDowntimeRefusal.compose.environmentId, zeroDowntimeRefusal.compose.id)),
+          }
+        }
+        onClose={() => setZeroDowntimeRefusal(undefined)}
+        problems={zeroDowntimeRefusal?.problems}
+      />
 
       <DangerModal
         confirmWord={deletingCompose?.name ?? ''}
