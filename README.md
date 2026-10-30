@@ -189,6 +189,12 @@ Uploaded certificates need Traefik's file provider
 `docker-compose.yml`, Traefik ignores every uploaded certificate and nothing
 says so: update the file and run `docker compose up -d` so Traefik is recreated.
 
+Zero-downtime deploy needs the same file provider: each switched-on Service's
+Domains use a Traefik transport the panel writes there. With an install
+`docker-compose.yml` older than uploaded certificates, those Domains return 404
+after the next deploy. Update the file and recreate Traefik before turning the
+switch on.
+
 `RELIST_ADMIN_EMAIL` and `RELIST_ADMIN_PASSWORD` are no longer read; the
 admin they created stays. Remove them from `.env`, and if **Account** still
 says the password is the one from the env, change it there.
