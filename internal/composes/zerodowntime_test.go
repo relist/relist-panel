@@ -26,6 +26,7 @@ type fakeEngine struct {
 	states     map[string][]EngineState // per ID; the last one repeats
 	calls      []string
 	removeErr  error
+	stopBudget time.Duration // time left on the last Stop's ctx
 	onScale    func() // runs when the runner scales; adds NEW
 }
 
@@ -64,6 +65,9 @@ func (e *fakeEngine) Stop(ctx context.Context, id string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.calls = append(e.calls, "stop "+id)
+	if deadline, ok := ctx.Deadline(); ok {
+		e.stopBudget = time.Until(deadline)
+	}
 	return nil
 }
 
@@ -278,6 +282,11 @@ func TestRunDeployExcludeAllRemovesOrphansViaEngine(t *testing.T) {
 	}
 	if want := []string{"stop o", "remove o force=false v=false"}; !reflect.DeepEqual(engine.recorded(), want) {
 		t.Fatalf("engine calls = %v, want %v", engine.recorded(), want)
+	}
+	// An orphan's stop_grace_period may run past 30s; it gets the same
+	// budget as an old Container in a rollout.
+	if engine.stopBudget < stopTimeout-time.Minute {
+		t.Fatalf("orphan stop had %s, want about %s", engine.stopBudget, stopTimeout)
 	}
 }
 

@@ -167,12 +167,16 @@ func (s *Service) removeOrphans(ctx context.Context, project, yamlContent string
 		if known[c.Service] {
 			continue
 		}
-		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		// Stopping waits out the orphan's stop_grace_period, as for an old
+		// Container in a rollout.
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopTimeout)
 		err := s.engine.Stop(cctx, c.ID)
-		if err == nil {
-			err = s.engine.Remove(cctx, c.ID, false, false)
-		}
 		cancel()
+		if err == nil {
+			cctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+			err = s.engine.Remove(cctx, c.ID, false, false)
+			cancel()
+		}
 		if err != nil {
 			return fmt.Errorf("remove orphan %s: %w", c.Name, err)
 		}
