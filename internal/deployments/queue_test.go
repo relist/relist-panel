@@ -81,10 +81,12 @@ func (f *fakeComposes) Target(_ context.Context, id int64) (composes.DeployTarge
 
 func (f *fakeComposes) CheckDeployable(context.Context, composes.DeployTarget) error { return nil }
 
+// Capture records the Services with build: as the real one does, which is what
+// a Deployment's build steps are planned from.
 func (f *fakeComposes) Capture(_ context.Context, t composes.DeployTarget) (composes.DeployTarget, error) {
-	if len(f.snapshotSecrets) > 0 {
-		t.Snapshot = &composes.ExecutionSnapshot{Secrets: f.snapshotSecrets}
-	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t.Snapshot = &composes.ExecutionSnapshot{Services: f.services, Secrets: f.snapshotSecrets}
 	return t, nil
 }
 
@@ -1257,5 +1259,27 @@ func TestLegacyResumeWithoutKeyFailsAtFetch(t *testing.T) {
 	got := h.waitSettled(h.a, d.Number)
 	if got.Status != StatusFailed || got.FailedStep != "fetch" || got.Reason != "Choose an SSH key for this Source" {
 		t.Fatalf("legacy no key = %+v", got)
+	}
+}
+
+func TestGitBuildStoresAllStepsBeforeFetching(t *testing.T) {
+	h := newHarness(t)
+	h.gitSource(h.a)
+	fetching, release := make(chan struct{}), make(chan struct{})
+	h.fetch.onFetch = func(context.Context, sources.Source, string, io.Writer) (sources.Ref, error) {
+		close(fetching)
+		<-release
+		return sources.Ref{SHA: "abc123", Subject: "first commit"}, nil
+	}
+	d := h.enqueue(h.a, ModeBuild)
+	h.start()
+	recv(t, fetching, "fetch to start")
+	got := h.get(h.a, d.Number)
+	close(release)
+	if want := []string{"fetch", "build:web", "build:api", "deploy"}; !reflect.DeepEqual(got.Steps, want) {
+		t.Fatalf("steps while fetching = %v, want %v", got.Steps, want)
+	}
+	if settled := h.waitSettled(h.a, d.Number); settled.Status != StatusSucceeded {
+		t.Fatalf("status = %s %q", settled.Status, settled.Reason)
 	}
 }

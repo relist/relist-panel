@@ -587,10 +587,16 @@ func (q *Queue) process(ctx context.Context, d Deployment) error {
 		return q.settleUnstarted(ctx, d, failed("", firstLine(err.Error())))
 	}
 
-	j := &job{q: q, ctx: ctx, bg: bg, d: d, target: target, snapshot: snapshot, steps: []string{stepDeploy}}
-	if d.Mode == ModeSkipBuild && snapshot.Source == nil {
-		j.pre = &outcome{status: StatusFailed, reason: reasonNoSource}
+	var buildServices []string
+	if snapshot.Files != nil {
+		buildServices = snapshot.Files.Services
 	}
+	p := planDeployment(planInput{mode: d.Mode, noCache: d.NoCache, freshVolumes: d.FreshVolumes, source: snapshot.Source, buildServices: buildServices})
+	steps := []string{stepDeploy}
+	if names := p.stepNames(); len(names) > 0 {
+		steps = names
+	}
+	j := &job{q: q, ctx: ctx, bg: bg, d: d, target: target, snapshot: snapshot, steps: steps, plan: p}
 	err = j.execute()
 	if j.settled {
 		// After execute returns, so a Cancel or Delete that holds the Project
@@ -631,7 +637,7 @@ type job struct {
 	snapshot *executionSnapshot
 	src      *sources.Source
 	steps    []string
-	pre      *outcome // a failure found while resolving the mode, reported after Start
+	plan     plan
 	rs       *activeRun
 	out      io.Writer
 	step     string
@@ -721,17 +727,18 @@ func (j *job) runStepsSafely() (o outcome) {
 	return j.runSteps()
 }
 
-// runSteps runs the Deployment's steps and returns how it ended.
+// runSteps runs the Deployment's planned steps and returns how it ended.
 func (j *job) runSteps() outcome {
-	if j.pre != nil {
-		return *j.pre
+	p := j.plan
+	if p.fail != nil {
+		return *p.fail
 	}
-	if j.d.Mode == ModeBuild {
-		if o, ok := j.fetchAndBuild(); !ok {
+	if p.usesSource || len(p.prepare) > 0 {
+		if o, ok := j.runPrepare(p); !ok {
 			return o
 		}
 	}
-	return j.deploy()
+	return j.runApply(p.apply)
 }
 
 func (j *job) setPhase(p phase) {
@@ -746,6 +753,14 @@ func (j *job) begin(step string) {
 		logf("set step: %v", err)
 	}
 	fmt.Fprintf(j.out, "==> %s\n", step)
+}
+
+// beginStep begins a planned step and logs its note.
+func (j *job) beginStep(s step) {
+	j.begin(s.name)
+	if s.note != "" {
+		fmt.Fprintln(j.out, s.note)
+	}
 }
 
 // interrupted reports a Cancel, the timeout or a shutdown, if one happened.
@@ -773,9 +788,9 @@ func (j *job) stepFailed(err error) outcome {
 	return failed(j.step, firstLine(err.Error()))
 }
 
-// fetchAndBuild runs Fetch and every Build step under the Source lock. It
-// returns false with the outcome when the Deployment must stop.
-func (j *job) fetchAndBuild() (outcome, bool) {
+// runPrepare runs the prepare steps (Fetch and every Build) under the Source
+// lock. It returns false with the outcome when the Deployment must stop.
+func (j *job) runPrepare(p plan) (outcome, bool) {
 	q := j.q
 	unlock, err := q.lockSource(j.tctx, j.d.ComposeID)
 	if err != nil {
@@ -783,102 +798,91 @@ func (j *job) fetchAndBuild() (outcome, bool) {
 	}
 	defer unlock()
 
-	// The Source is read under its lock, so an edit that held the lock while
-	// this Deployment waited is the one built.
-	var src sources.Source
-	if j.snapshot != nil {
-		if j.snapshot.Source == nil {
-			return failed("", reasonNoSource), false
-		}
-		src = *j.snapshot.Source
-	} else {
-		src, err = q.d.Sources.Get(j.bg, j.d.ComposeID)
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		return failed("", reasonNoSource), false
-	}
-	if err != nil {
-		return failed("", firstLine(err.Error())), false
-	}
+	// The plan only uses a Source the snapshot holds, so an edit that held the
+	// lock while this Deployment waited is not the one built.
+	src := *j.snapshot.Source
 	j.src = &src
-	if src.Kind == sources.KindGit {
-		if err := q.d.Store.SetSteps(j.bg, j.d.ID, []string{stepFetch, stepDeploy}); err != nil {
-			logf("set steps: %v", err)
-		}
-		if src.Branch == "" {
-			j.step = stepFetch
-			return failed(stepFetch, reasonNoBranch), false
-		}
-		if src.PrivateKey == "" {
-			j.step = stepFetch
-			return failed(stepFetch, reasonNoKey), false
-		}
-	}
 
 	j.setPhase(phaseFetching)
 	if o, ok := j.interrupted(); ok {
 		return o, false
 	}
-	if j.src.Kind == sources.KindGit {
-		j.begin(stepFetch)
-		sourceDir := composes.ComposeDir(j.target.Request)
-		if j.snapshot != nil {
-			sourceDir = j.snapshot.SourceDir
-		}
-		ref, err := q.d.Fetcher.Fetch(j.tctx, *j.src, sourceDir, j.out)
-		if err != nil {
-			return j.stepFailed(err), false
-		}
-		if redact, ok := j.out.(*redactingWriter); ok {
-			ref.Subject = redact.redact(ref.Subject)
-		}
-		if err := q.d.Store.SetSource(j.bg, j.d.ID, ref.SHA, ref.Subject); err != nil {
+	if src.Kind != sources.KindGit {
+		if err := q.d.Store.SetSource(j.bg, j.d.ID, src.ZipName, ""); err != nil {
 			logf("set source: %v", err)
 		}
-	} else if err := q.d.Store.SetSource(j.bg, j.d.ID, j.src.ZipName, ""); err != nil {
-		logf("set source: %v", err)
 	}
 
-	j.step = ""
-	plan, err := q.d.Composes.PrepareBuild(j.tctx, j.target)
-	if err != nil {
-		return j.stepFailed(err), false
-	}
-	if plan.Cleanup != nil {
-		defer plan.Cleanup()
-	}
-	if len(plan.Services) == 0 {
-		fmt.Fprintln(j.out, "no Service has build:")
-		if err := j.recordMaterialization(src); err != nil {
-			return j.stepFailed(err), false
+	var build *composes.BuildPlan
+	defer func() {
+		if build != nil && build.Cleanup != nil {
+			build.Cleanup()
 		}
-		return outcome{}, true
-	}
-	var steps []string
-	if j.src.Kind == sources.KindGit {
-		steps = append(steps, stepFetch)
-	}
-	for _, svc := range plan.Services {
-		steps = append(steps, "build:"+svc)
-	}
-	steps = append(steps, stepDeploy)
-	if err := q.d.Store.SetSteps(j.bg, j.d.ID, steps); err != nil {
-		logf("set steps: %v", err)
-	}
-
-	j.setPhase(phaseBuilding)
-	for _, svc := range plan.Services {
-		j.begin("build:" + svc)
-		if o, ok := j.interrupted(); ok {
-			return o, false
-		}
-		err := q.d.Builder.Build(j.tctx, plan.Request, composes.BuildOptions{Service: svc, NoCache: j.d.NoCache, Out: j.out})
+	}()
+	prepareBuild := func() (outcome, bool) {
+		j.step = ""
+		plan, err := q.d.Composes.PrepareBuild(j.tctx, j.target)
 		if err != nil {
 			return j.stepFailed(err), false
 		}
+		build = &plan
+		return outcome{}, true
+	}
+	for _, s := range p.prepare {
+		switch s.kind {
+		case kindFetch:
+			if o, ok := j.runFetch(s); !ok {
+				return o, false
+			}
+		case kindBuild:
+			if build == nil {
+				if o, ok := prepareBuild(); !ok {
+					return o, false
+				}
+				j.setPhase(phaseBuilding)
+			}
+			j.beginStep(s)
+			if o, ok := j.interrupted(); ok {
+				return o, false
+			}
+			err := q.d.Builder.Build(j.tctx, build.Request, composes.BuildOptions{Service: s.service, NoCache: s.noCache, Out: j.out})
+			if err != nil {
+				return j.stepFailed(err), false
+			}
+		}
+	}
+	if build == nil {
+		if o, ok := prepareBuild(); !ok {
+			return o, false
+		}
+	}
+	if p.afterPrepare != "" {
+		fmt.Fprintln(j.out, p.afterPrepare)
 	}
 	if err := j.recordMaterialization(src); err != nil {
 		return j.stepFailed(err), false
+	}
+	return outcome{}, true
+}
+
+// runFetch fetches the Git Source into the snapshot's directory and records
+// the commit it got.
+func (j *job) runFetch(s step) (outcome, bool) {
+	q := j.q
+	j.beginStep(s)
+	sourceDir := composes.ComposeDir(j.target.Request)
+	if j.snapshot != nil {
+		sourceDir = j.snapshot.SourceDir
+	}
+	ref, err := q.d.Fetcher.Fetch(j.tctx, *j.src, sourceDir, j.out)
+	if err != nil {
+		return j.stepFailed(err), false
+	}
+	if redact, ok := j.out.(*redactingWriter); ok {
+		ref.Subject = redact.redact(ref.Subject)
+	}
+	if err := q.d.Store.SetSource(j.bg, j.d.ID, ref.SHA, ref.Subject); err != nil {
+		logf("set source: %v", err)
 	}
 	return outcome{}, true
 }
@@ -892,18 +896,18 @@ func (j *job) recordMaterialization(src sources.Source) error {
 	return nil
 }
 
-// deploy waits for the Project gate (and, for a fresh-volumes Deployment, the
-// exclusive volumes hold), then runs the Deploy step. It holds nothing but
-// those while it runs, and the step is shielded from shutdown and Cancel.
-func (j *job) deploy() outcome {
+// runApply waits for the Project gate (and, when a step deletes volumes, the
+// exclusive volumes hold), then runs the apply steps. It holds nothing but
+// those while they run, and the steps are shielded from shutdown and Cancel.
+func (j *job) runApply(steps []step) outcome {
 	q := j.q
-	j.begin(stepDeploy)
+	j.beginStep(steps[0])
 	j.setPhase(phaseWaitingGate)
 	rel, err := q.d.Gate.Acquire(j.tctx, j.target.ProjectID)
 	if err != nil {
 		return j.stepFailed(err)
 	}
-	if j.d.FreshVolumes {
+	if freshVolumes(steps) {
 		// The step deletes the Compose's volumes, so open Volume reads must
 		// end first. Waiting here keeps the gate, as a Delete would.
 		relVolumes, err := q.d.Gate.AcquireVolumes(j.tctx, j.target.ProjectID)
@@ -916,7 +920,7 @@ func (j *job) deploy() outcome {
 	}
 	var once sync.Once
 	release := func() { once.Do(rel) }
-	defer release() // a panic in RunDeploy must not leak the gate
+	defer release() // a panic in a step must not leak the gate
 
 	// A Delete may have held the gate first; running now would recreate the
 	// Compose's directory and start containers for a Compose with no row.
@@ -925,7 +929,7 @@ func (j *job) deploy() outcome {
 		if errors.Is(err, sql.ErrNoRows) {
 			return outcome{status: StatusCanceled, reason: reasonComposeDeleted}
 		}
-		return failed(stepDeploy, firstLine(err.Error()))
+		return failed(j.step, firstLine(err.Error()))
 	}
 	q.mu.Lock()
 	if j.tctx.Err() != nil {
@@ -943,43 +947,53 @@ func (j *job) deploy() outcome {
 		dctx, cancel = context.WithDeadline(dctx, deadline)
 		defer cancel()
 	}
-	// A deploy-mode Deployment never builds from a Source: its src/ may be
-	// unfetched, and the build would run without the source lock.
-	build := j.d.Mode == ModeDeploy
-	if build {
-		hasSource := j.snapshot != nil && j.snapshot.Source != nil
-		var err error
-		if j.snapshot == nil {
-			_, err = q.d.Sources.Get(j.bg, j.d.ComposeID)
-			hasSource = err == nil
+	var warnings []string
+	for i, s := range steps {
+		if i > 0 {
+			j.beginStep(s)
 		}
-		if hasSource {
-			build = false
-			fmt.Fprintln(j.out, "compose has a source; deploying without building")
-		} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		var stepWarnings []string
+		var err error
+		switch s.kind {
+		case kindDeploy:
+			stepWarnings, err = j.runDeploy(dctx, s)
+		}
+		if err != nil {
 			release()
-			return failed(stepDeploy, firstLine(err.Error()))
+			o := failed(s.name, firstLine(err.Error()))
+			if errors.Is(dctx.Err(), context.DeadlineExceeded) {
+				o.reason = reasonTimeout
+			}
+			var failure *composes.DeployFailure
+			if errors.As(err, &failure) && failure.VolumesRemoved {
+				o.warnings = append(o.warnings, volumesRemovedWarning)
+				fmt.Fprintf(j.out, "warning: %s\n", volumesRemovedWarning)
+			}
+			return o
+		}
+		warnings = append(warnings, stepWarnings...)
+	}
+	release()
+	return outcome{status: StatusSucceeded, warnings: warnings}
+}
+
+// freshVolumes reports whether any step deletes the Compose's volumes.
+func freshVolumes(steps []step) bool {
+	for _, s := range steps {
+		if s.freshVolumes {
+			return true
 		}
 	}
-	warnings, err := q.d.Composes.RunDeploy(dctx, j.target, composes.DeployOptions{
-		FreshVolumes: j.d.FreshVolumes,
-		Build:        build,
+	return false
+}
+
+// runDeploy writes the Compose's files and runs up.
+func (j *job) runDeploy(dctx context.Context, s step) ([]string, error) {
+	return j.q.d.Composes.RunDeploy(dctx, j.target, composes.DeployOptions{
+		FreshVolumes: s.freshVolumes,
+		Build:        s.build,
 		Out:          j.out,
 	})
-	release()
-	if err != nil {
-		o := failed(stepDeploy, firstLine(err.Error()))
-		if errors.Is(dctx.Err(), context.DeadlineExceeded) {
-			o.reason = reasonTimeout
-		}
-		var failure *composes.DeployFailure
-		if errors.As(err, &failure) && failure.VolumesRemoved {
-			o.warnings = append(o.warnings, volumesRemovedWarning)
-			fmt.Fprintf(j.out, "warning: %s\n", volumesRemovedWarning)
-		}
-		return o
-	}
-	return outcome{status: StatusSucceeded, warnings: warnings}
 }
 
 const volumesRemovedWarning = "Named volumes were removed before deployment failed. Their data will not be restored automatically. Restore a backup if you need the previous data."
