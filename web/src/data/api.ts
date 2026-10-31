@@ -57,6 +57,7 @@ import type {
   TerminalServices,
   VolumeAccess,
   VolumeListing,
+  ZeroDowntimeService,
 } from './types';
 import type { MetricWindow } from './types';
 import type { MigrationStatus } from './migration';
@@ -150,6 +151,17 @@ export class ApiError extends Error {
   }
 }
 
+/** A deploy refused because zero-downtime Services can't be rolled out: the 422 body's `zeroDowntime`. */
+export class ZeroDowntimeRefusedError extends ApiError {
+  readonly problems: { service: string; reasons: string[] }[];
+
+  constructor(message: string, problems: { service: string; reasons: string[] }[]) {
+    super(422, message);
+    this.name = 'ZeroDowntimeRefusedError';
+    this.problems = problems;
+  }
+}
+
 /** The API's `error` message from a response body, or a status-based one when the body carries none. */
 function errorMessage(status: number, bodyText: string): string {
   return errorBody(status, bodyText).message;
@@ -169,6 +181,19 @@ function errorBody(status: number, bodyText: string): { message: string; field?:
     // Fall through to a status-based message when the response is not JSON.
   }
   return { message: `Request failed (${status})` };
+}
+
+/** The `zeroDowntime` list of a refused deploy's body, or undefined when it has none. */
+function zeroDowntimeProblems(bodyText: string): { service: string; reasons: string[] }[] | undefined {
+  try {
+    const payload = JSON.parse(bodyText) as { zeroDowntime?: unknown } | null;
+    if (Array.isArray(payload?.zeroDowntime)) {
+      return payload.zeroDowntime as { service: string; reasons: string[] }[];
+    }
+  } catch {
+    // Not JSON: an ordinary 422.
+  }
+  return undefined;
 }
 
 async function responseError(response: Response): Promise<string> {
@@ -314,8 +339,21 @@ export const api = {
    * queued, 409 when one with other options is (the message names it). No client
    * timeout: the POST waits behind a same-Project deploy step.
    */
-  enqueueDeployment: (location: ComposePath, req: DeploymentRequest) =>
-    request<{ number: number }>(`${composePath(location)}/deployments`, jsonInit('POST', req)),
+  enqueueDeployment: async (location: ComposePath, req: DeploymentRequest): Promise<{ number: number }> => {
+    const response = await fetch(`${composePath(location)}/deployments`, { credentials: 'same-origin', ...jsonInit('POST', req) });
+    const text = await response.text().catch(() => '');
+    if (!response.ok) {
+      const { message, field } = errorBody(response.status, text);
+      if (response.status === 422) {
+        const problems = zeroDowntimeProblems(text);
+        if (problems) {
+          throw new ZeroDowntimeRefusedError(message, problems);
+        }
+      }
+      throw new ApiError(response.status, message, field);
+    }
+    return JSON.parse(text) as { number: number };
+  },
   /** The Compose's Deployments, newest first. */
   listDeployments: (location: ComposePath) => request<Deployment[]>(`${composePath(location)}/deployments`),
   listGlobalDeployments: (query: DeploymentHistoryQuery = {}) => {
@@ -397,6 +435,9 @@ export const api = {
 
   /** The Compose's domains, and the saved YAML's Services a domain can point at. */
   listDomains: (location: ComposePath) => request<ComposeDomains>(domainsPath(location)),
+  listZeroDowntime: (location: ComposePath) => request<ZeroDowntimeService[]>(`${composePath(location)}/zero-downtime`),
+  setZeroDowntime: (location: ComposePath, service: string, enabled: boolean) =>
+    request<void>(`${composePath(location)}/zero-downtime/${encodeURIComponent(service)}`, jsonInit('PUT', { enabled })),
   createDomain: (location: ComposePath, input: DomainInput) =>
     request<Domain>(domainsPath(location), jsonInit('POST', input)),
   updateDomain: (location: ComposePath, domainId: number, input: DomainInput) =>

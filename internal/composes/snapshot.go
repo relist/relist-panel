@@ -2,7 +2,9 @@ package composes
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,10 +22,13 @@ type ExecutionSnapshot struct {
 	Services      []string
 	Secrets       []string
 	PathVariables map[string]string
+	// ZeroDowntime is the Services this deploy rolls out (ADR-0023), in YAML
+	// order; empty in snapshots taken before the feature.
+	ZeroDowntime []string
 }
 
 func (x *ExecutionSnapshot) files() deployFiles {
-	return deployFiles{composeYAML: x.YAML, envFile: x.Environment, setFiles: x.Sets, warnings: x.Warnings}
+	return deployFiles{composeYAML: x.YAML, envFile: x.Environment, setFiles: x.Sets, warnings: x.Warnings, zeroDowntime: x.ZeroDowntime}
 }
 
 // Capture resolves every mutable configuration input once. The caller holds
@@ -40,55 +45,65 @@ func (s *Service) Capture(ctx context.Context, t DeployTarget) (DeployTarget, er
 	if err != nil {
 		return DeployTarget{}, err
 	}
-	t.Snapshot = &ExecutionSnapshot{YAML: files.composeYAML, Environment: files.envFile, Sets: files.setFiles, Warnings: files.warnings, Services: services, Secrets: files.secrets, PathVariables: files.pathVariables}
+	t.Snapshot = &ExecutionSnapshot{YAML: files.composeYAML, Environment: files.envFile, Sets: files.setFiles, Warnings: files.warnings, Services: services, Secrets: files.secrets, PathVariables: files.pathVariables, ZeroDowntime: files.zeroDowntime}
 	return t, nil
 }
 
 func prepareSnapshotBuild(t DeployTarget) (BuildPlan, error) {
 	dir := ComposeDir(t.Request)
-	plan := BuildPlan{Request: RunRequest{ProjectName: t.Request.ProjectName, ComposeFilePath: filepath.Join(dir, buildComposeFileName), EnvFilePath: filepath.Join(dir, buildEnvFileName)}, Services: t.Snapshot.Services}
 	// Build staging has its own set files and never overwrites files used by
 	// the running Compose. Their values still come from the same snapshot.
-	stagedSets := filepath.Join(dir, ".build-sets")
-	plan.Cleanup = func() {
-		_ = os.Remove(plan.Request.ComposeFilePath)
-		_ = os.Remove(plan.Request.EnvFilePath)
-		_ = os.RemoveAll(stagedSets)
+	req, cleanup, err := stageSnapshot(t, filepath.Join(dir, buildComposeFileName), filepath.Join(dir, buildEnvFileName), filepath.Join(dir, ".build-sets"))
+	if err != nil {
+		return BuildPlan{}, err
+	}
+	return BuildPlan{Request: req, Services: t.Snapshot.Services, Cleanup: cleanup}, nil
+}
+
+// stageSnapshot writes the snapshot's YAML, env file and set files at the
+// given paths, the YAML pointing at the staged env and set files, and returns
+// the request that reads them. cleanup removes all of them.
+func stageSnapshot(t DeployTarget, composePath, envPath, setsPath string) (RunRequest, func(), error) {
+	req := RunRequest{ProjectName: t.Request.ProjectName, ComposeFilePath: composePath, EnvFilePath: envPath}
+	cleanup := func() {
+		_ = os.Remove(composePath)
+		_ = os.Remove(envPath)
+		_ = os.RemoveAll(setsPath)
 	}
 	staged, err := rewriteYAMLPaths(t.Snapshot.YAML, func(value string) string {
 		if value == t.Request.EnvFilePath {
-			return plan.Request.EnvFilePath
+			return envPath
 		}
 		if strings.HasPrefix(value, setsDir(t.Request.EnvFilePath)+string(os.PathSeparator)) {
-			return filepath.Join(stagedSets, filepath.Base(value))
+			return filepath.Join(setsPath, filepath.Base(value))
 		}
 		return value
 	})
 	if err != nil {
-		return BuildPlan{}, err
+		return RunRequest{}, nil, err
 	}
-	if err := os.MkdirAll(dir, composeDirPerm); err != nil {
-		return BuildPlan{}, err
+	if err := os.MkdirAll(filepath.Dir(composePath), composeDirPerm); err != nil {
+		return RunRequest{}, nil, err
 	}
 	if len(t.Snapshot.Sets) > 0 {
-		if err := os.MkdirAll(stagedSets, composeDirPerm); err != nil {
-			plan.Cleanup()
-			return BuildPlan{}, err
+		if err := os.MkdirAll(setsPath, composeDirPerm); err != nil {
+			cleanup()
+			return RunRequest{}, nil, err
 		}
 		for id, content := range t.Snapshot.Sets {
-			if err := os.WriteFile(filepath.Join(stagedSets, fmt.Sprintf("%d.env", id)), []byte(content), envFilePerm); err != nil {
-				plan.Cleanup()
-				return BuildPlan{}, err
+			if err := os.WriteFile(filepath.Join(setsPath, fmt.Sprintf("%d.env", id)), []byte(content), envFilePerm); err != nil {
+				cleanup()
+				return RunRequest{}, nil, err
 			}
 		}
 	}
-	for path, content := range map[string]string{plan.Request.EnvFilePath: t.Snapshot.Environment, plan.Request.ComposeFilePath: staged} {
+	for path, content := range map[string]string{envPath: t.Snapshot.Environment, composePath: staged} {
 		if err := os.WriteFile(path, []byte(content), envFilePerm); err != nil {
-			plan.Cleanup()
-			return BuildPlan{}, err
+			cleanup()
+			return RunRequest{}, nil, err
 		}
 	}
-	return plan, nil
+	return req, cleanup, nil
 }
 
 // WithSourceDirectory points relative Source paths at one Deployment's private
@@ -365,4 +380,25 @@ func shortMountParts(mount string) (string, string, bool) {
 		}
 	}
 	return mount, "", false
+}
+
+// CleanStaging removes the snapshot copies a zero-downtime check or a build
+// stages in dir. They hold env values, and a panel that stops mid-run leaves
+// them behind; at startup nothing is using them. A missing dir is fine.
+func CleanStaging(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".zd-check-") || name == buildComposeFileName || name == buildEnvFileName || name == ".build-sets" {
+			if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

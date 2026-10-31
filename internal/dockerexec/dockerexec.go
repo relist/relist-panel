@@ -30,16 +30,32 @@ func New() Runner {
 	return Runner{}
 }
 
-// upArgs is the argv for a deploy. build chooses --build or --no-build (a
+// upArgs is the argv for a deploy. Build chooses --build or --no-build (a
 // Source's Services are built beforehand by Build). --remove-orphans removes
 // containers of services no longer in the compose file; it never touches
-// volumes. The argv is tested through this helper.
-func upArgs(build bool) []string {
-	flag := "--no-build"
-	if build {
-		flag = "--build"
+// volumes. Services, when set, limits up to them with --no-deps, so a Service
+// being rolled out is left alone. The argv is tested through this helper.
+func upArgs(opts composes.UpOptions) []string {
+	args := []string{"up", "-d", buildFlag(opts.Build)}
+	if len(opts.Services) > 0 {
+		args = append(args, "--no-deps")
 	}
-	return []string{"up", "-d", flag, "--remove-orphans"}
+	args = append(args, "--remove-orphans")
+	return append(args, opts.Services...)
+}
+
+// scaleArgs starts one more Container of a Service from the current file and
+// leaves the running ones as they are (ADR-0023).
+func scaleArgs(opts composes.ScaleOptions) []string {
+	return []string{"up", "-d", buildFlag(opts.Build), "--no-deps", "--no-recreate",
+		"--scale", fmt.Sprintf("%s=%d", opts.Service, opts.Replicas), opts.Service}
+}
+
+func buildFlag(build bool) string {
+	if build {
+		return "--build"
+	}
+	return "--no-build"
 }
 
 // buildArgs is the argv for building one Service with plain progress output.
@@ -53,8 +69,18 @@ func buildArgs(service string, noCache bool) []string {
 }
 
 func (Runner) Up(ctx context.Context, req composes.RunRequest, opts composes.UpOptions) error {
-	_, err := run(ctx, req, opts.Out, upArgs(opts.Build)...)
+	_, err := run(ctx, req, opts.Out, upArgs(opts)...)
 	return err
+}
+
+func (Runner) Scale(ctx context.Context, req composes.RunRequest, opts composes.ScaleOptions) error {
+	_, err := run(ctx, req, opts.Out, scaleArgs(opts)...)
+	return err
+}
+
+func (Runner) Config(ctx context.Context, req composes.RunRequest) ([]byte, error) {
+	content, err := run(ctx, req, nil, "config", "--format", "json")
+	return []byte(content), err
 }
 
 func (Runner) Build(ctx context.Context, req composes.RunRequest, opts composes.BuildOptions) error {

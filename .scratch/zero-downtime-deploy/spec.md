@@ -1,7 +1,7 @@
 # Spec — Zero-downtime deploy for Services with a Domain
 
 Date: 2026-10-30.
-Status: open — spec under review, branch feat/zero-downtime-deploy. Delivered as two
+Status: implemented on branch feat/zero-downtime-deploy; live check pending. Delivered as two
 PRs: **Part 0**, a refactor of the Deployment worker with no change in behaviour, then
 **Part 1**, zero-downtime deploy built on top of it.
 

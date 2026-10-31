@@ -20,6 +20,7 @@ import (
 	"relist-panel/internal/database"
 	"relist-panel/internal/dockerexec"
 	"relist-panel/internal/dockernet"
+	"relist-panel/internal/domains"
 	"relist-panel/internal/hostmetrics"
 	"relist-panel/internal/httpapi"
 	"relist-panel/internal/metrics"
@@ -134,6 +135,11 @@ func main() {
 	if err := certificates.Reconcile(ctx, certificates.NewStore(db), cfg.DataDir); err != nil {
 		log.Printf("reconcile certificates: %v", err)
 	}
+	// The transport zero-downtime Domains name (ADR-0023) must always exist:
+	// a Domain whose label names a missing one returns 404.
+	if err := domains.WriteTransportFile(certificates.DynamicDir(cfg.DataDir)); err != nil {
+		log.Printf("write traefik transport file: %v", err)
+	}
 
 	// The metrics loop (ADR-0006): one sampler for the panel's lifetime,
 	// with the 30s container sweep and the 5-minute docker df refresh
@@ -175,6 +181,7 @@ func main() {
 	handler, waitDeployments := httpapi.NewHandler(ctx, httpapi.Deps{
 		DB:             db,
 		Runner:         dockerexec.New(),
+		Engine:         dockerexec.NewEngine(dockerexec.DefaultSocketPath),
 		DataDir:        cfg.DataDir,
 		History:        sampler,
 		Services:       collector,
@@ -340,7 +347,9 @@ func composeIdentities(db *sql.DB) dockerexec.ComposeIdentities {
 	}
 }
 
-// cleanSourceStaging runs sources.CleanStaging over every Compose directory.
+// cleanSourceStaging runs sources.CleanStaging over every Compose directory,
+// and composes.CleanStaging for the zero-downtime check and build copies a
+// stopped panel left there, which hold env values.
 func cleanSourceStaging(ctx context.Context, db *sql.DB, dataDir string) {
 	dirs, err := composes.ComposeDirs(ctx, db, dataDir)
 	if err != nil {
@@ -350,6 +359,9 @@ func cleanSourceStaging(ctx context.Context, db *sql.DB, dataDir string) {
 	for _, dir := range dirs {
 		if err := sources.CleanStaging(dir); err != nil {
 			log.Printf("warning: clearing upload leftovers in %s: %v", dir, err)
+		}
+		if err := composes.CleanStaging(dir); err != nil {
+			log.Printf("warning: clearing staged compose files in %s: %v", dir, err)
 		}
 	}
 }

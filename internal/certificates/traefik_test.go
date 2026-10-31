@@ -145,3 +145,19 @@ func TestWriteDirRemovesStaleAndWritesTheRestWhenOneWriteFails(t *testing.T) {
 		t.Errorf("files = %s, want cert-9.yml removed and cert-2.yml written", got)
 	}
 }
+
+// TestWriteDirKeepsTransportFile: the zero-downtime transport (ADR-0023) shares
+// the directory, and a Domain whose label names it returns 404 without it.
+func TestWriteDirKeepsTransportFile(t *testing.T) {
+	dir := t.TempDir()
+	transport := filepath.Join(dir, "relist-transports.yml")
+	if err := os.WriteFile(transport, []byte("http: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteDir(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(transport); err != nil {
+		t.Fatalf("transport file after WriteDir: %v", err)
+	}
+}

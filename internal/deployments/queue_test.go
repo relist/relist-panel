@@ -21,6 +21,7 @@ import (
 	"relist-panel/internal/composes"
 	"relist-panel/internal/sources"
 	"relist-panel/internal/sshkeys"
+	"relist-panel/internal/zerodowntime"
 )
 
 // recorder keeps an ordered, goroutine-safe list of what the fakes saw.
@@ -63,6 +64,44 @@ type fakeComposes struct {
 	snapshotSecrets []string
 	cleanups        int
 	onDeploy        func(ctx context.Context, id int64, opts composes.DeployOptions) ([]string, error)
+	// zeroDowntime is what Capture records as the snapshot's rollout list.
+	zeroDowntime []string
+	problems     []zerodowntime.Problem
+	problemsErr  error
+	checked      int
+	rolledOut    []string
+	onRollout    func(ctx context.Context, service string) ([]string, error)
+	marked       int
+}
+
+func (f *fakeComposes) ZeroDowntimeProblems(context.Context, composes.DeployTarget) ([]zerodowntime.Problem, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checked++
+	return f.problems, f.problemsErr
+}
+
+func (f *fakeComposes) RunRollout(ctx context.Context, t composes.DeployTarget, service string, opts composes.RolloutOptions) ([]string, error) {
+	f.mu.Lock()
+	f.rolledOut = append(f.rolledOut, service)
+	hook := f.onRollout
+	f.mu.Unlock()
+	f.rec.add("rollout:%s", service)
+	if opts.Deadline.IsZero() {
+		return nil, errors.New("rollout without a deadline")
+	}
+	if hook != nil {
+		return hook(ctx, service)
+	}
+	return nil, nil
+}
+
+func (f *fakeComposes) MarkDeployed(context.Context, composes.DeployTarget) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.marked++
+	f.rec.add("marked")
+	return nil
 }
 
 func (f *fakeComposes) Target(_ context.Context, id int64) (composes.DeployTarget, error) {
@@ -86,7 +125,7 @@ func (f *fakeComposes) CheckDeployable(context.Context, composes.DeployTarget) e
 func (f *fakeComposes) Capture(_ context.Context, t composes.DeployTarget) (composes.DeployTarget, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	t.Snapshot = &composes.ExecutionSnapshot{Services: f.services, Secrets: f.snapshotSecrets}
+	t.Snapshot = &composes.ExecutionSnapshot{Services: f.services, Secrets: f.snapshotSecrets, ZeroDowntime: f.zeroDowntime}
 	return t, nil
 }
 
@@ -1281,5 +1320,167 @@ func TestGitBuildStoresAllStepsBeforeFetching(t *testing.T) {
 	}
 	if settled := h.waitSettled(h.a, d.Number); settled.Status != StatusSucceeded {
 		t.Fatalf("status = %s %q", settled.Status, settled.Reason)
+	}
+}
+
+func TestRolloutStepsRunInGateAndRecordWarnings(t *testing.T) {
+	h := newHarness(t)
+	h.comp.zeroDowntime = []string{"web"}
+	h.comp.onRollout = func(context.Context, string) ([]string, error) {
+		return []string{"web's Traefik labels changed"}, nil
+	}
+	d := h.enqueue(h.a, ModeDeploy)
+	h.start()
+	got := h.waitSettled(h.a, d.Number)
+	if got.Status != StatusSucceeded || !reflect.DeepEqual(got.Steps, []string{"deploy", "rollout:web"}) {
+		t.Fatalf("got %s %q steps %v", got.Status, got.Reason, got.Steps)
+	}
+	if !reflect.DeepEqual(got.Warnings, []string{"web's Traefik labels changed"}) {
+		t.Fatalf("warnings = %v", got.Warnings)
+	}
+	if !reflect.DeepEqual(h.comp.deployed[0].Exclude, []string{"web"}) {
+		t.Fatalf("deploy opts = %+v, want web excluded", h.comp.deployed[0])
+	}
+	events := strings.Join(h.rec.all(), ",")
+	if want := fmt.Sprintf("gate+,deploy:%d,rollout:web,marked,gate-", h.a); !strings.Contains(events, want) {
+		t.Fatalf("events = %s, want %s", events, want)
+	}
+}
+
+func TestRolloutFailureFailsDeployment(t *testing.T) {
+	h := newHarness(t)
+	h.comp.zeroDowntime = []string{"web", "api"}
+	h.comp.onRollout = func(context.Context, string) ([]string, error) {
+		return nil, errors.New("web did not become healthy in 12s; kept the previous container")
+	}
+	d := h.enqueue(h.a, ModeDeploy)
+	h.start()
+	got := h.waitSettled(h.a, d.Number)
+	if got.Status != StatusFailed || got.FailedStep != "rollout:web" || got.Reason != "web did not become healthy in 12s; kept the previous container" {
+		t.Fatalf("got %+v", got)
+	}
+	if !reflect.DeepEqual(h.comp.rolledOut, []string{"web"}) || h.comp.marked != 0 {
+		t.Fatalf("rolled out %v, marked %d", h.comp.rolledOut, h.comp.marked)
+	}
+	log, err := os.ReadFile(LogPath(h.comp.dirs[h.a], d.Number))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), "not deployed: api\n") {
+		t.Fatalf("log lacks the services left out:\n%s", log)
+	}
+}
+
+// A timeout settles the Deployment as "timeout", but the log still says what
+// the rollout did about it.
+func TestRolloutTimeoutKeepsItsReasonInLog(t *testing.T) {
+	h := newHarness(t)
+	h.timeout = 50 * time.Millisecond
+	h.comp.zeroDowntime = []string{"web"}
+	h.comp.onRollout = func(ctx context.Context, _ string) ([]string, error) {
+		<-ctx.Done()
+		return nil, errors.New("web did not become healthy in 0s; could not remove the new container p-web-2: boom")
+	}
+	d := h.enqueue(h.a, ModeDeploy)
+	h.start()
+	got := h.waitSettled(h.a, d.Number)
+	if got.Status != StatusFailed || got.Reason != "timeout" || got.FailedStep != "rollout:web" {
+		t.Fatalf("got %s %q %q", got.Status, got.Reason, got.FailedStep)
+	}
+	log, err := os.ReadFile(LogPath(h.comp.dirs[h.a], d.Number))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), "could not remove the new container p-web-2: boom") {
+		t.Fatalf("log lacks the rollout's own failure:\n%s", log)
+	}
+}
+
+// A failed step keeps the warnings of the steps before it and its own.
+func TestRolloutFailureKeepsWarnings(t *testing.T) {
+	h := newHarness(t)
+	h.comp.zeroDowntime = []string{"web"}
+	h.comp.onDeploy = func(context.Context, int64, composes.DeployOptions) ([]string, error) {
+		return []string{"file warning"}, nil
+	}
+	h.comp.onRollout = func(context.Context, string) ([]string, error) {
+		return []string{"web's Traefik labels changed"}, errors.New("web did not become healthy in 12s; kept the previous container")
+	}
+	d := h.enqueue(h.a, ModeDeploy)
+	h.start()
+	got := h.waitSettled(h.a, d.Number)
+	if got.Status != StatusFailed || !reflect.DeepEqual(got.Warnings, []string{"file warning", "web's Traefik labels changed"}) {
+		t.Fatalf("got %s warnings %q", got.Status, got.Warnings)
+	}
+}
+
+func TestCancelDuringRolloutRefused(t *testing.T) {
+	h := newHarness(t)
+	h.comp.zeroDowntime = []string{"web"}
+	inRollout, release := make(chan struct{}), make(chan struct{})
+	h.comp.onRollout = func(context.Context, string) ([]string, error) {
+		close(inRollout)
+		<-release
+		return nil, nil
+	}
+	d := h.enqueue(h.a, ModeDeploy)
+	h.start()
+	recv(t, inRollout, "rollout to start")
+	if err := h.q.Cancel(context.Background(), h.a, d.Number); !errors.Is(err, ErrNotCancelable) {
+		t.Fatalf("Cancel err = %v, want ErrNotCancelable", err)
+	}
+	close(release)
+	if got := h.waitSettled(h.a, d.Number).Status; got != StatusSucceeded {
+		t.Fatalf("status = %s", got)
+	}
+}
+
+func TestEnqueueRefusesZeroDowntimeProblems(t *testing.T) {
+	h := newHarness(t)
+	h.comp.zeroDowntime = []string{"web"}
+	h.comp.problems = []zerodowntime.Problem{{Service: "web", Reasons: []string{"has no healthcheck"}}}
+	h.newQueue()
+	_, _, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeDeploy})
+	var refused *ZeroDowntimeError
+	if !errors.As(err, &refused) || !reflect.DeepEqual(refused.Problems, h.comp.problems) {
+		t.Fatalf("err = %v, want a ZeroDowntimeError", err)
+	}
+	if list, _ := h.store.List(context.Background(), h.a, 10); len(list) != 0 {
+		t.Fatalf("deployments = %+v, want none", list)
+	}
+}
+
+func TestEnqueueFreshVolumesSkipsZeroDowntimeCheck(t *testing.T) {
+	h := newHarness(t)
+	h.comp.zeroDowntime = []string{"web"}
+	h.comp.problems = []zerodowntime.Problem{{Service: "web", Reasons: []string{"has no healthcheck"}}}
+	h.newQueue()
+	if _, _, err := h.q.Enqueue(context.Background(), h.a, Request{Mode: ModeDeploy, FreshVolumes: true}); err != nil {
+		t.Fatal(err)
+	}
+	if h.comp.checked != 0 {
+		t.Fatalf("checked %d times, want 0", h.comp.checked)
+	}
+}
+
+func TestCreateZeroDowntime422(t *testing.T) {
+	h := newHarness(t)
+	h.comp.zeroDowntime = []string{"web"}
+	h.comp.problems = []zerodowntime.Problem{{Service: "web", Reasons: []string{"has no healthcheck"}}}
+	rec := h.postDeployment("deploy")
+	want := `{"error":"zero-downtime deploy is on for services that can't be rolled out","zeroDowntime":[{"service":"web","reasons":["has no healthcheck"]}]}`
+	if rec.Code != http.StatusUnprocessableEntity || strings.TrimSpace(rec.Body.String()) != want {
+		t.Fatalf("create = %d %s, want 422 %s", rec.Code, rec.Body, want)
+	}
+}
+
+func TestEnqueueConfigFailureIs400(t *testing.T) {
+	h := newHarness(t)
+	h.comp.zeroDowntime = []string{"web"}
+	h.comp.problemsErr = &composes.DeployFailure{Kind: composes.FailureInvalid, Message: "compose config failed: variable X is not set"}
+	rec := h.postDeployment("deploy")
+	var body map[string]string
+	if rec.Code != http.StatusBadRequest || json.Unmarshal(rec.Body.Bytes(), &body) != nil || body["error"] != "compose config failed: variable X is not set" {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body)
 	}
 }

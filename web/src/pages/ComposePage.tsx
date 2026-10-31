@@ -54,6 +54,7 @@ import { ComposeTerminalTab } from '../components/ComposeTerminalTab';
 import { ComposeVariablesTab } from '../components/ComposeVariablesTab';
 import { ComposeVolumesTab } from '../components/ComposeVolumesTab';
 import { DangerModal } from '../components/DangerModal';
+import { ZeroDowntimeRefusalModal } from '../components/ZeroDowntimeRefusalModal';
 import { DetectDockerfilesModal } from '../components/DetectDockerfilesModal';
 import { FullscreenEditor } from '../components/FullscreenEditor';
 import {
@@ -70,13 +71,13 @@ import { ServiceMonitor } from '../components/ServiceMonitor';
 import { SourceCard } from '../components/SourceCard';
 import { SourceModal } from '../components/SourceModal';
 import { YamlEditor } from '../components/YamlEditor';
-import { ApiError, api, removalPlanPath } from '../data/api';
+import { ApiError, api, removalPlanPath, ZeroDowntimeRefusedError } from '../data/api';
 import { useRemovalPlan } from '../data/useRemovalPlan';
 import { insertBuildBlocks } from '../data/build-insert';
 import { yamlServices } from '../data/source-view';
 import { deploymentButtonLabel, isActive } from '../data/deployments-view';
 import { usePanel } from '../data/store';
-import type { BuildTarget, ComposeVariable, DetectedDockerfile, ComposeVolumes, DeploymentRequest, OrphanVolume, VulnSummary } from '../data/types';
+import type { BuildTarget, ComposeVariable, DetectedDockerfile, ComposeVolumes, DeploymentRequest, OrphanVolume, VulnSummary, ZeroDowntimeService } from '../data/types';
 import { composeState, findComposeLocation } from '../data/types';
 import { effectiveVariableCount } from '../components/variables-view';
 import { activeComposeTab, composeDeployIdentity, internalHostnamePattern, composeLinkIsStale, deploySteps, filterLogLines, freshDeployView, hasUnsavedChanges, logServiceOptions } from './compose-view';
@@ -121,6 +122,7 @@ export function ComposePage() {
     loadVariables,
     loadServices,
     loadVolumes,
+    loadZeroDowntime,
     projects,
     refreshStatus,
     restartCompose,
@@ -155,6 +157,7 @@ export function ComposePage() {
   // Action failures stay on this screen as an Alert (GUIDELINES §8) — the
   // control that retries them is right there.
   const [actionError, setActionError] = useState<string>();
+  const [zeroDowntimeRefusal, setZeroDowntimeRefusal] = useState<ZeroDowntimeRefusedError['problems']>();
   const fail = (reason: unknown) =>
     setActionError(reason instanceof Error ? reason.message : 'Something went wrong');
 
@@ -282,6 +285,43 @@ export function ComposePage() {
       loadLogs(logsComposeId).then(setLogsText).catch(fail);
     }
   }, [loadLogs, logsComposeId, onLogsTab]);
+
+  // The zero-downtime switches, read once for the whole page: the Domains
+  // tab's card, the editor note and the Fresh volumes modal share them, since
+  // each read runs `docker compose config` on the host. Read again after a
+  // save, a Domain change or a switch change. The note and the modal degrade
+  // to today's copy when the read fails; the card shows the error.
+  const [zeroDowntimeStatus, setZeroDowntimeStatus] = useState<{
+    composeId: number;
+    services?: ZeroDowntimeService[];
+    error?: string;
+  }>();
+  const zeroDowntimeRequest = useRef(0);
+  const zeroDowntimeComposeId = compose?.id;
+  const composeUpdatedAt = compose?.updatedAt;
+  const composeDomainsChangedAt = compose?.domainsChangedAt;
+  const reloadZeroDowntime = useCallback(async () => {
+    if (zeroDowntimeComposeId === undefined) {
+      return;
+    }
+    const id = zeroDowntimeComposeId;
+    const mine = ++zeroDowntimeRequest.current;
+    try {
+      const services = await loadZeroDowntime(id);
+      if (zeroDowntimeRequest.current === mine) {
+        setZeroDowntimeStatus({ composeId: id, services });
+      }
+    } catch (reason: unknown) {
+      if (zeroDowntimeRequest.current === mine) {
+        const error = reason instanceof Error ? reason.message : 'Could not load the zero-downtime switches';
+        // A failed reread keeps the last good list.
+        setZeroDowntimeStatus((previous) => ({ composeId: id, error, services: previous?.composeId === id ? previous.services : undefined }));
+      }
+    }
+  }, [loadZeroDowntime, zeroDowntimeComposeId]);
+  useEffect(() => {
+    void reloadZeroDowntime();
+  }, [composeDomainsChangedAt, composeUpdatedAt, reloadZeroDowntime]);
   // `available: false` means the feature cannot run at all — a bare binary, no
   // Docker socket — and the tab is hidden rather than shown dead. A URL that
   // still names it redirects to the Editor along with every other stale link.
@@ -499,7 +539,11 @@ export function ComposePage() {
         }
       }
     } catch (reason: unknown) {
-      fail(reason);
+      if (reason instanceof ZeroDowntimeRefusedError) {
+        setZeroDowntimeRefusal(reason.problems);
+      } else {
+        fail(reason);
+      }
     } finally {
       if (fresh) {
         freshRunningRef.current = false;
@@ -791,7 +835,9 @@ export function ComposePage() {
                         value={draft}
                       />
                     </div>
-                    <ComposeEditorGuide />
+                    <ComposeEditorGuide
+                      zeroDowntime={zeroDowntimeStatus?.composeId === compose.id ? zeroDowntimeStatus.services : undefined}
+                    />
                   </Card>
                 </Col>
 
@@ -1001,6 +1047,9 @@ export function ComposePage() {
                 compose={compose}
                 deploying={isPending(`deploy:${compose.id}`)}
                 onDeploy={() => void deploy()}
+                onOpenEditor={() => navigate(paths.compose(project.id, environment.id, compose.id))}
+                onReloadZeroDowntime={reloadZeroDowntime}
+                zeroDowntime={zeroDowntimeStatus?.composeId === compose.id ? zeroDowntimeStatus : undefined}
               />
             ),
             key: 'domains',
@@ -1230,6 +1279,19 @@ export function ComposePage() {
         saving={isPending(`save-compose:${compose.id}`)}
       />
 
+      <ZeroDowntimeRefusalModal
+        onClose={() => setZeroDowntimeRefusal(undefined)}
+        onOpenDomains={() => {
+          setZeroDowntimeRefusal(undefined);
+          navigate(paths.compose(project.id, environment.id, compose.id, 'domains'));
+        }}
+        onOpenEditor={() => {
+          setZeroDowntimeRefusal(undefined);
+          navigate(paths.compose(project.id, environment.id, compose.id));
+        }}
+        problems={zeroDowntimeRefusal}
+      />
+
       <DangerModal
         confirmWord={compose.name}
         consequences={
@@ -1262,6 +1324,9 @@ export function ComposePage() {
               Volumes used only by Services behind a Compose profile may also be removed, even if they are not listed. A
               volume with an explicit <Text code>name:</Text> is removed even if another Compose uses it.
             </Paragraph>
+            {zeroDowntimeStatus?.composeId === compose.id && zeroDowntimeStatus.services?.some((s) => s.enabled) && (
+              <Paragraph>Zero-downtime deploy doesn&apos;t apply to this deploy.</Paragraph>
+            )}
             <Paragraph type="secondary">
               Bind mounts are not deleted, and neither are volumes declared <Text code>external: true</Text>. To keep a copy first, download a tar.gz backup from the Volumes tab.
               {dirty ? ' Your unsaved changes are saved first.' : ''}

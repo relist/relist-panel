@@ -45,6 +45,9 @@ type Deps struct {
 	// DataDir is the root directory Compose files are resolved under
 	// (ADR-0002).
 	DataDir string
+	// Engine addresses single Containers for zero-downtime Rollouts
+	// (ADR-0023). Without one, a Rollout fails.
+	Engine composes.ContainerEngine
 	// History and Services are the running sampler's read sides
 	// (*hostmetrics.Sampler and *hostmetrics.ServiceCollector in production,
 	// fakes at the HTTP seam). The metrics endpoints need both.
@@ -84,7 +87,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	mux.HandleFunc("GET /healthz", healthz)
 	authService := auth.New(db)
 	authService.RegisterRoutes(mux)
-	composesService := composes.New(db, runner, dataDir)
+	composesService := composes.New(db, runner, dataDir).WithEngine(d.Engine)
 	projectsService := projects.New(db, composesService)
 	projectsService.RegisterRoutes(mux)
 	environmentsService := environments.New(db, composesService)

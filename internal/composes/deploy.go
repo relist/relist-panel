@@ -13,6 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"relist-panel/internal/certificates"
 	"relist-panel/internal/dockernet"
 	"relist-panel/internal/domains"
 )
@@ -36,9 +37,12 @@ type DeployTarget struct {
 
 // DeployOptions tunes RunDeploy. FreshVolumes deletes the Compose's named
 // volumes first, Build passes --build to the runner and Out, when set,
-// receives the deploy's warnings and the runner's output.
+// receives the deploy's warnings and the runner's output. Exclude leaves
+// those Services to their Rollout (ADR-0023): up then starts only the rest,
+// and the deploy time waits for MarkDeployed.
 type DeployOptions struct {
 	FreshVolumes, Build bool
+	Exclude             []string
 	Out                 io.Writer
 }
 
@@ -138,6 +142,9 @@ type deployFiles struct {
 	warnings      []string
 	secrets       []string
 	pathVariables map[string]string
+	// zeroDowntime is the switched-on Services that have a Domain, in YAML
+	// order: the ones whose labels carry the retry and the transport.
+	zeroDowntime []string
 }
 
 // prepareDeployFiles resolves the YAML and loads the environment variables.
@@ -150,7 +157,13 @@ func (s *Service) prepareDeployFiles(ctx context.Context, t DeployTarget) (deplo
 	if err != nil {
 		return deployFiles{}, failure(FailureInternal, "could not load variables", err)
 	}
-	resolvedYAML, usedSets, warnings, err := s.resolveForDeploy(ctx, t.ProjectID, t.Compose, t.Compose.YAMLContent, t.Request.EnvFilePath, vars)
+	// Read once: the labels and the snapshot's list must agree, or a Service
+	// could roll out without its retry.
+	enabled, err := s.switches.Enabled(ctx, t.Compose.ID)
+	if err != nil {
+		return deployFiles{}, failure(FailureInternal, "could not load zero-downtime services", err)
+	}
+	resolvedYAML, usedSets, warnings, zeroDowntime, err := s.resolveForDeploy(ctx, t.ProjectID, t.Compose, t.Compose.YAMLContent, t.Request.EnvFilePath, vars, enabled)
 	if err != nil {
 		return deployFiles{}, err
 	}
@@ -161,43 +174,53 @@ func (s *Service) prepareDeployFiles(ctx context.Context, t DeployTarget) (deplo
 		warnings:      warnings,
 		secrets:       vars.secretValues(),
 		pathVariables: vars.interpolationValues(),
+		zeroDowntime:  zeroDowntime,
 	}, nil
 }
 
 // resolveForDeploy loads the Compose's domains and resolves yamlContent the
 // way a deploy writes it, returning the IDs of the sets it points at. vars
 // only has to carry keys, so preview can share it without reading values. It
-// returns a *DeployFailure.
-func (s *Service) resolveForDeploy(ctx context.Context, projectID int64, compose Compose, yamlContent, envFilePath string, vars deployVariables) (string, []int64, []string, error) {
+// returns a *DeployFailure. The enabled Services that have a Domain get the
+// zero-downtime labels and are returned in YAML order.
+func (s *Service) resolveForDeploy(ctx context.Context, projectID int64, compose Compose, yamlContent, envFilePath string, vars deployVariables, enabled []string) (string, []int64, []string, []string, error) {
 	composeDomains, err := s.domains.ListForCompose(ctx, compose.ID)
 	if err != nil {
-		return "", nil, nil, failure(FailureInternal, "could not load domains", err)
+		return "", nil, nil, nil, failure(FailureInternal, "could not load domains", err)
 	}
 	projectName, environmentName, err := s.repository.parentNames(ctx, projectID, compose.EnvironmentID)
 	if err != nil {
-		return "", nil, nil, failure(FailureInternal, "could not load compose", err)
+		return "", nil, nil, nil, failure(FailureInternal, "could not load compose", err)
+	}
+	zeroDowntime, err := zeroDowntimeServices(yamlContent, composeDomains, enabled)
+	if err != nil {
+		return "", nil, nil, nil, failure(FailureInvalid, "compose yaml is invalid: "+err.Error(), err)
+	}
+	onSet := map[string]bool{}
+	for _, name := range zeroDowntime {
+		onSet[name] = true
 	}
 	id := networkIdentity{DeployName: compose.DeployProjectName(), Compose: compose.Name, Environment: environmentName, Project: projectName}
-	resolvedYAML, usedSets, warnings, err := resolveCompose(yamlContent, dockernet.NetworkName, envFilePath, compose.ID, composeDomains, id, vars)
+	resolvedYAML, usedSets, warnings, err := resolveCompose(yamlContent, dockernet.NetworkName, envFilePath, compose.ID, composeDomains, id, vars, onSet)
 	var target *domains.TargetError
 	if errors.As(err, &target) {
-		return "", nil, nil, failure(FailureInvalid, target.Error(), err)
+		return "", nil, nil, nil, failure(FailureInvalid, target.Error(), err)
 	} else if err != nil {
-		return "", nil, nil, failure(FailureInvalid, "compose yaml is invalid: "+err.Error(), err)
+		return "", nil, nil, nil, failure(FailureInvalid, "compose yaml is invalid: "+err.Error(), err)
 	}
 	hasSource, err := s.repository.hasSource(ctx, compose.ID)
 	if err != nil {
-		return "", nil, nil, failure(FailureInternal, "could not load source", err)
+		return "", nil, nil, nil, failure(FailureInternal, "could not load source", err)
 	}
 	elsewhere, err := s.volumeNamesElsewhere(ctx, []int64{compose.ID})
 	if err != nil {
-		return "", nil, nil, failure(FailureInternal, "could not load compose volumes", err)
+		return "", nil, nil, nil, failure(FailureInternal, "could not load compose volumes", err)
 	}
 	warnings = append(warnings, volumeWarnings(yamlContent, filepath.Dir(envFilePath), hasSource, elsewhere)...)
 	if warnings == nil {
 		warnings = []string{}
 	}
-	return resolvedYAML, usedSets, warnings, nil
+	return resolvedYAML, usedSets, warnings, zeroDowntime, nil
 }
 
 // RunDeploy resolves and writes the Compose's files, runs `up` and records the
@@ -210,6 +233,13 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 	files, err := s.prepareDeployFiles(ctx, t)
 	if err != nil {
 		return nil, err
+	}
+	// The zero-downtime labels name this transport; without it Traefik
+	// disables their Domains.
+	if len(files.zeroDowntime) > 0 {
+		if err := domains.WriteTransportFile(certificates.DynamicDir(s.dataDir)); err != nil {
+			return nil, failure(FailureInternal, "could not write Traefik transport file", err)
+		}
 	}
 
 	// After the volumes are gone a failure must say so.
@@ -251,6 +281,12 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 		for _, w := range files.warnings {
 			fmt.Fprintf(opts.Out, "warning: %s\n", w)
 		}
+	}
+	if len(opts.Exclude) > 0 {
+		if err := s.deploySubset(ctx, req, files.composeYAML, opts); err != nil {
+			return nil, failure(FailureRunner, "deploy failed: "+err.Error(), err)
+		}
+		return files.warnings, nil
 	}
 	if err := s.runner.Up(ctx, req, UpOptions{Build: opts.Build, Out: opts.Out}); err != nil {
 		return nil, failure(FailureRunner, "deploy failed"+suffix+": "+err.Error()+volumesAdvice(removed), err)
@@ -528,4 +564,27 @@ func declareSharedNetwork(yamlContent, name string) (string, error) {
 	}
 	out, err := yaml.Marshal(&doc)
 	return string(out), err
+}
+
+// deploySubset runs up for every active Service but the excluded ones, or,
+// when none is left, removes orphans itself.
+func (s *Service) deploySubset(ctx context.Context, req RunRequest, yamlContent string, opts DeployOptions) error {
+	active, err := s.activeServices(ctx, req, yamlContent)
+	if err != nil {
+		return err
+	}
+	excluded := map[string]bool{}
+	for _, name := range opts.Exclude {
+		excluded[name] = true
+	}
+	var rest []string
+	for _, name := range active {
+		if !excluded[name] {
+			rest = append(rest, name)
+		}
+	}
+	if len(rest) == 0 {
+		return s.removeOrphans(ctx, req.ProjectName, yamlContent)
+	}
+	return s.runner.Up(ctx, req, UpOptions{Build: opts.Build, Services: rest, Out: opts.Out})
 }

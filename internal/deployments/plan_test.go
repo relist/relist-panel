@@ -89,6 +89,30 @@ func TestPlanDeployment(t *testing.T) {
 			want: plan{usesSource: true, prepare: []step{build("web", false)}, apply: []step{{kind: kindDeploy, name: "deploy", freshVolumes: true}}},
 		},
 	}
+	rollout := func(svc string, build bool) step {
+		return step{kind: kindRollout, name: "rollout:" + svc, service: svc, build: build}
+	}
+	tests = append(tests, []struct {
+		name string
+		in   planInput
+		want plan
+	}{
+		{
+			name: "a zero-downtime service rolls out after the rest deploy",
+			in:   planInput{mode: ModeDeploy, zeroDowntime: []string{"web"}},
+			want: plan{apply: []step{{kind: kindDeploy, name: "deploy", build: true, exclude: []string{"web"}}, rollout("web", true)}},
+		},
+		{
+			name: "rollouts follow the order given",
+			in:   planInput{mode: ModeSkipBuild, source: git, zeroDowntime: []string{"web", "api"}},
+			want: plan{apply: []step{{kind: kindDeploy, name: "deploy", exclude: []string{"web", "api"}}, rollout("web", false), rollout("api", false)}},
+		},
+		{
+			name: "fresh volumes deploys everything without rollout",
+			in:   planInput{mode: ModeDeploy, freshVolumes: true, zeroDowntime: []string{"web"}},
+			want: plan{apply: []step{{kind: kindDeploy, name: "deploy", build: true, freshVolumes: true}}},
+		},
+	}...)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := planDeployment(tc.in)

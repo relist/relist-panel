@@ -42,7 +42,13 @@ func (r statusRunner) Build(context.Context, composes.RunRequest, composes.Build
 func (r statusRunner) Down(context.Context, composes.RunRequest) error            { return nil }
 func (r statusRunner) DownWithVolumes(context.Context, composes.RunRequest) error { return nil }
 func (r statusRunner) Restart(context.Context, composes.RunRequest) error         { return nil }
-func (r statusRunner) Logs(context.Context, composes.RunRequest) (string, error)  { return "", nil }
+func (r statusRunner) Config(context.Context, composes.RunRequest) ([]byte, error) {
+	return []byte(`{"services":{}}`), nil
+}
+func (r statusRunner) Scale(context.Context, composes.RunRequest, composes.ScaleOptions) error {
+	return nil
+}
+func (r statusRunner) Logs(context.Context, composes.RunRequest) (string, error) { return "", nil }
 func (r statusRunner) Status(_ context.Context, req composes.RunRequest) (composes.ComposeStatus, error) {
 	if r.d.Running[req.ProjectName] {
 		return composes.ComposeStatus{Running: 1, Total: 1}, nil

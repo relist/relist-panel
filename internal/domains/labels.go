@@ -18,8 +18,10 @@ const (
 // "services" map, mutated in place) and returns warnings in a stable order.
 // Domains are processed in ID order. network is the Docker network Traefik
 // reaches the containers on. A *TargetError is returned, with services left
-// untouched, when a domain's Service is missing or sets network_mode.
-func Inject(services map[string]any, composeID int64, domains []Domain, network string) ([]string, error) {
+// untouched, when a domain's Service is missing or sets network_mode. The
+// domains of a Service in zeroDowntime also get a retry middleware and the
+// fast-dial transport (ADR-0023).
+func Inject(services map[string]any, composeID int64, domains []Domain, network string, zeroDowntime map[string]bool) ([]string, error) {
 	ordered := append([]Domain(nil), domains...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
 
@@ -54,7 +56,7 @@ func Inject(services map[string]any, composeID int64, domains []Domain, network 
 			prepared[d.Service] = labels
 			warnings = append(warnings, prepareService(d.Service, labels, generated, network)...)
 		}
-		addDomain(labels, composeID, d)
+		addDomain(labels, composeID, d, zeroDowntime[d.Service])
 	}
 
 	for name, labels := range prepared {
@@ -108,7 +110,7 @@ func EntrypointFor(d Domain) string {
 }
 
 // addDomain writes the labels of one domain.
-func addDomain(labels *labelSet, composeID int64, d Domain) {
+func addDomain(labels *labelSet, composeID int64, d Domain, zeroDowntime bool) {
 	n := RouterName(composeID, d.ID)
 	router := routerPrefix + n
 
@@ -125,6 +127,13 @@ func addDomain(labels *labelSet, composeID int64, d Domain) {
 		labels.set("traefik.http.middlewares."+n+"-prefix.addprefix.prefix", d.InternalPath)
 	}
 	chain = append(chain, d.Middlewares...)
+	if zeroDowntime {
+		// Last, right in front of the service: only the dial needs retrying,
+		// and a retried request must not pass strip or prefix twice.
+		chain = append(chain, n+"-retry")
+		labels.set("traefik.http.middlewares."+n+"-retry.retry.attempts", "4")
+		labels.set("traefik.http.services."+n+".loadbalancer.serversTransport", "relist-fastdial@file")
+	}
 
 	labels.set(router+".rule", rule)
 	labels.set(router+".entrypoints", entrypoint)

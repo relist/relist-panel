@@ -221,6 +221,13 @@ export type ComposeDomains = {
   services: string[];
 };
 
+/** `GET …/zero-downtime`: one Service with a Domain, its switch, and what would block its rollout today. */
+export type ZeroDowntimeService = {
+  service: string;
+  enabled: boolean;
+  reasons: string[];
+};
+
 /** The file a deploy would write for a draft, and the warnings it would return. */
 export type ComposePreview = {
   yaml: string;

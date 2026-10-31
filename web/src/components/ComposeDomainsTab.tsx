@@ -4,11 +4,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { ApiError } from '../data/api';
 import { usePanel } from '../data/store';
-import type { Compose, ComposeDomains, Domain, DomainInput } from '../data/types';
+import type { Compose, ComposeDomains, Domain, DomainInput, ZeroDowntimeService } from '../data/types';
 import { domainUrl, httpsTag } from '../pages/domains-view';
 import { DomainFormModal } from './DomainFormModal';
 import { EmptyState } from './primitives';
 import { RedeployBanner } from './RedeployBanner';
+import { ZeroDowntimeCard } from './ZeroDowntimeCard';
 
 const { Text } = Typography;
 
@@ -26,10 +27,19 @@ export function ComposeDomainsTab({
   compose,
   deploying,
   onDeploy,
+  onOpenEditor,
+  onReloadZeroDowntime,
+  zeroDowntime,
 }: {
   compose: Compose;
   deploying: boolean;
   onDeploy: () => void;
+  /** Sends the operator to the Editor tab, where a zero-downtime problem is fixed. */
+  onOpenEditor: () => void;
+  /** Rereads the page's zero-downtime switches after one changes. */
+  onReloadZeroDowntime: () => Promise<void>;
+  /** The page's zero-downtime switches; undefined until the first read ends. */
+  zeroDowntime?: { services?: ZeroDowntimeService[]; error?: string };
 }) {
   const { createDomain, deleteDomain, loadDomains, updateDomain } = usePanel();
   const [data, setData] = useState<{ composeId: number; payload?: ComposeDomains; error?: string; refreshing?: boolean }>();
@@ -216,6 +226,13 @@ export function ComposeDomainsTab({
           />
         )}
       </Card>
+      <ZeroDowntimeCard
+        compose={compose}
+        error={zeroDowntime?.error}
+        onOpenEditor={onOpenEditor}
+        onReload={onReloadZeroDowntime}
+        services={zeroDowntime?.services}
+      />
       <DomainFormModal
         domain={modal?.domain}
         error={saveError}

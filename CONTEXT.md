@@ -64,6 +64,14 @@ _Avoid_: Credential, Deploy key (the per-Compose key of ADR-0016)
 One queued run that brings a Compose's Containers up to date: fetch the Source, build each Service that has `build:` one at a time, then `up`. A newly queued Deployment keeps the configuration selected when it was queued, independently of later edits. Numbered per Compose, with status, steps and a log. All Deployments on the host share one queue and run one at a time.
 _Avoid_: Build (the build is one step of a Deployment), Job, Release
 
+**Zero-downtime deploy**:
+A per-Service setting, available to Services with a Domain. When it is on, a Deployment replaces the Service's Container by **Rollout** instead of recreating it (ADR-0023).
+_Avoid_: Rolling update (Swarm's feature), Blue/green.
+
+**Rollout**:
+The step of a Deployment that starts a new Container of one Service next to the old one, waits until it is healthy, then stops and removes the old one. If the new one is not healthy in time, it is removed instead and the Deployment fails.
+_Avoid_: Update, Swap.
+
 **Terminal Session**:
 One interactive shell in one Container of a Service, opened from the Compose page's Terminal tab and living only as long as that page. _Avoid_: Console, SSH.
 

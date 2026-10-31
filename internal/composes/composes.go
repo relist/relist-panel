@@ -21,6 +21,7 @@ import (
 
 	"relist-panel/internal/domains"
 	"relist-panel/internal/slug"
+	"relist-panel/internal/zerodowntime"
 )
 
 const (
@@ -58,7 +59,18 @@ type ComposeStatus struct {
 // set, receives the command's stdout and stderr as they arrive.
 type UpOptions struct {
 	Build bool
-	Out   io.Writer
+	// Services, when set, limits up to them, with --no-deps (ADR-0023).
+	Services []string
+	Out      io.Writer
+}
+
+// ScaleOptions starts one more Container of Service next to the running ones,
+// without recreating them: Replicas is how many there are afterwards.
+type ScaleOptions struct {
+	Service  string
+	Replicas int
+	Build    bool
+	Out      io.Writer
 }
 
 // BuildOptions tunes building one Service. Out, when set, receives the
@@ -82,6 +94,10 @@ type ComposeRunner interface {
 	Restart(ctx context.Context, req RunRequest) error
 	Status(ctx context.Context, req RunRequest) (ComposeStatus, error)
 	Logs(ctx context.Context, req RunRequest) (string, error)
+	// Config is `docker compose config --format json`: the file as Compose
+	// resolves it, interpolated and with inactive profiles dropped.
+	Config(ctx context.Context, req RunRequest) ([]byte, error)
+	Scale(ctx context.Context, req RunRequest, opts ScaleOptions) error
 }
 
 type Service struct {
@@ -89,8 +105,16 @@ type Service struct {
 	runner     ComposeRunner
 	dataDir    string
 	domains    *domains.Store
+	switches   zeroDowntimeSwitches
+	engine     ContainerEngine
 	canceler   DeploymentCanceler
 	now        func() time.Time
+}
+
+// zeroDowntimeSwitches is the per-Service zero-downtime switch (ADR-0023).
+type zeroDowntimeSwitches interface {
+	Enabled(ctx context.Context, composeID int64) ([]string, error)
+	Set(ctx context.Context, composeID int64, service string, on bool, now time.Time) error
 }
 
 type repository struct {
@@ -144,7 +168,14 @@ type composeUpdateInput struct {
 // database. runner drives deploy lifecycle actions; dataDir is the root
 // directory Compose files are resolved under (ADR-0002).
 func New(db *sql.DB, runner ComposeRunner, dataDir string) *Service {
-	return &Service{repository: &repository{db: db}, runner: runner, dataDir: dataDir, domains: domains.NewStore(db), now: time.Now}
+	return &Service{repository: &repository{db: db}, runner: runner, dataDir: dataDir, domains: domains.NewStore(db), switches: zerodowntime.NewStore(db), now: time.Now}
+}
+
+// WithEngine gives the Service the Container engine a Rollout and orphan
+// removal need (ADR-0023). Without one, both fail.
+func (s *Service) WithEngine(e ContainerEngine) *Service {
+	s.engine = e
+	return s
 }
 
 // RegisterRoutes adds the authenticated Compose endpoints to mux.
@@ -160,6 +191,8 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/removal-plan", s.removalPlan)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/logs", s.logs)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/services/{service}/effective-variables", s.effectiveVariables)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/zero-downtime", s.listZeroDowntime)
+	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/zero-downtime/{service}", s.setZeroDowntime)
 }
 
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
@@ -398,7 +431,12 @@ func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load variables")
 		return
 	}
-	resolvedYAML, _, warnings, err := s.resolveForDeploy(r.Context(), projectID, compose, *input.YAMLContent, req.EnvFilePath, vars)
+	enabled, err := s.switches.Enabled(r.Context(), compose.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load zero-downtime services")
+		return
+	}
+	resolvedYAML, _, warnings, _, err := s.resolveForDeploy(r.Context(), projectID, compose, *input.YAMLContent, req.EnvFilePath, vars, enabled)
 	if err != nil {
 		writeDeployFailure(w, err)
 		return
@@ -1142,7 +1180,7 @@ func runRequestFor(dataDir string, compose Compose) RunRequest {
 // panel's env file, in binding order; the IDs of the sets used are returned.
 // The warnings say what that overrode or skipped. A *domains.TargetError is
 // returned as is.
-func resolveCompose(yamlContent, networkName, envFilePath string, composeID int64, ds []domains.Domain, id networkIdentity, vars deployVariables) (string, []int64, []string, error) {
+func resolveCompose(yamlContent, networkName, envFilePath string, composeID int64, ds []domains.Domain, id networkIdentity, vars deployVariables, zeroDowntime map[string]bool) (string, []int64, []string, error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(yamlContent), &doc); err != nil {
 		return "", nil, nil, fmt.Errorf("parse compose yaml: %w", err)
@@ -1174,7 +1212,7 @@ func resolveCompose(yamlContent, networkName, envFilePath string, composeID int6
 	// their own Traefik labels.
 	joins := sharedNetworkJoins(services, networkName, ds)
 	// With no services at all, a domain still has to be refused.
-	warnings, err := domains.Inject(services, composeID, ds, networkName)
+	warnings, err := domains.Inject(services, composeID, ds, networkName, zeroDowntime)
 	if err != nil {
 		return "", nil, nil, err
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"relist-panel/internal/deployments"
@@ -162,7 +163,7 @@ func (f *finalizer) Complete(ctx context.Context, m Manifest) (Summary, error) {
 		entry := SummaryDeployment{ComposeID: id}
 		d, _, err := f.d.Queue.Enqueue(ctx, id, deployments.Request{Mode: mode})
 		if err != nil {
-			entry.Error = err.Error()
+			entry.Error = enqueueError(err)
 		} else {
 			entry.Number = d.Number
 		}
@@ -179,4 +180,21 @@ func (f *finalizer) Complete(ctx context.Context, m Manifest) (Summary, error) {
 	}
 	slices.Sort(summary.DNS)
 	return summary, nil
+}
+
+// enqueueError is a refused redeploy as the summary shows it. A zero-downtime
+// refusal names each Service and reason, since the summary is all the
+// operator sees of it.
+func enqueueError(err error) string {
+	var refused *deployments.ZeroDowntimeError
+	if !errors.As(err, &refused) {
+		return err.Error()
+	}
+	var lines []string
+	for _, p := range refused.Problems {
+		for _, reason := range p.Reasons {
+			lines = append(lines, p.Service+" — "+reason)
+		}
+	}
+	return "can't deploy with zero downtime: " + strings.Join(lines, "; ")
 }

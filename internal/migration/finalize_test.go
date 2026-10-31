@@ -15,6 +15,7 @@ import (
 	"relist-panel/internal/deployments"
 	"relist-panel/internal/domains"
 	"relist-panel/internal/sources"
+	"relist-panel/internal/zerodowntime"
 )
 
 // stageDatabase writes a migrated database with one marker Project into
@@ -148,13 +149,35 @@ func TestClearCopiedStateClearsLockAndCancels(t *testing.T) {
 type fakeEnqueuer struct {
 	mu    sync.Mutex
 	calls map[int64]deployments.Mode
+	errs  map[int64]error
 }
 
 func (q *fakeEnqueuer) Enqueue(_ context.Context, id int64, r deployments.Request) (deployments.Deployment, bool, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.calls[id] = r.Mode
+	if err := q.errs[id]; err != nil {
+		return deployments.Deployment{}, false, err
+	}
 	return deployments.Deployment{ComposeID: id, Number: 7}, true, nil
+}
+
+// The summary is all the operator sees of a refused redeploy, so it names
+// what to fix.
+func TestCompleteFinalizeNamesZeroDowntimeProblems(t *testing.T) {
+	queue := &fakeEnqueuer{calls: map[int64]deployments.Mode{}, errs: map[int64]error{1: &deployments.ZeroDowntimeError{Problems: []zerodowntime.Problem{
+		{Service: "web", Reasons: []string{"has no healthcheck", "sets container_name; two Containers can't share a name"}},
+		{Service: "api", Reasons: []string{"publishes host port 8080; two Containers can't bind it"}},
+	}}}}
+	f := NewFinalizer(FinalizeDeps{Local: LocalHost{Docker: NewFakeDocker(), DataDir: t.TempDir()}, Queue: queue, Sources: sourceSet{}, Domains: fakeDomains{}})
+	summary, err := f.Complete(context.Background(), Manifest{RunningComposeIDs: []int64{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "can't deploy with zero downtime: web — has no healthcheck; web — sets container_name; two Containers can't share a name; api — publishes host port 8080; two Containers can't bind it"
+	if len(summary.Deployments) != 1 || summary.Deployments[0].Error != want {
+		t.Fatalf("summary = %+v, want error %q", summary.Deployments, want)
+	}
 }
 
 type sourceSet map[int64]bool

@@ -17,6 +17,7 @@ import (
 	"relist-panel/internal/dockerhost"
 	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
+	"relist-panel/internal/zerodowntime"
 )
 
 // Gate serialises work on a Project; the Deploy step holds it. AcquireVolumes
@@ -35,6 +36,9 @@ type Composes interface {
 	CheckDeployable(ctx context.Context, t composes.DeployTarget) error
 	PrepareBuild(ctx context.Context, t composes.DeployTarget) (composes.BuildPlan, error)
 	RunDeploy(ctx context.Context, t composes.DeployTarget, opts composes.DeployOptions) ([]string, error)
+	RunRollout(ctx context.Context, t composes.DeployTarget, service string, opts composes.RolloutOptions) ([]string, error)
+	MarkDeployed(ctx context.Context, t composes.DeployTarget) error
+	ZeroDowntimeProblems(ctx context.Context, t composes.DeployTarget) ([]zerodowntime.Problem, error)
 }
 
 type Fetcher interface {
@@ -97,6 +101,14 @@ func reuse(queued Deployment, r Request) (Deployment, bool, error) {
 		return Deployment{}, false, &QueuedConflictError{Queued: queued}
 	}
 	return queued, false, nil
+}
+
+// ZeroDowntimeError refuses a Deployment whose zero-downtime Services can't
+// be rolled out (ADR-0023); nothing is queued.
+type ZeroDowntimeError struct{ Problems []zerodowntime.Problem }
+
+func (e *ZeroDowntimeError) Error() string {
+	return "zero-downtime deploy is on for services that can't be rolled out"
 }
 
 // ErrHeld refuses a Deployment while a server Migration holds the queue.
@@ -313,6 +325,16 @@ func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deploy
 		return Deployment{}, false, err
 	}
 	defer snapshot.release()
+	if !r.FreshVolumes && snapshot.Files != nil && len(snapshot.Files.ZeroDowntime) > 0 {
+		problems, err := q.d.Composes.ZeroDowntimeProblems(ctx, snapshot.Target)
+		if err == nil && len(problems) > 0 {
+			err = &ZeroDowntimeError{Problems: problems}
+		}
+		if err != nil {
+			discardCaptured(snapshot)
+			return Deployment{}, false, err
+		}
+	}
 	q.holdMu.Lock()
 	var d Deployment
 	var created bool
@@ -587,11 +609,11 @@ func (q *Queue) process(ctx context.Context, d Deployment) error {
 		return q.settleUnstarted(ctx, d, failed("", firstLine(err.Error())))
 	}
 
-	var buildServices []string
+	var buildServices, zeroDowntime []string
 	if snapshot.Files != nil {
-		buildServices = snapshot.Files.Services
+		buildServices, zeroDowntime = snapshot.Files.Services, snapshot.Files.ZeroDowntime
 	}
-	p := planDeployment(planInput{mode: d.Mode, noCache: d.NoCache, freshVolumes: d.FreshVolumes, source: snapshot.Source, buildServices: buildServices})
+	p := planDeployment(planInput{mode: d.Mode, noCache: d.NoCache, freshVolumes: d.FreshVolumes, source: snapshot.Source, buildServices: buildServices, zeroDowntime: zeroDowntime})
 	steps := []string{stepDeploy}
 	if names := p.stepNames(); len(names) > 0 {
 		steps = names
@@ -948,6 +970,7 @@ func (j *job) runApply(steps []step) outcome {
 		defer cancel()
 	}
 	var warnings []string
+	rolledOut := false
 	for i, s := range steps {
 		if i > 0 {
 			j.beginStep(s)
@@ -957,11 +980,24 @@ func (j *job) runApply(steps []step) outcome {
 		switch s.kind {
 		case kindDeploy:
 			stepWarnings, err = j.runDeploy(dctx, s)
+		case kindRollout:
+			rolledOut = true
+			stepWarnings, err = j.runRollout(dctx, s)
 		}
 		if err != nil {
+			for _, rest := range steps[i+1:] {
+				if rest.kind == kindRollout {
+					fmt.Fprintf(j.out, "not deployed: %s\n", rest.service)
+				}
+			}
 			release()
 			o := failed(s.name, firstLine(err.Error()))
+			// Warnings already raised still describe what this Deployment did.
+			o.warnings = append(append(o.warnings, warnings...), stepWarnings...)
 			if errors.Is(dctx.Err(), context.DeadlineExceeded) {
+				// The reason becomes "timeout"; the log keeps what the step
+				// did about it, such as a container it could not remove.
+				fmt.Fprintf(j.out, "error: %s\n", firstLine(err.Error()))
 				o.reason = reasonTimeout
 			}
 			var failure *composes.DeployFailure
@@ -972,6 +1008,13 @@ func (j *job) runApply(steps []step) outcome {
 			return o
 		}
 		warnings = append(warnings, stepWarnings...)
+	}
+	// RunDeploy leaves the deploy time to the rollouts when it excluded any.
+	if rolledOut {
+		if err := q.d.Composes.MarkDeployed(j.bg, j.target); err != nil {
+			release()
+			return outcome{status: StatusFailed, failedStep: j.step, reason: "could not record deploy time", warnings: warnings}
+		}
 	}
 	release()
 	return outcome{status: StatusSucceeded, warnings: warnings}
@@ -992,7 +1035,19 @@ func (j *job) runDeploy(dctx context.Context, s step) ([]string, error) {
 	return j.q.d.Composes.RunDeploy(dctx, j.target, composes.DeployOptions{
 		FreshVolumes: s.freshVolumes,
 		Build:        s.build,
+		Exclude:      s.exclude,
 		Out:          j.out,
+	})
+}
+
+// runRollout replaces one Service's Container without a gap (ADR-0023). Its
+// health wait ends at the Deployment's deadline.
+func (j *job) runRollout(dctx context.Context, s step) ([]string, error) {
+	deadline, _ := dctx.Deadline()
+	return j.q.d.Composes.RunRollout(dctx, j.target, s.service, composes.RolloutOptions{
+		Build:    s.build,
+		Deadline: deadline,
+		Out:      j.out,
 	})
 }
 
