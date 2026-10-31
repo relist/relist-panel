@@ -1,5 +1,5 @@
 import { Alert, Button, Card, Flex, Modal, Switch, Typography } from 'antd';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { usePanel } from '../data/store';
 import type { Compose, ZeroDowntimeService } from '../data/types';
@@ -24,43 +24,36 @@ function Reasons({ reasons }: { reasons: string[] }) {
 /**
  * The Domains tab's zero-downtime switches, one per Service with a Domain
  * (ADR-0023). Turning one on asks first; turning one off saves at once. The
- * list reloads after each change and whenever the YAML or the Domains change.
+ * page owns the list, so one read serves the card, the editor note and the
+ * Fresh volumes modal; the card asks the page to read again after a change.
  */
-export function ZeroDowntimeCard({ compose, onOpenEditor }: { compose: Compose; onOpenEditor: () => void }) {
-  const { loadZeroDowntime, setZeroDowntime } = usePanel();
-  const [rows, setRows] = useState<{ composeId: number; services: ZeroDowntimeService[] }>();
-  const [loadError, setLoadError] = useState<string>();
+export function ZeroDowntimeCard({
+  compose,
+  error: loadError,
+  onOpenEditor,
+  onReload,
+  services,
+}: {
+  compose: Compose;
+  /** Why the last read failed. */
+  error?: string;
+  onOpenEditor: () => void;
+  onReload: () => Promise<void>;
+  /** Undefined until the first read ends. */
+  services?: ZeroDowntimeService[];
+}) {
+  const { setZeroDowntime } = usePanel();
   const [saving, setSaving] = useState<string>();
   const [saveError, setSaveError] = useState<string>();
   const [confirm, setConfirm] = useState<ZeroDowntimeService>();
   const [confirmError, setConfirmError] = useState<string>();
-  const request = useRef(0);
   const composeId = compose.id;
-
-  const fetchRows = useCallback(async () => {
-    const mine = ++request.current;
-    try {
-      const services = await loadZeroDowntime(composeId);
-      if (request.current === mine) {
-        setRows({ composeId, services });
-        setLoadError(undefined);
-      }
-    } catch (reason: unknown) {
-      if (request.current === mine) {
-        setLoadError(errorText(reason, 'Could not load the zero-downtime switches'));
-      }
-    }
-  }, [composeId, loadZeroDowntime]);
-
-  useEffect(() => {
-    void fetchRows();
-  }, [fetchRows, compose.domainsChangedAt, compose.updatedAt]);
 
   const save = async (service: string, enabled: boolean) => {
     setSaving(service);
     try {
       await setZeroDowntime(composeId, service, enabled);
-      await fetchRows();
+      await onReload();
     } finally {
       setSaving(undefined);
     }
@@ -93,11 +86,10 @@ export function ZeroDowntimeCard({ compose, onOpenEditor }: { compose: Compose; 
     setConfirmError(undefined);
   };
 
-  const services = rows?.composeId === composeId ? rows.services : undefined;
   if (loadError && !services) {
     return (
       <Alert
-        action={<Button onClick={() => void fetchRows()}>Retry</Button>}
+        action={<Button onClick={() => void onReload()}>Retry</Button>}
         description={loadError}
         showIcon
         style={{ marginTop: LAYOUT.gutter }}

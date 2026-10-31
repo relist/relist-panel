@@ -4,14 +4,13 @@ import '../test/dom-setup';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ConfigProvider } from 'antd';
-import type { ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Compose, ZeroDowntimeService } from '../data/types';
 import { ZERO_DOWNTIME_REQUIREMENTS } from './ZeroDowntimeRequirements';
 import { ZeroDowntimeCard } from './ZeroDowntimeCard';
 
 const panel = vi.hoisted(() => ({
-  loadZeroDowntime: vi.fn(),
   setZeroDowntime: vi.fn(),
 }));
 
@@ -48,9 +47,25 @@ function still(node: ReactNode) {
   return render(<ConfigProvider theme={{ token: { motion: false } }}>{node}</ConfigProvider>);
 }
 
+/** The page's reread of the switches; each test says what it returns. */
+const reload = vi.fn<() => Promise<ZeroDowntimeService[]>>();
+
+/** Stands in for ComposePage, which owns the list and rereads it on request. */
+function Page({ initial }: { initial: ZeroDowntimeService[] }) {
+  const [services, setServices] = useState(initial);
+  return (
+    <ZeroDowntimeCard
+      compose={compose}
+      onOpenEditor={onOpenEditor}
+      onReload={async () => setServices(await reload())}
+      services={services}
+    />
+  );
+}
+
 async function renderCard(rows: ZeroDowntimeService[]) {
-  panel.loadZeroDowntime.mockResolvedValue(rows);
-  still(<ZeroDowntimeCard compose={compose} onOpenEditor={onOpenEditor} />);
+  reload.mockResolvedValue(rows);
+  still(<Page initial={rows} />);
   return screen.findByRole('switch', { name: 'Zero-downtime deploy for web' });
 }
 
@@ -69,11 +84,22 @@ describe('ZeroDowntimeCard', () => {
     );
   });
 
-  it('renders nothing when no Service has a Domain', async () => {
-    panel.loadZeroDowntime.mockResolvedValue([]);
-    const { container } = render(<ZeroDowntimeCard compose={compose} onOpenEditor={onOpenEditor} />);
-    await waitFor(() => expect(panel.loadZeroDowntime).toHaveBeenCalledWith(7));
+  it('renders nothing while loading or when no Service has a Domain', () => {
+    const onReload = vi.fn();
+    const { container, rerender } = render(<ZeroDowntimeCard compose={compose} onOpenEditor={onOpenEditor} onReload={onReload} />);
     expect(container.textContent).toBe('');
+    rerender(<ZeroDowntimeCard compose={compose} onOpenEditor={onOpenEditor} onReload={onReload} services={[]} />);
+    expect(container.textContent).toBe('');
+    expect(onReload).not.toHaveBeenCalled();
+  });
+
+  it('shows a failed first read with Retry', async () => {
+    const onReload = vi.fn(async () => undefined);
+    const user = userEvent.setup();
+    render(<ZeroDowntimeCard compose={compose} error="Request failed (500)" onOpenEditor={onOpenEditor} onReload={onReload} />);
+    expect(screen.getByText('Request failed (500)')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onReload).toHaveBeenCalledTimes(1);
   });
 
   it('shows the help text', async () => {
@@ -122,7 +148,7 @@ describe('ZeroDowntimeCard', () => {
     expect(panel.setZeroDowntime).toHaveBeenCalledTimes(1);
     expect(panel.setZeroDowntime).toHaveBeenCalledWith(7, 'web', true);
     expect(accept.className).toContain('ant-btn-loading');
-    panel.loadZeroDowntime.mockResolvedValue([{ ...off, enabled: true }]);
+    reload.mockResolvedValue([{ ...off, enabled: true }]);
     put.resolve();
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     await waitFor(() => expect(screen.getByRole('switch', { name: 'Zero-downtime deploy for web' }).getAttribute('aria-checked')).toBe('true'));

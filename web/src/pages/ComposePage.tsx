@@ -286,28 +286,42 @@ export function ComposePage() {
     }
   }, [loadLogs, logsComposeId, onLogsTab]);
 
-  // The zero-downtime switches, for the editor note and the Fresh volumes
-  // modal: read again on entering the Editor tab and after a save or a Domain
-  // change, so a switch flipped on the Domains tab shows on return. Both
-  // degrade to today's copy when the read fails.
-  const [zeroDowntimeStatus, setZeroDowntimeStatus] = useState<{ composeId: number; services: ZeroDowntimeService[] }>();
-  const onEditorTab = activeTab === 'editor';
+  // The zero-downtime switches, read once for the whole page: the Domains
+  // tab's card, the editor note and the Fresh volumes modal share them, since
+  // each read runs `docker compose config` on the host. Read again after a
+  // save, a Domain change or a switch change. The note and the modal degrade
+  // to today's copy when the read fails; the card shows the error.
+  const [zeroDowntimeStatus, setZeroDowntimeStatus] = useState<{
+    composeId: number;
+    services?: ZeroDowntimeService[];
+    error?: string;
+  }>();
+  const zeroDowntimeRequest = useRef(0);
   const zeroDowntimeComposeId = compose?.id;
   const composeUpdatedAt = compose?.updatedAt;
   const composeDomainsChangedAt = compose?.domainsChangedAt;
-  useEffect(() => {
+  const reloadZeroDowntime = useCallback(async () => {
     if (zeroDowntimeComposeId === undefined) {
       return;
     }
-    let live = true;
-    loadZeroDowntime(zeroDowntimeComposeId).then(
-      (services) => live && setZeroDowntimeStatus({ composeId: zeroDowntimeComposeId, services }),
-      () => undefined,
-    );
-    return () => {
-      live = false;
-    };
-  }, [composeDomainsChangedAt, composeUpdatedAt, loadZeroDowntime, onEditorTab, zeroDowntimeComposeId]);
+    const id = zeroDowntimeComposeId;
+    const mine = ++zeroDowntimeRequest.current;
+    try {
+      const services = await loadZeroDowntime(id);
+      if (zeroDowntimeRequest.current === mine) {
+        setZeroDowntimeStatus({ composeId: id, services });
+      }
+    } catch (reason: unknown) {
+      if (zeroDowntimeRequest.current === mine) {
+        const error = reason instanceof Error ? reason.message : 'Could not load the zero-downtime switches';
+        // A failed reread keeps the last good list.
+        setZeroDowntimeStatus((previous) => ({ composeId: id, error, services: previous?.composeId === id ? previous.services : undefined }));
+      }
+    }
+  }, [loadZeroDowntime, zeroDowntimeComposeId]);
+  useEffect(() => {
+    void reloadZeroDowntime();
+  }, [composeDomainsChangedAt, composeUpdatedAt, reloadZeroDowntime]);
   // `available: false` means the feature cannot run at all — a bare binary, no
   // Docker socket — and the tab is hidden rather than shown dead. A URL that
   // still names it redirects to the Editor along with every other stale link.
@@ -1034,6 +1048,8 @@ export function ComposePage() {
                 deploying={isPending(`deploy:${compose.id}`)}
                 onDeploy={() => void deploy()}
                 onOpenEditor={() => navigate(paths.compose(project.id, environment.id, compose.id))}
+                onReloadZeroDowntime={reloadZeroDowntime}
+                zeroDowntime={zeroDowntimeStatus?.composeId === compose.id ? zeroDowntimeStatus : undefined}
               />
             ),
             key: 'domains',
@@ -1308,7 +1324,7 @@ export function ComposePage() {
               Volumes used only by Services behind a Compose profile may also be removed, even if they are not listed. A
               volume with an explicit <Text code>name:</Text> is removed even if another Compose uses it.
             </Paragraph>
-            {zeroDowntimeStatus?.composeId === compose.id && zeroDowntimeStatus.services.some((s) => s.enabled) && (
+            {zeroDowntimeStatus?.composeId === compose.id && zeroDowntimeStatus.services?.some((s) => s.enabled) && (
               <Paragraph>Zero-downtime deploy doesn&apos;t apply to this deploy.</Paragraph>
             )}
             <Paragraph type="secondary">

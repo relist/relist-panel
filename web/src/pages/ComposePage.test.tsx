@@ -59,10 +59,10 @@ function LoadProjectTree() {
   return null;
 }
 
-function renderPage(composeId = 7) {
+function renderPage(composeId = 7, tab?: string) {
   const router = createMemoryRouter([
     { element: <ComposePage />, path: '/projects/:projectId/env/:environmentId/compose/:composeId/:tab?' },
-  ], { initialEntries: [paths.compose(1, 2, composeId)] });
+  ], { initialEntries: [paths.compose(1, 2, composeId, tab)] });
   render(
     <App>
       <PanelProvider>
@@ -189,6 +189,19 @@ describe('Zero-downtime refusal', () => {
     await user.click(screen.getByRole('button', { name: /Deploy$/ }));
     await user.click(await screen.findByRole('button', { name: 'Open editor' }));
     await waitFor(() => expect(router.state.location.pathname).toBe(paths.compose(1, 2, 7)));
+  });
+});
+
+describe('Zero-downtime switches', () => {
+  // Each read runs `docker compose config` on the host.
+  it('reads them once for the Domains tab', async () => {
+    vi.spyOn(api, 'getSource').mockResolvedValue(null);
+    vi.spyOn(api, 'listDomains').mockResolvedValue({ domains: [], services: ['api'] });
+    const list = vi.mocked(api.listZeroDowntime).mockResolvedValue([{ service: 'api', enabled: false, reasons: [] }]);
+    renderPage(7, 'domains');
+    await screen.findByRole('switch', { name: 'Zero-downtime deploy for api' });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(list).toHaveBeenCalledTimes(1);
   });
 });
 
