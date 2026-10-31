@@ -116,3 +116,15 @@ func TestTraefikLabelsUnescapesDollar(t *testing.T) {
 		t.Fatalf("TraefikLabels = %v, want %v", got, want)
 	}
 }
+
+// Docker reads retries: 0 as its default of 3, so the wait must too.
+func TestWaitLimitZeroRetriesIsDefault(t *testing.T) {
+	config := []byte(`{"services":{"web":{"healthcheck":{"test":["CMD","true"],"interval":"20s","timeout":"5s","retries":0}}}}`)
+	got, err := WaitLimit(config, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 85 * time.Second; got != want { // 0 + (20s + 5s) × 3 + 10s
+		t.Fatalf("WaitLimit = %s, want %s", got, want)
+	}
+}

@@ -159,8 +159,9 @@ func WaitLimit(configJSON []byte, service string) (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Docker reads 0, like an unset value, as its default.
 	retries := defaultRetries
-	if h.Retries != nil {
+	if h.Retries != nil && *h.Retries > 0 {
 		retries = *h.Retries
 	}
 	return start + (interval+timeout)*time.Duration(retries) + waitMargin, nil
