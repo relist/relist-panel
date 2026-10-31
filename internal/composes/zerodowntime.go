@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -81,8 +82,37 @@ func stageCheck(t DeployTarget) (RunRequest, func(), error) {
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return RunRequest{}, nil, err
 	}
-	base := filepath.Join(ComposeDir(t.Request), ".zd-check-"+hex.EncodeToString(suffix[:]))
-	return stageSnapshot(t, base+".yml", base+".env", base+"-sets")
+	dir := ComposeDir(t.Request)
+	created := missingDirs(dir)
+	base := filepath.Join(dir, ".zd-check-"+hex.EncodeToString(suffix[:]))
+	req, cleanup, err := stageSnapshot(t, base+".yml", base+".env", base+"-sets")
+	if err != nil {
+		removeEmptyDirs(created)
+		return req, cleanup, err
+	}
+	return req, func() { cleanup(); removeEmptyDirs(created) }, nil
+}
+
+// missingDirs is dir and each parent of it that does not exist yet, deepest
+// first.
+func missingDirs(dir string) []string {
+	var missing []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Stat(d); err == nil || filepath.Dir(d) == d {
+			return missing
+		}
+		missing = append(missing, d)
+	}
+}
+
+// removeEmptyDirs removes dirs deepest first, leaving any that are not
+// empty: a deploy that started meanwhile keeps its files.
+func removeEmptyDirs(dirs []string) {
+	for _, d := range dirs {
+		if os.Remove(d) != nil {
+			return
+		}
+	}
 }
 
 // ZeroDowntimeProblems checks the snapshot's zero-downtime Services against

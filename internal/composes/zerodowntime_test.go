@@ -27,7 +27,7 @@ type fakeEngine struct {
 	calls      []string
 	removeErr  error
 	stopBudget time.Duration // time left on the last Stop's ctx
-	onScale    func() // runs when the runner scales; adds NEW
+	onScale    func()        // runs when the runner scales; adds NEW
 }
 
 // Like the real Engine, every call fails once its ctx is done.
@@ -384,5 +384,59 @@ func TestFirstErrorLineSkipsArgvAndWarnings(t *testing.T) {
 	}
 	if got := firstErrorLine(errors.New("plain failure\nmore")); got != "plain failure" {
 		t.Fatalf("firstErrorLine(plain) = %q", got)
+	}
+}
+
+// A Compose that was never deployed has no directory; checking it must not
+// leave one behind.
+func TestStageCheckRemovesTheDirectoryItCreated(t *testing.T) {
+	svc, _, target, db := newDeployService(t, zdYAML)
+	seedDomain(t, db, "web")
+	switchOn(t, db, "web")
+	captured, err := svc.Capture(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := ComposeDir(target.Request)
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("compose dir exists before the check: %v", err)
+	}
+	if _, err := svc.ZeroDowntimeProblems(context.Background(), captured); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("compose dir left after the check: %v", err)
+	}
+}
+
+// Staged copies hold env values; a panel that died mid-check or mid-build
+// leaves them, so startup removes them and nothing else.
+func TestCleanStaging(t *testing.T) {
+	dir := t.TempDir()
+	for _, path := range []string{".zd-check-ab.yml", ".zd-check-ab.env", ".zd-check-ab-sets/1.env", ".build-compose.yml", ".build.env", ".build-sets/x.env", "docker-compose.yml", ".env", "sets/1.env"} {
+		full := filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := CleanStaging(dir); err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			rel, _ := filepath.Rel(dir, path)
+			left = append(left, rel)
+		}
+		return nil
+	})
+	if want := []string{".env", "docker-compose.yml", "sets/1.env"}; !reflect.DeepEqual(left, want) {
+		t.Fatalf("left = %v, want %v", left, want)
+	}
+	if err := CleanStaging(filepath.Join(dir, "missing")); err != nil {
+		t.Fatalf("CleanStaging(missing dir) = %v", err)
 	}
 }

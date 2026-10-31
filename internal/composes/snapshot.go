@@ -2,7 +2,9 @@ package composes
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -378,4 +380,25 @@ func shortMountParts(mount string) (string, string, bool) {
 		}
 	}
 	return mount, "", false
+}
+
+// CleanStaging removes the snapshot copies a zero-downtime check or a build
+// stages in dir. They hold env values, and a panel that stops mid-run leaves
+// them behind; at startup nothing is using them. A missing dir is fine.
+func CleanStaging(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".zd-check-") || name == buildComposeFileName || name == buildEnvFileName || name == ".build-sets" {
+			if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

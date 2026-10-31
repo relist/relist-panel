@@ -347,7 +347,9 @@ func composeIdentities(db *sql.DB) dockerexec.ComposeIdentities {
 	}
 }
 
-// cleanSourceStaging runs sources.CleanStaging over every Compose directory.
+// cleanSourceStaging runs sources.CleanStaging over every Compose directory,
+// and composes.CleanStaging for the zero-downtime check and build copies a
+// stopped panel left there, which hold env values.
 func cleanSourceStaging(ctx context.Context, db *sql.DB, dataDir string) {
 	dirs, err := composes.ComposeDirs(ctx, db, dataDir)
 	if err != nil {
@@ -357,6 +359,9 @@ func cleanSourceStaging(ctx context.Context, db *sql.DB, dataDir string) {
 	for _, dir := range dirs {
 		if err := sources.CleanStaging(dir); err != nil {
 			log.Printf("warning: clearing upload leftovers in %s: %v", dir, err)
+		}
+		if err := composes.CleanStaging(dir); err != nil {
+			log.Printf("warning: clearing staged compose files in %s: %v", dir, err)
 		}
 	}
 }
