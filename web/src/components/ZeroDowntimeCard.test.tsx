@@ -154,6 +154,21 @@ describe('ZeroDowntimeCard', () => {
     await waitFor(() => expect(screen.getByRole('switch', { name: 'Zero-downtime deploy for web' }).getAttribute('aria-checked')).toBe('true'));
   });
 
+  it('cannot be cancelled while the PUT is in flight', async () => {
+    const user = userEvent.setup();
+    const toggle = await renderCard([off]);
+    const put = deferred<void>();
+    panel.setZeroDowntime.mockReturnValue(put.promise);
+    await user.click(toggle);
+    await user.click(await screen.findByRole('button', { name: 'Accept and turn on' }));
+    const cancel = screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement;
+    expect(cancel.disabled).toBe(true);
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    put.reject(new Error('web has no domain'));
+    expect(await within(screen.getByRole('dialog')).findByText('web has no domain')).toBeTruthy();
+  });
+
   it('keeps the modal open with the error when Accept fails', async () => {
     const user = userEvent.setup();
     const toggle = await renderCard([off]);

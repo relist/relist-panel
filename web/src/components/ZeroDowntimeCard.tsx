@@ -81,7 +81,11 @@ export function ZeroDowntimeCard({
     }
   };
 
+  const confirmSaving = confirm !== undefined && saving === confirm.service;
   const closeConfirm = () => {
+    if (confirmSaving) {
+      return;
+    }
     setConfirm(undefined);
     setConfirmError(undefined);
   };
@@ -149,10 +153,16 @@ export function ZeroDowntimeCard({
           ))}
         </Flex>
       </Card>
+      {/* Once Accept is pressed the switch turns on whatever the modal does,
+          so the modal stays until the PUT answers. */}
       <Modal
+        cancelButtonProps={{ disabled: confirmSaving }}
         cancelText="Cancel"
-        confirmLoading={confirm !== undefined && saving === confirm.service}
+        closable={!confirmSaving}
+        confirmLoading={confirmSaving}
         destroyOnHidden
+        keyboard={!confirmSaving}
+        mask={{ closable: !confirmSaving }}
         okText="Accept and turn on"
         onCancel={closeConfirm}
         onOk={() => void accept()}
