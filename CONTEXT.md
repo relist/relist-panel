@@ -37,7 +37,7 @@ One running instance of a Service, created by a deploy. Its identity is not stab
 _Avoid_: Instance
 
 **Image**:
-A Docker image present on the host, listed and loaded from the Images page. A Compose references one by name in its file, or builds one from its Source; the panel builds images only from a Source and never pulls one itself — except the Scanner's own image (ADR-0021).
+A Docker image present on the host, listed and loaded from the Images page. A Compose references one by name in its file, or builds one from its Source; the panel builds images only from a Source and never pulls one itself — except the Scanner's own image (ADR-0021) and the panel's own image for a Panel update (ADR-0024).
 _Avoid_: Build, Artifact
 
 **Scanner**:
@@ -122,3 +122,31 @@ _Avoid_: Maintenance mode (the maintenance page is what visitors of its Domains 
 **Control socket**:
 The Unix socket inside the panel container through which the `relist-panel` command talks to the running panel. Reaching it requires running a command in the container.
 _Avoid_: admin socket, API socket.
+
+**Install**:
+The Docker Compose project on the host that runs the panel and Traefik: its directory, its Install file, its Install override and its `.env`. The panel finds it from its own Container's Compose labels.
+_Avoid_: Stack, Panel compose (a Compose is something the panel deploys, never the panel itself)
+
+**Install file**:
+The Install's `docker-compose.yml`, owned by the panel: each version ships one, and a Panel update replaces or merges it.
+_Avoid_: Base file, Main compose
+
+**Install override**:
+The Install's `docker-compose.override.yml`, owned by the operator, where the Install is customised. A Panel update never writes it.
+_Avoid_: Custom compose, Local file
+
+**Panel update**:
+One run, started from the web, that moves the Install to a newer panel version and puts the old one back if the new one is not healthy (ADR-0024).
+_Avoid_: Upgrade, Release, Deployment (that deploys a Compose), Migration (that moves the panel to another host)
+
+**Update manifest**:
+The signed description of one panel version: its image digest, its Install file, its Install invariants and the manual steps it needs.
+_Avoid_: Release notes, Changelog
+
+**Install invariant**:
+A property the Install's merged configuration must have for a panel version to run, such as the Docker socket mount on the panel Service. Each Update manifest lists its own.
+_Avoid_: Rule, Requirement
+
+**Updater**:
+The short-lived Container, of the current panel image, that applies a Panel update and rolls it back. It runs outside the Install so it outlives the panel Container it replaces.
+_Avoid_: Agent, Sidecar, Watchtower
