@@ -10,7 +10,7 @@ tasks:
     desc: Build the embedded frontend and Go binary
     deps: [build-web]
     cmds:
-      - go build -o relist-panel .
+      - go build -ldflags "-X main.version={{.VERSION | default "dev"}}" -o relist-panel .
 
   build-web:
     desc: Generate the embedded frontend assets

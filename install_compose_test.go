@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"slices"
 	"testing"
@@ -34,5 +35,17 @@ func TestInstallComposeMountsTraefikDynamicDir(t *testing.T) {
 	}
 	if !slices.Contains(traefik.Volumes, "${RELIST_DATA_DIR:-/var/lib/relist-panel}/.traefik/dynamic:/letsencrypt/dynamic") {
 		t.Errorf("traefik volumes = %v, want the dynamic directory mounted on its own", traefik.Volumes)
+	}
+}
+
+// The binary embeds the Install file as the base for Panel update's change
+// check. A build that forgot to re-embed it would compare against a stale copy.
+func TestEmbeddedInstallFileMatchesRepoFile(t *testing.T) {
+	raw, err := os.ReadFile("docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(installFile, raw) {
+		t.Fatal("embedded Install file differs from docker-compose.yml; rebuild the binary")
 	}
 }

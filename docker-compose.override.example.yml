@@ -1,0 +1,11 @@
+# Example Install override. Copy to docker-compose.override.yml to keep local
+# changes across a Panel update: Compose merges that file over
+# docker-compose.yml, and Panel update never replaces it.
+services:
+  panel:
+    labels:
+      # One extra label on the panel Service.
+      - com.example.owner=ops
+    volumes:
+      # One extra volume on the panel Service.
+      - /srv/backups:/backups:ro

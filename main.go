@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"errors"
 	"fmt"
 	"log"
@@ -31,6 +32,16 @@ import (
 	"relist-panel/internal/volumes"
 	"relist-panel/internal/vulnscan"
 )
+
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
+
+// installFile is the Install file this build ships, embedded so Panel update
+// can compare it with the copy on the host. It is handed to internal packages
+// as a value, since go:embed cannot reach the repo root from them.
+//
+//go:embed docker-compose.yml
+var installFile []byte
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "reset-2fa" {
@@ -183,6 +194,7 @@ func main() {
 		Runner:         dockerexec.New(),
 		Engine:         dockerexec.NewEngine(dockerexec.DefaultSocketPath),
 		DataDir:        cfg.DataDir,
+		Version:        version,
 		History:        sampler,
 		Services:       collector,
 		VolumeRunner:   volumeRunner,
@@ -207,7 +219,7 @@ func main() {
 		log.Printf("warning: no migration control socket, so this panel cannot migrate or resume a migration lock; set RELIST_CONTROL_SOCKET to a writable path and restart: %v", err)
 	}
 
-	log.Printf("relist-panel listening on %s", cfg.Address())
+	log.Printf("relist-panel %s listening on %s", version, cfg.Address())
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- server.ListenAndServe()

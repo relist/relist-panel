@@ -6,15 +6,18 @@ COPY web/ ./
 RUN pnpm build
 
 FROM golang:1.27-alpine AS go-builder
+ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 # Every root .go file: main, its subcommands and helpers.
 COPY *.go ./
+# Embedded as the Install file the binary ships.
+COPY docker-compose.yml ./
 COPY internal/ ./internal/
 COPY cmd/ ./cmd/
 COPY --from=web-builder /src/internal/webassets/dist ./internal/webassets/dist
-RUN CGO_ENABLED=0 go build -o /out/relist-panel .
+RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o /out/relist-panel .
 # The Volume helper is its own small binary — not a subcommand of the panel —
 # because it must not link the panel's sqlite and net/http dependencies
 # (the spec's weight measurement). /usr/local/bin/relist-volhelper is the

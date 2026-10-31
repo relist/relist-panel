@@ -74,6 +74,8 @@ type Deps struct {
 	// host, or Traefik could route the panel's own traffic to an app. Empty
 	// means unknown and refuses nothing.
 	PanelDomain string
+	// Version is the build version, shown by GET /api/auth/status.
+	Version string
 }
 
 // NewHandler builds the top-level HTTP handler for the panel.
@@ -85,7 +87,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	migrationOptions := d.Migration
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
-	authService := auth.New(db)
+	authService := auth.New(db).WithVersion(d.Version)
 	authService.RegisterRoutes(mux)
 	composesService := composes.New(db, runner, dataDir).WithEngine(d.Engine)
 	projectsService := projects.New(db, composesService)
