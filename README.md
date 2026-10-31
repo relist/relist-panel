@@ -419,6 +419,32 @@ Deployment; pressing Build & Deploy again returns the queued one.
 Each build leaves its previous image as a dangling image. Run
 `docker image prune` to remove them.
 
+### Zero-downtime deploy
+
+A Service with a Domain can turn on zero-downtime deploy on the Domains tab.
+A Deployment then starts the Service's new Container next to the old one,
+waits for its healthcheck to pass, and only then stops and removes the old one.
+If the new Container is not healthy in time, it is removed, the old one keeps
+serving, and the Deployment fails. Traefik retries a request whose connection
+to the old Container fails, and never sends a request to the app twice. The
+note under the YAML editor lists what the Service needs; a deploy is refused
+when its healthcheck, `container_name`, host ports, replicas or anonymous
+volumes rule out a rollout. Fresh volumes and a first deploy run a plain `up`.
+
+What it does not promise:
+
+- **The healthcheck has to mean "ready".** If it only checks that the process
+  is alive, Traefik sends traffic before the app can answer.
+- **The app has to shut down gracefully on SIGTERM.** A request the old
+  Container is still working on when it stops gets a 502; Traefik does not
+  retry a request that already reached the app.
+- **Other Services still restart.** If a deploy recreates `db`, the app may
+  return its own errors while `db` is down. Compose recreates `db` only when
+  its image or configuration changed.
+- **A deploy that changes the Service's Traefik labels has a short outage**,
+  about 2 seconds, logged as a warning: an edited Domain, the first deploy
+  after the switch is turned on, or edited hand-written `traefik.*` labels.
+
 ### Build args and secrets
 
 `build.args` can interpolate `${VAR}` from the Environment and Compose
