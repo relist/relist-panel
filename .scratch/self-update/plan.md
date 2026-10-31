@@ -197,7 +197,8 @@ Implements spec "Apply" steps 3–4, "API" `apply`, and the remaining bullets of
   start the Updater with the Engine API equivalent of the spec's `docker run` (no Compose
   labels; name `relist-panel-updater-<run id>`; refuse if one is still running, remove a
   stale exited one). Returns the run id.
-- Subcommand `relist-panel panel-update apply --run <id>` in `main.go`, implemented in
+- Subcommand `relist-panel panel-update apply --run <id>` in `main.go` (and its line in
+  the `--help` usage from Task 10), implemented in
   `internal/panelupdate` (logic) + a thin CLI file. It needs: data dir, Install dir,
   project, config files, target image digest, `RELIST_DOMAIN`. **Decision:** the panel
   writes these into `<run dir>/plan.json` before starting the Updater, so the Updater's
@@ -275,3 +276,31 @@ Implements the rest of ticket `issues/07-docs.md`.
   confirmation) matching what Task 7 built.
 - Set `Status: closed` on tickets 01, 03, 04, 05, 06, 07 (and leave 02 `ready-for-human`
   with a note of what remains: key, secret, package visibility; and 08 open).
+
+## Task 10: `--help`, `--version`, and no server on unknown arguments
+
+Runs **next, before Task 2** (numbered 10 so earlier task numbers stay stable). Not in the
+spec: a safety fix found during Task 1, when `./relist-panel --help` started the server on
+the default data dir.
+
+Today `main()` checks `os.Args[1]` against each subcommand and falls through to the server
+for anything else. The server's only flag is `--insecure-migration-source`, read with
+`slices.Contains(os.Args[1:], …)` in `internal/config/config.go`; the migration sandbox
+(`scripts/sandbox-migration.sh`) passes it as the container `command`.
+
+- `relist-panel -h`, `--help` or `help`: print usage to stdout and exit 0. Usage lists
+  running with no arguments (start the panel), the server flag
+  `--insecure-migration-source`, and every subcommand with a one-line description:
+  `reset-2fa`, `reset-password`, `create-admin`, `migration`, `maintenance-page`, plus
+  `panel-update` once Task 6 adds it (Task 6 must add its line).
+- `relist-panel --version` or `version`: print `version` and exit 0.
+- Any other argument list that is not a known subcommand and is not made only of known
+  server flags: print usage to stderr and exit 2. The server never starts.
+- None of these load config, open the database or touch the data dir.
+- Shape: move the dispatch decision into a pure function (args in, a decision out) so it
+  can be table-tested without starting anything; `main()` acts on the decision. Keep each
+  subcommand's own flag parsing as it is.
+- Tests: table test over `[]`, `--help`, `-h`, `help`, `--version`, `version`, each
+  subcommand name, `--insecure-migration-source`, `--bogus`,
+  `--insecure-migration-source --bogus`, `serve`.
+- README: mention `relist-panel --help` where the CLI commands are described.
