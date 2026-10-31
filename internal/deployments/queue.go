@@ -992,7 +992,12 @@ func (j *job) runApply(steps []step) outcome {
 			}
 			release()
 			o := failed(s.name, firstLine(err.Error()))
+			// Warnings already raised still describe what this Deployment did.
+			o.warnings = append(append(o.warnings, warnings...), stepWarnings...)
 			if errors.Is(dctx.Err(), context.DeadlineExceeded) {
+				// The reason becomes "timeout"; the log keeps what the step
+				// did about it, such as a container it could not remove.
+				fmt.Fprintf(j.out, "error: %s\n", firstLine(err.Error()))
 				o.reason = reasonTimeout
 			}
 			var failure *composes.DeployFailure

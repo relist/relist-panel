@@ -126,7 +126,7 @@ func (s *Service) RunRollout(ctx context.Context, t DeployTarget, service string
 		err := s.engine.Remove(cctx, c.ID, true, false)
 		cancel()
 		if err != nil {
-			return nil, failure(FailureRunner, "could not remove the stopped container "+c.Name+": "+err.Error(), err)
+			return warnings, failure(FailureRunner, "could not remove the stopped container "+c.Name+": "+err.Error(), err)
 		}
 		fmt.Fprintf(out, "rollout %s: removed the stopped container %s\n", service, c.Name)
 	}
@@ -144,11 +144,11 @@ func (s *Service) RunRollout(ctx context.Context, t DeployTarget, service string
 		s.removeNew(ctx, started)
 		switch {
 		case scaleErr != nil:
-			return nil, failure(FailureRunner, "deploy failed: "+scaleErr.Error(), scaleErr)
+			return warnings, failure(FailureRunner, "deploy failed: "+scaleErr.Error(), scaleErr)
 		case listErr != nil:
-			return nil, failure(FailureRunner, "could not list containers: "+listErr.Error(), listErr)
+			return warnings, failure(FailureRunner, "could not list containers: "+listErr.Error(), listErr)
 		}
-		return nil, failure(FailureRunner, "could not identify the new container", nil)
+		return warnings, failure(FailureRunner, "could not identify the new container", nil)
 	}
 	created := started[0]
 	fmt.Fprintf(out, "rollout %s: started %s, waiting up to %s for it to be healthy\n", service, created.Name, limit)
@@ -162,9 +162,9 @@ func (s *Service) RunRollout(ctx context.Context, t DeployTarget, service string
 		}
 		if err := s.removeNew(ctx, started); err != nil {
 			reason := fmt.Sprintf("%s did not become healthy in %s; could not remove the new container %s: %v", service, limit, created.Name, err)
-			return nil, failure(FailureRunner, reason, err)
+			return warnings, failure(FailureRunner, reason, err)
 		}
-		return nil, failure(FailureRunner, fmt.Sprintf("%s did not become healthy in %s; kept the previous container", service, limit), nil)
+		return warnings, failure(FailureRunner, fmt.Sprintf("%s did not become healthy in %s; kept the previous container", service, limit), nil)
 	}
 
 	if !drift {
@@ -181,7 +181,7 @@ func (s *Service) RunRollout(ctx context.Context, t DeployTarget, service string
 		}
 		if err != nil {
 			reason := fmt.Sprintf("%s is serving from %s, but the old container %s could not be removed: %v", service, created.Name, c.Name, err)
-			return nil, failure(FailureRunner, reason, err)
+			return warnings, failure(FailureRunner, reason, err)
 		}
 	}
 	fmt.Fprintf(out, "rollout %s: %s is healthy; removed the previous container\n", service, created.Name)

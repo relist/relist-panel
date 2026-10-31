@@ -289,3 +289,18 @@ func TestRolloutRemoveNewFails(t *testing.T) {
 		t.Fatalf("err = %v, want it to name the leftover container", err)
 	}
 }
+
+// A drift warning raised before the health wait still reaches the Deployment
+// when the new Container then fails.
+func TestRolloutFailureReturnsDriftWarning(t *testing.T) {
+	f := newRollout(t, "b")
+	f.health("a", EngineState{Running: true, Health: "healthy", Labels: map[string]string{"traefik.enable": "false"}})
+	f.health("b", EngineState{Running: true, Health: "unhealthy"})
+	warnings, err := f.run(RolloutOptions{})
+	if err == nil {
+		t.Fatal("want a failure")
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "Traefik labels changed") {
+		t.Fatalf("warnings = %v, want the drift warning", warnings)
+	}
+}

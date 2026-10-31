@@ -1371,6 +1371,49 @@ func TestRolloutFailureFailsDeployment(t *testing.T) {
 	}
 }
 
+// A timeout settles the Deployment as "timeout", but the log still says what
+// the rollout did about it.
+func TestRolloutTimeoutKeepsItsReasonInLog(t *testing.T) {
+	h := newHarness(t)
+	h.timeout = 50 * time.Millisecond
+	h.comp.zeroDowntime = []string{"web"}
+	h.comp.onRollout = func(ctx context.Context, _ string) ([]string, error) {
+		<-ctx.Done()
+		return nil, errors.New("web did not become healthy in 0s; could not remove the new container p-web-2: boom")
+	}
+	d := h.enqueue(h.a, ModeDeploy)
+	h.start()
+	got := h.waitSettled(h.a, d.Number)
+	if got.Status != StatusFailed || got.Reason != "timeout" || got.FailedStep != "rollout:web" {
+		t.Fatalf("got %s %q %q", got.Status, got.Reason, got.FailedStep)
+	}
+	log, err := os.ReadFile(LogPath(h.comp.dirs[h.a], d.Number))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), "could not remove the new container p-web-2: boom") {
+		t.Fatalf("log lacks the rollout's own failure:\n%s", log)
+	}
+}
+
+// A failed step keeps the warnings of the steps before it and its own.
+func TestRolloutFailureKeepsWarnings(t *testing.T) {
+	h := newHarness(t)
+	h.comp.zeroDowntime = []string{"web"}
+	h.comp.onDeploy = func(context.Context, int64, composes.DeployOptions) ([]string, error) {
+		return []string{"file warning"}, nil
+	}
+	h.comp.onRollout = func(context.Context, string) ([]string, error) {
+		return []string{"web's Traefik labels changed"}, errors.New("web did not become healthy in 12s; kept the previous container")
+	}
+	d := h.enqueue(h.a, ModeDeploy)
+	h.start()
+	got := h.waitSettled(h.a, d.Number)
+	if got.Status != StatusFailed || !reflect.DeepEqual(got.Warnings, []string{"file warning", "web's Traefik labels changed"}) {
+		t.Fatalf("got %s warnings %q", got.Status, got.Warnings)
+	}
+}
+
 func TestCancelDuringRolloutRefused(t *testing.T) {
 	h := newHarness(t)
 	h.comp.zeroDowntime = []string{"web"}
