@@ -35,6 +35,7 @@ const (
 // Preflight step names, as the Failure of a report names them.
 const (
 	StepGate       = "gate"
+	StepManifest   = "manifest"
 	StepPull       = "pull"
 	StepChange     = "change"
 	StepConfig     = "config"
@@ -92,7 +93,18 @@ type Report struct {
 	UnknownKinds      []string `json:"unknownKinds"`
 	ReadmeURL         string   `json:"readmeUrl"`
 
-	Gate Gate `json:"gate"`
+	// UpToDate is true when the newest release is not newer than the running
+	// version: there is nothing to apply.
+	UpToDate bool `json:"upToDate"`
+	// Fingerprint hashes every input of the Preflight: Apply refuses a report
+	// whose inputs have changed since the operator saw it.
+	Fingerprint string `json:"fingerprint"`
+	// Image is the manifest's digest reference.
+	Image string `json:"image"`
+
+	// Gate is filled only by Service.Preflight, which Task 9 removes; the
+	// standalone Checker leaves it out of the report.
+	Gate Gate `json:"-"`
 	// Change is one of the Change constants; empty before the change check.
 	Change string `json:"change"`
 	// Diff is the change to the Install file the update would write; empty
@@ -377,12 +389,17 @@ func (s *Service) pull(ctx context.Context, m *Manifest) error {
 // is not edited, the three-way merge when it is. A conflict sets the report's
 // Conflict and returns no candidate.
 func (s *Service) changeCheck(r *Report, ours, theirs []byte) ([]byte, error) {
-	if bytes.Equal(ours, s.d.InstallFile) {
+	return changeCheck(r, s.d.InstallFile, ours, theirs)
+}
+
+// changeCheck is the change check against base, the embedded copy.
+func changeCheck(r *Report, base, ours, theirs []byte) ([]byte, error) {
+	if bytes.Equal(ours, base) {
 		r.Change = ChangeNotEdited
 		r.Diff = unifiedDiff(ours, theirs)
 		return theirs, nil
 	}
-	merged, conflicts, err := mergeFile(ours, s.d.InstallFile, theirs)
+	merged, conflicts, err := mergeFile(ours, base, theirs)
 	if err != nil {
 		return nil, err
 	}
@@ -505,7 +522,12 @@ func writeCandidate(dir string, in Install, files InstallFiles, candidate, env [
 // resolve to their real paths; the files are the scratch copies, in label
 // order, and the candidate .env replaces the project one.
 func composeArgs(in Install, scratch string, files []string, rest ...string) []string {
-	argv := []string{"docker", "compose", "-p", in.Project, "--project-directory", in.Dir}
+	return append([]string{"docker", "compose"}, composeSubArgs(in, scratch, files, rest...)...)
+}
+
+// composeSubArgs is composeArgs without the leading `docker compose`.
+func composeSubArgs(in Install, scratch string, files []string, rest ...string) []string {
+	argv := []string{"-p", in.Project, "--project-directory", in.Dir}
 	for _, f := range files {
 		argv = append(argv, "-f", f)
 	}

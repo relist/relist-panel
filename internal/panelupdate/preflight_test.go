@@ -20,6 +20,7 @@ type fakeDocker struct {
 	pulled  []string
 	pullErr error
 	hashes  []ServiceHash
+	imageID string // the pulled image's ID; "sha256:target" when empty
 }
 
 func (f *fakeDocker) Pull(_ context.Context, ref string) error {
@@ -28,6 +29,9 @@ func (f *fakeDocker) Pull(_ context.Context, ref string) error {
 }
 
 func (f *fakeDocker) ImageID(_ context.Context, ref string) (string, error) {
+	if f.imageID != "" {
+		return f.imageID, nil
+	}
 	return "sha256:target", nil
 }
 

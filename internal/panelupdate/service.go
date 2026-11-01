@@ -259,11 +259,16 @@ func (s *Service) fetch(ctx context.Context) (*Manifest, []byte, error) {
 }
 
 func (s *Service) get(ctx context.Context, url string) ([]byte, error) {
+	return httpGet(ctx, s.d.Client, url)
+}
+
+// httpGet fetches url with a 10 MiB cap; the Service and the Checker share it.
+func httpGet(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := s.d.Client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("could not reach the release server: %w", err)
 	}
