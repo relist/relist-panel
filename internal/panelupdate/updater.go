@@ -13,6 +13,8 @@ import (
 const (
 	DefaultHealthTimeout = 180 * time.Second
 	DefaultHealthEvery   = 2 * time.Second
+	// DefaultUpTimeout bounds one `docker compose up` (a pull can hang).
+	DefaultUpTimeout = 15 * time.Minute
 )
 
 // ContainerInfo is a Container of the Install's project, as the Updater needs
@@ -50,6 +52,9 @@ type Updater struct {
 	// HealthTimeout and HealthEvery default to 180 s and 2 s.
 	HealthTimeout time.Duration
 	HealthEvery   time.Duration
+	// UpTimeout bounds each `docker compose up`; it defaults to 15 minutes.
+	// A hung pull then fails the step and the run rolls back.
+	UpTimeout time.Duration
 	// Sleep waits d or until ctx is done. Nil means a timer.
 	Sleep func(ctx context.Context, d time.Duration) error
 	// Logf narrates the run; nil is silent.
@@ -78,6 +83,23 @@ func (u *Updater) timeout() time.Duration {
 		return u.HealthTimeout
 	}
 	return DefaultHealthTimeout
+}
+
+// composeUp runs `up` for at most UpTimeout.
+func (u *Updater) composeUp(ctx context.Context, plan Plan) error {
+	d := u.UpTimeout
+	if d <= 0 {
+		d = DefaultUpTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	if err := u.Host.ComposeUp(ctx, plan); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("did not finish within %s: %w", d, err)
+		}
+		return err
+	}
+	return nil
 }
 
 func (u *Updater) every() time.Duration {
@@ -123,6 +145,11 @@ func (u *Updater) Apply(ctx context.Context, run string) (RunStatus, error) {
 		u.logf("refusing the plan: %v", err)
 		return u.finish(dir, st, StateInterrupted, fmt.Sprintf("the plan was refused, nothing was changed: %v", err), ""), nil
 	}
+	if err := refuseSymlinks(plan); err != nil {
+		// Nothing was written and no compose ran: the run just ends.
+		u.logf("refusing: %v", err)
+		return u.finish(dir, st, StateInterrupted, fmt.Sprintf("nothing was changed: %v", err), ""), nil
+	}
 	u.logf("update %s -> %s (run %s)", st.FromVersion, st.ToVersion, run)
 	cause := u.update(ctx, dir, &st, plan)
 	if cause == nil {
@@ -131,6 +158,19 @@ func (u *Updater) Apply(ctx context.Context, run string) (RunStatus, error) {
 	}
 	u.logf("failed: %v; rolling back", cause)
 	return u.rollback(ctx, dir, st, plan, cause), nil
+}
+
+// refuseSymlinks fails when the Install file or .env is a symlink now: the
+// rename that writes a file would replace the link, and the rollback could not
+// put the operator's file back. The backup refuses them too; this is the
+// check at write time.
+func refuseSymlinks(plan Plan) error {
+	for _, path := range []string{plan.ConfigFiles[0], plan.EnvFile()} {
+		if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink; Panel update needs regular files in the Install directory", path)
+		}
+	}
+	return nil
 }
 
 // step records the state a step is about to run in.
@@ -171,7 +211,7 @@ func (u *Updater) update(ctx context.Context, dir string, st *RunStatus, plan Pl
 	if err := u.step(dir, st, StateComposeUp); err != nil {
 		return fmt.Errorf("write status: %w", err)
 	}
-	if err := u.Host.ComposeUp(ctx, plan); err != nil {
+	if err := u.composeUp(ctx, plan); err != nil {
 		return fmt.Errorf("docker compose up: %w", err)
 	}
 	if err := u.step(dir, st, StateWaitingHealth); err != nil {
@@ -200,7 +240,7 @@ func (u *Updater) rollback(ctx context.Context, dir string, st RunStatus, plan P
 	if err := restoreDatabase(u.DataDir, dir); err != nil {
 		return failed(fmt.Errorf("restore panel.db: %w", err))
 	}
-	if err := u.Host.ComposeUp(ctx, plan); err != nil {
+	if err := u.composeUp(ctx, plan); err != nil {
 		return failed(fmt.Errorf("docker compose up: %w", err))
 	}
 	if err := u.waitHealthy(ctx, plan, plan.FromImageID); err != nil {

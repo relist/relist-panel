@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -338,5 +339,20 @@ func TestUpdaterHostHealthzSendsHostAndSNI(t *testing.T) {
 	}
 	if host != "panel.example.com" || sni != "panel.example.com" {
 		t.Fatalf("host %q sni %q", host, sni)
+	}
+}
+
+func TestExecComposeDropsRelistDataDir(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\nprintf 'dir=%s other=%s' \"${RELIST_DATA_DIR-unset}\" \"$KEEP_ME\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("RELIST_DATA_DIR", "/var/lib/relist-panel")
+	t.Setenv("KEEP_ME", "yes")
+	out, err := dockerexec.ExecComposeForTest(context.Background(), []string{"up"})
+	if err != nil || string(out) != "dir=unset other=yes" {
+		t.Fatalf("out = %q, %v", out, err)
 	}
 }

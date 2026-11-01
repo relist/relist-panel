@@ -423,3 +423,23 @@ func TestMergeFileExitCodes(t *testing.T) {
 		t.Fatalf("conflicts = %d, %v", n, err)
 	}
 }
+
+func TestPreflightScratchIsPrivate(t *testing.T) {
+	r := newRig(t, rigOpts{current: embeddedFile, theirs: newerFile})
+	rep := r.preflight(t)
+	dir := filepath.Join(r.data, ".panel-update", "preflight", rep.ID)
+	info, err := os.Stat(dir)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("scratch dir = %v, %v", info, err)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) == 0 {
+		t.Fatal("no scratch files")
+	}
+	for _, e := range entries {
+		fi, _ := e.Info()
+		if fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s has mode %v", e.Name(), fi.Mode().Perm())
+		}
+	}
+}

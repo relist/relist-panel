@@ -20,3 +20,5 @@ func NewPanelDockerAt(socketPath string) *PanelDocker { return NewPanelDocker(so
 func NewPanelUpdaterHostWith(run func(ctx context.Context, args []string) ([]byte, error)) *PanelUpdaterHost {
 	return &PanelUpdaterHost{runCompose: run}
 }
+
+var ExecComposeForTest = execCompose

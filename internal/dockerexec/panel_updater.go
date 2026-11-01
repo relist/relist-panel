@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -30,9 +31,25 @@ func NewPanelUpdaterHost(socketPath string) *PanelUpdaterHost {
 	return &PanelUpdaterHost{engine: NewEngine(socketPath), runCompose: execCompose}
 }
 
+// composeEnv is the Updater's environment for `docker compose` without
+// RELIST_DATA_DIR. The Updater Container has it so the Updater finds the data
+// directory, but Compose reads it as a variable of the Install file too, where
+// it would override the Install's own .env; the Preflight's helper has no such
+// variable, so `up` could then interpolate differently from what was checked.
+func composeEnv(environ []string) []string {
+	out := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		if !strings.HasPrefix(kv, "RELIST_DATA_DIR=") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 func execCompose(ctx context.Context, args []string) ([]byte, error) {
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose"}, args...)...)
+	cmd.Env = composeEnv(os.Environ())
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
 	return out.Bytes(), err

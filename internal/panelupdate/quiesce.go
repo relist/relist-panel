@@ -155,15 +155,36 @@ func (s *Service) backup(ctx context.Context, run Run, in Install) error {
 }
 
 // pruneRuns removes every run directory but keep, which has just been backed
-// up completely.
+// up completely, and but the newest run that ended rollback-failed: its backup
+// is what the manual restore commands point at. That one goes only once a
+// later run has succeeded.
 func (s *Service) pruneRuns(keep string) {
 	ids, err := runIDs(s.d.DataDir)
 	if err != nil {
 		log.Printf("panelupdate: list old runs: %v", err)
 		return
 	}
+	state := func(id string) string {
+		st, err := ReadStatus(RunDir(s.d.DataDir, id))
+		if err != nil {
+			return ""
+		}
+		return st.State
+	}
+	// Walk from the newest: a succeeded run settles every older failure.
+	retain, settled := "", false
+	for i := len(ids) - 1; i >= 0; i-- {
+		switch state(ids[i]) {
+		case StateSucceeded:
+			settled = true
+		case StateRollbackFailed:
+			if !settled && ids[i] != keep && retain == "" {
+				retain = ids[i]
+			}
+		}
+	}
 	for _, id := range ids {
-		if id == keep {
+		if id == keep || id == retain {
 			continue
 		}
 		if err := os.RemoveAll(RunDir(s.d.DataDir, id)); err != nil {

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -17,9 +20,10 @@ func (f fakeSelf) InspectSelf(context.Context) (Self, error) { return f.self, f.
 
 // fakeHelper serves files by path and speaks readScript's exit protocol.
 type fakeHelper struct {
-	files map[string]string
-	runs  []HelperRun
-	err   error
+	files    map[string]string
+	symlinks map[string]bool
+	runs     []HelperRun
+	err      error
 }
 
 func (f *fakeHelper) Run(_ context.Context, run HelperRun, stdout io.Writer) error {
@@ -27,7 +31,11 @@ func (f *fakeHelper) Run(_ context.Context, run HelperRun, stdout io.Writer) err
 	if f.err != nil {
 		return f.err
 	}
-	data, ok := f.files[run.Argv[len(run.Argv)-1]]
+	path := run.Argv[len(run.Argv)-1]
+	if _, ok := f.symlinks[path]; ok {
+		return &HelperExitError{Code: notRegularExit}
+	}
+	data, ok := f.files[path]
 	if !ok {
 		return &HelperExitError{Code: missingExit}
 	}
@@ -105,6 +113,23 @@ func TestReadInstallFiles(t *testing.T) {
 			t.Fatalf("files = %+v, %v", got, err)
 		}
 	})
+	t.Run("symlinked .env is unavailable, not absent", func(t *testing.T) {
+		h.symlinks = map[string]bool{"/srv/relist/.env": true}
+		defer func() { h.symlinks = nil }()
+		var u *Unavailable
+		_, err := s.ReadInstallFiles(context.Background(), in)
+		if !errors.As(err, &u) || !strings.Contains(u.Reason, "/srv/relist/.env is a symlink") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("symlinked Install file is unavailable", func(t *testing.T) {
+		h.symlinks = map[string]bool{"/srv/relist/docker-compose.yml": true}
+		defer func() { h.symlinks = nil }()
+		var u *Unavailable
+		if _, err := s.ReadInstallFiles(context.Background(), in); !errors.As(err, &u) {
+			t.Fatalf("err = %v", err)
+		}
+	})
 	t.Run("missing config file fails", func(t *testing.T) {
 		delete(h.files, "/srv/relist/docker-compose.override.yml")
 		if _, err := s.ReadInstallFiles(context.Background(), in); err == nil || !strings.Contains(err.Error(), "docker-compose.override.yml") {
@@ -135,5 +160,26 @@ func TestStatusReportsInstall(t *testing.T) {
 	_, st = serve(t, s, "GET", "/api/panel-update/status", "")
 	if !st.Install.Available || st.Install.Reason != "" {
 		t.Fatalf("install = %+v", st.Install)
+	}
+}
+
+func TestReadScriptExitCodes(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) { _ = os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600) }
+	write("file", "data")
+	_ = os.Mkdir(filepath.Join(dir, "dir"), 0o700)
+	_ = os.Symlink("/nonexistent/target", filepath.Join(dir, "dangling"))
+	_ = os.Symlink(filepath.Join(dir, "file"), filepath.Join(dir, "good-link"))
+	for name, want := range map[string]int{"file": 0, "missing": missingExit, "dangling": notRegularExit, "good-link": notRegularExit, "dir": notRegularExit} {
+		cmd := exec.Command("sh", "-c", readScript, "sh", filepath.Join(dir, name))
+		err := cmd.Run()
+		got := 0
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			got = ee.ExitCode()
+		}
+		if got != want {
+			t.Errorf("%s: exit %d, want %d", name, got, want)
+		}
 	}
 }

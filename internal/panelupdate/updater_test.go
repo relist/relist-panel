@@ -24,7 +24,9 @@ type fakeHost struct {
 	// healthy says whether the n-th `up` leaves a panel that answers.
 	healthy map[int]bool
 	// onUp runs inside the n-th `up`, as the new Containers would.
-	onUp   func(n int)
+	onUp func(n int)
+	// hangUp makes the n-th `up` wait for its context, like a hung pull.
+	hangUp map[int]bool
 	states []string // status.json state seen at each call
 	dir    string
 }
@@ -36,11 +38,17 @@ func (h *fakeHost) note(call string) {
 	}
 }
 
-func (h *fakeHost) ComposeUp(_ context.Context, _ Plan) error {
+func (h *fakeHost) ComposeUp(ctx context.Context, _ Plan) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.ups++
 	h.note("up")
+	if h.hangUp[h.ups] {
+		h.mu.Unlock()
+		<-ctx.Done()
+		h.mu.Lock()
+		return ctx.Err()
+	}
 	if h.onUp != nil {
 		h.onUp(h.ups)
 	}
@@ -390,5 +398,50 @@ func TestUpdaterRefusesABadPlan(t *testing.T) {
 	}
 	if err := good(newUpdaterRig(t, true)).Validate("20261101T120000Z", "relative"); err == nil {
 		t.Fatal("a relative data dir must be rejected")
+	}
+}
+
+func TestUpdaterHungComposeUpRollsBack(t *testing.T) {
+	r := newUpdaterRig(t, true)
+	r.host.hangUp = map[int]bool{1: true}
+	r.u.UpTimeout = 30 * time.Millisecond
+	st, _ := r.u.Apply(context.Background(), r.run)
+	if st.State != StateRolledBack || !strings.Contains(st.Error, "did not finish within") {
+		t.Fatalf("status = %+v", st)
+	}
+	if r.read(t, r.compose()) != oldInstall || r.read(t, r.env()) != oldEnv {
+		t.Fatal("the files were not restored")
+	}
+}
+
+func TestUpdaterRefusesSymlinkedFiles(t *testing.T) {
+	for name, link := range map[string]func(r *updaterRig) string{
+		"Install file": func(r *updaterRig) string { return r.compose() },
+		"env":          func(r *updaterRig) string { return r.env() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newUpdaterRig(t, true)
+			path := link(r)
+			target := filepath.Join(t.TempDir(), "elsewhere")
+			if err := os.WriteFile(target, []byte("outside"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatal(err)
+			}
+			st, err := r.u.Apply(context.Background(), r.run)
+			if err != nil || st.State != StateInterrupted || !strings.Contains(st.Error, "is a symlink") {
+				t.Fatalf("status = %+v, %v", st, err)
+			}
+			if len(r.host.calls) != 0 {
+				t.Fatalf("the host was touched: %v", r.host.calls)
+			}
+			if got, _ := os.Readlink(path); got != target || r.read(t, target) != "outside" {
+				t.Fatal("the symlink or its target changed")
+			}
+		})
 	}
 }

@@ -20,7 +20,10 @@ COPY docker-compose.yml ./
 COPY internal/ ./internal/
 COPY cmd/ ./cmd/
 COPY --from=web-builder /src/internal/webassets/dist ./internal/webassets/dist
-RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X relist-panel/internal/panelupdate.releasePublicKey=${RELEASE_KEY}" -o /out/relist-panel .
+# The key is passed only when given: an empty -X would override the committed one.
+RUN ldflags="-X main.version=${VERSION}"; \
+    if [ -n "${RELEASE_KEY}" ]; then ldflags="${ldflags} -X relist-panel/internal/panelupdate.releasePublicKey=${RELEASE_KEY}"; fi; \
+    CGO_ENABLED=0 go build -ldflags "${ldflags}" -o /out/relist-panel .
 # The Volume helper is its own small binary — not a subcommand of the panel —
 # because it must not link the panel's sqlite and net/http dependencies
 # (the spec's weight measurement). /usr/local/bin/relist-volhelper is the

@@ -233,6 +233,12 @@ func TestMiddlewareWhileLocked(t *testing.T) {
 		{"GET", "/healthz", 200},
 		{"POST", "/api/auth/login", 200},
 		{"GET", "/api/auth/status", 200},
+		{"POST", "/api/auth/logout", 200},
+		{"POST", "/api/auth/password", 503},
+		{"POST", "/api/auth/2fa/setup", 503},
+		{"POST", "/api/auth/2fa/enable", 503},
+		{"POST", "/api/auth/2fa/disable", 503},
+		{"GET", "/api/auth/account", 503},
 		{"GET", "/api/panel-update/status", 200},
 		{"GET", "/", 200},
 		{"GET", "/assets/app.js", 200},
@@ -514,5 +520,36 @@ func TestStatusFileIsAtomicAndRoundTrips(t *testing.T) {
 	}
 	if _, err := ReadStatus(t.TempDir()); !os.IsNotExist(err) {
 		t.Fatalf("missing status.json: %v", err)
+	}
+}
+
+func TestQuiesceKeepsARollbackFailedRunUntilALaterOneSucceeded(t *testing.T) {
+	r := newLockRig(t)
+	r.writeRun(t, "20261029T100000Z", StateRollbackFailed) // superseded by the next failure
+	r.writeRun(t, "20261030T100000Z", StateRollbackFailed)
+	r.writeRun(t, "20261031T100000Z", StateRolledBack)
+	run, err := r.s.QuiesceAndBackup(t.Context(), r.install(), "1.3.0", "1.4.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exists := func(id string) bool {
+		_, err := os.Stat(RunDir(r.dir, id))
+		return err == nil
+	}
+	if exists("20261029T100000Z") || !exists("20261030T100000Z") || exists("20261031T100000Z") || !exists(run.ID) {
+		t.Fatal("only the newest rollback-failed run and the new one may stay")
+	}
+	// The new run succeeds; the next backup clears the failed one.
+	r.s.AbortRun(run, "") // lock off
+	if err := r.s.SetRunState(run, StateSucceeded, ""); err != nil {
+		t.Fatal(err)
+	}
+	r.now = time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	next, err := r.s.QuiesceAndBackup(t.Context(), r.install(), "1.4.0", "1.5.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists("20261030T100000Z") || exists(run.ID) || !exists(next.ID) {
+		t.Fatal("a later success must release the rollback-failed run")
 	}
 }

@@ -143,12 +143,18 @@ func splitFiles(list string) []string {
 	return out
 }
 
-// missingExit is the exit code readScript uses for "no such file".
-const missingExit = 44
+// Exit codes of readScript: "no such file", and "there, but not a regular
+// file" (any symlink, whose target may lie outside the mounted Install
+// directory, or a directory or device).
+const (
+	missingExit    = 44
+	notRegularExit = 45
+)
 
-// readScript prints $1, or exits missingExit when it is not a regular file.
-// The path is an argument, never part of the script.
-const readScript = `[ -f "$1" ] || exit 44; exec cat -- "$1"`
+// readScript prints $1, exits missingExit when nothing is there at all, and
+// notRegularExit when it is a symlink or anything but a regular file. The path
+// is an argument, never part of the script.
+const readScript = `if [ -L "$1" ]; then exit 45; fi; [ -e "$1" ] || exit 44; [ -f "$1" ] || exit 45; exec cat -- "$1"`
 
 // ReadInstallFiles reads the Install's config files and .env through a helper
 // Container. A missing config file is an error; a missing .env is empty.
@@ -183,6 +189,9 @@ func (s *Service) readFile(ctx context.Context, in Install, path string) ([]byte
 	var exit *HelperExitError
 	if errors.As(err, &exit) && exit.Code == missingExit {
 		return nil, fs.ErrNotExist
+	}
+	if errors.As(err, &exit) && exit.Code == notRegularExit {
+		return nil, &Unavailable{fmt.Sprintf("%s is a symlink or not a regular file; Panel update needs regular files in the Install directory", path)}
 	}
 	if err != nil {
 		return nil, err

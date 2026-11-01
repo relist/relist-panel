@@ -466,7 +466,8 @@ func (s *Service) newScratch(id string) (string, error) {
 		return "", err
 	}
 	dir := filepath.Join(root, id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// The copied files may hold secrets; the helper runs as root.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -486,12 +487,12 @@ func (f fileSet) withoutOverrides() []string { return []string{f.install} }
 // files and the candidate .env in the scratch directory.
 func writeCandidate(dir string, in Install, files InstallFiles, candidate, env []byte) (fileSet, error) {
 	set := fileSet{install: filepath.Join(dir, "docker-compose.yml"), env: filepath.Join(dir, ".env")}
-	if err := os.WriteFile(set.install, candidate, 0o644); err != nil {
+	if err := os.WriteFile(set.install, candidate, 0o600); err != nil {
 		return set, err
 	}
 	for i := 1; i < len(in.ConfigFiles); i++ {
 		path := filepath.Join(dir, fmt.Sprintf("%02d-%s", i, filepath.Base(in.ConfigFiles[i])))
-		if err := os.WriteFile(path, files.Config[i], 0o644); err != nil {
+		if err := os.WriteFile(path, files.Config[i], 0o600); err != nil {
 			return set, err
 		}
 		set.overrides = append(set.overrides, path)
