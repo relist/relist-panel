@@ -8,12 +8,11 @@ import (
 	"time"
 )
 
-const (
-	watchEvery = 2 * time.Second
-	// watchIdle is how long the watcher sleeps once the newest run is over and
-	// settled; a new run wakes it sooner.
-	watchIdle = time.Minute
-)
+// watchEvery is how often the watcher reads the newest run. A run can be
+// started by a process the panel does not control (install.sh --update runs the
+// Updater with the panel not asked, or not running), so the watcher never
+// sleeps longer: the spec has the panel read status.json every 2 s.
+const watchEvery = 2 * time.Second
 
 // ErrMigrationLocked is the reason the panel refuses a quiesce request while a
 // server Migration holds its lock.
@@ -45,21 +44,18 @@ type UpdaterListing struct {
 	Running bool
 }
 
-// Watch follows the newest run until ctx is done: every 2 s while it is not
-// over, and rarely once it is. A terminal state is copied to panel_updates, the
-// lock goes off and the exited Updater Container goes. A run that is not over
-// whose Updater Container is missing or exited is written as interrupted.
+// Watch follows the newest run until ctx is done, every 2 s. A terminal state
+// is copied to panel_updates, the lock goes off and the exited Updater
+// Container goes. A run that is not over whose Updater Container is missing or
+// exited is written as interrupted.
 func (s *Service) Watch(ctx context.Context) {
 	for {
-		wait := watchEvery
-		if s.watchOnce(ctx) {
-			wait = watchIdle
-		}
+		s.watchOnce(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-s.wake:
-		case <-s.d.After(wait):
+		case <-s.d.After(watchEvery):
 		}
 	}
 }

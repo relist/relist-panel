@@ -1,6 +1,7 @@
 package panelupdate
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -145,4 +146,42 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatal("condition not met")
+}
+
+// A run is started by a process the panel does not control (install.sh --update
+// runs the Updater with the panel not asked), so the watcher cannot sleep long
+// when it sees no run: the next tick has to notice a new one within 2 seconds.
+func TestWatchPollsEveryTwoSecondsEvenWhenIdle(t *testing.T) {
+	r := newLockRig(t)
+	var waits []time.Duration
+	ctx, cancel := context.WithCancel(t.Context())
+	r.s.d.After = func(d time.Duration) <-chan time.Time {
+		waits = append(waits, d)
+		if len(waits) == 3 {
+			cancel()
+		}
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}
+	// No run at all, then a settled terminal run: both are idle states.
+	r.s.Watch(ctx)
+	r.writeRun(t, watchRun, StateSucceeded)
+	ctx2, cancel2 := context.WithCancel(t.Context())
+	waits = nil
+	r.s.d.After = func(d time.Duration) <-chan time.Time {
+		waits = append(waits, d)
+		if len(waits) == 3 {
+			cancel2()
+		}
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}
+	r.s.Watch(ctx2)
+	for _, d := range waits {
+		if d > watchEvery {
+			t.Fatalf("slept %s between ticks, want at most %s", d, watchEvery)
+		}
+	}
 }
