@@ -35,6 +35,8 @@ var subcommands = []subcommand{
 		func(a []string) int { return runCreateAdmin(a, os.Stdin, os.Stdout, os.Stderr, stdinConsole()) }},
 	{"migration", "drive a server Migration through the running panel", runMigration},
 	{"maintenance-page", "answer 503 with the maintenance page (used by a Migration)", runMaintenancePage},
+	{"setup", "write the Install file and .env for a new install",
+		func(a []string) int { return runSetup(a, os.Stdout, os.Stderr) }},
 	{"update", "check or apply a Panel update (runs in its own Container)", runUpdate},
 }
 

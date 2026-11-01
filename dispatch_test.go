@@ -22,6 +22,7 @@ func TestDecide(t *testing.T) {
 		{[]string{"create-admin", "--generate"}, actionSubcommand},
 		{[]string{"migration", "status"}, actionSubcommand},
 		{[]string{"maintenance-page"}, actionSubcommand},
+		{[]string{"setup", "--dir", "/x"}, actionSubcommand},
 		{[]string{"update", "--preflight", "--dir", "/x"}, actionSubcommand},
 		{[]string{"panel-update", "apply", "--run", "x"}, actionUsageError},
 		{[]string{"--insecure-migration-source"}, actionServer},
