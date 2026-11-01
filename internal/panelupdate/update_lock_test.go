@@ -54,13 +54,10 @@ type fakeScans struct{ waited int }
 func (f *fakeScans) WaitIdle(context.Context) error { f.waited++; return nil }
 
 type fakeUpdater struct {
-	mu       sync.Mutex
-	state    map[string]UpdaterState
-	removed  []string
-	err      error
-	started  []UpdaterSpec
-	startErr error
-	onStart  func(UpdaterSpec)
+	mu      sync.Mutex
+	state   map[string]UpdaterState
+	removed []string
+	err     error
 }
 
 func (f *fakeUpdater) ListUpdaters(context.Context) ([]UpdaterListing, error) {
@@ -71,20 +68,6 @@ func (f *fakeUpdater) ListUpdaters(context.Context) ([]UpdaterListing, error) {
 		out = append(out, UpdaterListing{Name: name, Running: st.Running})
 	}
 	return out, f.err
-}
-
-func (f *fakeUpdater) StartUpdater(_ context.Context, spec UpdaterSpec) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.startErr != nil {
-		return f.startErr
-	}
-	f.started = append(f.started, spec)
-	f.state[spec.Name] = UpdaterState{Exists: true, Running: true}
-	if f.onStart != nil {
-		f.onStart(spec)
-	}
-	return nil
 }
 
 func (f *fakeUpdater) UpdaterState(_ context.Context, name string) (UpdaterState, error) {
@@ -106,7 +89,6 @@ type lockRig struct {
 	queue   *fakeQueue
 	scans   *fakeScans
 	updater *fakeUpdater
-	files   *fakeHelper
 	dir     string
 	now     time.Time
 	migr    bool
@@ -117,14 +99,10 @@ func newLockRig(t *testing.T) *lockRig {
 	r := &lockRig{
 		queue: &fakeQueue{}, scans: &fakeScans{}, updater: &fakeUpdater{state: map[string]UpdaterState{}},
 		dir: t.TempDir(), now: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC),
-		files: &fakeHelper{files: map[string]string{
-			"/srv/relist/docker-compose.yml": "services: {}\n",
-			"/srv/relist/.env":               "RELIST_DOMAIN=x\n",
-		}},
 	}
 	r.s = New(Deps{
 		Store: NewStore(newDB(t)), DataDir: r.dir, Queue: r.queue, Scans: r.scans, Updater: r.updater,
-		Helper: r.files, Now: func() time.Time { return r.now },
+		Now:             func() time.Time { return r.now },
 		MigrationLocked: func(context.Context) (bool, error) { return r.migr, nil },
 	})
 	return r
@@ -269,17 +247,6 @@ func TestDailyCheckSkipsWriteWhileLocked(t *testing.T) {
 	}
 	if st, _ := s.d.Store.Settings(t.Context()); st.LastCheckAt != nil {
 		t.Fatal("a check was recorded while locked")
-	}
-}
-
-func TestPanelUpdateGateRefusesWhileLocked(t *testing.T) {
-	r := newLockRig(t)
-	if err := r.s.lock(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	var rep Report
-	if _, err := r.s.gate(t.Context(), &rep); err == nil || !rep.Gate.UpdateRunning {
-		t.Fatalf("gate = %v %+v", err, rep.Gate)
 	}
 }
 

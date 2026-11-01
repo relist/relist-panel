@@ -37,29 +37,12 @@ type UpdaterContainers interface {
 	// ListUpdaters lists every Container named relist-panel-updater-*, of any
 	// run.
 	ListUpdaters(ctx context.Context) ([]UpdaterListing, error)
-	// StartUpdater creates and starts the Updater Container, the Engine API
-	// equivalent of the spec's `docker run -d`.
-	StartUpdater(ctx context.Context, spec UpdaterSpec) error
 }
 
 // UpdaterListing is one Updater Container found by name.
 type UpdaterListing struct {
 	Name    string
 	Running bool
-}
-
-// UpdaterSpec is the Updater Container to start. It has no Compose labels, so
-// `up` never treats it as an orphan of the project. The adapter adds the
-// Docker socket.
-type UpdaterSpec struct {
-	Name  string
-	Image string // the panel's own image, by ID
-	Run   string // the run id: the command is `panel-update apply --run <Run>`
-	// InstallDir and DataDir are mounted read-write at their own paths, and
-	// DataDir is the Updater's RELIST_DATA_DIR.
-	InstallDir string
-	DataDir    string
-	Network    string
 }
 
 // Watch follows the newest run until ctx is done: every 2 s while it is not

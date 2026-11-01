@@ -3,11 +3,6 @@ package panelupdate
 import (
 	"context"
 	"errors"
-	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -17,31 +12,6 @@ type fakeSelf struct {
 }
 
 func (f fakeSelf) InspectSelf(context.Context) (Self, error) { return f.self, f.err }
-
-// fakeHelper serves files by path and speaks readScript's exit protocol.
-type fakeHelper struct {
-	files    map[string]string
-	symlinks map[string]bool
-	runs     []HelperRun
-	err      error
-}
-
-func (f *fakeHelper) Run(_ context.Context, run HelperRun, stdout io.Writer) error {
-	f.runs = append(f.runs, run)
-	if f.err != nil {
-		return f.err
-	}
-	path := run.Argv[len(run.Argv)-1]
-	if _, ok := f.symlinks[path]; ok {
-		return &HelperExitError{Code: notRegularExit}
-	}
-	data, ok := f.files[path]
-	if !ok {
-		return &HelperExitError{Code: missingExit}
-	}
-	_, _ = io.WriteString(stdout, data)
-	return nil
-}
 
 func composeLabels() map[string]string {
 	return map[string]string{
@@ -87,69 +57,6 @@ func TestFindInstall(t *testing.T) {
 	}
 }
 
-func TestReadInstallFiles(t *testing.T) {
-	in := Install{Project: "p", Dir: "/srv/relist", Image: "sha256:1",
-		ConfigFiles: []string{"/srv/relist/docker-compose.yml", "/srv/relist/docker-compose.override.yml"}}
-	h := &fakeHelper{files: map[string]string{
-		"/srv/relist/docker-compose.yml":          "base",
-		"/srv/relist/docker-compose.override.yml": "over",
-		"/srv/relist/.env":                        "A=1\n",
-	}}
-	s := New(Deps{Helper: h})
-	got, err := s.ReadInstallFiles(context.Background(), in)
-	if err != nil || string(got.Config[0]) != "base" || string(got.Config[1]) != "over" || string(got.Env) != "A=1\n" {
-		t.Fatalf("files = %+v, %v", got, err)
-	}
-	for _, run := range h.runs {
-		if run.Image != "sha256:1" || run.Dir != "/srv/relist" {
-			t.Fatalf("run = %+v", run)
-		}
-	}
-
-	t.Run("missing .env is empty", func(t *testing.T) {
-		delete(h.files, "/srv/relist/.env")
-		got, err := s.ReadInstallFiles(context.Background(), in)
-		if err != nil || len(got.Env) != 0 || len(got.Config) != 2 {
-			t.Fatalf("files = %+v, %v", got, err)
-		}
-	})
-	t.Run("symlinked .env is unavailable, not absent", func(t *testing.T) {
-		h.symlinks = map[string]bool{"/srv/relist/.env": true}
-		defer func() { h.symlinks = nil }()
-		var u *Unavailable
-		_, err := s.ReadInstallFiles(context.Background(), in)
-		if !errors.As(err, &u) || !strings.Contains(u.Reason, "/srv/relist/.env is a symlink") {
-			t.Fatalf("err = %v", err)
-		}
-	})
-	t.Run("symlinked Install file is unavailable", func(t *testing.T) {
-		h.symlinks = map[string]bool{"/srv/relist/docker-compose.yml": true}
-		defer func() { h.symlinks = nil }()
-		var u *Unavailable
-		if _, err := s.ReadInstallFiles(context.Background(), in); !errors.As(err, &u) {
-			t.Fatalf("err = %v", err)
-		}
-	})
-	t.Run("missing config file fails", func(t *testing.T) {
-		delete(h.files, "/srv/relist/docker-compose.override.yml")
-		if _, err := s.ReadInstallFiles(context.Background(), in); err == nil || !strings.Contains(err.Error(), "docker-compose.override.yml") {
-			t.Fatalf("err = %v", err)
-		}
-	})
-	t.Run("helper failure fails", func(t *testing.T) {
-		bad := New(Deps{Helper: &fakeHelper{err: &HelperExitError{Code: 1, Stderr: "denied"}}})
-		if _, err := bad.ReadInstallFiles(context.Background(), in); err == nil {
-			t.Fatal("want an error")
-		}
-	})
-	t.Run("no helper is unavailable", func(t *testing.T) {
-		var u *Unavailable
-		if _, err := New(Deps{}).ReadInstallFiles(context.Background(), in); !errors.As(err, &u) {
-			t.Fatalf("err = %v", err)
-		}
-	})
-}
-
 func TestStatusReportsInstall(t *testing.T) {
 	s, _ := newService(t, "1.3.0")
 	_, st := serve(t, s, "GET", "/api/panel-update/status", "")
@@ -160,26 +67,5 @@ func TestStatusReportsInstall(t *testing.T) {
 	_, st = serve(t, s, "GET", "/api/panel-update/status", "")
 	if !st.Install.Available || st.Install.Reason != "" {
 		t.Fatalf("install = %+v", st.Install)
-	}
-}
-
-func TestReadScriptExitCodes(t *testing.T) {
-	dir := t.TempDir()
-	write := func(name, body string) { _ = os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600) }
-	write("file", "data")
-	_ = os.Mkdir(filepath.Join(dir, "dir"), 0o700)
-	_ = os.Symlink("/nonexistent/target", filepath.Join(dir, "dangling"))
-	_ = os.Symlink(filepath.Join(dir, "file"), filepath.Join(dir, "good-link"))
-	for name, want := range map[string]int{"file": 0, "missing": missingExit, "dangling": notRegularExit, "good-link": notRegularExit, "dir": notRegularExit} {
-		cmd := exec.Command("sh", "-c", readScript, "sh", filepath.Join(dir, name))
-		err := cmd.Run()
-		got := 0
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			got = ee.ExitCode()
-		}
-		if got != want {
-			t.Errorf("%s: exit %d, want %d", name, got, want)
-		}
 	}
 }

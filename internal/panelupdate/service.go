@@ -48,18 +48,15 @@ type Deps struct {
 	// Client fetches the manifest. Nil means a client with checkTimeout.
 	Client *http.Client
 	Now    func() time.Time
-	// Self and Helper find and read the Install. Nil makes it unavailable.
-	Self   SelfInspector
-	Helper Helper
-	// Docker pulls the new image and lists the running Containers' config
-	// hashes for the Preflight. Nil makes the Preflight fail at that step.
-	Docker Docker
-	// DataDir holds the Preflight's scratch directory.
+	// Self finds the Install from the panel's own Container labels. Nil makes
+	// it unavailable.
+	Self SelfInspector
+	// Runner starts the `update` Container for the preview, the update and
+	// its cancel. Nil makes them unavailable.
+	Runner UpdateRunner
+	// DataDir holds the run directories and the preflight reports.
 	DataDir string
-	// InstallFile is the Install file this build embeds: the base of the
-	// change check and the merge.
-	InstallFile []byte
-	// MigrationLocked and DeploysBusy are the Preflight's Gate. Nil means
+	// MigrationLocked and DeploysBusy are the page's live gate. Nil means
 	// not locked and not busy.
 	MigrationLocked func(ctx context.Context) (bool, error)
 	DeploysBusy     func() bool
@@ -68,8 +65,6 @@ type Deps struct {
 	Queue   QueueControl
 	Scans   ScanWaiter
 	Updater UpdaterContainers
-	// Domain is RELIST_DOMAIN: the Host and SNI of the Updater's health request.
-	Domain string
 	// WaitingOn says what the update lock waits for: "Deployment api #3", a
 	// vulnerability scan, or "" when nothing.
 	WaitingOn func() string
@@ -97,12 +92,11 @@ type Service struct {
 	qsMu sync.Mutex
 	qs   *quiesceState
 	beat atomic.Int64
-	// pfRun serializes Preflights; pfMu guards latest.
-	pfRun  sync.Mutex
-	pfMu   sync.Mutex
-	latest *Report
-	// latestFP is the fingerprint of latest.
-	latestFP string
+	// pfRun serializes previews; pfMu guards latestID, the id of the report
+	// the last preview returned: an Apply must name it.
+	pfRun    sync.Mutex
+	pfMu     sync.Mutex
+	latestID string
 }
 
 func New(d Deps) *Service {

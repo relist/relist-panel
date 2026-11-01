@@ -193,15 +193,13 @@ func main() {
 			Restart:  restart,
 			Control:  control,
 		},
-		Docker:           dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
-		VulnScanner:      dockerexec.NewTrivyScanner(dockerexec.DefaultSocketPath, cfg.DataDir),
-		VulnInUse:        dockerexec.NewInUse(dockerexec.DefaultSocketPath, composeIdentities(db), os.Hostname),
-		PanelSelf:        dockerexec.NewPanelSelf(dockerexec.DefaultSocketPath),
-		PanelHelper:      dockerexec.NewPanelHelper(),
-		PanelDocker:      panelDocker,
-		PanelUpdater:     panelDocker,
-		PanelInstallFile: installFile,
-		PanelDomain:      cfg.Install.Domain,
+		Docker:       dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
+		VulnScanner:  dockerexec.NewTrivyScanner(dockerexec.DefaultSocketPath, cfg.DataDir),
+		VulnInUse:    dockerexec.NewInUse(dockerexec.DefaultSocketPath, composeIdentities(db), os.Hostname),
+		PanelSelf:    dockerexec.NewPanelSelf(dockerexec.DefaultSocketPath),
+		PanelRunner:  dockerexec.NewPanelUpdateRunner(),
+		PanelUpdater: panelDocker,
+		PanelDomain:  cfg.Install.Domain,
 	})
 	server := newServer(cfg.Address(), handler)
 	controlServer, err := serveControl(cfg.ControlSocket, control)

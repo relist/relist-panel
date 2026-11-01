@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -16,6 +18,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT "+base+"/settings", s.putSettings)
 	mux.HandleFunc("POST "+base+"/preflight", s.postPreflight)
 	mux.HandleFunc("POST "+base+"/apply", s.postApply)
+	mux.HandleFunc("POST "+base+"/cancel", s.postCancel)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
@@ -54,9 +57,13 @@ type RunInfo struct {
 	Error    string `json:"error"`
 	// RollbackError is why the rollback failed, set with rollback-failed.
 	RollbackError string `json:"rollbackError"`
-	FromVersion   string `json:"fromVersion"`
-	ToVersion     string `json:"toVersion"`
-	StartedAt     int64  `json:"startedAt"`
+	// WaitingOn is what a quiescing run waits for; Note is a caveat about a
+	// run that went on, such as a panel that did not answer.
+	WaitingOn   string `json:"waitingOn"`
+	Note        string `json:"note"`
+	FromVersion string `json:"fromVersion"`
+	ToVersion   string `json:"toVersion"`
+	StartedAt   int64  `json:"startedAt"`
 	// BackupPath is the run directory that holds the backup, empty before the
 	// backup is complete.
 	BackupPath string `json:"backupPath"`
@@ -127,6 +134,7 @@ func (s *Service) runInfo() *RunInfo {
 	}
 	info := &RunInfo{
 		ID: st.Run, State: st.State, Terminal: IsTerminal(st.State), Error: st.Error, RollbackError: st.RollbackError,
+		WaitingOn: st.WaitingOn, Note: st.Note,
 		FromVersion: st.FromVersion, ToVersion: st.ToVersion, StartedAt: st.StartedAt,
 	}
 	info.BackupFiles = []BackupFile{}
@@ -187,22 +195,105 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	s.respondStatus(w, r)
 }
 
-// postPreflight runs the Preflight and returns its report. A step that fails
-// is part of the report, not an HTTP error.
-func (s *Service) postPreflight(w http.ResponseWriter, r *http.Request) {
-	report, err := s.Preflight(r.Context())
-	switch {
-	case err != nil:
-		writeError(w, http.StatusInternalServerError, "could not run the preflight")
-	case report == nil:
-		writeError(w, http.StatusConflict, "No update is available")
-	default:
-		writeJSON(w, http.StatusOK, report)
-	}
+// previewResponse is POST /api/panel-update/preflight: the report of the
+// update Container and the live gate the page shows next to it.
+type previewResponse struct {
+	Report *Report `json:"report"`
+	Gate   Gate    `json:"gate"`
 }
 
-// postApply starts the update. It answers 202 with the run id; the page then
-// follows the run through GET /status. A refusal is 409.
+// liveGate is the state the update waits on, read now.
+func (s *Service) liveGate(ctx context.Context, installAvailable bool) Gate {
+	g := Gate{InstallAvailable: installAvailable, UpdateRunning: s.Locked()}
+	if s.d.MigrationLocked != nil {
+		locked, err := s.d.MigrationLocked(ctx)
+		if err != nil {
+			log.Printf("panelupdate: read the Migration state: %v", err)
+		}
+		g.MigrationLocked = locked
+	}
+	if s.d.DeploysBusy != nil {
+		g.DeploysBusy = s.d.DeploysBusy()
+	}
+	return g
+}
+
+// installArgs are the flags that tell the update command which Install this is.
+func installArgs(in Install) []string {
+	args := []string{"--project", in.Project, "--dir", in.Dir}
+	for _, f := range in.ConfigFiles {
+		args = append(args, "--file", f)
+	}
+	return args
+}
+
+func (s *Service) updateSpec(in Install, name string, args []string) UpdateSpec {
+	spec := UpdateSpec{Name: name, Image: in.Image, Args: args, InstallDir: in.Dir, DataDir: s.d.DataDir, Network: networkName}
+	if s.d.ManifestURL != "" && s.d.ManifestURL != DefaultManifestURL {
+		spec.Env = append(spec.Env, "RELIST_UPDATE_MANIFEST_URL="+s.d.ManifestURL)
+	}
+	return spec
+}
+
+// postPreflight runs `update --preflight --json` in a Container of the current
+// image and returns its report. A step that fails is part of the report, not
+// an HTTP error.
+func (s *Service) postPreflight(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	switch {
+	case s.Development():
+		writeError(w, http.StatusConflict, developmentMessage)
+		return
+	case s.Locked():
+		writeError(w, http.StatusConflict, "A Panel update is already running.")
+		return
+	}
+	in, err := s.FindInstall(ctx)
+	if err != nil {
+		var unavailable *Unavailable
+		if !errors.As(err, &unavailable) {
+			writeError(w, http.StatusInternalServerError, "could not find the Install")
+			return
+		}
+		report := &Report{
+			FromVersion: s.d.Version, ReadmeURL: ReadmeURL, Invariants: []InvariantResult{}, Recreated: []string{},
+			UnknownKinds: []string{}, ManualSteps: []ManualStep{},
+			Failed: &Failure{Step: StepInstall, Message: "Panel update is unavailable: " + unavailable.Reason + "."},
+		}
+		writeJSON(w, http.StatusOK, previewResponse{Report: report, Gate: s.liveGate(ctx, false)})
+		return
+	}
+	if s.d.Runner == nil {
+		writeError(w, http.StatusInternalServerError, "this panel cannot start the update container")
+		return
+	}
+	// One at a time: the preflight directory keeps only the latest report.
+	s.pfRun.Lock()
+	defer s.pfRun.Unlock()
+	args := append([]string{"--preflight", "--json"}, installArgs(in)...)
+	stdout, code, err := s.d.Runner.Preflight(ctx, s.updateSpec(in, "", args))
+	if err != nil {
+		log.Printf("panelupdate: preflight: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not run the preflight: "+err.Error())
+		return
+	}
+	// Exit 1 (not ready) and 3 (up to date) are still reports.
+	var report Report
+	if code != 0 && code != 1 && code != 3 || json.Unmarshal(stdout, &report) != nil {
+		log.Printf("panelupdate: preflight exited %d: %s", code, stdout)
+		writeError(w, http.StatusInternalServerError, "the preflight did not produce a report")
+		return
+	}
+	s.pfMu.Lock()
+	s.latestID = report.ID
+	s.pfMu.Unlock()
+	writeJSON(w, http.StatusOK, previewResponse{Report: &report, Gate: s.liveGate(ctx, true)})
+}
+
+var stepIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// postApply starts the Updater detached and answers 202 with the run id at
+// once; the page then follows the run through GET /status. A refusal is 409.
 func (s *Service) postApply(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ReportID        string   `json:"report_id"`
@@ -212,5 +303,76 @@ func (s *Service) postApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	writeError(w, http.StatusNotImplemented, "the update container is not wired yet")
+	for _, id := range body.ManualStepsDone {
+		if !stepIDPattern.MatchString(id) {
+			writeError(w, http.StatusBadRequest, "invalid manual step id")
+			return
+		}
+	}
+	ctx := r.Context()
+	s.pfMu.Lock()
+	latest := s.latestID
+	s.pfMu.Unlock()
+	if latest == "" || latest != body.ReportID {
+		writeError(w, http.StatusConflict, "The preview is out of date. Run the preview again.")
+		return
+	}
+	if st, ok, _ := NewestRun(s.d.DataDir); s.Locked() || ok && !IsTerminal(st.State) {
+		writeError(w, http.StatusConflict, "A Panel update is already running.")
+		return
+	}
+	in, err := s.FindInstall(ctx)
+	if err != nil {
+		writeError(w, http.StatusConflict, "Panel update is unavailable: "+err.Error()+".")
+		return
+	}
+	if s.d.Runner == nil {
+		writeError(w, http.StatusInternalServerError, "this panel cannot start the update container")
+		return
+	}
+	run := NewRunID(s.d.Now())
+	args := []string{"--report", body.ReportID, "--run", run}
+	if len(body.ManualStepsDone) > 0 {
+		args = append(args, "--steps-done", strings.Join(body.ManualStepsDone, ","))
+	}
+	args = append(args, installArgs(in)...)
+	if err := s.d.Runner.StartUpdater(ctx, s.updateSpec(in, UpdaterName(run), args)); err != nil {
+		log.Printf("panelupdate: start the Updater: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not start the update: "+err.Error())
+		return
+	}
+	s.poke()
+	writeJSON(w, http.StatusAccepted, map[string]string{"run": run})
+}
+
+// postCancel stops the Updater while its run is quiescing. Until the backup
+// starts, SIGTERM ends the run as aborted and the panel releases its lock.
+func (s *Service) postCancel(w http.ResponseWriter, r *http.Request) {
+	st, ok, err := NewestRun(s.d.DataDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not read the update status")
+		return
+	}
+	if !ok || st.State != StateQuiescing {
+		writeError(w, http.StatusConflict, "Only a waiting update can be cancelled")
+		return
+	}
+	if s.d.Runner == nil {
+		writeError(w, http.StatusInternalServerError, "this panel cannot stop the update container")
+		return
+	}
+	if err := s.d.Runner.StopUpdater(r.Context(), UpdaterName(st.Run)); err != nil {
+		log.Printf("panelupdate: stop the Updater: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not cancel the update: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"run": st.Run})
+}
+
+// poke wakes the watcher, so a run it should follow is seen without waiting.
+func (s *Service) poke() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
 }

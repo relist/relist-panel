@@ -1,12 +1,8 @@
 package panelupdate
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"path/filepath"
 	"strings"
 )
@@ -22,7 +18,6 @@ const (
 const (
 	reasonNotCompose  = "this panel was not started with Docker Compose"
 	reasonNoInspect   = "this panel cannot inspect its own Container"
-	reasonNoHelper    = "this panel cannot start a helper Container"
 	reasonOutsideDir  = "an Install file lies outside the Install directory"
 	reasonRelativeDir = "the Install's labels name a relative path"
 )
@@ -36,8 +31,8 @@ type Install struct {
 	// ConfigFiles are the -f files in the order Compose merges them: the
 	// Install file, then the Install override when there is one.
 	ConfigFiles []string
-	// Image is the ID of the image the panel runs from, which the helper
-	// Container is started from so panel and helper cannot skew.
+	// Image is the ID of the image the panel runs from, which the update
+	// Container is started from so panel and update command cannot skew.
 	Image string
 }
 
@@ -63,18 +58,6 @@ type SelfInspector interface {
 	InspectSelf(ctx context.Context) (Self, error)
 }
 
-// HelperRun is one command in a short-lived helper Container of the panel's
-// image (ADR-0010). Dir is mounted read-only at the same path. Argv[0] is the
-// entrypoint.
-type HelperRun struct {
-	Image string
-	Dir   string
-	// Scratch, when set, is a second directory mounted read-only at its own
-	// path: the Preflight's candidate files.
-	Scratch string
-	Argv    []string
-}
-
 // HelperExitError is a command that ran and exited non-zero.
 type HelperExitError struct {
 	Code   int
@@ -83,12 +66,6 @@ type HelperExitError struct {
 
 func (e *HelperExitError) Error() string {
 	return fmt.Sprintf("helper exited %d: %s", e.Code, e.Stderr)
-}
-
-// Helper runs one command in a helper Container and streams its stdout.
-// Reading files is built on it, and so is `docker compose config`.
-type Helper interface {
-	Run(ctx context.Context, run HelperRun, stdout io.Writer) error
 }
 
 // Unavailable says why Panel update cannot work on this host.
@@ -141,60 +118,4 @@ func splitFiles(list string) []string {
 		}
 	}
 	return out
-}
-
-// Exit codes of readScript: "no such file", and "there, but not a regular
-// file" (any symlink, whose target may lie outside the mounted Install
-// directory, or a directory or device).
-const (
-	missingExit    = 44
-	notRegularExit = 45
-)
-
-// readScript prints $1, exits missingExit when nothing is there at all, and
-// notRegularExit when it is a symlink or anything but a regular file. The path
-// is an argument, never part of the script.
-const readScript = `if [ -L "$1" ]; then exit 45; fi; [ -e "$1" ] || exit 44; [ -f "$1" ] || exit 45; exec cat -- "$1"`
-
-// ReadInstallFiles reads the Install's config files and .env through a helper
-// Container. A missing config file is an error; a missing .env is empty.
-func (s *Service) ReadInstallFiles(ctx context.Context, in Install) (InstallFiles, error) {
-	if s.d.Helper == nil {
-		return InstallFiles{}, &Unavailable{reasonNoHelper}
-	}
-	var out InstallFiles
-	for _, path := range in.ConfigFiles {
-		data, err := s.readFile(ctx, in, path)
-		if err != nil {
-			return InstallFiles{}, fmt.Errorf("read %s: %w", path, err)
-		}
-		out.Config = append(out.Config, data)
-	}
-	env, err := s.readFile(ctx, in, in.EnvFile())
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		env = nil
-	case err != nil:
-		return InstallFiles{}, fmt.Errorf("read %s: %w", in.EnvFile(), err)
-	}
-	out.Env = env
-	return out, nil
-}
-
-func (s *Service) readFile(ctx context.Context, in Install, path string) ([]byte, error) {
-	var stdout bytes.Buffer
-	err := s.d.Helper.Run(ctx, HelperRun{
-		Image: in.Image, Dir: in.Dir, Argv: []string{"sh", "-c", readScript, "sh", path},
-	}, &stdout)
-	var exit *HelperExitError
-	if errors.As(err, &exit) && exit.Code == missingExit {
-		return nil, fs.ErrNotExist
-	}
-	if errors.As(err, &exit) && exit.Code == notRegularExit {
-		return nil, &Unavailable{fmt.Sprintf("%s is a symlink or not a regular file; Panel update needs regular files in the Install directory", path)}
-	}
-	if err != nil {
-		return nil, err
-	}
-	return stdout.Bytes(), nil
 }

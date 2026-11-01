@@ -44,50 +44,76 @@ func (p *PanelSelf) InspectSelf(ctx context.Context) (panelupdate.Self, error) {
 	return panelupdate.Self{ImageID: inspected.Image, Labels: inspected.Config.Labels}, nil
 }
 
-// PanelHelper implements panelupdate.Helper: one `docker run --rm` of the
-// panel's own image per command (ADR-0010), the Install directory mounted
-// read-only at its real path.
-type PanelHelper struct {
+// PanelUpdateRunner implements panelupdate.UpdateRunner: the `update` Container
+// is one `docker run` of the current panel image, outside the Install and with
+// no Compose labels, so `up` never treats it as an orphan of the project.
+type PanelUpdateRunner struct {
 	runDocker func(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) error
 }
 
-func NewPanelHelper() *PanelHelper { return &PanelHelper{runDocker: execDocker} }
+func NewPanelUpdateRunner() *PanelUpdateRunner { return &PanelUpdateRunner{runDocker: execDocker} }
 
-func (h *PanelHelper) Run(ctx context.Context, run panelupdate.HelperRun, stdout io.Writer) error {
-	var stderr bytes.Buffer
-	err := h.runDocker(ctx, helperArgv(run), nil, stdout, &stderr)
-	if err == nil {
-		return nil
+// updateArgv is the whole command line, argv[0] included:
+//
+//	docker run [--rm | -d --name <name>] --network relist-network //	  -v /var/run/docker.sock:/var/run/docker.sock //	  -v <install dir>:<install dir> -v <data dir>:<data dir> //	  -e RELIST_DATA_DIR=<data dir> <image> update <args…>
+//
+// A detached run has no --rm and no restart policy: the watcher removes the
+// Container once the run is settled, and its logs outlive a failure. It is not
+// locked down: it needs the socket and both directories.
+func updateArgv(spec panelupdate.UpdateSpec, detached bool) []string {
+	argv := []string{"docker", "run"}
+	if detached {
+		argv = append(argv, "-d", "--name", spec.Name)
+	} else {
+		argv = append(argv, "--rm")
 	}
-	message := strings.TrimSpace(stderr.String())
-	var exit exitCoder
-	if errors.As(err, &exit) {
-		return &panelupdate.HelperExitError{Code: exit.ExitCode(), Stderr: message}
+	argv = append(argv,
+		"--network", spec.Network,
+		"-v", DefaultSocketPath+":"+DefaultSocketPath,
+		"-v", spec.InstallDir+":"+spec.InstallDir,
+		"-v", spec.DataDir+":"+spec.DataDir,
+		"-e", "RELIST_DATA_DIR="+spec.DataDir,
+	)
+	for _, e := range spec.Env {
+		argv = append(argv, "-e", e)
 	}
-	return fmt.Errorf("docker run: %w: %s", err, message)
+	argv = append(argv, spec.Image, "update")
+	return append(argv, spec.Args...)
 }
 
-// helperArgv is the whole command line, argv[0] included. The mounts are the
-// Install directory and, for a Preflight, its scratch directory, both
-// read-only; DAC_READ_SEARCH lets root read a 0600
-// .env owned by someone else, and nothing can write.
-func helperArgv(run panelupdate.HelperRun) []string {
-	argv := []string{
-		"docker", "run", "--rm",
-		"--network", "none",
-		"--read-only",
-		"--tmpfs", "/tmp",
-		"--cap-drop", "ALL",
-		"--cap-add", "DAC_READ_SEARCH",
-		"--security-opt", "no-new-privileges",
-		"--memory", "256m",
-		"-v", run.Dir + ":" + run.Dir + ":ro",
+// Preflight runs the Container with --rm and waits for it. A non-zero exit is
+// not an error here: the caller reads the exit code (1 and 3 are reports).
+func (r *PanelUpdateRunner) Preflight(ctx context.Context, spec panelupdate.UpdateSpec) ([]byte, int, error) {
+	var stdout, stderr bytes.Buffer
+	err := r.runDocker(ctx, updateArgv(spec, false), nil, &stdout, &stderr)
+	if err == nil {
+		return stdout.Bytes(), 0, nil
 	}
-	if run.Scratch != "" {
-		argv = append(argv, "-v", run.Scratch+":"+run.Scratch+":ro")
+	var exit exitCoder
+	if errors.As(err, &exit) {
+		return stdout.Bytes(), exit.ExitCode(), nil
 	}
-	argv = append(argv, "--entrypoint", run.Argv[0], run.Image)
-	return append(argv, run.Argv[1:]...)
+	return nil, 0, fmt.Errorf("docker run: %w: %s", err, strings.TrimSpace(stderr.String()))
+}
+
+// StartUpdater starts the detached Container; `docker run -d` returns once it
+// runs.
+func (r *PanelUpdateRunner) StartUpdater(ctx context.Context, spec panelupdate.UpdateSpec) error {
+	var stderr bytes.Buffer
+	if err := r.runDocker(ctx, updateArgv(spec, true), nil, io.Discard, &stderr); err != nil {
+		return fmt.Errorf("docker run: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// StopUpdater is `docker stop <name>`: the Updater gets SIGTERM, which aborts a
+// run that is still quiescing.
+func (r *PanelUpdateRunner) StopUpdater(ctx context.Context, name string) error {
+	var stderr bytes.Buffer
+	if err := r.runDocker(ctx, []string{"docker", "stop", name}, nil, io.Discard, &stderr); err != nil {
+		return fmt.Errorf("docker stop: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 // PanelDocker implements panelupdate.Docker over the Engine API.
@@ -182,7 +208,7 @@ func (d *PanelDocker) ConfigHashes(ctx context.Context, project string) ([]panel
 var (
 	_ panelupdate.Docker        = (*PanelDocker)(nil)
 	_ panelupdate.SelfInspector = (*PanelSelf)(nil)
-	_ panelupdate.Helper        = (*PanelHelper)(nil)
+	_ panelupdate.UpdateRunner  = (*PanelUpdateRunner)(nil)
 )
 
 // UpdaterState inspects the Updater Container by name. A Container that is
@@ -251,40 +277,3 @@ func (d *PanelDocker) ListUpdaters(ctx context.Context) ([]panelupdate.UpdaterLi
 }
 
 const updaterNamePrefix = "relist-panel-updater-"
-
-// StartUpdater is the Engine API form of
-//
-//	docker run -d --name <name> --network relist-network \
-//	  -v /var/run/docker.sock:/var/run/docker.sock \
-//	  -v <install dir>:<install dir> -v <data dir>:<data dir> \
-//	  -e RELIST_DATA_DIR=<data dir> <image> panel-update apply --run <id>
-//
-// It has no Compose labels, no restart policy and is not removed on exit: the
-// watcher removes it once the run is settled, and its logs outlive a failure.
-// It is not locked down: it needs the socket and both directories.
-func (d *PanelDocker) StartUpdater(ctx context.Context, spec panelupdate.UpdaterSpec) error {
-	create := map[string]any{
-		"Image": spec.Image,
-		"Cmd":   []string{"panel-update", "apply", "--run", spec.Run},
-		"Env":   []string{"RELIST_DATA_DIR=" + spec.DataDir},
-		"HostConfig": map[string]any{
-			"Binds": []string{
-				DefaultSocketPath + ":" + DefaultSocketPath,
-				spec.InstallDir + ":" + spec.InstallDir,
-				spec.DataDir + ":" + spec.DataDir,
-			},
-			"NetworkMode": spec.Network,
-		},
-	}
-	var created struct {
-		ID string `json:"Id"`
-	}
-	if err := d.engine.doBody(ctx, http.MethodPost, "/containers/create?name="+url.QueryEscape(spec.Name), create, &created); err != nil {
-		return err
-	}
-	if err := d.engine.do(ctx, http.MethodPost, "/containers/"+url.PathEscape(created.ID)+"/start", nil); err != nil {
-		_ = d.engine.Remove(context.WithoutCancel(ctx), created.ID, true, false)
-		return err
-	}
-	return nil
-}

@@ -3,8 +3,8 @@ package dockerexec_test
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -45,71 +45,61 @@ func TestPanelSelfErrors(t *testing.T) {
 	}
 }
 
-func TestHelperArgvMountsOnlyTheInstallReadOnly(t *testing.T) {
-	got := dockerexec.HelperArgv(panelupdate.HelperRun{Image: "sha256:abc", Dir: "/srv/app", Argv: []string{"sh", "-c", "cat", "sh", "/srv/app/x"}})
-	line := strings.Join(got, " ")
-	for _, want := range []string{"run --rm", "--network none", "--read-only", "--cap-drop ALL", "-v /srv/app:/srv/app:ro", "--entrypoint sh sha256:abc -c cat sh /srv/app/x"} {
-		if !strings.Contains(line, want) {
-			t.Errorf("argv %q lacks %q", line, want)
+func TestUpdateSpecArgv(t *testing.T) {
+	spec := panelupdate.UpdateSpec{
+		Name: "relist-panel-updater-20261101T120000Z", Image: "sha256:abc", InstallDir: "/opt/relist-panel",
+		DataDir: "/var/lib/relist-panel", Network: "relist-network",
+		Args: []string{"--report", "id", "--run", "20261101T120000Z"},
+		Env:  []string{"RELIST_UPDATE_MANIFEST_URL=http://registry.test/m.json"},
+	}
+	mounts := "--network relist-network -v /var/run/docker.sock:/var/run/docker.sock -v /opt/relist-panel:/opt/relist-panel -v /var/lib/relist-panel:/var/lib/relist-panel -e RELIST_DATA_DIR=/var/lib/relist-panel -e RELIST_UPDATE_MANIFEST_URL=http://registry.test/m.json sha256:abc update --report id --run 20261101T120000Z"
+	if got, want := strings.Join(dockerexec.UpdateArgv(spec, false), " "), "docker run --rm "+mounts; got != want {
+		t.Errorf("--rm argv\n got %q\nwant %q", got, want)
+	}
+	if got, want := strings.Join(dockerexec.UpdateArgv(spec, true), " "), "docker run -d --name relist-panel-updater-20261101T120000Z "+mounts; got != want {
+		t.Errorf("detached argv\n got %q\nwant %q", got, want)
+	}
+	// No Compose labels: `up` must not take the Updater for an orphan.
+	if strings.Contains(strings.Join(dockerexec.UpdateArgv(spec, true), " "), "com.docker.compose") || strings.Contains(strings.Join(dockerexec.UpdateArgv(spec, true), " "), "--restart") {
+		t.Error("the Updater carries Compose labels or a restart policy")
+	}
+}
+
+func TestPanelUpdateRunnerPreflightExitCodes(t *testing.T) {
+	for _, code := range []int{0, 1, 3} {
+		var argv []string
+		r := dockerexec.NewPanelUpdateRunnerWith(func(_ context.Context, a []string, _ io.Reader, stdout, _ io.Writer) error {
+			argv = a
+			_, _ = stdout.Write([]byte(`{"id":"x"}`))
+			return exec.Command("sh", "-c", fmt.Sprintf("exit %d", code)).Run()
+		})
+		out, got, err := r.Preflight(context.Background(), panelupdate.UpdateSpec{Image: "i", Args: []string{"--preflight"}})
+		if err != nil || got != code || string(out) != `{"id":"x"}` || argv[2] != "--rm" {
+			t.Errorf("exit %d: out %q code %d err %v argv %v", code, out, got, err, argv)
 		}
 	}
-	if strings.Count(line, " -v ") != 1 || strings.Contains(line, "docker.sock") {
-		t.Errorf("argv %q mounts more than the Install dir", line)
-	}
-}
-
-func TestPanelHelperRun(t *testing.T) {
-	h := dockerexec.NewPanelHelperWith(func(_ context.Context, _ []string, _ io.Reader, stdout, stderr io.Writer) error {
-		_, _ = stdout.Write([]byte("out"))
-		_, _ = stderr.Write([]byte("boom\n"))
-		return exec.Command("sh", "-c", "exit 44").Run()
+	r := dockerexec.NewPanelUpdateRunnerWith(func(context.Context, []string, io.Reader, io.Writer, io.Writer) error {
+		return errors.New("no docker")
 	})
-	var out strings.Builder
-	err := h.Run(context.Background(), panelupdate.HelperRun{Image: "i", Dir: "/d", Argv: []string{"sh"}}, &out)
-	var exit *panelupdate.HelperExitError
-	if !errors.As(err, &exit) || exit.Code != 44 || exit.Stderr != "boom" || out.String() != "out" {
-		t.Fatalf("err %v, out %q", err, out.String())
+	if _, _, err := r.Preflight(context.Background(), panelupdate.UpdateSpec{}); err == nil {
+		t.Error("a docker that cannot run is an error, not an exit code")
 	}
 }
 
-// Real Docker: reads a file through a helper of an image the host has.
-// Opt in with RELIST_DOCKER_TESTS=1; RELIST_TEST_IMAGE names the image
-// (default alpine:3). Nothing persists: --rm, and the directory is temporary.
-func TestPanelHelperRealDocker(t *testing.T) {
-	if os.Getenv("RELIST_DOCKER_TESTS") != "1" {
-		t.Skip("set RELIST_DOCKER_TESTS=1 to run against Docker")
-	}
-	image := os.Getenv("RELIST_TEST_IMAGE")
-	if image == "" {
-		image = "alpine:3"
-	}
-	dir := t.TempDir()
-	if err := os.WriteFile(dir+"/su-test.yml", []byte("services: {}\n"), 0o600); err != nil {
+func TestPanelUpdateRunnerStartAndStop(t *testing.T) {
+	var calls [][]string
+	r := dockerexec.NewPanelUpdateRunnerWith(func(_ context.Context, a []string, _ io.Reader, _, _ io.Writer) error {
+		calls = append(calls, a)
+		return nil
+	})
+	if err := r.StartUpdater(context.Background(), panelupdate.UpdateSpec{Name: "n", Image: "i"}); err != nil {
 		t.Fatal(err)
 	}
-	var out strings.Builder
-	h := dockerexec.NewPanelHelper()
-	script := []string{"sh", "-c", `[ -f "$1" ] || exit 44; exec cat -- "$1"`, "sh"}
-	if err := h.Run(context.Background(), panelupdate.HelperRun{Image: image, Dir: dir, Argv: append(script, dir+"/su-test.yml")}, &out); err != nil || out.String() != "services: {}\n" {
-		t.Fatalf("read: %v %q", err, out.String())
+	if err := r.StopUpdater(context.Background(), "relist-panel-updater-x"); err != nil {
+		t.Fatal(err)
 	}
-	err := h.Run(context.Background(), panelupdate.HelperRun{Image: image, Dir: dir, Argv: append(script, dir+"/.env")}, io.Discard)
-	var exit *panelupdate.HelperExitError
-	if !errors.As(err, &exit) || exit.Code != 44 {
-		t.Fatalf("missing file: %v", err)
-	}
-}
-
-func TestHelperArgvMountsTheScratchDirReadOnly(t *testing.T) {
-	got := dockerexec.HelperArgv(panelupdate.HelperRun{Image: "sha256:abc", Dir: "/srv/app", Scratch: "/data/.panel-update/preflight/x", Argv: []string{"docker", "compose", "config"}})
-	line := strings.Join(got, " ")
-	for _, want := range []string{"-v /srv/app:/srv/app:ro", "-v /data/.panel-update/preflight/x:/data/.panel-update/preflight/x:ro", "--network none", "--read-only", "--cap-drop ALL", "--entrypoint docker sha256:abc compose config"} {
-		if !strings.Contains(line, want) {
-			t.Errorf("argv %q lacks %q", line, want)
-		}
-	}
-	if strings.Count(line, " -v ") != 2 || strings.Contains(line, "docker.sock") || strings.Contains(line, ":rw") {
-		t.Errorf("argv %q mounts more than two read-only directories", line)
+	if calls[0][2] != "-d" || strings.Join(calls[1], " ") != "docker stop relist-panel-updater-x" {
+		t.Fatalf("calls = %v", calls)
 	}
 }
 
@@ -195,60 +185,6 @@ func TestPanelDockerUpdaterState(t *testing.T) {
 	socket := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }))
 	if _, err := dockerexec.NewPanelDockerAt(socket).UpdaterState(context.Background(), "x"); err == nil {
 		t.Fatal("a daemon error must not read as a missing Container")
-	}
-}
-
-func TestPanelDockerStartUpdaterBody(t *testing.T) {
-	var created map[string]any
-	var name, started string
-	socket := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		switch {
-		case strings.HasSuffix(req.URL.Path, "/containers/create"):
-			name = req.URL.Query().Get("name")
-			_ = json.NewDecoder(req.Body).Decode(&created)
-			_, _ = w.Write([]byte(`{"Id":"c1"}`))
-		case strings.HasSuffix(req.URL.Path, "/start"):
-			started = req.URL.Path
-			w.WriteHeader(http.StatusNoContent)
-		}
-	}))
-	err := dockerexec.NewPanelDocker(socket).StartUpdater(context.Background(), panelupdate.UpdaterSpec{
-		Name: "relist-panel-updater-20261101T120000Z", Image: "sha256:abc", Run: "20261101T120000Z",
-		InstallDir: "/srv/relist", DataDir: "/var/lib/relist-panel", Network: "relist-network",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	host := created["HostConfig"].(map[string]any)
-	if name != "relist-panel-updater-20261101T120000Z" || started != "/containers/c1/start" || created["Image"] != "sha256:abc" ||
-		!reflect.DeepEqual(created["Cmd"], []any{"panel-update", "apply", "--run", "20261101T120000Z"}) ||
-		!reflect.DeepEqual(created["Env"], []any{"RELIST_DATA_DIR=/var/lib/relist-panel"}) ||
-		host["NetworkMode"] != "relist-network" ||
-		!reflect.DeepEqual(host["Binds"], []any{"/var/run/docker.sock:/var/run/docker.sock", "/srv/relist:/srv/relist", "/var/lib/relist-panel:/var/lib/relist-panel"}) {
-		t.Fatalf("name %q created %+v", name, created)
-	}
-	// No Compose labels, so `up` never sees an orphan; nothing restarts it or
-	// removes it on exit.
-	if _, ok := created["Labels"]; ok || host["RestartPolicy"] != nil || host["AutoRemove"] != nil {
-		t.Fatalf("created %+v", created)
-	}
-}
-
-func TestPanelDockerStartUpdaterRemovesWhatDidNotStart(t *testing.T) {
-	var deleted string
-	socket := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		switch {
-		case req.Method == http.MethodDelete:
-			deleted = req.URL.Path
-		case strings.HasSuffix(req.URL.Path, "/containers/create"):
-			_, _ = w.Write([]byte(`{"Id":"c1"}`))
-		default:
-			http.Error(w, `{"message":"port is already allocated"}`, http.StatusInternalServerError)
-		}
-	}))
-	err := dockerexec.NewPanelDocker(socket).StartUpdater(context.Background(), panelupdate.UpdaterSpec{Name: "n", Image: "i", Run: "r"})
-	if err == nil || deleted != "/containers/c1" {
-		t.Fatalf("err %v deleted %q", err, deleted)
 	}
 }
 

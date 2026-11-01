@@ -1,19 +1,6 @@
 package panelupdate
 
-import (
-	"context"
-	"fmt"
-)
-
-// Refusal is an Apply the panel will not start, in words for the operator.
-// The route answers it with 409.
-type Refusal struct{ Message string }
-
-func (r *Refusal) Error() string { return r.Message }
-
-func refuse(format string, args ...any) error {
-	return &Refusal{Message: fmt.Sprintf(format, args...)}
-}
+import "context"
 
 // unticked lists the manual steps the operator did not confirm.
 func unticked(steps []ManualStep, done []string) []string {

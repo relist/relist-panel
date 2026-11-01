@@ -72,14 +72,12 @@ type Deps struct {
 	// nil leaves the feature out.
 	VulnScanner vulnscan.Scanner
 	VulnInUse   vulnscan.InUse
-	// PanelSelf and PanelHelper let Panel update find and read the Install.
+	// PanelSelf lets Panel update find the Install, and PanelRunner starts the
+	// `update` Container.
 	PanelSelf   panelupdate.SelfInspector
-	PanelHelper panelupdate.Helper
-	PanelDocker panelupdate.Docker
+	PanelRunner panelupdate.UpdateRunner
 	// PanelUpdater finds and removes the Updater Container.
 	PanelUpdater panelupdate.UpdaterContainers
-	// PanelInstallFile is the Install file this build embeds.
-	PanelInstallFile []byte
 	// PanelDomain is the install's RELIST_DOMAIN. A Domain cannot take this
 	// host, or Traefik could route the panel's own traffic to an app. Empty
 	// means unknown and refuses nothing.
@@ -146,8 +144,8 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	// is not over keeps this panel from running Deployments or taking writes.
 	puDeps := panelupdate.Deps{
 		Store: panelupdate.NewStore(db), Version: d.Version, ManifestURL: panelupdate.ManifestURLFromEnv(),
-		Self: d.PanelSelf, Helper: d.PanelHelper, Docker: d.PanelDocker, Updater: d.PanelUpdater,
-		DataDir: dataDir, InstallFile: d.PanelInstallFile, Domain: d.PanelDomain, DeploysBusy: queue.Busy, Queue: queue,
+		Self: d.PanelSelf, Runner: d.PanelRunner, Updater: d.PanelUpdater,
+		DataDir: dataDir, DeploysBusy: queue.Busy, Queue: queue,
 		WaitingOn: func() string { return updateWaitingOn(ctx, db, queue) },
 		MigrationLocked: func(ctx context.Context) (bool, error) {
 			if migrationOptions == nil {
