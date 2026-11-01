@@ -133,7 +133,7 @@ func (u *Updater) Apply(ctx context.Context, run string) (RunStatus, error) {
 	if err != nil {
 		return RunStatus{}, fmt.Errorf("read the run's status: %w", err)
 	}
-	if st.State != StateStartingUpdater {
+	if st.State != stateStartingUpdater {
 		return st, fmt.Errorf("%w: it is %s", ErrNotStarting, st.State)
 	}
 	plan, err := ReadPlan(dir)

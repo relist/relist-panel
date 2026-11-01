@@ -92,7 +92,7 @@ func (s *Service) Apply(ctx context.Context, reportID string, stepsDone []string
 		s.AbortRun(run, "write plan.json: "+err.Error())
 		return "", fmt.Errorf("write the plan: %w", err)
 	}
-	if err := s.SetRunState(run, StateStartingUpdater, ""); err != nil {
+	if err := s.SetRunState(run, stateStartingUpdater, ""); err != nil {
 		s.AbortRun(run, err.Error())
 		return "", err
 	}

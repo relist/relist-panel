@@ -17,7 +17,8 @@ import (
 const (
 	StateQuiescing       = "quiescing"
 	StateBackingUp       = "backing-up"
-	StateStartingUpdater = "starting-updater"
+	stateStartingUpdater = "starting-updater"
+	StateAborted         = "aborted"
 	StateWritingFiles    = "writing-files"
 	StateComposeUp       = "compose-up"
 	StateWaitingHealth   = "waiting-health"
@@ -39,7 +40,7 @@ const (
 // update lock on.
 func IsTerminal(state string) bool {
 	switch state {
-	case StateSucceeded, StateRolledBack, StateRollbackFailed, StateInterrupted:
+	case StateSucceeded, StateRolledBack, StateRollbackFailed, StateAborted, StateInterrupted:
 		return true
 	}
 	return false
@@ -53,6 +54,10 @@ type RunStatus struct {
 	// Error is why the update failed: the reason of a rolled-back run, or of
 	// an interrupted one.
 	Error string `json:"error,omitempty"`
+	// WaitingOn is what a quiescing run waits for, copied from panel.json.
+	WaitingOn string `json:"waitingOn,omitempty"`
+	// Note is a caveat about a run that went on, such as PanelNoAnswerNote.
+	Note string `json:"note,omitempty"`
 	// RollbackError is why putting the old version back failed; it is set only
 	// with rollback-failed, next to Error.
 	RollbackError string `json:"rollbackError,omitempty"`
@@ -64,6 +69,10 @@ type RunStatus struct {
 	// UpdatedAt is when the file was last written.
 	UpdatedAt int64 `json:"updatedAt"`
 }
+
+// PanelNoAnswerNote is the Note of a run whose panel did not answer the
+// quiesce request and was stopped.
+const PanelNoAnswerNote = "panel did not answer; a running Deployment may have been cut"
 
 var runIDPattern = regexp.MustCompile(`^\d{8}T\d{6}Z$`)
 

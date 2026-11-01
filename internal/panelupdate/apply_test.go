@@ -76,7 +76,7 @@ func TestApplyStartsTheUpdater(t *testing.T) {
 		t.Fatalf("candidate .env = %q", got)
 	}
 	st, err := ReadStatus(dir)
-	if err != nil || st.State != StateStartingUpdater || st.FromImage != "sha256:img" || st.ToVersion != "1.4.0" {
+	if err != nil || st.State != stateStartingUpdater || st.FromImage != "sha256:img" || st.ToVersion != "1.4.0" {
 		t.Fatalf("status = %+v, %v", st, err)
 	}
 	if !r.svc.Locked() || !contains(r.queue.list(), "hold") {

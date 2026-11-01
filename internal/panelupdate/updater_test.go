@@ -145,7 +145,7 @@ func newUpdaterRig(t *testing.T, withEnv bool) *updaterRig {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
-	if err := WriteStatus(r.dir, RunStatus{Run: r.run, State: StateStartingUpdater, FromVersion: "1.3.0", ToVersion: "1.4.0", FromImage: "sha256:old"}, now); err != nil {
+	if err := WriteStatus(r.dir, RunStatus{Run: r.run, State: stateStartingUpdater, FromVersion: "1.3.0", ToVersion: "1.4.0", FromImage: "sha256:old"}, now); err != nil {
 		t.Fatal(err)
 	}
 	r.host = &fakeHost{
