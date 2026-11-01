@@ -71,6 +71,9 @@ type Deps struct {
 	// nil leaves the feature out.
 	VulnScanner vulnscan.Scanner
 	VulnInUse   vulnscan.InUse
+	// PanelSelf and PanelHelper let Panel update find and read the Install.
+	PanelSelf   panelupdate.SelfInspector
+	PanelHelper panelupdate.Helper
 	// PanelDomain is the install's RELIST_DOMAIN. A Domain cannot take this
 	// host, or Traefik could route the panel's own traffic to an app. Empty
 	// means unknown and refuses nothing.
@@ -151,6 +154,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	}
 	panelUpdates := panelupdate.New(panelupdate.Deps{
 		Store: panelupdate.NewStore(db), Version: d.Version, ManifestURL: panelupdate.ManifestURLFromEnv(),
+		Self: d.PanelSelf, Helper: d.PanelHelper,
 	})
 	panelUpdates.RegisterRoutes(mux)
 	worker.Add(1)

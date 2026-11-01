@@ -1,6 +1,7 @@
 package panelupdate
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -29,12 +30,19 @@ type Status struct {
 	Version string `json:"version"`
 	// Development is true for a build that was not stamped; Message says why
 	// no update is offered.
-	Development  bool       `json:"development"`
-	Message      string     `json:"message,omitempty"`
-	Available    *Available `json:"available"`
-	CheckEnabled bool       `json:"checkEnabled"`
-	LastCheckAt  *time.Time `json:"lastCheckAt"`
-	LastError    string     `json:"lastError"`
+	Development  bool          `json:"development"`
+	Message      string        `json:"message,omitempty"`
+	Available    *Available    `json:"available"`
+	CheckEnabled bool          `json:"checkEnabled"`
+	LastCheckAt  *time.Time    `json:"lastCheckAt"`
+	LastError    string        `json:"lastError"`
+	Install      InstallStatus `json:"install"`
+}
+
+// InstallStatus says whether the Install was found and, if not, why not.
+type InstallStatus struct {
+	Available bool   `json:"available"`
+	Reason    string `json:"reason"`
 }
 
 // Available describes the version on offer.
@@ -66,6 +74,7 @@ func (s *Service) status(r *http.Request) (Status, error) {
 	} else if s.NoKey() {
 		out.Message = ErrNoKey.Error()
 	}
+	out.Install = s.installStatus(ctx)
 	if m != nil {
 		out.Available = &Available{Version: m.Version, ReleasedAt: m.ReleasedAt, NotesURL: m.NotesURL, ManualSteps: m.ManualSteps}
 		if out.Available.ManualSteps == nil {
@@ -73,6 +82,15 @@ func (s *Service) status(r *http.Request) (Status, error) {
 		}
 	}
 	return out, nil
+}
+
+func (s *Service) installStatus(ctx context.Context) InstallStatus {
+	_, err := s.FindInstall(ctx)
+	var unavailable *Unavailable
+	if errors.As(err, &unavailable) {
+		return InstallStatus{Reason: unavailable.Reason}
+	}
+	return InstallStatus{Available: err == nil}
 }
 
 func (s *Service) respondStatus(w http.ResponseWriter, r *http.Request) {

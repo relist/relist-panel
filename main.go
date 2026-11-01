@@ -222,6 +222,8 @@ func main() {
 		Docker:      dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
 		VulnScanner: dockerexec.NewTrivyScanner(dockerexec.DefaultSocketPath, cfg.DataDir),
 		VulnInUse:   dockerexec.NewInUse(dockerexec.DefaultSocketPath, composeIdentities(db), os.Hostname),
+		PanelSelf:   dockerexec.NewPanelSelf(dockerexec.DefaultSocketPath),
+		PanelHelper: dockerexec.NewPanelHelper(),
 		PanelDomain: cfg.Install.Domain,
 	})
 	server := newServer(cfg.Address(), handler)

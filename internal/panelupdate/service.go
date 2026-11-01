@@ -48,6 +48,9 @@ type Deps struct {
 	// Client fetches the manifest. Nil means a client with checkTimeout.
 	Client *http.Client
 	Now    func() time.Time
+	// Self and Helper find and read the Install. Nil makes it unavailable.
+	Self   SelfInspector
+	Helper Helper
 	// After returns a channel that fires after d. Nil means time.After.
 	After func(d time.Duration) <-chan time.Time
 }
