@@ -23,6 +23,7 @@ import (
 	"relist-panel/internal/images"
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/migration"
+	"relist-panel/internal/panelupdate"
 	"relist-panel/internal/projects"
 	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
@@ -148,6 +149,15 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			vulnService.RunScheduler(ctx)
 		}()
 	}
+	panelUpdates := panelupdate.New(panelupdate.Deps{
+		Store: panelupdate.NewStore(db), Version: d.Version, ManifestURL: panelupdate.ManifestURLFromEnv(),
+	})
+	panelUpdates.RegisterRoutes(mux)
+	worker.Add(1)
+	go func() {
+		defer worker.Done()
+		panelUpdates.RunScheduler(ctx)
+	}()
 	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
 	sshkeys.New(db).RegisterRoutes(mux)
 	certificates.New(db, dataDir).RegisterRoutes(mux)
