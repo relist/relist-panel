@@ -1,306 +1,570 @@
-# Plan — Panel update (execution order for tickets 01–07)
+# One Updater and the Install script — Implementation Plan
 
-Spec (binding): `.scratch/self-update/spec.md`. ADR: `docs/adr/0024-panel-self-update.md`.
-Tickets: `.scratch/self-update/issues/NN-*.md`. Each task below names the ticket and spec
-sections it implements; the ticket and spec text are the requirements. Where this plan adds
-a decision the spec does not make, it is marked **Decision**.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Ticket 08 (switch the Install file to the published image) is **not** in this plan: it needs
-a first release on GHCR (ticket 02's human part) and changes how the owner rebuilds the live
-install. Ticket 02's human part (signing key, package visibility) is also not in this plan.
+**Goal:** Rework Panel update so one `relist-panel update` command does the whole run for both
+the web and a shell script, and add a `curl | sh` Install script.
+
+**Architecture:** The Preflight, the quiesce request, the backup and the apply move out of the
+panel's `Service` into a standalone `Updater` that runs in a Container of the current image. The
+panel answers a quiesce request through `panel.json` in the run directory and starts the same
+Container for Preview and Update. `install.sh`, filled in by the release workflow, calls the new
+`setup` and `update` commands.
+
+**Tech Stack:** Go (standard library, `modernc.org/sqlite` already in use), Docker Engine API
+and `docker compose` CLI through `internal/dockerexec`, React + antd 6.5.1, POSIX `sh`,
+GitHub Actions.
+
+**Spec:** `.scratch/self-update/spec.md` (binding). ADRs: `docs/adr/0024-panel-self-update.md`,
+`docs/adr/0025-one-updater-and-install-script.md`. The previous plan (tickets 01–07) is in git
+history at `432091e`; everything it built stays unless a task below removes it.
 
 ## Global Constraints
 
-- **Never touch the live install.** This checkout is also the owner's live panel: Compose
-  project `relist-panel` (containers `relist-panel-panel-1`, `relist-panel-traefik-1`),
-  data dir `/var/lib/relist-panel`. Never run `docker compose up/down/restart/pull` in the
-  repo root, never stop, recreate or exec into those containers, never write under
-  `/var/lib/relist-panel`. Any real-Docker check uses a throwaway project in a temp
-  directory with its own project name (prefix `su-test-`) and is torn down afterwards
-  (`docker compose -p su-test-… down -v`, remove temp dirs and test images you built).
-- Vocabulary from `CONTEXT.md`: Install, Install file, Install override, Panel update,
-  Updater, Update manifest, Install invariant. "Migration" means a server Migration only;
-  SQL changes are "schema migrations".
-- Never edit an existing schema migration under `internal/migrations/`. The new one is
-  `00025_panel_updates.sql`.
-- Commits: Conventional Commits, no scope (`feat: …`, `fix: …`, `test: …`, `docs: …`),
-  imperative, lowercase after the colon. **No `Co-Authored-By` or `Claude-Session`
-  trailers.** Commit on the current branch `feat/panel-self-update`. Never push.
-- Verification before reporting done: `go vet ./...` and `go test ./...` green; for web
-  changes also `pnpm --dir web typecheck` and `pnpm --dir web test`.
-- Match the surrounding code: package layout per ADR-0003 (one adapter package, one port
-  per consumer), comment density and naming of neighbouring files, table tests with fakes
-  as in `internal/vulnscan/*_test.go` and `internal/migration/*_test.go`.
-- Frontend (`web/`): read https://ant.design/llms.txt first, then only the linked
-  component pages you use; installed `antd` is 6.5.1. Follow `docs/GUIDELINES.md`.
-- Go standard library only for crypto (ed25519). No new Go module dependencies unless a
-  task says so.
+- **Never touch the live install.** This checkout is the owner's live panel: Compose project
+  `relist-panel` (Containers `relist-panel-panel-1`, `relist-panel-traefik-1`), data dir
+  `/var/lib/relist-panel`, network `relist-network`, ports 80/443. Never run
+  `docker compose up/down/restart/pull/build` in the repo root; never stop, recreate or exec into
+  those Containers; never write under `/var/lib/relist-panel`. Real-Docker checks run only inside
+  docker:dind (`scripts/probe-panel-update.sh`).
+- **Never run the `relist-panel` binary without a temp `RELIST_DATA_DIR`.** With no arguments it
+  starts the server.
+- **Never edit an existing schema migration** (`internal/migrations/00001`–`00027`). No schema
+  change is expected; if one is needed it is `00028_*.sql`.
+- Commits: Conventional Commits, no scope, imperative, lowercase after the colon. **No
+  `Co-Authored-By` or `Claude-Session` trailers.** Commit on `feat/panel-self-update`. Never push.
+- Done means: `go vet ./...` and `go test ./...` green; for web changes also
+  `pnpm --dir web typecheck` and `pnpm --dir web test`; for `release/install.sh`,
+  `shellcheck -s sh release/install.sh` clean.
+- Vocabulary from `CONTEXT.md`: Install, Install file, Install override, Install script, Panel
+  update, Updater, Update manifest, Install invariant.
+- Frontend: read https://ant.design/llms.txt and the linked pages for the components you touch;
+  check props against antd 6.5.1. Follow `docs/GUIDELINES.md` §4.15.
+- Go standard library only for crypto. No new Go module dependencies.
+- Fixed values from the spec: quiesce heartbeat every 2 s, "panel answers" window 20 s, health
+  180 s polling every 2 s, compose `up` timeout 15 minutes, install health wait 60 s on
+  `http://127.0.0.1:8888/healthz`, default `--dir` `/opt/relist-panel`, Container names
+  `relist-panel` and `relist-traefik`, Updater name `relist-panel-updater-<run id>`, `update`
+  exit codes 0 ready / 1 not ready / 2 usage / 3 up to date.
 
-## Codebase facts the tasks rely on
+## Review Focus
 
-- Subcommands are dispatched at the top of `main()` in `main.go` (`reset-2fa`,
-  `create-admin`, `migration`, `maintenance-page`). The server is wired further down in
-  `main.go` (`httpapi.NewHandler(ctx, httpapi.Deps{…})`).
-- `go:embed` cannot reach parent directories. `docker-compose.yml` sits in the repo root,
-  so the embed directive lives in package `main` (root) and the bytes are passed into
-  internal packages. The `Dockerfile` go-builder stage copies only `*.go`, `internal/`,
-  `cmd/`: it must also `COPY docker-compose.yml ./`.
-- Deployment queue: `internal/deployments/queue.go` has `Hold()`, `Release()` (a single
-  bool, not a counter), `WaitIdle(ctx)` and `Busy()`. `Busy()` is true while held, and the
-  scan worker's `vulnscan.DeployGate.Busy()` is backed by it — so holding the queue also
-  gates the scan queue between tasks.
-- Migration lock: `internal/migration/lock.go` — the middleware and `allowedWhileLocked`
-  allowlist are the shape to copy for the update lock.
-- `VACUUM INTO`: `internal/migration/items.go` (`writeDatabase`).
-- One-run helper containers: `internal/dockerexec/volume_runner.go` (ADR-0008/0010).
-  Engine API client: `internal/dockerexec/engine.go`.
-- Prune ownership: `internal/dockerhost/plan.go` (`Ownership`, `owner`).
-- Auth status route: `internal/auth/auth.go` (`GET /api/auth/status`, `s.status`).
-- Web: routes `web/src/app/routes.tsx`, paths `web/src/app/paths.ts`, shell/sider
-  `web/src/app/AppShell.tsx`, pages under `web/src/pages/`, API data hooks under
-  `web/src/data/`.
+1. **A `panel.json` from an earlier run** must not count as the panel answering: the Updater only
+   reads an ack whose `run` equals its own run id (test in Task 5).
+2. **Clock skew between Containers:** the Updater decides "answering" by a heartbeat that changes,
+   never by comparing the panel's timestamp with its own clock (test in Task 5).
+3. **The Updater dies after the backup, before `up`:** the old panel is still running and locked;
+   its watcher must mark the run `interrupted` and release the lock (test in Task 8).
+4. **`install.sh` under `dash` with no terminal** (cron, CI, `ssh host 'curl … | sh'`): it must
+   stop with a message telling the operator to pass `--auto`, never hang on `/dev/tty` (test in
+   Task 11).
+5. **A domain typed as a URL** (`https://panel.example.com/`, a space, an empty answer): refused
+   before anything is checked or written, never put into `.env` (test in Task 11).
 
 ---
 
-## Task 1: Version stamp, named image, embedded Install file
+### Task 1: Install file — Container names, published image, build block in the override
 
-Implements ticket `issues/01-version-and-install-file.md` and spec "Install file and image
-pin" (phase "Until releases exist").
+**Files:**
+- Modify: `docker-compose.yml`, `docker-compose.override.example.yml`, `.gitignore`
+- Test: `install_compose_test.go`
 
-- **Decision:** the embedded copy is exposed from package `main` (`//go:embed
-  docker-compose.yml` into a `[]byte`) and handed to later packages as a value; the
-  ticket's "`internal/install` package exports `EmbeddedInstallFile()`" becomes "package
-  `main` holds the embed; tasks 3–4 receive it as a dependency". The test that the
-  embedded bytes equal the repo file lives in package `main`.
-- **Decision:** `GET /api/auth/status` gains `"version": "<version>"`; thread the version
-  into `auth` through its existing constructor/options rather than a global.
-- Update `Dockerfile` (`ARG VERSION=dev`, `-ldflags "-X main.version=${VERSION}"`,
-  `COPY docker-compose.yml ./` in go-builder) and `Taskfile.yml` build (`-ldflags` with
-  `VERSION` defaulting to `dev`).
-- `docker-compose.yml`: keep `build: .`, add `image: ghcr.io/relist/relist-panel:local`
-  and `pull_policy: build`, and the comment header from the spec. Add
-  `docker-compose.override.example.yml`.
-- Do not run `docker compose` against the repo root (Global Constraints). Validate the
-  file with `docker compose -f docker-compose.yml config -q` only.
+**Interfaces:**
+- Produces: the panel Service is `container_name: relist-panel`,
+  `image: ${RELIST_PANEL_IMAGE:-ghcr.io/relist/relist-panel:latest}`, no `build:`, no
+  `pull_policy`; Traefik is `container_name: relist-traefik`. The embedded copy (`main.go`
+  `installFile`) follows automatically.
 
-## Task 2: Update check, settings, status API
+- [ ] **Step 1: Write the failing tests** in `install_compose_test.go`:
+  - `TestInstallFileUsesPublishedImage`: panel `image` equals
+    `${RELIST_PANEL_IMAGE:-ghcr.io/relist/relist-panel:latest}`, `build` absent, `pull_policy`
+    absent.
+  - `TestInstallFileNamesContainers`: panel `container_name` is `relist-panel`, traefik
+    `container_name` is `relist-traefik`.
+  - `TestOverrideExampleBuildsFromSource`: `docker-compose.override.example.yml` parses as YAML
+    and its panel Service has `build: .`, `image: relist-panel:local`, `pull_policy: build`.
+  - `TestGitignoreKeepsInstallLocalFiles`: `.gitignore` has lines `docker-compose.override.yml`
+    and `.env`.
+- [ ] **Step 2: Run** `go test -run 'TestInstallFile|TestOverrideExample|TestGitignore' .` —
+  expected FAIL.
+- [ ] **Step 3: Edit the files.** Keep the Install file's comment header. In the override example
+  put the build block first, under a comment saying a checkout that builds from source copies it
+  to `docker-compose.override.yml`; keep the existing label/volume examples after it, commented as
+  examples.
+- [ ] **Step 4: Run** `go test .` — expected PASS (the existing Install file tests too).
+- [ ] **Step 5: Commit** `feat: name the install containers and run the published panel image`
 
-Implements ticket `issues/03-update-check.md` and spec "Update manifest", "Update check",
-"API" (the `status`, `check`, `settings` rows only).
+### Task 2: Run files — `aborted`, `waitingOn`, `panel.json`
 
-- New package `internal/panelupdate`.
-- **Decision:** the release public key is a package-level `var releasePublicKey = "<base64
-  placeholder>"` in `key.go`, settable at build time with `-ldflags -X
-  relist-panel/internal/panelupdate.releasePublicKey=<base64>` (used for end-to-end tests
-  with a test key). Production builds use the committed value. Unit tests inject keys
-  directly and never read the variable.
-- **Decision:** manifest location is
-  `https://github.com/relist/relist-panel/releases/latest/download/update-manifest.json`
-  (and `.sig`), overridable with env `RELIST_UPDATE_MANIFEST_URL` (the `.sig` URL is the
-  manifest URL + `.sig`). The signature is still verified, so the override is safe.
-- Version compare: semver `MAJOR.MINOR.PATCH` with optional leading `v`; anything else
-  (including `dev`) is never offered an update — status says "Development build: updates
-  are not offered".
-- Schema migration `00025_panel_updates.sql` creates both tables from the spec. Write it
-  so a later task can add columns with a new migration; this task owns only the columns
-  it uses plus the `panel_updates` run columns listed in the spec (id, from_version,
-  to_version, state, error, started_at, finished_at).
-- Routes registered through `httpapi.Deps` the way `vulnscan` registers its routes;
-  admin-only like the other `/api/*` routes.
-- The daily check must skip writing while the update lock is on — the lock arrives in
-  Task 5; leave a small `func() bool` hook (default false) that Task 5 wires.
+**Files:**
+- Modify: `internal/panelupdate/run.go`
+- Create: `internal/panelupdate/ack.go`, `internal/panelupdate/ack_test.go`
+- Test: `internal/panelupdate/run_test.go` (create if absent)
 
-## Task 3: Install discovery and reading Install files
+**Interfaces:**
+- Produces:
+  - states: remove `StateStartingUpdater`; add `StateAborted = "aborted"`.
+    `IsTerminal` is true for `succeeded`, `rolled-back`, `rollback-failed`, `aborted`,
+    `interrupted`.
+  - `RunStatus` gains `WaitingOn string \`json:"waitingOn,omitempty"\`` and
+    `Note string \`json:"note,omitempty"\`` (for `panel did not answer; a running Deployment may
+    have been cut`).
+  - `const PanelNoAnswerNote = "panel did not answer; a running Deployment may have been cut"`.
+  - `type PanelAck struct { Run string \`json:"run"\`; State string \`json:"state"\`; WaitingOn string \`json:"waitingOn,omitempty"\`; Reason string \`json:"reason,omitempty"\`; Heartbeat int64 \`json:"heartbeat"\` }`
+    with `const AckWaiting = "waiting"`, `AckReady = "ready"`, `AckRefused = "refused"`.
+  - `func WriteAck(dir string, a PanelAck) error` (temp file + rename, `0600`, like
+    `WriteStatus`), `func ReadAck(dir string) (PanelAck, error)` (`fs.ErrNotExist` when absent).
+  - `Heartbeat` is a counter the panel increments on every write, not a time.
 
-Implements the "The Install, found from labels" section of the spec and the first two
-bullets of ticket `issues/04-install-discovery-and-preflight.md`.
+- [ ] **Step 1: Write the failing tests:** `TestIsTerminalAborted` (`aborted` terminal,
+  `quiescing` not); `TestAckRoundTrip` (write then read equals); `TestReadAckMissing`
+  (`errors.Is(err, fs.ErrNotExist)`); `TestWriteAckIsAtomic` (no temp file left in the dir).
+- [ ] **Step 2: Run** `go test ./internal/panelupdate -run 'Aborted|Ack'` — expected FAIL.
+- [ ] **Step 3: Implement** in `run.go` and `ack.go`. Rename `StateStartingUpdater` to the
+  unexported `stateStartingUpdater` so its remaining users still compile; Task 8 deletes its last
+  use. It is not terminal.
+- [ ] **Step 4: Run** `go test ./internal/panelupdate` — expected PASS.
+- [ ] **Step 5: Commit** `feat: add the aborted state and the panel's quiesce ack file`
 
-- Discovery: inspect the panel's own Container (`os.Hostname()` → Engine API container
-  inspect) and read `com.docker.compose.project`, `com.docker.compose.project.working_dir`,
-  `com.docker.compose.project.config_files` (comma-separated). Return
-  `Install{Project, Dir string; ConfigFiles []string}` or an Unavailable reason with the
-  spec's wording.
-- File reads go through a one-run helper Container of the panel's current image (image ID
-  from the same inspect), Install dir mounted `:ro` at the same path, following
-  `volume_runner.go`'s pattern. It returns the bytes of each config file and `.env`
-  (missing `.env` → empty, not an error).
-- Put the Docker-facing code in `internal/dockerexec` (adapter) behind a port interface
-  declared in `internal/panelupdate`, per ADR-0003.
-- `GET /api/panel-update/status` (from Task 2) adds `install: {available, reason}`.
-- Unit tests with fakes; one real-Docker test is optional and, if written, must be skipped
-  unless an env var like `RELIST_DOCKER_TESTS=1` is set and must use a `su-test-` project.
+### Task 3: The Install on disk — direct reads, discovery by directory, local compose
 
-## Task 4: Preflight
+**Files:**
+- Modify: `internal/panelupdate/install.go`
+- Create: `internal/panelupdate/install_local.go`, `internal/panelupdate/install_local_test.go`
+- Modify: `internal/dockerexec/panel_updater.go` (add container listing by working dir)
 
-Implements spec "Preflight (no writes)" steps 1–7, the "Install invariant kinds" table,
-and the rest of ticket `issues/04-install-discovery-and-preflight.md`, plus
-`POST /api/panel-update/preflight`.
+**Interfaces:**
+- Consumes: `Install{Project, Dir, ConfigFiles, Image}` (exists), `installFromLabels` (exists).
+- Produces:
+  - `func ReadLocalFiles(in Install) (InstallFiles, error)` — reads each config file and `.env`
+    from the local filesystem (the command's own mount). `os.Lstat` first: a symlink or a
+    non-regular file returns `*Unavailable` with the existing wording; a missing `.env` is empty;
+    a missing config file is an error.
+  - `type ProjectFinder interface { ContainersInDir(ctx context.Context, dir string) ([]Self, error) }`
+    — every Container whose `com.docker.compose.project.working_dir` label equals `dir`.
+  - `func ResolveInstall(ctx context.Context, a InstallArgs, f ProjectFinder) (Install, error)` with
+    `type InstallArgs struct { Project, Dir string; Files []string }`:
+    - `Project`, `Dir`, `Files` all set → use them (validated like `installFromLabels`);
+    - only `Dir` → labels of the first Container from `ContainersInDir`;
+    - none found → project from `.env` `COMPOSE_PROJECT_NAME`, else `filepath.Base(dir)`; files
+      `<dir>/docker-compose.yml` plus `<dir>/docker-compose.override.yml` when it exists.
+  - `type ComposeRunner interface { Run(ctx context.Context, argv []string) ([]byte, error) }` —
+    runs a `docker compose …` argv in this process's environment; a non-zero exit returns
+    `*HelperExitError{Code, Stderr}` (reuse the type, rename later only if a task says so).
+  - `(*dockerexec.PanelUpdaterHost).ContainersInDir` and a `dockerexec.LocalCompose` implementing
+    `ComposeRunner` with the existing `execCompose`.
 
-- Inputs: the Install (Task 3), the verified newest manifest (Task 2), the embedded
-  Install file (Task 1).
-- Pull by digest through the Engine API (`POST /images/create?fromImage=…`), as the
-  Scanner image pull does in `internal/dockerexec/trivy*.go`.
-- `git merge-file -p <ours> <base> <theirs>`: exit 0 merged, 1–127 conflicts, 255 error.
-  Run it in the panel process (git is in the image) on temp files under the scratch dir.
-- `docker compose config --format json` and `config --hash '*'` run in the read-only
-  helper with `--project-directory <real Install dir>`, the scratch files as `-f` in label
-  order, `--env-file <scratch>/.env` — see spec step 4 for why. The scratch dir is
-  `<data dir>/.panel-update/preflight/<report id>/`; keep only the latest.
-- Invariant evaluators: one function per kind, over the decoded config JSON. Unknown kind →
-  report state "Needs a manual update". Blame: re-run `config` without the Install
-  override; if the invariant passes there, blame the override, else the Install file (or
-  `.env` for `service-image`).
-- Report struct and id are kept in memory (latest only) for Task 6's apply to compare.
-- Tests per the ticket, including the Traefik `command:` override case and the
-  relative-path override case, using recorded `config` JSON fixtures under `testdata/`.
+- [ ] **Step 1: Write the failing tests** (temp dirs, fake `ProjectFinder`):
+  - `TestReadLocalFilesRefusesSymlink`: `.env` is a symlink → `*Unavailable` naming the path.
+  - `TestReadLocalFilesMissingEnvIsEmpty`.
+  - `TestResolveInstallFromArgs`, `TestResolveInstallFromLabelsInDir`,
+    `TestResolveInstallFallbackUsesComposeProjectName` (`.env` has
+    `COMPOSE_PROJECT_NAME=relist-panel`, dir base `install` → project `relist-panel`, files are the
+    Install file plus the override when present),
+    `TestResolveInstallFallbackUsesDirName`.
+- [ ] **Step 2: Run** `go test ./internal/panelupdate -run 'ReadLocal|ResolveInstall'` — FAIL.
+- [ ] **Step 3: Implement.** Parse `.env` with the existing `parseEnv`.
+- [ ] **Step 4: Run** `go test ./internal/panelupdate ./internal/dockerexec` — PASS.
+- [ ] **Step 5: Commit** `feat: read the install from disk and find it by directory`
 
-## Task 5: Update lock, start-locked, watcher, quiesce and backup
+### Task 4: Standalone Preflight
 
-Implements spec "Apply" steps 1–2 and 5, and the lock/watcher/quiesce/backup bullets of
-ticket `issues/05-apply-updater-rollback.md`.
+**Files:**
+- Create: `internal/panelupdate/checker.go`, `internal/panelupdate/checker_test.go`
+- Modify: `internal/panelupdate/preflight.go` (move step functions onto `Checker`; delete what
+  becomes dead in Task 9, not here), `internal/panelupdate/preflight_test.go`,
+  `internal/panelupdate/preflight_compose_test.go`
 
-- `status.json` lives in `<data dir>/.panel-update/<run id>/status.json`; "newest run" is
-  the highest run id (use a sortable id, e.g. UTC timestamp `20261101T120000Z`). Writes
-  are atomic (temp + rename). States: `quiescing`, `backing-up`, `starting-updater`,
-  `writing-files`, `compose-up`, `waiting-health`, `succeeded`, `rolling-back`,
-  `rolled-back`, `rollback-failed`, `interrupted`. Terminal: `succeeded`, `rolled-back`,
-  `rollback-failed`, `interrupted`.
-- Update lock = HTTP write middleware (allowlist from the spec) + `Queue.Hold()`; it is
-  derived from the newest `status.json`, checked at startup **before** the HTTP server
-  and workers start.
-- **Decision:** `Queue.Hold/Release` is a single bool shared with the Migration lock.
-  Panel update refuses to start while a Migration lock is held, and the Migration's
-  `serve`/lock entry must refuse while the update lock is on (add that check where the
-  Migration lock is taken, with a test). Releasing the update lock must not release a
-  hold the Migration owns — with mutual exclusion this holds; document it in a comment.
-- Watcher: poll the newest `status.json` every 2 s while non-terminal. Terminal → copy
-  state to `panel_updates`, release the lock, remove the exited Updater Container
-  (`relist-panel-updater-<run id>`). Non-terminal and the Updater Container is missing or
-  exited → write `interrupted` (with a reason), release the lock.
-- Quiesce + backup function (called by Task 6's apply): write `quiescing`, Hold, WaitIdle,
-  wait for the scan worker's current task (expose a wait from `vulnscan` if none exists),
-  then `backing-up`: `VACUUM INTO` → `panel.db`, copy every Install config file and `.env`
-  into the run dir (the panel reads them via the Task 3 helper; writing the backup copies
-  goes to the data dir, which the panel can write directly). Remove the previous run dir
-  only after this backup is complete.
-- Wire the Task 2 daily-check hook to the lock.
-- Tests per the ticket (start-locked runs no Deployment, dead Updater → interrupted,
-  503 while locked, allowlisted routes pass).
+**Interfaces:**
+- Consumes: `ReadLocalFiles`, `ComposeRunner` (Task 3); `ParseManifest`, `UnknownKinds`,
+  `mergeFile`, `writeCandidate`, `composeArgs`, `parseComposeConfig`, `evaluate`, `blame`,
+  `parseHashes`, `setEnvKey`, `parseEnv` (exist).
+- Produces:
+  - `type Checker struct { DataDir, Version string; InstallFile []byte; Key ed25519.PublicKey; ManifestURL string; Client *http.Client; Docker Docker; Compose ComposeRunner; Now func() time.Time }`
+  - `func (c *Checker) Check(ctx context.Context, in Install) (*Report, *Candidate, error)` — spec
+    Preflight steps 1–8 in order. The error is only for "could not run at all"; every step
+    failure is `Report.Failed`.
+  - `Report` gains `UpToDate bool \`json:"upToDate"\``, `Fingerprint string \`json:"fingerprint"\``,
+    `Image string \`json:"image"\`` (the manifest's digest ref). `Gate` is removed from `Report`
+    (the web adds the live gate itself, Task 9).
+  - `type Candidate struct { In Install; Manifest *Manifest; Files InstallFiles; Install, Env []byte; ImageID string }`
+    (the exported form of today's `candidate`, plus the pulled image's ID).
+  - `func WriteReport(dataDir string, r *Report) error` → `<data dir>/.panel-update/preflight/<id>/report.json`
+    (`0600`), keeping only the latest id directory; `func ReadReport(dataDir, id string) (*Report, error)`.
+  - `func (r *Report) ExitCode() int` — 3 when `UpToDate`, 0 when `Ready`, else 1.
+  - The fingerprint covers what today's `fingerprint` covers plus the manifest bytes and the
+    pulled image ID.
 
-## Task 6: Updater subcommand, apply, rollback, prune ownership
+- [ ] **Step 1: Write the failing tests** in `checker_test.go` with an `httptest` manifest server
+  signed by a test key, a fake `Docker` and a fake `ComposeRunner` returning recorded JSON:
+  - `TestCheckUpToDate`: manifest version equal to `Version` → `UpToDate`, `ExitCode()==3`, no
+    pull happened.
+  - `TestCheckUnknownKindStopsBeforePull`: `NeedsManualUpdate`, fake Docker saw no pull.
+  - `TestCheckBadSignature`: `Failed.Step == "manifest"` (new step name `StepManifest`).
+  - `TestCheckNotEditedReady`, `TestCheckEditedMerged`, `TestCheckConflict` (moved from
+    `preflight_test.go`, now through `Check`).
+  - `TestCheckFingerprintChangesWithEnv`: same inputs → same fingerprint; one byte of `.env`
+    changed → different.
+  - `TestWriteReportKeepsLatest`: two writes leave one directory; `ReadReport` of the second id
+    returns it.
+  - Keep `preflight_compose_test.go`'s override cases (`env_file: ./x.env`, `./foo:/foo`, Traefik
+    `command:` override fails `service-command-has` naming the override, `build:` fails
+    `service-image`) running through `Check`.
+- [ ] **Step 2: Run** `go test ./internal/panelupdate -run 'Check|WriteReport'` — FAIL.
+- [ ] **Step 3: Implement** `Checker`. Fetch with the existing `get` logic (30 s, 10 MiB cap)
+  moved to a function both `Service` and `Checker` call. The `Service.Preflight` method stays
+  compiling until Task 9.
+- [ ] **Step 4: Run** `go test ./internal/panelupdate` — PASS.
+- [ ] **Step 5: Commit** `feat: run the preflight outside the panel`
 
-Implements spec "Apply" steps 3–4, "API" `apply`, and the remaining bullets of ticket
-`issues/05-apply-updater-rollback.md`.
+### Task 5: The Updater runs the whole Panel update
 
-- `POST /api/panel-update/apply {report_id, manual_steps_done}`: re-run Preflight; 409 if
-  the report differs or a manual step is unticked; then Task 5's quiesce + backup; then
-  start the Updater with the Engine API equivalent of the spec's `docker run` (no Compose
-  labels; name `relist-panel-updater-<run id>`; refuse if one is still running, remove a
-  stale exited one). Returns the run id.
-- Subcommand `relist-panel panel-update apply --run <id>` in `main.go` (and its line in
-  the `--help` usage from Task 10), implemented in
-  `internal/panelupdate` (logic) + a thin CLI file. It needs: data dir, Install dir,
-  project, config files, target image digest, `RELIST_DOMAIN`. **Decision:** the panel
-  writes these into `<run dir>/plan.json` before starting the Updater, so the Updater's
-  only flag is `--run`; the Updater reads `RELIST_DATA_DIR` from its env (pass it in the
-  `docker run` env).
-- Updater steps per spec 4.1–4.5; it shells out to `docker compose` (as the panel already
-  does) and uses the Engine API for container lookups. Health: find Traefik by labels
-  (`com.docker.compose.project=<project>`, `com.docker.compose.service=traefik`), its IP on
-  `relist-network`, `GET https://<ip>/healthz` with Host + SNI `RELIST_DOMAIN`,
-  `InsecureSkipVerify`; plus panel Container image ID == target. 180 s, every 2 s. Make the
-  durations injectable for tests.
-- Rollback restores Install files and `.env` from the run dir, then stop panel → copy
-  backup `panel.db` over `<data dir>/panel.db` (remove `-wal`/`-shm` siblings) → `up -d` →
-  health against the old digest.
-- Prune: `internal/dockerhost` ownership lists the previous panel image (from the last
-  `succeeded` run's from-image) and never offers `.panel-update/` content; label the owner
-  "Panel update".
-- Tests with fakes per the ticket. Then one manual end-to-end check on a **throwaway
-  sandbox Install** (never the live one): a temp dir with a copy of the Install file
-  renamed project `su-test-update`, its own data dir under the temp dir, two locally built
-  panel images tagged `su-test/panel:a` and `:b` (built with
-  `-ldflags -X …releasePublicKey=<test key>`), a manifest signed with the test key served
-  from a local HTTP server via `RELIST_UPDATE_MANIFEST_URL`. If ports 80/443 are taken by
-  the live Traefik, override the sandbox Traefik ports in its override file. Record what
-  you ran and saw in the report; tear everything down. If the sandbox cannot be made to
-  work in reasonable time, report DONE_WITH_CONCERNS with what blocked it rather than
-  touching the live install.
+**Files:**
+- Modify: `internal/panelupdate/updater.go`, `internal/panelupdate/updater_test.go`
+- Create: `internal/panelupdate/quiesce_request.go`, `internal/panelupdate/backup.go` (move
+  `Backup`, `BackupFile`, `ReadBackup` and the backup writer here from `quiesce.go`)
+- Delete: `internal/panelupdate/plan.go` and its tests
 
-## Task 7: Web — Panel update page
+**Interfaces:**
+- Consumes: `Checker`, `Candidate`, `ReadReport` (Task 4); `PanelAck`, `ReadAck`, `StateAborted`,
+  `PanelNoAnswerNote` (Task 2); `ResolveInstall` (Task 3); `UpdaterHost` (exists, minus `Plan`).
+- Produces:
+  - `UpdaterHost` methods take `Install` instead of `Plan`: `ComposeUp(ctx, in Install) error`,
+    `ComposeStop(ctx, in Install, service string) error`; `Containers` and `Healthz` unchanged;
+    new `UpdaterState(ctx, name string) (UpdaterState, error)` (same as the watcher's).
+  - `type Updater struct` gains `Checker *Checker`, `Domain string`, `AnswerWindow time.Duration`
+    (default 20 s), `AckEvery time.Duration` (default 2 s), `Signals <-chan os.Signal`.
+  - `func (u *Updater) Apply(ctx context.Context, a ApplyArgs) (RunStatus, error)` with
+    `type ApplyArgs struct { Run, Report string; StepsDone []string; In Install }`. Steps exactly as
+    spec "Apply" 1–10. Returns the terminal status.
+  - `func vacuumInto(ctx context.Context, dbPath, dst string) error` — opens
+    `file:<dbPath>?_pragma=busy_timeout(5000)` with `modernc.org/sqlite`, runs `VACUUM INTO ?`,
+    closes. Never runs schema migrations.
+- Quiesce rules (the parts the spec leaves to the plan):
+  - **Answering:** a `panel.json` with `Run == a.Run` appears within `AnswerWindow` of writing
+    `quiescing`.
+  - **While waiting:** wait for `AckReady` with no limit; copy `WaitingOn` into `status.json` when
+    it changes. If `Heartbeat` stops changing for `AnswerWindow` and the panel Container is not
+    running → treat as not answering (stop nothing more, write the note, go on). A stalled
+    heartbeat with the Container still running → keep waiting.
+  - **`AckRefused`** → `aborted` with `Reason`.
+  - **Not answering** → `ComposeStop(in, "panel")`, `Note = PanelNoAnswerNote`, go on.
+  - **Signals:** a value on `Signals` before the backup starts → `aborted` ("cancelled"), return.
+    After that, ignore it.
+- Run directory: `Apply` refuses if `RunDir(a.Run)` already exists. Before quiescing nothing is
+  written; a failed re-check writes one `status.json` in state `aborted` with the reason.
+- `RELIST_DOMAIN` for health is `u.Domain`; the command (Task 6) reads it from the Install's
+  `.env`, default `panel.localhost`.
 
-Implements ticket `issues/06-web-panel-update-page.md` and spec "Web".
+- [ ] **Step 1: Write the failing tests** (fake host, fake ack writer goroutine, `Sleep` stubbed):
+  - `TestApplyPanelAnswersAndSucceeds`: ack `waiting` (WaitingOn `Deployment api #3`) then `ready`
+    → `status.json` saw `waitingOn`, backup written, `succeeded`.
+  - `TestApplyIgnoresAckOfOtherRun`: `panel.json` with another run id → treated as not answering:
+    `ComposeStop(panel)` called, note set.
+  - `TestApplyHeartbeatNotClock`: ack heartbeat counter advances while its file mtime is an hour in
+    the past → still answering.
+  - `TestApplyRefusedIsAborted`: ack `refused` reason `a server Migration holds the lock` →
+    `aborted`, nothing written to the Install.
+  - `TestApplyNoAnswerStopsPanel`.
+  - `TestApplyStalledHeartbeatPanelGone`: heartbeat stops, Container not running → note set, goes
+    on to `succeeded`.
+  - `TestApplySignalBeforeBackupAborts` and `TestApplySignalAfterBackupIgnored`.
+  - `TestApplyRecheckMismatchAborts`: report fingerprint differs → `aborted`, no quiesce.
+  - `TestApplyStepNotDoneAborts`.
+  - `TestApplyMarksStaleRunInterrupted`; `TestApplyRefusesWhileStaleUpdaterRuns`.
+  - `TestApplyRefusesExistingRunDir`.
+  - Existing health-timeout → `rolled-back`, restore-failure → `rollback-failed`, WAL removed
+    before restore, symlink refusal: kept, now through `Apply(ApplyArgs)`.
+  - `TestVacuumIntoWhileOpen`: open the DB with a second `*sql.DB` holding a read transaction,
+    `vacuumInto` succeeds and the copy has the rows.
+- [ ] **Step 2: Run** `go test ./internal/panelupdate -run 'Apply|Vacuum'` — FAIL.
+- [ ] **Step 3: Implement.** The quiesce loop lives in `quiesce_request.go`. Delete `Plan`,
+  `ReadPlan`, `Validate`, `writePlan`.
+- [ ] **Step 4: Run** `go test ./internal/panelupdate ./internal/dockerexec` — PASS.
+- [ ] **Step 5: Commit** `feat: let the updater quiesce, back up and apply the whole update`
 
-- Route `/panel-update` (add to `paths.ts`, `routes.tsx`), sider entry below Docker, header
-  `Update available` tag beside the version (version from `/api/auth/status`).
-- All states from the spec's "Page states" table, including Interrupted; polling rules from
-  "Polling"; confirm text from "Confirmation"; Preview with read-only Monaco diff editor,
-  invariant list with blame, recreated Services with the Traefik warning, manual-step
-  checkboxes.
-- Component tests in the style of the neighbouring `*.test.tsx` for: each top-level state
-  render, Restarting on network error/5xx, 401 → sign-in, reload once on target version.
-- Rebuild the embedded frontend (`task build-web`) and commit it as its own
-  `chore: rebuild the embedded frontend` commit, as earlier features did.
+### Task 6: `relist-panel update`
 
-## Task 8: Release tooling and workflow
+**Files:**
+- Create: `update.go`, `update_test.go` (package main)
+- Delete: `panel_update.go` and its test
+- Modify: `dispatch.go`, `dispatch_test.go`
 
-Implements the "Agent" part of ticket `issues/02-release-workflow-and-key.md` and the
-`release/*.json` bullet of ticket `issues/07-docs.md`.
+**Interfaces:**
+- Consumes: `Checker`, `WriteReport`, `Report.ExitCode` (Task 4); `Updater.Apply`, `ApplyArgs`
+  (Task 5); `ResolveInstall`, `InstallArgs` (Task 3).
+- Produces: subcommand `update` replacing `panel-update` in `subcommands`, summary
+  `check or apply a Panel update (runs in its own Container)`.
+  - Flags: `--preflight`, `--report ID`, `--run ID`, `--steps-done ID,…`, `--dir PATH`,
+    `--project NAME`, `--file PATH` (repeatable), `--json`, `--help`.
+  - `--preflight` and `--report` are exclusive; neither, or both → usage, exit 2. `--report`
+    needs `--run` (a valid run id, `ValidRunID`), else exit 2.
+  - `RELIST_DATA_DIR` must be absolute (exit 2 otherwise, today's message).
+  - `--preflight`: `ResolveInstall` → `Check` → `WriteReport` → print (text, or `--json` one object
+    on stdout) → exit `Report.ExitCode()`.
+  - `--report`: `Apply` with `signal.Notify(ch, syscall.SIGTERM, os.Interrupt)`; exit 0 on
+    `succeeded`, 1 otherwise. Logs go to stderr with `log.Printf`, one line per step.
+  - Text report format: one line per field the spec's report lists; invariants as `ok`/`FAIL`
+    lines with detail and source.
 
-- `cmd/relist-release` with `manifest`, `sign`, `verify`, and **Decision:** a `keygen`
-  subcommand (prints a new base64 private and public key) so the owner can do the human
-  step with repo tooling.
-- `release/invariants.json`: convert every note under README "Upgrading an existing
-  install" into invariants of the kinds Task 4 implements; `service-image` for `panel`.
-  `release/manual-steps.json`: anything that cannot be an invariant (e.g. opening port
-  443). The `manifest` subcommand validates kinds against the same list Task 4 uses
-  (import it; do not duplicate it).
-- `.github/workflows/release.yml` per the ticket: tag `v*`, buildx amd64+arm64, push to
-  GHCR with `GITHUB_TOKEN` (`permissions: packages: write, contents: write`), read the
-  index digest, manifest, sign with secret `RELIST_RELEASE_KEY`, create the GitHub Release
-  with both files. Pin third-party actions by full commit SHA with a version comment.
-- Tests: manifest round-trip, sign/verify, a tampered byte fails verify, an unknown
-  invariant kind fails `manifest`.
+- [ ] **Step 1: Write the failing tests:** `TestUpdateUsage` (no mode → 2; both modes → 2;
+  `--report` without `--run` → 2; bad run id → 2; `--help` → 0 and prints usage);
+  `TestUpdateNeedsDataDir`; `TestDispatchListsUpdateNotPanelUpdate`. Mode functions take their
+  dependencies as parameters so the tests use fakes and never start a server.
+- [ ] **Step 2: Run** `go test -run 'Update|Dispatch' .` — FAIL.
+- [ ] **Step 3: Implement** `runUpdate(args []string) int`.
+- [ ] **Step 4: Run** `go test .` — PASS.
+- [ ] **Step 5: Commit** `feat: add the update command`
 
-## Task 9: Docs
+### Task 7: `relist-panel setup`
 
-Implements the rest of ticket `issues/07-docs.md`.
+**Files:**
+- Create: `setup.go`, `setup_test.go` (package main)
+- Modify: `dispatch.go`
 
-- README: the Install file vs override and `.env` rule; how Panel update works and what it
-  does not promise (no downgrade, Traefik restart drops Domains briefly, `--env-file`
-  Installs refused, unavailable until releases exist); the one-time manual upgrade
-  (spec section); shorten "Upgrading an existing install" to a pointer to
-  `release/invariants.json` / `release/manual-steps.json` while keeping the notes
-  operators of today's `build:` installs still need.
-- `docs/GUIDELINES.md`: add section 4.15 *Panel update* (route, placement, states, polling,
-  confirmation) matching what Task 7 built.
-- Set `Status: closed` on tickets 01, 03, 04, 05, 06, 07 (and leave 02 `ready-for-human`
-  with a note of what remains: key, secret, package visibility; and 08 open).
+**Interfaces:**
+- Consumes: `installFile` (embedded, `main.go`).
+- Produces: subcommand `setup`, summary `write the Install file and .env for a new install`.
+  `relist-panel setup --dir PATH --domain HOST --image REF [--acme-email ADDRESS]`.
+  - Writes `<dir>/docker-compose.yml` (`0644`, the embedded bytes) and `<dir>/.env` (`0600`) with,
+    in this order: `RELIST_DOMAIN=…`, `RELIST_ACME_EMAIL=…` (empty allowed), `RELIST_PANEL_IMAGE=…`,
+    `COMPOSE_PROJECT_NAME=relist-panel`.
+  - Refuses (exit 1, nothing written) when either file exists. `--dir` must be absolute and
+    exist. Missing `--domain` or `--image` → exit 2. Values containing a newline → exit 2.
 
-## Task 10: `--help`, `--version`, and no server on unknown arguments
+- [ ] **Step 1: Write the failing tests:** `TestSetupWritesFiles` (contents and modes),
+  `TestSetupRefusesExisting` (pre-existing `.env` → exit 1, compose file not created),
+  `TestSetupUsage`.
+- [ ] **Step 2: Run** `go test -run Setup .` — FAIL.
+- [ ] **Step 3: Implement** `runSetup(args []string, stdout, stderr io.Writer) int`.
+- [ ] **Step 4: Run** `go test .` — PASS.
+- [ ] **Step 5: Commit** `feat: add the setup command`
 
-Runs **next, before Task 2** (numbered 10 so earlier task numbers stay stable). Not in the
-spec: a safety fix found during Task 1, when `./relist-panel --help` started the server on
-the default data dir.
+### Task 8: The panel answers the quiesce request
 
-Today `main()` checks `os.Args[1]` against each subcommand and falls through to the server
-for anything else. The server's only flag is `--insecure-migration-source`, read with
-`slices.Contains(os.Args[1:], …)` in `internal/config/config.go`; the migration sandbox
-(`scripts/sandbox-migration.sh`) passes it as the container `command`.
+**Files:**
+- Modify: `internal/panelupdate/watch.go`, `internal/panelupdate/lock.go`,
+  `internal/panelupdate/service.go`
+- Delete: `internal/panelupdate/quiesce.go` (what is left after Task 5 moved the backup out),
+  `apply.go`'s `QuiesceAndBackup` callers
+- Test: `internal/panelupdate/update_lock_test.go`, `internal/panelupdate/watch_test.go` (create)
 
-- `relist-panel -h`, `--help` or `help`: print usage to stdout and exit 0. Usage lists
-  running with no arguments (start the panel), the server flag
-  `--insecure-migration-source`, and every subcommand with a one-line description:
-  `reset-2fa`, `reset-password`, `create-admin`, `migration`, `maintenance-page`, plus
-  `panel-update` once Task 6 adds it (Task 6 must add its line).
-- `relist-panel --version` or `version`: print `version` and exit 0.
-- Any other argument list that is not a known subcommand and is not made only of known
-  server flags: print usage to stderr and exit 2. The server never starts.
-- None of these load config, open the database or touch the data dir.
-- Shape: move the dispatch decision into a pure function (args in, a decision out) so it
-  can be table-tested without starting anything; `main()` acts on the decision. Keep each
-  subcommand's own flag parsing as it is.
-- Tests: table test over `[]`, `--help`, `-h`, `help`, `--version`, `version`, each
-  subcommand name, `--insecure-migration-source`, `--bogus`,
-  `--insecure-migration-source --bogus`, `serve`.
-- README: mention `relist-panel --help` where the CLI commands are described.
+**Interfaces:**
+- Consumes: `PanelAck`, `WriteAck`, `StateAborted` (Task 2).
+- Produces:
+  - `Deps` gains `WaitingOn func() string` — what the lock waits on, `""` when idle. `httpapi`
+    wires it from `(*deployments.Queue).Running()` as `Deployment <compose name> #<number>` and,
+    when only the scan worker is busy, `a vulnerability scan`.
+  - Watcher on a non-terminal newest run: if a Migration lock is held → `WriteAck{State: refused,
+    Reason: ErrMigrationLocked.Error()}` and do not lock; else `lock()` once, start
+    `Queue.WaitIdle` and `Scans.WaitIdle` in a goroutine, and every `watchEvery` write
+    `WriteAck{Run, State: waiting|ready, WaitingOn, Heartbeat: n++}` until the run is terminal.
+  - `Deps.Updater` keeps `UpdaterState`, `RemoveUpdater`, `ListUpdaters`, `StartUpdater`.
+  - Remove `guard`, `setGuard`, `guarded`, `MarkStarted`, `AbortRun`, `QuiesceAndBackup`,
+    `runMu`, `stateStartingUpdater`.
+  - `allowedWhileUpdating` also allows `POST /api/panel-update/cancel`.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `TestWatcherAcksReadyWhenIdle`: non-terminal `status.json` → lock on, `panel.json`
+    `ready` with heartbeat ≥ 1.
+  - `TestWatcherAcksWaitingWithDeployment`: fake queue busy, `WaitingOn` returns
+    `Deployment api #3` → ack `waiting` with that text; after the queue goes idle → `ready` and the
+    heartbeat advanced.
+  - `TestWatcherRefusesUnderMigrationLock`: ack `refused`, `Locked()` false.
+  - `TestWatcherInterruptsAfterBackup` (Review Focus 3): run in `backing-up`, Updater Container
+    exited → `status.json` `interrupted`, lock released.
+  - `TestCancelAllowedWhileLocked`: `POST /api/panel-update/cancel` passes the middleware; `POST
+    /api/panel-update/apply` gets 503.
+  - Existing start-locked and 503 tests keep passing.
+- [ ] **Step 2: Run** `go test ./internal/panelupdate -run 'Watcher|Cancel|Lock'` — FAIL.
+- [ ] **Step 3: Implement**, and wire `WaitingOn` in `internal/httpapi/httpapi.go`.
+- [ ] **Step 4: Run** `go test ./internal/panelupdate ./internal/httpapi` — PASS.
+- [ ] **Step 5: Commit** `feat: answer the updater's quiesce request from the panel`
+
+### Task 9: The panel's API starts the `update` Container
+
+**Files:**
+- Modify: `internal/panelupdate/http.go`, `internal/panelupdate/apply.go`,
+  `internal/panelupdate/preflight.go`, `internal/panelupdate/install.go`,
+  `internal/panelupdate/service.go`, `internal/dockerexec/panel_update.go`,
+  `internal/httpapi/httpapi.go`, `main.go`
+- Test: `internal/panelupdate/http_test.go`, `internal/dockerexec/panel_update_test.go`
+
+**Interfaces:**
+- Consumes: `Report`, `UpdaterName`, `NewRunID`, `ValidRunID`, `ReadReport` (Tasks 2, 4).
+- Produces:
+  - `type UpdateRunner interface { Preflight(ctx context.Context, spec UpdateSpec) (stdout []byte, exitCode int, err error); StartUpdater(ctx context.Context, spec UpdateSpec) error; StopUpdater(ctx context.Context, name string) error }`
+    replacing `Helper` and the old `StartUpdater(UpdaterSpec)`.
+  - `type UpdateSpec struct { Name, Image string; Args []string; InstallDir, DataDir, Network string; Env []string }`
+    — `docker run [--rm | -d --name Name] --network Network -v sock -v InstallDir:InstallDir
+    -v DataDir:DataDir -e RELIST_DATA_DIR=DataDir [-e Env…] Image update Args…`, no Compose labels.
+    `Env` passes `RELIST_UPDATE_MANIFEST_URL` through when the panel has it set.
+  - `POST /api/panel-update/preflight`: `FindInstall` → runner `Preflight` with `--preflight --json
+    --project --dir --file…` → parse stdout as `Report`; exit 1 or 3 is still a report; exit 2 or a
+    parse failure is 500. The response adds `gate` (Migration lock, Deployments busy, update
+    running) next to the report: `{report, gate}`. The panel remembers the latest report id.
+  - `POST /api/panel-update/apply` `{report_id, manual_steps_done}`: 409 if the id is not the
+    latest or a run is not terminal; `run := NewRunID(now)`; `StartUpdater` with
+    `--report id --run run --steps-done … --project --dir --file…`; respond `{run}` at once.
+  - `POST /api/panel-update/cancel`: newest run in `quiescing` → `StopUpdater(UpdaterName(run))`,
+    202; otherwise 409 `Only a waiting update can be cancelled`.
+  - `RunInfo` gains `waitingOn` and `note`.
+  - Delete `Helper`, `HelperRun`, `PanelHelper`, `ReadInstallFiles`/`readFile`, `runCompose`'s
+    helper path, `Service.Preflight`, `preflightLocked`, `Service.Apply`, `LatestReport`'s
+    fingerprint field.
+
+- [ ] **Step 1: Write the failing tests** (fake `UpdateRunner`):
+  - `TestPreflightEndpointRunsContainer`: argv contains `--preflight --json` and the label values;
+    response is the fake report plus `gate`.
+  - `TestPreflightEndpointExitThreeIsReport`.
+  - `TestApplyEndpointStartsDetachedAndReturns`: runner saw `StartUpdater` with name
+    `relist-panel-updater-<run>` and args `--report <id> --run <run> --steps-done a,b`; response
+    `{run}`.
+  - `TestApplyEndpointRefusesStaleReport` (409), `TestApplyEndpointRefusesRunningRun` (409).
+  - `TestCancelEndpoint`: `quiescing` → `StopUpdater` called, 202; `compose-up` → 409.
+  - `dockerexec`: `TestUpdateSpecArgv` for both `--rm` and `-d --name`.
+- [ ] **Step 2: Run** `go test ./internal/panelupdate ./internal/dockerexec -run 'Endpoint|UpdateSpec'` — FAIL.
+- [ ] **Step 3: Implement** and rewire `main.go`/`httpapi.go` (`PanelHelper` removed,
+  `PanelUpdater` becomes the `UpdateRunner`).
+- [ ] **Step 4: Run** `go vet ./... && go test ./...` — PASS.
+- [ ] **Step 5: Commit** `feat: start the update container from the panel's api`
+
+### Task 10: Web — Waiting, Cancel, Aborted
+
+**Files:**
+- Modify: `web/src/data/panel-update.ts`, `web/src/data/usePanelUpdate.ts`,
+  `web/src/pages/PanelUpdatePage.tsx`, their tests under `web/src/**/__tests__` or `*.test.ts(x)`
+  next to them (follow the existing location)
+
+**Interfaces:**
+- Consumes: `RunInfo.waitingOn`, `RunInfo.note`, `POST /api/panel-update/cancel`, the preflight
+  response `{report, gate}` (Tasks 8, 9).
+- Produces:
+  - `RunState` drops `starting-updater`, adds `aborted`; `UPDATE_STEPS` starts at `quiescing`.
+  - `PageState` adds `'waiting'`: `status.run` non-terminal in `quiescing`.
+  - `PanelUpdateRun` gains `waitingOn: string`, `note: string`.
+  - `cancelUpdate(): Promise<void>` in the data module.
+  - `finishedRun` includes `aborted`, shown as an info `Alert` titled `Update cancelled` (or the
+    reason when refused by a Migration lock); nothing was written.
+  - The confirm text says queued Deployments are cancelled and a running Deployment or scan is
+    waited for (spec "Confirmation").
+
+- [ ] **Step 1: Write the failing tests:** `pageState` returns `'waiting'` for a `quiescing` run;
+  the page in Waiting shows `waitingOn` text and a **Cancel** button that calls
+  `cancelUpdate`; an `aborted` run shows the info alert; a run with `note` shows it as a warning
+  in Updating.
+- [ ] **Step 2: Run** `pnpm --dir web test -- panel-update` — FAIL.
+- [ ] **Step 3: Implement.** Use the antd components the page already uses (`Steps`, `Alert`,
+  `Button`); check their 6.5.1 props on ant.design first.
+- [ ] **Step 4: Run** `pnpm --dir web typecheck && pnpm --dir web test` — PASS. Then rebuild the
+  embedded frontend the way commit `175729c` did and run `go test .`.
+- [ ] **Step 5: Commit** `feat: show the waiting step and cancel on the panel update page`
+  (the embedded build as a second commit `chore: rebuild the embedded frontend`).
+
+### Task 11: `install.sh`
+
+**Files:**
+- Create: `release/install.sh`, `install_script_test.go` (package main)
+
+**Interfaces:**
+- Consumes: `setup` flags (Task 7), `update` flags and exit codes (Task 6),
+  `create-admin --email --generate` (exists).
+- Produces: a POSIX `sh` script with `VERSION="@VERSION@"` and `IMAGE="@IMAGE@"` placeholders the
+  workflow fills; `RELIST_INSTALL_IMAGE` overrides `IMAGE`. Behaviour exactly as spec "The
+  Install script". Order:
+  1. parse and validate flags (unknown flag, bad domain, `--auto` without `--domain` → exit 2) —
+     before any check, so validation needs no Docker;
+  2. no terminal (`[ -t 0 ] || [ -r /dev/tty ]` fails to open) and no `--auto` → exit 2 with
+     `No terminal to ask on; pass --auto with --domain and --email`;
+  3. the checks, then the writes, as the spec lists.
+- Domain rule: `^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$`
+  checked with `grep -Eq`; a scheme, path, port or space is refused with
+  `Give the host name only, like panel.example.com`.
+- `--update` generates the run id with `date -u +%Y%m%dT%H%M%SZ` and reads `RELIST_DATA_DIR` from
+  `<dir>/.env` (default `/var/lib/relist-panel`) for the `-v` mounts.
+
+- [ ] **Step 1: Write the failing tests** in `install_script_test.go`, each running
+  `sh release/install.sh …` with `PATH` set to a temp dir containing a fake `docker` that records
+  its argv and fails the test if called:
+  - `TestInstallScriptRejectsURLDomain`: `--auto --domain https://panel.example.com/` → exit 2,
+    stderr has `host name only`, fake docker never called.
+  - `TestInstallScriptRejectsUnknownFlag` → exit 2.
+  - `TestInstallScriptAutoNeedsDomain` → exit 2.
+  - `TestInstallScriptNoTerminalNeedsAuto`: stdin `/dev/null`, no controlling terminal
+    (`SysProcAttr{Setsid: true}`) → exit 2 with the no-terminal message (Review Focus 4).
+  - Skip with `t.Skip` when `sh` is missing; run once more under `dash` when it is on `PATH`.
+- [ ] **Step 2: Run** `go test -run InstallScript .` — FAIL.
+- [ ] **Step 3: Write `release/install.sh`.**
+- [ ] **Step 4: Run** `shellcheck -s sh release/install.sh && go test -run InstallScript .` — PASS.
+- [ ] **Step 5: Commit** `feat: add the install script`
+
+### Task 12: Release workflow ships `install.sh`
+
+**Files:**
+- Modify: `.github/workflows/release.yml`
+
+**Interfaces:**
+- Consumes: `release/install.sh` placeholders (Task 11).
+- Produces: after "Verify the signature", a step `Write the install script` that `sed`s
+  `@VERSION@` and `@IMAGE@` (`ghcr.io/relist/relist-panel@<digest>`) into `install.sh`, fails if a
+  placeholder is left (`grep -q '@VERSION@\|@IMAGE@'`), and runs `shellcheck -s sh install.sh`
+  (preinstalled on `ubuntu-latest`). `gh release create` attaches `install.sh` too. The trigger
+  stays `workflow_dispatch`.
+
+- [ ] **Step 1: Edit the workflow.**
+- [ ] **Step 2: Verify** `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"`
+  succeeds and `actionlint` passes if installed (say so if it is not).
+- [ ] **Step 3: Commit** `ci: attach the install script to each release`
+
+### Task 13: End-to-end probe in dind
+
+**Files:**
+- Modify: `scripts/probe-panel-update.sh`, `Taskfile.yml` (only if the task's command changes)
+
+**Interfaces:**
+- Consumes: everything above.
+- Produces: the probe, still refusing to run outside docker:dind, does the spec's six end-to-end
+  steps in order with a local registry and `RELIST_INSTALL_IMAGE`/`RELIST_UPDATE_MANIFEST_URL`
+  pointing at it, plus the test release key built in with `RELEASE_KEY`:
+  1. `install.sh --auto --domain panel.localhost` installs 1.0.0; the password line is printed;
+  2. a second `install.sh` exits non-zero with the refusal;
+  3. a fake long Deployment (a Compose whose build sleeps 30 s) runs; `install.sh --update` to
+     1.1.0 logs the `waitingOn` text, then succeeds;
+  4. a run cancelled with `docker stop` while `quiescing` ends `aborted` and `/api/panel-update/status`
+     reports `locked: false`;
+  5. a run against an image whose `/healthz` fails rolls back; every Install file and `.env`
+     match their pre-run bytes (`cmp`);
+  6. with `relist-panel` stopped, `install.sh --update` notes the panel did not answer and
+     succeeds.
+- Prints `PASS`/`FAIL` per step and exits non-zero on any failure.
+
+- [ ] **Step 1: Extend the probe.**
+- [ ] **Step 2: Run** `task probe:panel-update` — all six PASS. Paste the step lines into the
+  commit message body.
+- [ ] **Step 3: Commit** `test: probe install and update end to end in dind`
+
+### Task 14: Docs and tracking
+
+**Files:**
+- Modify: `README.md`, `docs/GUIDELINES.md` (§4.15, if it names states), `.scratch/self-update/followups.md`,
+  `.scratch/self-update/issues/*.md`, `release/manual-steps.json` (only if a step for existing
+  installs is needed)
+
+**Interfaces:**
+- Consumes: final behaviour of Tasks 1–13.
+- Produces:
+  - README "Self-hosted install": the `curl | sh` commands and flags first; the old clone-and-build
+    steps move under "Building from source" with the override copy step; `docker exec
+    relist-panel …` replaces `docker compose exec panel …` where it reads better; "Panel update"
+    section names `install.sh --update` and the Cancel button; "Upgrading an existing install"
+    gets the spec's three steps for existing Installs.
+  - followups: remove the two items this rework closes (quiescing blocks Apply; Updater signal
+    handling before the backup) and the helper-only items (helper stdout buffer, helper scratch
+    dir, `working_dir` `:`/`,` in `-v` if no longer relevant); keep the rest.
+  - issues: ticket 08 → `closed` (done by Task 1); add `09-one-updater-and-install-script.md`,
+    `closed`, pointing at ADR-0025 and this plan; ticket 02 keeps its owner steps.
+
+- [ ] **Step 1: Edit the docs.**
+- [ ] **Step 2: Verify** every command in the README sections you touched matches a flag that
+  exists (`grep` the flag names in `update.go`, `setup.go`, `release/install.sh`).
+- [ ] **Step 3: Commit** `docs: document the install script and the update command`
