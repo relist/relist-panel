@@ -63,6 +63,11 @@ type Deps struct {
 	// not locked and not busy.
 	MigrationLocked func(ctx context.Context) (bool, error)
 	DeploysBusy     func() bool
+	// Queue, Scans and Updater are what the update lock drives and watches.
+	// Nil leaves that part out.
+	Queue   QueueControl
+	Scans   ScanWaiter
+	Updater UpdaterContainers
 	// After returns a channel that fires after d. Nil means time.After.
 	After func(d time.Duration) <-chan time.Time
 }
@@ -71,8 +76,20 @@ type Service struct {
 	d  Deps
 	mu sync.Mutex // one check at a time
 	// locked reports whether the update lock is on. While it is, the check
-	// writes nothing. Task 5 wires it; until then it is always false.
+	// writes nothing. New wires it to Locked.
 	locked atomic.Pointer[func() bool]
+	// lockOn is the update lock; lockMu orders turning it on and off with the
+	// queue's hold. runMu serializes QuiesceAndBackup.
+	lockOn atomic.Bool
+	lockMu sync.Mutex
+	runMu  sync.Mutex
+	// guard is the run between QuiesceAndBackup and MarkStarted, which has no
+	// Updater Container yet; settled is the last run and state the watcher
+	// finished with. Both are guarded by guardMu.
+	guardMu sync.Mutex
+	guard   string
+	settled string
+	wake    chan struct{}
 	// pfRun serializes Preflights; pfMu guards latest.
 	pfRun  sync.Mutex
 	pfMu   sync.Mutex
@@ -99,7 +116,9 @@ func New(d Deps) *Service {
 	if d.After == nil {
 		d.After = time.After
 	}
-	return &Service{d: d}
+	s := &Service{d: d, wake: make(chan struct{}, 1)}
+	s.SetLocked(s.Locked)
+	return s
 }
 
 // SetLocked installs the update-lock hook. It is safe to call while the

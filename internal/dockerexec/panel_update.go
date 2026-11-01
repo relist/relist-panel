@@ -184,3 +184,28 @@ var (
 	_ panelupdate.SelfInspector = (*PanelSelf)(nil)
 	_ panelupdate.Helper        = (*PanelHelper)(nil)
 )
+
+// UpdaterState inspects the Updater Container by name. A Container that is
+// created, restarting or paused counts as running: it may still write.
+func (d *PanelDocker) UpdaterState(ctx context.Context, name string) (panelupdate.UpdaterState, error) {
+	var inspected struct {
+		State struct {
+			Status string `json:"Status"`
+		} `json:"State"`
+	}
+	err := d.engine.do(ctx, http.MethodGet, "/containers/"+url.PathEscape(name)+"/json", &inspected)
+	var apiErr *engineError
+	if errors.As(err, &apiErr) && apiErr.status == http.StatusNotFound {
+		return panelupdate.UpdaterState{}, nil
+	}
+	if err != nil {
+		return panelupdate.UpdaterState{}, err
+	}
+	status := inspected.State.Status
+	return panelupdate.UpdaterState{Exists: true, Running: status != "exited" && status != "dead"}, nil
+}
+
+// RemoveUpdater removes a stopped Updater Container, without force.
+func (d *PanelDocker) RemoveUpdater(ctx context.Context, name string) error {
+	return d.engine.Remove(ctx, name, false, false)
+}

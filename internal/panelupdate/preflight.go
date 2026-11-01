@@ -115,6 +115,8 @@ type Gate struct {
 	InstallAvailable bool `json:"installAvailable"`
 	MigrationLocked  bool `json:"migrationLocked"`
 	DeploysBusy      bool `json:"deploysBusy"`
+	// UpdateRunning is true while the update lock is on: a run is in progress.
+	UpdateRunning bool `json:"updateRunning"`
 }
 
 // Conflict shows both sides of an Install file edit that does not merge.
@@ -277,8 +279,12 @@ func (s *Service) gate(ctx context.Context, r *Report) (Install, error) {
 	if s.d.DeploysBusy != nil {
 		r.Gate.DeploysBusy = s.d.DeploysBusy()
 	}
+	r.Gate.UpdateRunning = s.Locked()
 	if r.Gate.MigrationLocked {
 		return Install{}, errors.New("A server Migration holds the lock; Panel update waits until it is over.")
+	}
+	if r.Gate.UpdateRunning {
+		return Install{}, errors.New("A Panel update is already running.")
 	}
 	in, err := s.FindInstall(ctx)
 	if err != nil {

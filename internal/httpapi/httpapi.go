@@ -75,6 +75,8 @@ type Deps struct {
 	PanelSelf   panelupdate.SelfInspector
 	PanelHelper panelupdate.Helper
 	PanelDocker panelupdate.Docker
+	// PanelUpdater finds and removes the Updater Container.
+	PanelUpdater panelupdate.UpdaterContainers
 	// PanelInstallFile is the Install file this build embeds.
 	PanelInstallFile []byte
 	// PanelDomain is the install's RELIST_DOMAIN. A Domain cannot take this
@@ -139,6 +141,27 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		vulnService = vulnscan.New(vulnscan.Deps{Store: vulnscan.NewStore(db), Scanner: d.VulnScanner, InUse: d.VulnInUse, Gate: queue})
 		vulnService.RegisterRoutes(mux)
 	}
+	// The update lock is checked before any worker starts: a Panel update that
+	// is not over keeps this panel from running Deployments or taking writes.
+	puDeps := panelupdate.Deps{
+		Store: panelupdate.NewStore(db), Version: d.Version, ManifestURL: panelupdate.ManifestURLFromEnv(),
+		Self: d.PanelSelf, Helper: d.PanelHelper, Docker: d.PanelDocker, Updater: d.PanelUpdater,
+		DataDir: dataDir, InstallFile: d.PanelInstallFile, DeploysBusy: queue.Busy, Queue: queue,
+		MigrationLocked: func(ctx context.Context) (bool, error) {
+			if migrationOptions == nil {
+				return false, nil
+			}
+			step, _, err := migration.NewStore(db, nil).Lock(ctx)
+			return step != migration.StepNone, err
+		},
+	}
+	if vulnService != nil {
+		puDeps.Scans = vulnService
+	}
+	panelUpdates := panelupdate.New(puDeps)
+	if err := panelUpdates.StartLocked(ctx); err != nil {
+		log.Printf("panelupdate: start locked: %v", err)
+	}
 	worker.Add(1)
 	go func() {
 		defer worker.Done()
@@ -155,23 +178,15 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			vulnService.RunScheduler(ctx)
 		}()
 	}
-	panelUpdates := panelupdate.New(panelupdate.Deps{
-		Store: panelupdate.NewStore(db), Version: d.Version, ManifestURL: panelupdate.ManifestURLFromEnv(),
-		Self: d.PanelSelf, Helper: d.PanelHelper, Docker: d.PanelDocker,
-		DataDir: dataDir, InstallFile: d.PanelInstallFile, DeploysBusy: queue.Busy,
-		MigrationLocked: func(ctx context.Context) (bool, error) {
-			if migrationOptions == nil {
-				return false, nil
-			}
-			step, _, err := migration.NewStore(db, nil).Lock(ctx)
-			return step != migration.StepNone, err
-		},
-	})
 	panelUpdates.RegisterRoutes(mux)
-	worker.Add(1)
+	worker.Add(2)
 	go func() {
 		defer worker.Done()
 		panelUpdates.RunScheduler(ctx)
+	}()
+	go func() {
+		defer worker.Done()
+		panelUpdates.Watch(ctx)
 	}()
 	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
 	sshkeys.New(db).RegisterRoutes(mux)
@@ -214,7 +229,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		metricsService := metrics.New(metrics.NewStore(db), d.History, d.Services)
 		metricsService.RegisterRoutes(mux)
 	}
-	var inner http.Handler = gate.middleware(mux)
+	var inner http.Handler = panelUpdates.Middleware(gate.middleware(mux))
 	if migrationOptions != nil {
 		domainStore := domains.NewStore(db)
 		oldHost := migration.NewOldHost(migration.OldHostDeps{
@@ -230,6 +245,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			DataDir:         dataDir,
 			ReportedDataDir: migrationOptions.ReportedDataDir,
 			Install:         migrationOptions.Install,
+			UpdateLocked:    panelUpdates.Locked,
 		})
 		oldHost.RegisterRoutes(mux)
 		local := migration.LocalHost{DB: db, Docker: migrationOptions.Docker, DataDir: dataDir, Install: migrationOptions.Install}

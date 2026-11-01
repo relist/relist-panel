@@ -162,3 +162,34 @@ func TestPanelDockerConfigHashes(t *testing.T) {
 		t.Fatalf("hashes = %+v filters %s", got, query)
 	}
 }
+
+func TestPanelDockerUpdaterState(t *testing.T) {
+	cases := map[string]struct {
+		status int
+		body   string
+		want   panelupdate.UpdaterState
+	}{
+		"running": {200, `{"State":{"Status":"running"}}`, panelupdate.UpdaterState{Exists: true, Running: true}},
+		"created": {200, `{"State":{"Status":"created"}}`, panelupdate.UpdaterState{Exists: true, Running: true}},
+		"exited":  {200, `{"State":{"Status":"exited"}}`, panelupdate.UpdaterState{Exists: true}},
+		"gone":    {404, `{"message":"No such container"}`, panelupdate.UpdaterState{}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			var path string
+			socket := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				path = req.URL.Path
+				w.WriteHeader(c.status)
+				_, _ = w.Write([]byte(c.body))
+			}))
+			got, err := dockerexec.NewPanelDockerAt(socket).UpdaterState(context.Background(), "relist-panel-updater-20261101T120000Z")
+			if err != nil || got != c.want || path != "/containers/relist-panel-updater-20261101T120000Z/json" {
+				t.Fatalf("got %+v, %v at %s", got, err, path)
+			}
+		})
+	}
+	socket := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }))
+	if _, err := dockerexec.NewPanelDockerAt(socket).UpdaterState(context.Background(), "x"); err == nil {
+		t.Fatal("a daemon error must not read as a missing Container")
+	}
+}

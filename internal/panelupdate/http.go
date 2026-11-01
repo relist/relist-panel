@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 )
@@ -38,6 +39,24 @@ type Status struct {
 	LastCheckAt  *time.Time    `json:"lastCheckAt"`
 	LastError    string        `json:"lastError"`
 	Install      InstallStatus `json:"install"`
+	// Locked is true while the update lock is on.
+	Locked bool `json:"locked"`
+	// Run is the newest update run, null when there has been none.
+	Run *RunInfo `json:"run"`
+}
+
+// RunInfo is the newest run's status.json, for the update page.
+type RunInfo struct {
+	ID          string `json:"id"`
+	State       string `json:"state"`
+	Terminal    bool   `json:"terminal"`
+	Error       string `json:"error"`
+	FromVersion string `json:"fromVersion"`
+	ToVersion   string `json:"toVersion"`
+	StartedAt   int64  `json:"startedAt"`
+	// BackupPath is the run directory that holds the backup, empty before the
+	// backup is complete.
+	BackupPath string `json:"backupPath"`
 }
 
 // InstallStatus says whether the Install was found and, if not, why not.
@@ -76,6 +95,8 @@ func (s *Service) status(r *http.Request) (Status, error) {
 		out.Message = ErrNoKey.Error()
 	}
 	out.Install = s.installStatus(ctx)
+	out.Locked = s.Locked()
+	out.Run = s.runInfo()
 	if m != nil {
 		out.Available = &Available{Version: m.Version, ReleasedAt: m.ReleasedAt, NotesURL: m.NotesURL, ManualSteps: m.ManualSteps}
 		if out.Available.ManualSteps == nil {
@@ -83,6 +104,28 @@ func (s *Service) status(r *http.Request) (Status, error) {
 		}
 	}
 	return out, nil
+}
+
+func (s *Service) runInfo() *RunInfo {
+	if s.d.DataDir == "" {
+		return nil
+	}
+	st, ok, err := NewestRun(s.d.DataDir)
+	if err != nil {
+		log.Printf("panelupdate: read the newest run: %v", err)
+		return nil
+	}
+	if !ok {
+		return nil
+	}
+	info := &RunInfo{
+		ID: st.Run, State: st.State, Terminal: IsTerminal(st.State), Error: st.Error,
+		FromVersion: st.FromVersion, ToVersion: st.ToVersion, StartedAt: st.StartedAt,
+	}
+	if _, err := ReadBackup(RunDir(s.d.DataDir, st.Run)); err == nil {
+		info.BackupPath = RunDir(s.d.DataDir, st.Run)
+	}
+	return info
 }
 
 func (s *Service) installStatus(ctx context.Context) InstallStatus {

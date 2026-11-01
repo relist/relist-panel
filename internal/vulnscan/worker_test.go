@@ -381,3 +381,42 @@ func TestScanComposeQueuesAMissingDB(t *testing.T) {
 		t.Fatalf("next task = %+v", task)
 	}
 }
+
+func TestWaitIdleWaitsForTheRunningScan(t *testing.T) {
+	h := newHarness(t)
+	h.enable()
+	h.scanner.blockScan, h.scanner.scanning = true, make(chan string, 1)
+	h.start()
+	h.svc.ScanImage(context.Background(), "sha256:app", ReasonManual)
+	select {
+	case <-h.scanner.scanning:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scan did not start")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := h.svc.WaitIdle(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitIdle during a scan = %v", err)
+	}
+	h.stop()
+	if err := h.svc.WaitIdle(context.Background()); err != nil {
+		t.Fatalf("WaitIdle after the worker ended = %v", err)
+	}
+}
+
+func TestWaitIdleDoesNotMissATaskBehindABusyGate(t *testing.T) {
+	h := newHarness(t)
+	h.enable()
+	h.gate.busy.Store(true) // the queue is held
+	h.start()
+	h.svc.ScanImage(context.Background(), "sha256:app", ReasonManual)
+	time.Sleep(30 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := h.svc.WaitIdle(ctx); err != nil {
+		t.Fatalf("WaitIdle behind a busy gate = %v", err)
+	}
+	if n := h.scanner.count("scan sha256:app"); n != 0 {
+		t.Fatalf("scanned %d times behind a busy gate", n)
+	}
+}

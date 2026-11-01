@@ -200,6 +200,7 @@ func main() {
 	}
 
 	control := http.NewServeMux()
+	panelDocker := dockerexec.NewPanelDocker(dockerexec.DefaultSocketPath)
 	handler, waitDeployments := httpapi.NewHandler(ctx, httpapi.Deps{
 		DB:             db,
 		Runner:         dockerexec.New(),
@@ -224,7 +225,8 @@ func main() {
 		VulnInUse:        dockerexec.NewInUse(dockerexec.DefaultSocketPath, composeIdentities(db), os.Hostname),
 		PanelSelf:        dockerexec.NewPanelSelf(dockerexec.DefaultSocketPath),
 		PanelHelper:      dockerexec.NewPanelHelper(),
-		PanelDocker:      dockerexec.NewPanelDocker(dockerexec.DefaultSocketPath),
+		PanelDocker:      panelDocker,
+		PanelUpdater:     panelDocker,
 		PanelInstallFile: installFile,
 		PanelDomain:      cfg.Install.Domain,
 	})

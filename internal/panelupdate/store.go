@@ -3,6 +3,7 @@ package panelupdate
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -62,4 +63,28 @@ func (s *Store) RecordFailure(ctx context.Context, at time.Time, errText string)
 	_, err := s.db.ExecContext(ctx, `UPDATE panel_update_settings SET last_check_at = ?, last_error = ? WHERE id = 1`,
 		at.Unix(), errText)
 	return err
+}
+
+// RecordRun copies a finished run to panel_updates. It is safe to repeat: the
+// run id keeps one row, and the latest state wins.
+func (s *Store) RecordRun(ctx context.Context, st RunStatus, now time.Time) error {
+	finished := st.UpdatedAt
+	if finished == 0 {
+		finished = now.Unix()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO panel_updates (run_id, from_version, to_version, state, error, started_at, finished_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (run_id) WHERE run_id <> '' DO UPDATE SET
+			state = excluded.state, error = excluded.error, finished_at = excluded.finished_at`,
+		st.Run, st.FromVersion, st.ToVersion, st.State, st.Error, st.StartedAt, finished)
+	return err
+}
+
+// VacuumInto writes a consistent copy of the database to path, which must not
+// exist (VACUUM INTO, as the Migration's database item does).
+func (s *Store) VacuumInto(ctx context.Context, path string) error {
+	if _, err := s.db.ExecContext(ctx, "VACUUM INTO ?", path); err != nil {
+		return fmt.Errorf("copy the database: %w", err)
+	}
+	return nil
 }
