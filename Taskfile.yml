@@ -33,6 +33,11 @@ tasks:
     cmds:
       - ./scripts/probe-migration.sh
 
+  probe:panel-update:
+    desc: Update a panel between two images, once to succeed and once to roll back, inside a docker:dind host (manual, needs privileged containers)
+    cmds:
+      - ./scripts/probe-panel-update.sh
+
   sandbox:migration:
     desc: Start two docker:dind panels, the old one seeded, to try a migration by hand
     cmds:

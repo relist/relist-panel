@@ -7,6 +7,9 @@ RUN pnpm build
 
 FROM golang:1.27-alpine AS go-builder
 ARG VERSION=dev
+# The release public key (base64 ed25519). Empty builds refuse every Update
+# manifest; scripts/probe-panel-update.sh builds with a throwaway key.
+ARG RELEASE_KEY=
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -17,7 +20,7 @@ COPY docker-compose.yml ./
 COPY internal/ ./internal/
 COPY cmd/ ./cmd/
 COPY --from=web-builder /src/internal/webassets/dist ./internal/webassets/dist
-RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o /out/relist-panel .
+RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X relist-panel/internal/panelupdate.releasePublicKey=${RELEASE_KEY}" -o /out/relist-panel .
 # The Volume helper is its own small binary — not a subcommand of the panel —
 # because it must not link the panel's sqlite and net/http dependencies
 # (the spec's weight measurement). /usr/local/bin/relist-volhelper is the
