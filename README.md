@@ -69,7 +69,9 @@ printf '%s\n' "$PASSWORD" | docker compose exec -T panel relist-panel create-adm
 docker compose exec -T panel relist-panel create-admin --email admin@example.com --generate
 ```
 
-The command refuses when an admin already exists.
+The command refuses when an admin already exists. `relist-panel --help` lists
+every command; an unknown argument prints that help and exits 2 instead of
+starting the server.
 
 If you lose the password, reset it from the same terminal. It takes the same
 options as `create-admin` (`--email` is only needed with more than one admin),

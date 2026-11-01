@@ -44,6 +44,17 @@ var version = "dev"
 var installFile []byte
 
 func main() {
+	switch decide(os.Args[1:]) {
+	case actionHelp:
+		printUsage(os.Stdout)
+		return
+	case actionVersion:
+		fmt.Println(version)
+		return
+	case actionUsageError:
+		printUsage(os.Stderr)
+		os.Exit(2)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "reset-2fa" {
 		os.Exit(runResetTwoFactor(os.Args[2:], os.Stdout, os.Stderr))
 	}
