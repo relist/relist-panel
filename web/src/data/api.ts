@@ -61,7 +61,7 @@ import type {
 } from './types';
 import type { MetricWindow } from './types';
 import type { MigrationStatus } from './migration';
-import type { PanelUpdateStatus, PreflightReport } from './panel-update';
+import type { PanelUpdateStatus, PreviewResponse } from './panel-update';
 
 export type AuthStatus = {
   authenticated: boolean;
@@ -262,13 +262,14 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ checkEnabled }),
     }),
-  panelUpdatePreflight: () => request<PreflightReport>('/api/panel-update/preflight', { method: 'POST' }),
+  panelUpdatePreflight: () => request<PreviewResponse>('/api/panel-update/preflight', { method: 'POST' }),
   panelUpdateApply: (reportId: string, manualStepsDone: string[]) =>
-    request<{ id: string }>('/api/panel-update/apply', {
+    request<{ run: string }>('/api/panel-update/apply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ report_id: reportId, manual_steps_done: manualStepsDone }),
     }),
+  panelUpdateCancel: () => request<{ run: string }>('/api/panel-update/cancel', { method: 'POST' }),
   resumeDocker: (confirm: string) => request<{ resumed: boolean }>('/api/docker/recover', jsonInit('POST', { confirm })),
   dockerReport: (refresh = false) => request<DockerReport>(`/api/docker${refresh ? '?refresh=1' : ''}`),
   dockerPrunePlan: (kind: DockerPruneKind) => request<DockerPrunePlan>(`/api/docker/prune-plan?kind=${encodeURIComponent(kind)}`),

@@ -8,11 +8,12 @@ import { SWRConfig } from 'swr';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../data/api';
-import type { PanelUpdateRun, PanelUpdateStatus, PreflightReport } from '../data/panel-update';
+import type { PanelUpdateRun, PanelUpdateStatus, PreflightGate, PreflightReport } from '../data/panel-update';
 import { PanelUpdatePage, UPDATED_FLAG } from './PanelUpdatePage';
 
 const api = vi.hoisted(() => ({
   panelUpdateApply: vi.fn(),
+  panelUpdateCancel: vi.fn(),
   panelUpdateCheck: vi.fn(),
   panelUpdatePreflight: vi.fn(),
   panelUpdateSettings: vi.fn(),
@@ -44,6 +45,8 @@ const run = (over: Partial<PanelUpdateRun> = {}): PanelUpdateRun => ({
   terminal: false,
   error: '',
   rollbackError: '',
+  waitingOn: '',
+  note: '',
   fromVersion: 'v1.0.0',
   toVersion: 'v1.1.0',
   startedAt: 1,
@@ -86,7 +89,8 @@ const report = (over: Partial<PreflightReport> = {}): PreflightReport => ({
   needsManualUpdate: false,
   unknownKinds: [],
   readmeUrl: 'https://example.com/readme',
-  gate: { installAvailable: true, migrationLocked: false, deploysBusy: false, updateRunning: false },
+  upToDate: false,
+  image: 'ghcr.io/relist/relist-panel@sha256:abc',
   change: 'not-edited',
   diff: '',
   conflict: null,
@@ -96,6 +100,9 @@ const report = (over: Partial<PreflightReport> = {}): PreflightReport => ({
   manualSteps: [],
   ...over,
 });
+
+const openGate: PreflightGate = { installAvailable: true, migrationLocked: false, deploysBusy: false, updateRunning: false };
+const preview = (r: PreflightReport, gate: PreflightGate = openGate) => ({ report: r, gate });
 
 function show() {
   return render(
@@ -147,7 +154,7 @@ describe('PanelUpdatePage states', () => {
 
   it('shows Needs a manual update for unknown invariant kinds, with the README link', async () => {
     api.panelUpdateStatus.mockResolvedValue(status({ available }));
-    api.panelUpdatePreflight.mockResolvedValue(report({ needsManualUpdate: true, unknownKinds: ['gpu'], ready: false }));
+    api.panelUpdatePreflight.mockResolvedValue(preview(report({ needsManualUpdate: true, unknownKinds: ['gpu'], ready: false })));
     show();
     await userEvent.click(await screen.findByRole('button', { name: 'Preview' }));
     expect(await screen.findByText('This Install needs a manual update')).toBeTruthy();
@@ -157,10 +164,10 @@ describe('PanelUpdatePage states', () => {
 
   it('shows Preview and enables Update only once every manual step is ticked, then confirms', async () => {
     api.panelUpdateStatus.mockResolvedValue(status({ available }));
-    api.panelUpdatePreflight.mockResolvedValue(
+    api.panelUpdatePreflight.mockResolvedValue(preview(
       report({ manualSteps: [{ id: 'dns', text: 'Point DNS at the host' }], recreated: ['panel', 'traefik'], traefikRecreated: true }),
-    );
-    api.panelUpdateApply.mockResolvedValue({ id: 'r1' });
+    ));
+    api.panelUpdateApply.mockResolvedValue({ run: 'r1' });
     show();
     await userEvent.click(await screen.findByRole('button', { name: 'Preview' }));
     const update = await screen.findByRole('button', { name: 'Update' });
@@ -172,14 +179,14 @@ describe('PanelUpdatePage states', () => {
     expect((screen.getByRole('button', { name: 'Update' }) as HTMLButtonElement).disabled).toBe(false);
     await userEvent.click(screen.getByRole('button', { name: 'Update' }));
 
-    expect(await screen.findByText(/Queued Deployments are cancelled and new ones are refused until the update ends/)).toBeTruthy();
+    expect(await screen.findByText(/Queued Deployments are cancelled\. A running Deployment or scan is waited for/)).toBeTruthy();
     expect(screen.getAllByText(/Traefik is recreated/).length).toBe(2);
   });
 
   it('applies the report id and the ticked manual steps from the confirm', async () => {
     api.panelUpdateStatus.mockResolvedValue(status({ available }));
-    api.panelUpdatePreflight.mockResolvedValue(report());
-    api.panelUpdateApply.mockResolvedValue({ id: 'r1' });
+    api.panelUpdatePreflight.mockResolvedValue(preview(report()));
+    api.panelUpdateApply.mockResolvedValue({ run: 'r1' });
     show();
     await userEvent.click(await screen.findByRole('button', { name: 'Preview' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Update' }));
@@ -192,7 +199,7 @@ describe('PanelUpdatePage states', () => {
 
   it('shows Refused with the server words, the conflict diff and the invariant list', async () => {
     api.panelUpdateStatus.mockResolvedValue(status({ available }));
-    api.panelUpdatePreflight.mockResolvedValue(
+    api.panelUpdatePreflight.mockResolvedValue(preview(
       report({
         ready: false,
         failed: { step: 'change', message: 'The Install file was edited and the edits do not merge.' },
@@ -202,7 +209,7 @@ describe('PanelUpdatePage states', () => {
           { kind: 'network', text: 'The panel joins relist-network', ok: false, detail: 'network missing', source: 'docker-compose.override.yml' },
         ],
       }),
-    );
+    ));
     show();
     await userEvent.click(await screen.findByRole('button', { name: 'Preview' }));
     expect(await screen.findByText('The Install file was edited and the edits do not merge.')).toBeTruthy();
@@ -215,9 +222,9 @@ describe('PanelUpdatePage states', () => {
 
   it('shows the merge diff of an edited Install file', async () => {
     api.panelUpdateStatus.mockResolvedValue(status({ available }));
-    api.panelUpdatePreflight.mockResolvedValue(
+    api.panelUpdatePreflight.mockResolvedValue(preview(
       report({ change: 'edited-merged', diff: '--- current\n+++ new\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n' }),
-    );
+    ));
     show();
     await userEvent.click(await screen.findByRole('button', { name: 'Preview' }));
     await screen.findByTestId('diff');
@@ -231,6 +238,72 @@ describe('PanelUpdatePage states', () => {
     expect(await screen.findByText('Updating to v1.1.0')).toBeTruthy();
     expect(screen.getByText('Back up the database and the Install files')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Check now' })).toBeNull();
+  });
+});
+
+describe('PanelUpdatePage waiting and cancelling', () => {
+  it('shows Waiting with what the run waits on and a Cancel button', async () => {
+    api.panelUpdateStatus.mockResolvedValue(
+      status({ locked: true, run: run({ state: 'quiescing', waitingOn: 'Deployment api #3' }) }),
+    );
+    show();
+    expect(await screen.findByText('Waiting to update to v1.1.0')).toBeTruthy();
+    expect(screen.getByText('Deployment api #3')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Check now' })).toBeNull();
+    expect(screen.queryByText('Updating to v1.1.0')).toBeNull();
+  });
+
+  it('Cancel calls the cancel endpoint and reads the status again', async () => {
+    api.panelUpdateStatus.mockResolvedValue(status({ locked: true, run: run({ state: 'quiescing', waitingOn: 'a vulnerability scan' }) }));
+    api.panelUpdateCancel.mockResolvedValue({ run: 'r1' });
+    show();
+    await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(api.panelUpdateCancel).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.panelUpdateStatus.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it('shows a cancelled run as an info alert saying nothing was written', async () => {
+    api.panelUpdateStatus.mockResolvedValue(status({ available, run: run({ state: 'aborted', terminal: true, error: 'cancelled' }) }));
+    show();
+    expect(await screen.findByText('Update cancelled')).toBeTruthy();
+    expect(screen.getByText(/Nothing was written/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Check now' })).toBeTruthy();
+  });
+
+  it('shows a run the panel refused under a Migration lock with the reason', async () => {
+    api.panelUpdateStatus.mockResolvedValue(
+      status({ run: run({ state: 'aborted', terminal: true, error: 'a server Migration holds the lock' }) }),
+    );
+    show();
+    expect(await screen.findByText('a server Migration holds the lock')).toBeTruthy();
+    expect(screen.queryByText('Update cancelled')).toBeNull();
+  });
+
+  it('shows the note of a run that went on without the panel answering, as a warning in Updating', async () => {
+    api.panelUpdateStatus.mockResolvedValue(
+      status({ locked: true, run: run({ state: 'compose-up', note: 'panel did not answer; a running Deployment may have been cut' }) }),
+    );
+    show();
+    expect(await screen.findByText('panel did not answer; a running Deployment may have been cut')).toBeTruthy();
+    expect(screen.getByText('Updating to v1.1.0')).toBeTruthy();
+  });
+
+  it('says so when the preview finds the panel up to date', async () => {
+    api.panelUpdateStatus.mockResolvedValue(status({ available }));
+    api.panelUpdatePreflight.mockResolvedValue(preview(report({ upToDate: true, ready: false })));
+    show();
+    await userEvent.click(await screen.findByRole('button', { name: 'Preview' }));
+    expect(await screen.findByText('This panel is already up to date.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Update' })).toBeNull();
+  });
+
+  it('shows the live gate beside the report', async () => {
+    api.panelUpdateStatus.mockResolvedValue(status({ available }));
+    api.panelUpdatePreflight.mockResolvedValue(preview(report(), { ...openGate, deploysBusy: true }));
+    show();
+    await userEvent.click(await screen.findByRole('button', { name: 'Preview' }));
+    expect(await screen.findByText('Deployments running')).toBeTruthy();
   });
 });
 

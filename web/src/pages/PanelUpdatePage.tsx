@@ -12,6 +12,7 @@ import {
   POLL_MS,
   UPDATE_STEPS,
   canUpdate,
+  cancelUpdate,
   checkCommands,
   finishedRun,
   isRestartingError,
@@ -22,7 +23,7 @@ import {
   splitUnifiedDiff,
   stepIndex,
 } from '../data/panel-update';
-import type { PanelUpdateRun, PanelUpdateStatus, PreflightReport } from '../data/panel-update';
+import type { PanelUpdateRun, PanelUpdateStatus, PreflightGate, PreflightReport } from '../data/panel-update';
 
 const { Link, Paragraph, Text } = Typography;
 
@@ -48,6 +49,9 @@ export function PanelUpdatePage() {
     shouldRetryOnError: false,
   });
   const [report, setReport] = useState<PreflightReport>();
+  const [gate, setGate] = useState<PreflightGate>();
+  const [notice, setNotice] = useState<string>();
+  const [cancelling, setCancelling] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState<string>();
   const [done, setDone] = useState<string[]>([]);
@@ -106,11 +110,12 @@ export function PanelUpdatePage() {
     };
   }, [polling, mutate]);
 
+  const waiting = run !== null && !run.terminal && run.state === 'quiescing';
   useEffect(() => {
-    if (restartingSince === undefined) return;
+    if (restartingSince === undefined && !waiting) return;
     const clock = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(clock);
-  }, [restartingSince]);
+  }, [restartingSince, waiting]);
 
   // The run this page followed has ended. A success on the target version
   // reloads the page once, onto the new bundle.
@@ -129,9 +134,23 @@ export function PanelUpdatePage() {
     setReport(undefined);
   }, [status, run, watchedRunId]);
 
+  const cancel = async () => {
+    setCancelling(true);
+    setError(undefined);
+    try {
+      await cancelUpdate();
+    } catch (reason) {
+      setError(message(reason, 'Could not cancel the update'));
+    } finally {
+      setCancelling(false);
+      await mutate();
+    }
+  };
+
   const check = async () => {
     setChecking(true);
     setError(undefined);
+    setNotice(undefined);
     try {
       await mutate(await api.panelUpdateCheck(), { revalidate: false });
       setReport(undefined);
@@ -157,9 +176,18 @@ export function PanelUpdatePage() {
   const preview = async () => {
     setPreviewing(true);
     setError(undefined);
+    setNotice(undefined);
     setDone([]);
     try {
-      setReport(await api.panelUpdatePreflight());
+      const preview = await api.panelUpdatePreflight();
+      if (preview.report.upToDate) {
+        setReport(undefined);
+        setNotice('This panel is already up to date.');
+        await mutate();
+      } else {
+        setReport(preview.report);
+        setGate(preview.gate);
+      }
     } catch (reason) {
       setReport(undefined);
       setError(message(reason, 'Could not preview the update'));
@@ -189,8 +217,8 @@ export function PanelUpdatePage() {
             <Text type="warning">Traefik is recreated: every Domain drops for a few seconds.</Text>
           )}
           <Text>
-            Queued Deployments are cancelled and new ones are refused until the update ends. Changes to the panel are
-            refused too.
+            Queued Deployments are cancelled. A running Deployment or scan is waited for, and new ones are refused until
+            the update ends. Changes to the panel are refused too.
           </Text>
         </Flex>
       ),
@@ -198,7 +226,7 @@ export function PanelUpdatePage() {
         setError(undefined);
         try {
           const started = await api.panelUpdateApply(current.id, done);
-          setWatchedRunId(started.id);
+          setWatchedRunId(started.run);
           await mutate();
         } catch (reason) {
           // A 409 means the files changed since the preview: it has to be run again.
@@ -227,8 +255,8 @@ export function PanelUpdatePage() {
   const restartingMs = restartingSince === undefined ? undefined : now - restartingSince;
   const state = pageState({ status, report, restartingMs, awaitingRun });
   const failed = finishedRun(status);
-  const result = failed && !dismissed.includes(failed.id) && state !== 'updating' && state !== 'restarting' && state !== 'no-answer' ? failed : undefined;
-  const busy = state === 'updating' || state === 'restarting' || state === 'no-answer';
+  const busy = state === 'waiting' || state === 'updating' || state === 'restarting' || state === 'no-answer';
+  const result = failed && !dismissed.includes(failed.id) && !busy ? failed : undefined;
 
   return (
     <Flex gap={LAYOUT.gutter} vertical>
@@ -246,8 +274,12 @@ export function PanelUpdatePage() {
       {updatedTo && !busy && <Alert closable showIcon title={`Updated to ${updatedTo}`} type="success" />}
       {result && <RunResult onClose={() => setDismissed((ids) => [...ids, result.id])} run={result} />}
       {error && <Alert closable onClose={() => setError(undefined)} showIcon title={error} type="error" />}
+      {notice && !busy && <Alert closable onClose={() => setNotice(undefined)} showIcon title={notice} type="info" />}
       {(state === 'restarting' || state === 'no-answer') && (
         <RestartingCard elapsedMs={restartingMs ?? 0} noAnswer={state === 'no-answer'} runId={run?.id ?? watchedRunId} />
+      )}
+      {state === 'waiting' && run && (
+        <WaitingCard cancelling={cancelling} elapsedMs={now - run.startedAt * 1000} onCancel={() => void cancel()} run={run} />
       )}
       {state === 'updating' && <UpdatingCard run={run} />}
       {(state === 'up-to-date' || state === 'available' || state === 'manual') && (
@@ -264,6 +296,7 @@ export function PanelUpdatePage() {
       {(state === 'preview' || state === 'refused') && report && (
         <PreviewCard
           done={done}
+          gate={gate}
           onChangeDone={setDone}
           onClose={() => setReport(undefined)}
           onPreviewAgain={() => void preview()}
@@ -277,6 +310,20 @@ export function PanelUpdatePage() {
 }
 
 function RunResult({ onClose, run }: { onClose: () => void; run: PanelUpdateRun }) {
+  if (run.state === 'aborted') {
+    // A cancel says "cancelled"; any other reason is the panel's, such as a Migration lock.
+    const cancelled = run.error === 'cancelled' || run.error === '';
+    return (
+      <Alert
+        closable
+        description="Nothing was written. The panel runs the same version as before."
+        onClose={onClose}
+        showIcon
+        title={cancelled ? 'Update cancelled' : run.error}
+        type="info"
+      />
+    );
+  }
   if (run.state === 'rolled-back') {
     return (
       <Alert
@@ -465,6 +512,7 @@ function UpdatingCard({ run }: { run: PanelUpdateRun | null }) {
           orientation="vertical"
           size="small"
         />
+        {run?.note && <Alert showIcon title={run.note} type="warning" />}
         <Text type="secondary">
           The page follows the update by itself. Do not close the panel's containers while it runs.
         </Text>
@@ -476,6 +524,43 @@ function UpdatingCard({ run }: { run: PanelUpdateRun | null }) {
 function elapsed(ms: number) {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function WaitingCard({
+  cancelling,
+  elapsedMs,
+  onCancel,
+  run,
+}: {
+  cancelling: boolean;
+  elapsedMs: number;
+  onCancel: () => void;
+  run: PanelUpdateRun;
+}) {
+  return (
+    <Card
+      extra={
+        <Button danger loading={cancelling} onClick={onCancel}>
+          Cancel
+        </Button>
+      }
+      title={`Waiting to update to ${run.toVersion}`}
+    >
+      <Flex gap={8} vertical>
+        <Text>
+          {run.waitingOn ? (
+            <>
+              Waiting for <Text strong>{run.waitingOn}</Text> to finish. Nothing has been changed yet.
+            </>
+          ) : (
+            'Waiting for the panel to go quiet. Nothing has been changed yet.'
+          )}
+        </Text>
+        <Text type="secondary">Waiting {elapsed(elapsedMs)}. Queued Deployments are cancelled; new ones are refused.</Text>
+        <Text type="secondary">Cancel ends the update before anything is written.</Text>
+      </Flex>
+    </Card>
+  );
 }
 
 function RestartingCard({ elapsedMs, noAnswer, runId }: { elapsedMs: number; noAnswer: boolean; runId?: string }) {
@@ -495,6 +580,7 @@ function RestartingCard({ elapsedMs, noAnswer, runId }: { elapsedMs: number; noA
 
 function PreviewCard({
   done,
+  gate,
   onChangeDone,
   onClose,
   onPreviewAgain,
@@ -503,6 +589,7 @@ function PreviewCard({
   report,
 }: {
   done: string[];
+  gate?: PreflightGate;
   onChangeDone: (ids: string[]) => void;
   onClose: () => void;
   onPreviewAgain: () => void;
@@ -562,23 +649,27 @@ function PreviewCard({
                   },
                 ]
               : []),
-            {
-              key: 'gate',
-              label: 'Right now',
-              children: (
-                <Flex gap={4} wrap>
-                  <Tag color={report.gate.installAvailable ? 'success' : 'error'}>
-                    {report.gate.installAvailable ? 'Install found' : 'Install not found'}
-                  </Tag>
-                  <Tag color={report.gate.migrationLocked ? 'error' : 'success'}>
-                    {report.gate.migrationLocked ? 'Migration in progress' : 'No Migration'}
-                  </Tag>
-                  <Tag color={report.gate.deploysBusy ? 'warning' : 'success'}>
-                    {report.gate.deploysBusy ? 'Deployments running' : 'No Deployments running'}
-                  </Tag>
-                </Flex>
-              ),
-            },
+            ...(gate
+              ? [
+                  {
+                    key: 'gate',
+                    label: 'Right now',
+                    children: (
+                      <Flex gap={4} wrap>
+                        <Tag color={gate.installAvailable ? 'success' : 'error'}>
+                          {gate.installAvailable ? 'Install found' : 'Install not found'}
+                        </Tag>
+                        <Tag color={gate.migrationLocked ? 'error' : 'success'}>
+                          {gate.migrationLocked ? 'Migration in progress' : 'No Migration'}
+                        </Tag>
+                        <Tag color={gate.deploysBusy ? 'warning' : 'success'}>
+                          {gate.deploysBusy ? 'Deployments running' : 'No Deployments running'}
+                        </Tag>
+                      </Flex>
+                    ),
+                  },
+                ]
+              : []),
           ]}
           size="small"
         />

@@ -4,12 +4,11 @@
  * operator runs on the host when the page cannot help any more.
  */
 
-import { ApiError } from './api';
+import { ApiError, api } from './api';
 
 export type RunState =
   | 'quiescing'
   | 'backing-up'
-  | 'starting-updater'
   | 'writing-files'
   | 'compose-up'
   | 'waiting-health'
@@ -17,6 +16,7 @@ export type RunState =
   | 'succeeded'
   | 'rolled-back'
   | 'rollback-failed'
+  | 'aborted'
   | 'interrupted';
 
 export type ManualStep = { id: string; text: string };
@@ -34,6 +34,10 @@ export type PanelUpdateRun = {
   terminal: boolean;
   error: string;
   rollbackError: string;
+  /** What a quiescing run waits for, such as `Deployment api #3`; empty when nothing. */
+  waitingOn: string;
+  /** A caveat about a run that went on, such as a panel that did not answer. */
+  note: string;
   fromVersion: string;
   toVersion: string;
   startedAt: number;
@@ -79,7 +83,9 @@ export type PreflightReport = {
   needsManualUpdate: boolean;
   unknownKinds: string[];
   readmeUrl: string;
-  gate: { installAvailable: boolean; migrationLocked: boolean; deploysBusy: boolean; updateRunning: boolean };
+  /** True when the newest release is not newer than the running version. */
+  upToDate: boolean;
+  image: string;
   change: PreflightChange;
   diff: string;
   conflict: { ours: string; theirs: string; merged: string; hunks: number } | null;
@@ -89,11 +95,16 @@ export type PreflightReport = {
   manualSteps: ManualStep[];
 };
 
+/** The live state the update waits on, shown next to the report. */
+export type PreflightGate = { installAvailable: boolean; migrationLocked: boolean; deploysBusy: boolean; updateRunning: boolean };
+
+/** `POST /api/panel-update/preflight`: the report of the update Container and the live gate. */
+export type PreviewResponse = { report: PreflightReport; gate: PreflightGate };
+
 /** The steps of a run in order, as the Updating state lists them. */
 export const UPDATE_STEPS: { state: RunState; title: string }[] = [
   { state: 'quiescing', title: 'Pause deployments and changes' },
   { state: 'backing-up', title: 'Back up the database and the Install files' },
-  { state: 'starting-updater', title: 'Start the Updater' },
   { state: 'writing-files', title: 'Write the new Install file' },
   { state: 'compose-up', title: 'Start the new version' },
   { state: 'waiting-health', title: 'Wait for the new version to answer' },
@@ -124,6 +135,7 @@ export type PageState =
   | 'manual'
   | 'preview'
   | 'refused'
+  | 'waiting'
   | 'updating'
   | 'restarting'
   | 'no-answer';
@@ -138,7 +150,7 @@ export function pageState(input: {
 }): PageState {
   const { status, report, restartingMs, awaitingRun } = input;
   if (restartingMs !== undefined) return restartingMs >= NO_ANSWER_MS ? 'no-answer' : 'restarting';
-  if (status.run && !status.run.terminal) return 'updating';
+  if (status.run && !status.run.terminal) return status.run.state === 'quiescing' ? 'waiting' : 'updating';
   if (awaitingRun) return 'updating';
   if (report) {
     if (report.needsManualUpdate) return 'manual';
@@ -153,7 +165,17 @@ export function pageState(input: {
 export function finishedRun(status: PanelUpdateStatus): PanelUpdateRun | undefined {
   const run = status.run;
   if (!run || !run.terminal) return undefined;
-  return run.state === 'rolled-back' || run.state === 'rollback-failed' || run.state === 'interrupted' ? run : undefined;
+  return run.state === 'rolled-back' ||
+    run.state === 'rollback-failed' ||
+    run.state === 'interrupted' ||
+    run.state === 'aborted'
+    ? run
+    : undefined;
+}
+
+/** Cancels a run that is still waiting for the panel to go quiet. */
+export async function cancelUpdate(): Promise<void> {
+  await api.panelUpdateCancel();
 }
 
 /** The index in `UPDATE_STEPS` a run is at; a rollback stays on the step that failed (the last one). */
