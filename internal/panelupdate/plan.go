@@ -2,8 +2,11 @@ package panelupdate
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // networkName is the shared network the Updater joins and Traefik is reached
@@ -62,4 +65,43 @@ func ReadPlan(dir string) (Plan, error) {
 		return p, err
 	}
 	return p, json.Unmarshal(data, &p)
+}
+
+// Validate checks a plan the Updater is about to act on with the Docker socket
+// in hand: it must name this run, and every path must be absolute, clean and
+// where the panel would have put it.
+func (p Plan) Validate(run, dataDir string) error {
+	if p.Run != run {
+		return fmt.Errorf("plan.json is for run %q, not %q", p.Run, run)
+	}
+	for name, v := range map[string]string{
+		"project": p.Project, "domain": p.Domain, "targetRef": p.TargetRef,
+		"targetImageId": p.TargetImageID, "fromImageId": p.FromImageID,
+	} {
+		if v == "" {
+			return fmt.Errorf("plan.json has no %s", name)
+		}
+	}
+	if !cleanAbs(dataDir) {
+		return fmt.Errorf("the data directory %q is not an absolute, clean path", dataDir)
+	}
+	if !cleanAbs(p.InstallDir) {
+		return fmt.Errorf("the Install directory %q is not an absolute, clean path", p.InstallDir)
+	}
+	if len(p.ConfigFiles) == 0 {
+		return errors.New("plan.json lists no config files")
+	}
+	for _, f := range p.ConfigFiles {
+		if !cleanAbs(f) {
+			return fmt.Errorf("the config file %q is not an absolute, clean path", f)
+		}
+		if !strings.HasPrefix(f, p.InstallDir+string(filepath.Separator)) {
+			return fmt.Errorf("the config file %q is outside the Install directory %q", f, p.InstallDir)
+		}
+	}
+	return nil
+}
+
+func cleanAbs(path string) bool {
+	return filepath.IsAbs(path) && filepath.Clean(path) == path
 }

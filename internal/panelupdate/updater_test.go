@@ -333,3 +333,62 @@ func TestUpdaterKeepsFileModes(t *testing.T) {
 		t.Fatalf(".env mode = %v, %v", info.Mode(), err)
 	}
 }
+
+func TestRestoreDatabaseLeavesPanelDBWhenAWalCannotGo(t *testing.T) {
+	r := newUpdaterRig(t, true)
+	db := filepath.Join(r.data, "panel.db")
+	// A non-empty directory named panel.db-wal cannot be removed as a file.
+	wal := db + "-wal"
+	if err := os.MkdirAll(filepath.Join(wal, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreDatabase(r.data, r.dir); err == nil {
+		t.Fatal("want an error")
+	}
+	if got := r.read(t, db); got != "database now" {
+		t.Fatalf("panel.db = %q: it must be untouched", got)
+	}
+}
+
+func TestUpdaterRefusesABadPlan(t *testing.T) {
+	good := func(r *updaterRig) Plan {
+		p, err := ReadPlan(r.dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	cases := map[string]func(p *Plan, r *updaterRig){
+		"other run":        func(p *Plan, _ *updaterRig) { p.Run = "20200101T000000Z" },
+		"empty files":      func(p *Plan, _ *updaterRig) { p.ConfigFiles = nil },
+		"relative file":    func(p *Plan, _ *updaterRig) { p.ConfigFiles = []string{"docker-compose.yml"} },
+		"unclean file":     func(p *Plan, r *updaterRig) { p.ConfigFiles = []string{r.install + "/../x/docker-compose.yml"} },
+		"file outside dir": func(p *Plan, _ *updaterRig) { p.ConfigFiles = []string{"/etc/docker-compose.yml"} },
+		"relative dir":     func(p *Plan, _ *updaterRig) { p.InstallDir = "install" },
+		"unclean dir":      func(p *Plan, r *updaterRig) { p.InstallDir = r.install + "/" },
+		"no project":       func(p *Plan, _ *updaterRig) { p.Project = "" },
+		"no target image":  func(p *Plan, _ *updaterRig) { p.TargetImageID = "" },
+		"no old image":     func(p *Plan, _ *updaterRig) { p.FromImageID = "" },
+		"no domain":        func(p *Plan, _ *updaterRig) { p.Domain = "" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := newUpdaterRig(t, true)
+			p := good(r)
+			mutate(&p, r)
+			if err := writePlan(r.dir, p, []byte(newInstall), []byte(newEnv)); err != nil {
+				t.Fatal(err)
+			}
+			st, err := r.u.Apply(context.Background(), r.run)
+			if err != nil || st.State != StateInterrupted || !strings.Contains(st.Error, "plan was refused") {
+				t.Fatalf("status = %+v, %v", st, err)
+			}
+			if len(r.host.calls) != 0 || r.read(t, r.compose()) != oldInstall {
+				t.Fatalf("the host was touched: %v", r.host.calls)
+			}
+		})
+	}
+	if err := good(newUpdaterRig(t, true)).Validate("20261101T120000Z", "relative"); err == nil {
+		t.Fatal("a relative data dir must be rejected")
+	}
+}

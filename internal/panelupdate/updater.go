@@ -115,8 +115,13 @@ func (u *Updater) Apply(ctx context.Context, run string) (RunStatus, error) {
 		return st, fmt.Errorf("%w: it is %s", ErrNotStarting, st.State)
 	}
 	plan, err := ReadPlan(dir)
+	if err == nil {
+		err = plan.Validate(run, u.DataDir)
+	}
 	if err != nil {
-		return u.finish(dir, st, StateRolledBack, fmt.Sprintf("read plan.json: %v; nothing was changed", err), ""), nil
+		// Nothing was written and no compose ran: the run just ends.
+		u.logf("refusing the plan: %v", err)
+		return u.finish(dir, st, StateInterrupted, fmt.Sprintf("the plan was refused, nothing was changed: %v", err), ""), nil
 	}
 	u.logf("update %s -> %s (run %s)", st.FromVersion, st.ToVersion, run)
 	cause := u.update(ctx, dir, &st, plan)
@@ -240,20 +245,18 @@ func (u *Updater) restoreFiles(dir string) error {
 	return nil
 }
 
-// restoreDatabase copies the run's backup over panel.db and removes the -wal
-// and -shm files of the database it replaces. It only copies files: the
-// Updater never opens the database.
+// restoreDatabase puts the run's backup in place of panel.db. The -wal and
+// -shm files of the database it replaces go first, so a stale WAL can never
+// sit next to the restored file; if one cannot be removed, panel.db is left
+// as it was. It only copies files: the Updater never opens the database.
 func restoreDatabase(dataDir, runDir string) error {
 	db := filepath.Join(dataDir, "panel.db")
-	if err := copyFileAtomic(filepath.Join(runDir, backupDB), db, 0o600); err != nil {
-		return err
-	}
 	for _, sibling := range []string{db + "-wal", db + "-shm"} {
 		if err := os.Remove(sibling); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
-	return nil
+	return copyFileAtomic(filepath.Join(runDir, backupDB), db, 0o600)
 }
 
 // waitHealthy polls until the Service panel runs the wanted image and the
