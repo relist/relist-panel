@@ -39,7 +39,11 @@ export type PanelUpdateRun = {
   startedAt: number;
   /** The run directory that holds the backup; empty before the backup is complete. */
   backupPath: string;
+  /** Each backed-up Install file and .env: where it belongs, and its copy in `backupPath`. */
+  backupFiles: PanelUpdateBackupFile[];
 };
+
+export type PanelUpdateBackupFile = { path: string; copy: string };
 
 export type PanelUpdateStatus = {
   version: string;
@@ -170,14 +174,20 @@ export function checkCommands(runId: string): string {
   return ['docker ps', `docker logs relist-panel-updater-${runId}`].join('\n');
 }
 
-/** What to run on the host to put the backup back by hand. */
-export function restoreCommands(backupPath: string): string {
+/**
+ * What to run on the host to put the backup back by hand. The -wal and -shm
+ * files of the database go first: a stale WAL next to the restored file would
+ * be replayed over it.
+ */
+export function restoreCommands(backupPath: string, backupFiles: PanelUpdateBackupFile[] = []): string {
+  const data = dataDirOf(backupPath);
   return [
     `ls -la ${backupPath}`,
     'cd <install dir>',
     'docker compose stop panel',
-    `cp ${backupPath}/panel.db ${dataDirOf(backupPath)}/panel.db`,
-    '# copy the Install files and .env from the backup back into the install directory',
+    `rm -f ${data}/panel.db-wal ${data}/panel.db-shm`,
+    `cp ${backupPath}/panel.db ${data}/panel.db`,
+    ...backupFiles.map((file) => `cp ${backupPath}/${file.copy} ${file.path}`),
     'docker compose up -d',
   ].join('\n');
 }

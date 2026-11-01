@@ -302,7 +302,7 @@ function RunResult({ onClose, run }: { onClose: () => void; run: PanelUpdateRun 
                 <Text>
                   The backup is in <Text code>{run.backupPath}</Text>. To restore it by hand, run this on the host:
                 </Text>
-                <Commands text={restoreCommands(run.backupPath)} />
+                <Commands text={restoreCommands(run.backupPath, run.backupFiles)} />
               </>
             )}
           </Flex>

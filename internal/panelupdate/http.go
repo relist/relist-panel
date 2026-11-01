@@ -60,6 +60,10 @@ type RunInfo struct {
 	// BackupPath is the run directory that holds the backup, empty before the
 	// backup is complete.
 	BackupPath string `json:"backupPath"`
+	// BackupFiles names each backed-up Install file (and .env) with where it
+	// belongs and its copy in BackupPath, as backup.json has them: the manual
+	// restore copies each back.
+	BackupFiles []BackupFile `json:"backupFiles"`
 }
 
 // InstallStatus says whether the Install was found and, if not, why not.
@@ -125,8 +129,13 @@ func (s *Service) runInfo() *RunInfo {
 		ID: st.Run, State: st.State, Terminal: IsTerminal(st.State), Error: st.Error, RollbackError: st.RollbackError,
 		FromVersion: st.FromVersion, ToVersion: st.ToVersion, StartedAt: st.StartedAt,
 	}
-	if _, err := ReadBackup(RunDir(s.d.DataDir, st.Run)); err == nil {
+	info.BackupFiles = []BackupFile{}
+	if b, err := ReadBackup(RunDir(s.d.DataDir, st.Run)); err == nil {
 		info.BackupPath = RunDir(s.d.DataDir, st.Run)
+		info.BackupFiles = append(info.BackupFiles, b.Config...)
+		if b.Env != nil {
+			info.BackupFiles = append(info.BackupFiles, *b.Env)
+		}
 	}
 	return info
 }

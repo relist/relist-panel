@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,6 +33,9 @@ const (
 	defaultNotesFmt = "https://github.com/relist/relist-panel/releases/tag/v%s"
 	keyEnv          = "RELIST_RELEASE_KEY"
 )
+
+// digestPattern is a full sha256 image digest: the manifest pins an image by it.
+var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Getenv, time.Now); err != nil {
@@ -90,8 +94,8 @@ func manifest(args []string, now func() time.Time) error {
 	if *version == "" || *digest == "" {
 		return errors.New("manifest needs --version and --digest")
 	}
-	if !strings.HasPrefix(*digest, "sha256:") {
-		return fmt.Errorf("the digest %q is not a sha256 digest", *digest)
+	if !digestPattern.MatchString(*digest) {
+		return fmt.Errorf("the digest %q is not a full sha256 digest (sha256: and 64 lowercase hex characters)", *digest)
 	}
 	at := now().UTC()
 	if *released != "" {

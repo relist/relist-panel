@@ -48,6 +48,10 @@ const run = (over: Partial<PanelUpdateRun> = {}): PanelUpdateRun => ({
   toVersion: 'v1.1.0',
   startedAt: 1,
   backupPath: '/var/lib/relist-panel/.panel-update/r1',
+  backupFiles: [
+    { path: '/srv/relist/docker-compose.yml', copy: 'config-0.yml' },
+    { path: '/srv/relist/.env', copy: 'env' },
+  ],
   ...over,
 });
 
@@ -331,6 +335,12 @@ describe('PanelUpdatePage finished runs', () => {
     expect(screen.getByText(/db restore failed/)).toBeTruthy();
     expect(screen.getAllByText(/\/var\/lib\/relist-panel\/\.panel-update\/r1/).length).toBeGreaterThan(0);
     expect(screen.getByText(/docker compose up -d/)).toBeTruthy();
+    const commands = document.body.textContent ?? '';
+    const at = (text: string) => commands.indexOf(text);
+    expect(at('rm -f /var/lib/relist-panel/panel.db-wal /var/lib/relist-panel/panel.db-shm')).toBeGreaterThan(-1);
+    expect(at('rm -f /var/lib/relist-panel/panel.db-wal')).toBeLessThan(at('cp /var/lib/relist-panel/.panel-update/r1/panel.db '));
+    expect(commands).toContain('cp /var/lib/relist-panel/.panel-update/r1/config-0.yml /srv/relist/docker-compose.yml');
+    expect(commands).toContain('cp /var/lib/relist-panel/.panel-update/r1/env /srv/relist/.env');
   });
 
   it('shows Interrupted with the running version, the backup path and the check commands', async () => {

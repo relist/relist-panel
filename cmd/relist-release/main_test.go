@@ -208,3 +208,92 @@ func TestReleaseWorkflowPinsActions(t *testing.T) {
 		t.Fatal("no actions found")
 	}
 }
+
+func TestManifestRejectsAMalformedDigest(t *testing.T) {
+	for name, digest := range map[string]string{
+		"prefix only": "sha256:",
+		"short":       "sha256:abc",
+		"uppercase":   "sha256:" + strings.Repeat("A", 64),
+		"not hex":     "sha256:" + strings.Repeat("g", 64),
+		"too long":    testDigest + "0",
+		"trailing":    testDigest + "\n",
+		"other algo":  "sha512:" + strings.Repeat("a", 64),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := run([]string{"manifest", "--version", "1.0.0", "--digest", digest,
+				"--compose", "../../docker-compose.yml", "--invariants", "../../release/invariants.json",
+				"--manual-steps", "../../release/manual-steps.json", "--out", filepath.Join(t.TempDir(), "m.json")},
+				&bytes.Buffer{}, os.Getenv, fixedNow)
+			if err == nil {
+				t.Fatalf("accepted %q", digest)
+			}
+		})
+	}
+}
+
+type workflowStep struct {
+	Name string            `yaml:"name"`
+	Uses string            `yaml:"uses"`
+	Run  string            `yaml:"run"`
+	Env  map[string]string `yaml:"env"`
+	With map[string]any    `yaml:"with"`
+}
+
+func releaseSteps(t *testing.T) []workflowStep {
+	t.Helper()
+	data, err := os.ReadFile("../../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wf struct {
+		Jobs map[string]struct {
+			Steps []workflowStep `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &wf); err != nil {
+		t.Fatal(err)
+	}
+	return wf.Jobs["release"].Steps
+}
+
+// The signing key is in the environment of the sign step alone, and :latest
+// moves only after that step and the verify step.
+func TestReleaseWorkflowHandlesTheKeyAndLatestCarefully(t *testing.T) {
+	steps := releaseSteps(t)
+	index := func(match func(workflowStep) bool) int {
+		for i, s := range steps {
+			if match(s) {
+				return i
+			}
+		}
+		t.Fatal("step not found")
+		return -1
+	}
+	run := func(sub string) int {
+		return index(func(s workflowStep) bool { return strings.Contains(s.Run, sub) })
+	}
+	for i, s := range steps {
+		_, hasKey := s.Env["RELIST_RELEASE_KEY"]
+		if hasKey != strings.Contains(s.Run, "relist-release sign") {
+			t.Errorf("step %d %q: the private key must be in the sign step's env, and only there", i, s.Name)
+		}
+		if strings.Contains(s.Run, "secrets.") {
+			t.Errorf("step %d %q inlines a secret in its script", i, s.Name)
+		}
+	}
+	build := index(func(s workflowStep) bool { return strings.HasPrefix(s.Uses, "docker/build-push-action@") })
+	if tags, _ := steps[build].With["tags"].(string); strings.Contains(tags, ":latest") {
+		t.Errorf("the build pushes latest before the manifest is signed: %q", tags)
+	}
+	manifest, sign, verify, latest := run("relist-release manifest"), run("relist-release sign"), run("relist-release verify"), run(":latest")
+	if !(build < manifest && manifest < sign && sign < verify && verify < latest) {
+		t.Errorf("order: build %d manifest %d sign %d verify %d latest %d", build, manifest, sign, verify, latest)
+	}
+	if test := run("go test ./cmd/relist-release ./internal/panelupdate"); test > build {
+		t.Error("the tests must run before the image is built")
+	}
+	checkout := index(func(s workflowStep) bool { return strings.HasPrefix(s.Uses, "actions/checkout@") })
+	if steps[checkout].With["persist-credentials"] != false {
+		t.Error("checkout must not persist credentials")
+	}
+}

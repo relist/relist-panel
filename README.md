@@ -225,7 +225,8 @@ The version that ships Panel update is installed by hand, once:
 3. Start it:
    - **Today** (the Install file builds the panel): run
      `docker compose up -d --build`.
-   - **Once the Install file uses the published image** (ticket 08): run
+   - **Once the Install file uses the published image** (its `panel` service has
+     an `image:` from `ghcr.io` and no `build:`): run
      `docker compose pull panel && docker compose up -d`. With no
      `RELIST_PANEL_IMAGE` in `.env`, this starts
      `ghcr.io/relist/relist-panel:latest`; the first Panel update pins the

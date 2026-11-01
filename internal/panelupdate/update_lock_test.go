@@ -502,6 +502,10 @@ func TestStatusReportsNewestRun(t *testing.T) {
 	if rec.Code != 200 || !st.Locked || st.Run == nil || st.Run.ID != run.ID || st.Run.State != StateBackingUp || st.Run.BackupPath != run.Dir || st.Run.Terminal {
 		t.Fatalf("status = %d %+v run=%+v", rec.Code, st, st.Run)
 	}
+	want := []BackupFile{{Path: "/srv/relist/docker-compose.yml", Copy: "config-0.yml"}, {Path: "/srv/relist/.env", Copy: "env"}}
+	if !slices.Equal(st.Run.BackupFiles, want) {
+		t.Fatalf("backup files = %+v, want %+v", st.Run.BackupFiles, want)
+	}
 }
 
 func TestStatusFileIsAtomicAndRoundTrips(t *testing.T) {
