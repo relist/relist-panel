@@ -29,6 +29,7 @@ type UpdateRunner interface {
 	// StartUpdater starts the Container detached under spec.Name and returns
 	// once it runs.
 	StartUpdater(ctx context.Context, spec UpdateSpec) error
-	// StopUpdater runs `docker stop` on the named Updater Container.
+	// StopUpdater sends SIGTERM to the named Updater Container (`docker kill
+	// --signal TERM`), never `docker stop`, whose SIGKILL could land mid-update.
 	StopUpdater(ctx context.Context, name string) error
 }

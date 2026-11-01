@@ -98,7 +98,7 @@ func TestPanelUpdateRunnerStartAndStop(t *testing.T) {
 	if err := r.StopUpdater(context.Background(), "relist-panel-updater-x"); err != nil {
 		t.Fatal(err)
 	}
-	if calls[0][2] != "-d" || strings.Join(calls[1], " ") != "docker stop relist-panel-updater-x" {
+	if calls[0][2] != "-d" || strings.Join(calls[1], " ") != "docker kill --signal TERM relist-panel-updater-x" {
 		t.Fatalf("calls = %v", calls)
 	}
 }

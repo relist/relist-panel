@@ -237,7 +237,9 @@ starts the update in a detached Container (`relist-panel-updater-<run id>`, so a
 dropped SSH session never stops it halfway) and follows its log. Ctrl-C stops
 only the log; the script then prints `docker logs -f relist-panel-updater-<run id>`
 and, while the update still waits for the panel to go quiet,
-`docker stop relist-panel-updater-<run id>`, which cancels it. If the panel does
+`docker kill --signal TERM relist-panel-updater-<run id>`, which cancels it
+(not `docker stop`: once the update is past waiting, its forced kill could stop it
+halfway). If the panel does
 not answer within 20 seconds, the update stops it (a running Deployment may be
 cut), says so, and goes on. Both the page and the script run
 `relist-panel update`, which `relist-panel --help` lists. With `--auto` the

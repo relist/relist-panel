@@ -331,7 +331,7 @@ Run states: `quiescing`, `backing-up`, `writing-files`, `compose-up`, `waiting-h
   Container with `--rm`, waits for it, and returns its report.
 - **Apply:** `POST /api/panel-update/apply` checks the report id is the latest, starts the
   Updater detached with `--report` and `--steps-done`, and returns the run id at once.
-- **Cancel:** `POST /api/panel-update/cancel` runs `docker stop` on the running Updater
+- **Cancel:** `POST /api/panel-update/cancel` sends SIGTERM to the running Updater (`docker kill --signal TERM`; never `docker stop`, whose SIGKILL after the grace period could kill an Updater that has moved past quiescing)
   while the run is `quiescing`, and refuses otherwise.
 - **Prune plans:** the previous panel image and `.panel-update/` are owned by "Panel
   update" and are never offered for removal.
@@ -405,7 +405,7 @@ A failure after the first write prints what was created and the commands to remo
 4. Start `update --report <id> --steps-done … --dir <dir>` detached and
    `docker logs -f` it until it exits. Print the final state from `status.json`.
 5. Ctrl-C stops only the log. The script then prints `docker logs -f
-   relist-panel-updater-<id>` and, while the run is `quiescing`, the `docker stop`
+   relist-panel-updater-<id>` and, while the run is `quiescing`, the `docker kill --signal TERM`
    command that cancels it.
 
 ## Web

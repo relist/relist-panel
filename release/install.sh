@@ -381,7 +381,7 @@ on_update_interrupt() {
   echo "  To follow it again:  docker logs -f $UPDATER_NAME" >&2
   state=$(run_state)
   if [ "$state" = quiescing ]; then
-    echo "  It is still waiting for the panel to go quiet. To cancel it:  docker stop $UPDATER_NAME" >&2
+    echo "  It is still waiting for the panel to go quiet. To cancel it:  docker kill --signal TERM $UPDATER_NAME" >&2
   fi
   exit 130
 }

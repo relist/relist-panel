@@ -106,12 +106,14 @@ func (r *PanelUpdateRunner) StartUpdater(ctx context.Context, spec panelupdate.U
 	return nil
 }
 
-// StopUpdater is `docker stop <name>`: the Updater gets SIGTERM, which aborts a
-// run that is still quiescing.
+// StopUpdater is `docker kill --signal TERM <name>`: the Updater gets SIGTERM,
+// which aborts a run that is still quiescing and is ignored once the backup
+// has started. Never `docker stop`: its SIGKILL after the grace period would
+// kill an Updater that moved past quiescing in the meantime, mid-update.
 func (r *PanelUpdateRunner) StopUpdater(ctx context.Context, name string) error {
 	var stderr bytes.Buffer
-	if err := r.runDocker(ctx, []string{"docker", "stop", name}, nil, io.Discard, &stderr); err != nil {
-		return fmt.Errorf("docker stop: %w: %s", err, strings.TrimSpace(stderr.String()))
+	if err := r.runDocker(ctx, []string{"docker", "kill", "--signal", "TERM", name}, nil, io.Discard, &stderr); err != nil {
+		return fmt.Errorf("docker kill: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
 }

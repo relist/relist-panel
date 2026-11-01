@@ -332,7 +332,7 @@ func (s *Service) postApply(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, u := range found {
 			if u.Running {
-				writeError(w, http.StatusConflict, "The Updater "+u.Name+" is still running. Wait for it, or stop it with docker stop "+u.Name+".")
+				writeError(w, http.StatusConflict, "The Updater "+u.Name+" is still running. Wait for it to finish: docker logs -f "+u.Name+".")
 				return
 			}
 		}

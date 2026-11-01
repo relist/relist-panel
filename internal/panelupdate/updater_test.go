@@ -32,6 +32,8 @@ type fakeHost struct {
 	hangUp map[int]bool
 	// panelDown makes the panel Container listed as exited before the first up.
 	panelDown bool
+	// onStop runs inside ComposeStop.
+	onStop func(service string)
 	// updaters is what UpdaterState answers by name.
 	updaters map[string]UpdaterState
 	states   []string // status.json state seen at each call
@@ -66,6 +68,9 @@ func (h *fakeHost) ComposeStop(_ context.Context, _ Install, service string) err
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.note("stop " + service)
+	if h.onStop != nil {
+		h.onStop(service)
+	}
 	return nil
 }
 
@@ -423,6 +428,28 @@ func TestApplyNoAnswerStopsPanel(t *testing.T) {
 	}
 	if on, _ := ReadStatus(r.dir); on.Note != PanelNoAnswerNote {
 		t.Fatalf("status.json = %+v", on)
+	}
+}
+
+// A run that stopped a panel which did not answer, and then aborts before it
+// writes anything, brings that panel back up: nothing else would.
+func TestApplyNoAnswerThenAbortRestartsPanel(t *testing.T) {
+	r := newUpdaterRig(t, true)
+	r.acks = nil
+	r.host.onStop = func(string) {
+		if err := os.WriteFile(r.env(), []byte("CHANGED=1\n"), 0o600); err != nil {
+			t.Error(err)
+		}
+	}
+	st := r.apply(t)
+	if st.State != StateAborted {
+		t.Fatalf("status = %+v", st)
+	}
+	if r.host.ups != 1 {
+		t.Fatalf("ups = %d, want the stopped panel brought back; calls %v", r.host.ups, r.host.calls)
+	}
+	if r.read(t, r.compose()) != oldInstall {
+		t.Fatal("the Install file was changed")
 	}
 }
 

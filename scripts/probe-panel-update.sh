@@ -22,7 +22,7 @@
 #   2. a second install.sh is refused;
 #   3. a slow Deployment runs; install.sh --update to 1.1.0 logs what it waits
 #      on, then succeeds;
-#   4. an update cancelled with `docker stop` while quiescing ends aborted and
+#   4. an update cancelled with `docker kill --signal TERM` while quiescing ends aborted and
 #      the panel's lock is released;
 #   5. an update whose new panel never answers rolls back, and every Install
 #      file and .env match their bytes from before the run;
@@ -297,7 +297,7 @@ done
 [ "$(status | json '(d["run"] or {}).get("state", "")')" = quiescing ] || { cat "$WORK/update4.out" >&2; fail "step 4: the run never reached quiescing"; }
 UPDATER=$(dind docker ps --filter name=relist-panel-updater- --format '{{.Names}}' | head -n1)
 [ -n "$UPDATER" ] || fail "step 4: no Updater Container"
-dind docker stop "$UPDATER" >/dev/null
+dind docker kill --signal TERM "$UPDATER" >/dev/null
 wait "$UPDATE4" || true
 for _ in $(seq 30); do [ "$(status | json '(d["run"] or {}).get("state", "")' 2>/dev/null)" = aborted ] && break; sleep 1; done
 [ "$(status | json 'd["run"]["state"]')" = aborted ] || fail "step 4: the run is $(status | json 'd["run"]["state"]'), want aborted"

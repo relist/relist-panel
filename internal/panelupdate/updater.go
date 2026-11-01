@@ -210,6 +210,18 @@ func (u *Updater) Apply(ctx context.Context, a ApplyArgs) (RunStatus, error) {
 	if err := u.step(dir, &st, StateQuiescing); err != nil {
 		return RunStatus{}, fmt.Errorf("write status: %w", err)
 	}
+	// stopped is set once this run has stopped a panel that did not answer:
+	// an abort after that brings it back up, since nothing else would.
+	stopped := false
+	abort := func(reason string) RunStatus {
+		if stopped {
+			u.logf("starting the stopped panel again")
+			if err := u.composeUp(ctx, a.In); err != nil {
+				reason += "; starting the stopped panel again failed: " + err.Error()
+			}
+		}
+		return u.finish(dir, st, StateAborted, reason, "")
+	}
 	outcome, detail, err := u.quiesce(ctx, dir, &st, a.In)
 	if err != nil {
 		return u.finish(dir, st, StateAborted, "the quiesce could not finish: "+err.Error(), ""), nil
@@ -225,11 +237,12 @@ func (u *Updater) Apply(ctx context.Context, a ApplyArgs) (RunStatus, error) {
 			if err := u.Host.ComposeStop(ctx, a.In, panelServiceName); err != nil {
 				return u.finish(dir, st, StateAborted, "stop the panel: "+err.Error(), ""), nil
 			}
+			stopped = true
 		}
 		st.Note = PanelNoAnswerNote
 	}
 	if u.signalled() {
-		return u.finish(dir, st, StateAborted, "cancelled", ""), nil
+		return abort("cancelled"), nil
 	}
 	// 5. Backup. From here on a signal is ignored.
 	if err := u.step(dir, &st, StateBackingUp); err != nil {
@@ -240,15 +253,15 @@ func (u *Updater) Apply(ctx context.Context, a ApplyArgs) (RunStatus, error) {
 		err = sameFiles(files, cand.Files)
 	}
 	if err != nil {
-		return u.finish(dir, st, StateAborted, "the Install changed while the update waited: "+err.Error(), ""), nil
+		return abort("the Install changed while the update waited: " + err.Error()), nil
 	}
 	if err := writeBackup(ctx, u.DataDir, dir, a.In, files); err != nil {
-		return u.finish(dir, st, StateAborted, "back up: "+err.Error(), ""), nil
+		return abort("back up: " + err.Error()), nil
 	}
 	pruneRuns(u.DataDir, a.Run)
 	if err := refuseSymlinks(a.In); err != nil {
 		u.logf("refusing: %v", err)
-		return u.finish(dir, st, StateAborted, fmt.Sprintf("nothing was changed: %v", err), ""), nil
+		return abort(fmt.Sprintf("nothing was changed: %v", err)), nil
 	}
 	u.logf("update %s -> %s (run %s)", st.FromVersion, st.ToVersion, a.Run)
 	cause := u.update(ctx, dir, &st, a.In, cand)
@@ -293,7 +306,7 @@ func (u *Updater) settleStale(ctx context.Context) error {
 		return fmt.Errorf("inspect the Updater of run %s: %w", st.Run, err)
 	}
 	if state.Running {
-		return fmt.Errorf("the Updater %s is still running; wait for it, or stop it with docker stop %s", UpdaterName(st.Run), UpdaterName(st.Run))
+		return fmt.Errorf("the Updater %s is still running; wait for it to finish: docker logs -f %s", UpdaterName(st.Run), UpdaterName(st.Run))
 	}
 	st.State, st.Error = StateInterrupted, fmt.Sprintf("the Updater Container exited before the run was over (last state: %s)", st.State)
 	u.logf("run %s was left %s: marking it interrupted", st.Run, st.State)
