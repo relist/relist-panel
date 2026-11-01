@@ -60,8 +60,8 @@ const supportedSchema = 1
 // ParseManifest checks sig, a raw ed25519 signature, over the exact bytes of
 // data, then parses them. A manifest that fails either step is no manifest.
 func ParseManifest(data, sig []byte, key ed25519.PublicKey) (*Manifest, error) {
-	if len(key) != ed25519.PublicKeySize {
-		return nil, errors.New("the release public key is not valid")
+	if err := checkKey(key); err != nil {
+		return nil, err
 	}
 	if len(sig) != ed25519.SignatureSize || !ed25519.Verify(key, data, sig) {
 		return nil, errors.New("the manifest signature does not match")
@@ -88,6 +88,9 @@ func DecodeKey(s string) (ed25519.PublicKey, error) {
 	b, err := base64.StdEncoding.DecodeString(s)
 	if err != nil || len(b) != ed25519.PublicKeySize {
 		return nil, errors.New("not a base64 ed25519 public key")
+	}
+	if err := checkKey(b); err != nil {
+		return nil, err
 	}
 	return ed25519.PublicKey(b), nil
 }

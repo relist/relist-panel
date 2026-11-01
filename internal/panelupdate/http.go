@@ -63,6 +63,8 @@ func (s *Service) status(r *http.Request) (Status, error) {
 	}
 	if out.Development {
 		out.Message = developmentMessage
+	} else if s.NoKey() {
+		out.Message = ErrNoKey.Error()
 	}
 	if m != nil {
 		out.Available = &Available{Version: m.Version, ReleasedAt: m.ReleasedAt, NotesURL: m.NotesURL, ManualSteps: m.ManualSteps}

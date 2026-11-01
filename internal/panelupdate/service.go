@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -56,11 +57,11 @@ type Service struct {
 	mu sync.Mutex // one check at a time
 	// locked reports whether the update lock is on. While it is, the check
 	// writes nothing. Task 5 wires it; until then it is always false.
-	locked func() bool
+	locked atomic.Pointer[func() bool]
 }
 
 func New(d Deps) *Service {
-	if d.Key == nil {
+	if d.Key == nil && releasePublicKey != "" {
 		key, err := DecodeKey(releasePublicKey)
 		if err != nil {
 			log.Printf("panelupdate: release public key: %v", err)
@@ -79,11 +80,23 @@ func New(d Deps) *Service {
 	if d.After == nil {
 		d.After = time.After
 	}
-	return &Service{d: d, locked: func() bool { return false }}
+	return &Service{d: d}
 }
 
-// SetLocked installs the update-lock hook.
-func (s *Service) SetLocked(f func() bool) { s.locked = f }
+// SetLocked installs the update-lock hook. It is safe to call while the
+// scheduler runs.
+func (s *Service) SetLocked(f func() bool) { s.locked.Store(&f) }
+
+func (s *Service) isLocked() bool {
+	f := s.locked.Load()
+	return f != nil && (*f)()
+}
+
+// ErrNoKey means this build has no usable release key.
+var ErrNoKey = errors.New("This build has no release key; updates are not offered")
+
+// NoKey reports a build that cannot verify any manifest.
+func (s *Service) NoKey() bool { return checkKey(s.d.Key) != nil }
 
 // Development reports a build that was not stamped with a release version.
 // Such a build is never offered an update.
@@ -120,13 +133,19 @@ func (s *Service) Available(ctx context.Context) (*Manifest, error) {
 func (s *Service) CheckNow(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.locked() {
+	if s.isLocked() {
 		return ErrBusy
+	}
+	if s.NoKey() {
+		return ErrNoKey
 	}
 	now := s.d.Now()
 	cand, sig, err := s.fetch(ctx)
 	if err != nil {
 		log.Printf("panelupdate: check: %v", err)
+		if s.isLocked() { // the lock came on during the fetch
+			return ErrBusy
+		}
 		if werr := s.d.Store.RecordFailure(ctx, now, err.Error()); werr != nil {
 			return werr
 		}
@@ -135,6 +154,9 @@ func (s *Service) CheckNow(ctx context.Context) error {
 	keep, keepSig, err := s.best(ctx, cand, sig)
 	if err != nil {
 		return err
+	}
+	if s.isLocked() { // the lock came on during the fetch: write nothing
+		return ErrBusy
 	}
 	return s.d.Store.RecordSuccess(ctx, now, keep, keepSig)
 }
@@ -239,7 +261,7 @@ func (s *Service) tick(ctx context.Context) {
 		log.Printf("panelupdate: read settings: %v", err)
 		return
 	}
-	if !st.CheckEnabled || s.locked() {
+	if !st.CheckEnabled || s.isLocked() {
 		return
 	}
 	// A failure is already logged and recorded.

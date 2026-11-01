@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -56,6 +57,7 @@ type release struct {
 	sig      atomic.Value // []byte
 	fail     atomic.Bool
 	hits     atomic.Int32
+	onHit    func()
 }
 
 func newRelease(t *testing.T, priv ed25519.PrivateKey) *release {
@@ -63,6 +65,9 @@ func newRelease(t *testing.T, priv ed25519.PrivateKey) *release {
 	r := &release{key: priv}
 	r.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		r.hits.Add(1)
+		if r.onHit != nil {
+			r.onHit()
+		}
 		if r.fail.Load() {
 			http.Error(w, "boom", http.StatusInternalServerError)
 			return
@@ -337,9 +342,70 @@ func TestSchedulerSkipsWhileLocked(t *testing.T) {
 	}
 }
 
-func TestPlaceholderKeyDecodes(t *testing.T) {
-	if _, err := DecodeKey(releasePublicKey); err != nil {
-		t.Fatal(err)
+func TestBuildWithoutReleaseKeyVerifiesNothing(t *testing.T) {
+	_, priv := newKey(t)
+	rel := newRelease(t, priv)
+	rel.publish(manifestJSON("1.4.0"))
+	s := New(Deps{Store: NewStore(newDB(t)), Version: "1.3.0", ManifestURL: rel.srv.URL + "/m.json"})
+	if !s.NoKey() {
+		t.Fatal("the placeholder is no key")
+	}
+	if err := s.CheckNow(context.Background()); err != ErrNoKey {
+		t.Fatalf("err = %v, want ErrNoKey", err)
+	}
+	if rel.hits.Load() != 0 || availableVersion(t, s) != "" {
+		t.Fatal("nothing should be fetched or offered")
+	}
+	_, st := serve(t, s, "GET", "/api/panel-update/status", "")
+	if st.Message != ErrNoKey.Error() {
+		t.Fatalf("message = %q", st.Message)
+	}
+}
+
+func TestSmallOrderKeysAreRejected(t *testing.T) {
+	zero := make([]byte, 32)
+	one := make([]byte, 32)
+	one[0] = 1
+	minusOne := make([]byte, 32) // y = p-1
+	minusOne[0], minusOne[31] = 0xec, 0x7f
+	for i := 1; i < 31; i++ {
+		minusOne[i] = 0xff
+	}
+	nonCanonical := append([]byte(nil), minusOne...) // y = p+1 reduces to 1
+	nonCanonical[0] = 0xee
+	for name, k := range map[string][]byte{"zero": zero, "identity": one, "order-2": minusOne, "non-canonical": nonCanonical} {
+		if err := checkKey(k); err == nil {
+			t.Errorf("%s key accepted", name)
+		}
+		if _, err := DecodeKey(base64.StdEncoding.EncodeToString(k)); err == nil {
+			t.Errorf("%s key decoded", name)
+		}
+		// A signature made for such a key (all zero: R = 0, S = 0) verifies nothing.
+		if _, err := ParseManifest(manifestJSON("1.4.0"), make([]byte, 64), k); err == nil {
+			t.Errorf("%s key verified a crafted signature", name)
+		}
+	}
+	pub, _ := newKey(t)
+	if err := checkKey(pub); err != nil {
+		t.Fatalf("a real key: %v", err)
+	}
+}
+
+func TestLockTurningOnDuringFetchWritesNothing(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		s, rel := newService(t, "1.3.0")
+		rel.publish(manifestJSON("1.4.0"))
+		rel.fail.Store(fail)
+		var on atomic.Bool
+		s.SetLocked(on.Load)
+		rel.onHit = func() { on.Store(true) } // the update starts while the check is in flight
+		if err := s.CheckNow(context.Background()); err != ErrBusy {
+			t.Fatalf("fail=%v: err = %v, want ErrBusy", fail, err)
+		}
+		st, _ := s.d.Store.Settings(context.Background())
+		if st.LastCheckAt != nil || st.LastError != "" || availableVersion(t, s) != "" {
+			t.Fatalf("fail=%v: wrote %+v", fail, st)
+		}
 	}
 }
 
