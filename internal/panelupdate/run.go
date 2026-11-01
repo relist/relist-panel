@@ -15,18 +15,17 @@ import (
 // States of an update run, as written to status.json. The panel writes the
 // first three, the Updater the rest, and the watcher writes interrupted.
 const (
-	StateQuiescing       = "quiescing"
-	StateBackingUp       = "backing-up"
-	stateStartingUpdater = "starting-updater"
-	StateAborted         = "aborted"
-	StateWritingFiles    = "writing-files"
-	StateComposeUp       = "compose-up"
-	StateWaitingHealth   = "waiting-health"
-	StateSucceeded       = "succeeded"
-	StateRollingBack     = "rolling-back"
-	StateRolledBack      = "rolled-back"
-	StateRollbackFailed  = "rollback-failed"
-	StateInterrupted     = "interrupted"
+	StateQuiescing      = "quiescing"
+	StateBackingUp      = "backing-up"
+	StateAborted        = "aborted"
+	StateWritingFiles   = "writing-files"
+	StateComposeUp      = "compose-up"
+	StateWaitingHealth  = "waiting-health"
+	StateSucceeded      = "succeeded"
+	StateRollingBack    = "rolling-back"
+	StateRolledBack     = "rolled-back"
+	StateRollbackFailed = "rollback-failed"
+	StateInterrupted    = "interrupted"
 )
 
 const (

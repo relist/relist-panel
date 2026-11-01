@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -147,6 +148,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		Store: panelupdate.NewStore(db), Version: d.Version, ManifestURL: panelupdate.ManifestURLFromEnv(),
 		Self: d.PanelSelf, Helper: d.PanelHelper, Docker: d.PanelDocker, Updater: d.PanelUpdater,
 		DataDir: dataDir, InstallFile: d.PanelInstallFile, Domain: d.PanelDomain, DeploysBusy: queue.Busy, Queue: queue,
+		WaitingOn: func() string { return updateWaitingOn(ctx, db, queue) },
 		MigrationLocked: func(ctx context.Context) (bool, error) {
 			if migrationOptions == nil {
 				return false, nil
@@ -300,4 +302,19 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 	if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
 		log.Printf("write health response: %v", err)
 	}
+}
+
+// updateWaitingOn says what a quiescing Panel update waits for. It is asked
+// only while the Deployment queue or the scan queue is not idle, so with no
+// Deployment running the wait is the scan worker's current task.
+func updateWaitingOn(ctx context.Context, db *sql.DB, queue *deployments.Queue) string {
+	composeID, number, ok := queue.Running()
+	if !ok {
+		return "a vulnerability scan"
+	}
+	var name string
+	if err := db.QueryRowContext(ctx, "SELECT name FROM composes WHERE id = ?", composeID).Scan(&name); err != nil {
+		return fmt.Sprintf("Deployment #%d", number)
+	}
+	return fmt.Sprintf("Deployment %s #%d", name, number)
 }

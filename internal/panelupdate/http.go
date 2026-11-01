@@ -212,15 +212,5 @@ func (s *Service) postApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	id, err := s.Apply(r.Context(), body.ReportID, body.ManualStepsDone)
-	var refusal *Refusal
-	switch {
-	case errors.As(err, &refusal):
-		writeError(w, http.StatusConflict, refusal.Message)
-	case err != nil:
-		log.Printf("panelupdate: apply: %v", err)
-		writeError(w, http.StatusInternalServerError, "could not start the update: "+err.Error())
-	default:
-		writeJSON(w, http.StatusAccepted, map[string]string{"id": id})
-	}
+	writeError(w, http.StatusNotImplemented, "the update container is not wired yet")
 }

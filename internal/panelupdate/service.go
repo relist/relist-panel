@@ -70,6 +70,9 @@ type Deps struct {
 	Updater UpdaterContainers
 	// Domain is RELIST_DOMAIN: the Host and SNI of the Updater's health request.
 	Domain string
+	// WaitingOn says what the update lock waits for: "Deployment api #3", a
+	// vulnerability scan, or "" when nothing.
+	WaitingOn func() string
 	// After returns a channel that fires after d. Nil means time.After.
 	After func(d time.Duration) <-chan time.Time
 }
@@ -81,17 +84,19 @@ type Service struct {
 	// writes nothing. New wires it to Locked.
 	locked atomic.Pointer[func() bool]
 	// lockOn is the update lock; lockMu orders turning it on and off with the
-	// queue's hold. runMu serializes QuiesceAndBackup.
+	// queue's hold.
 	lockOn atomic.Bool
 	lockMu sync.Mutex
-	runMu  sync.Mutex
-	// guard is the run between QuiesceAndBackup and MarkStarted, which has no
-	// Updater Container yet; settled is the last run and state the watcher
-	// finished with. Both are guarded by guardMu.
-	guardMu sync.Mutex
-	guard   string
-	settled string
-	wake    chan struct{}
+	// settled is the last run and state the watcher finished with; settleMu
+	// guards it.
+	settleMu sync.Mutex
+	settled  string
+	wake     chan struct{}
+	// qs is the quiesce request the watcher is answering, qsMu guards it, and
+	// beat is the heartbeat counter of panel.json.
+	qsMu sync.Mutex
+	qs   *quiesceState
+	beat atomic.Int64
 	// pfRun serializes Preflights; pfMu guards latest.
 	pfRun  sync.Mutex
 	pfMu   sync.Mutex

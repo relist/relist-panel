@@ -240,6 +240,9 @@ func TestMiddlewareWhileLocked(t *testing.T) {
 		{"POST", "/api/auth/2fa/disable", 503},
 		{"GET", "/api/auth/account", 503},
 		{"GET", "/api/panel-update/status", 200},
+		{"POST", "/api/panel-update/cancel", 200},
+		{"POST", "/api/panel-update/apply", 503},
+		{"POST", "/api/panel-update/preflight", 503},
 		{"GET", "/", 200},
 		{"GET", "/assets/app.js", 200},
 	} {
@@ -266,109 +269,6 @@ func TestDailyCheckSkipsWriteWhileLocked(t *testing.T) {
 	}
 	if st, _ := s.d.Store.Settings(t.Context()); st.LastCheckAt != nil {
 		t.Fatal("a check was recorded while locked")
-	}
-}
-
-func TestQuiesceAndBackup(t *testing.T) {
-	r := newLockRig(t)
-	r.writeRun(t, "20261031T100000Z", StateSucceeded) // the previous run's backup
-	run, err := r.s.QuiesceAndBackup(t.Context(), r.install(), "1.3.0", "1.4.0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if run.ID != "20261101T120000Z" || !r.s.Locked() {
-		t.Fatalf("run = %+v locked = %v", run, r.s.Locked())
-	}
-	if got := r.queue.list(); !slices.Equal(got, []string{"hold", "cancel", "wait-idle"}) || r.scans.waited != 1 {
-		t.Fatalf("events = %v scans waited = %d", got, r.scans.waited)
-	}
-	st, err := ReadStatus(run.Dir)
-	if err != nil || st.State != StateBackingUp || st.FromVersion != "1.3.0" || st.ToVersion != "1.4.0" {
-		t.Fatalf("status = %+v, %v", st, err)
-	}
-	for _, f := range []string{"panel.db", "config-0.yml", "env", "backup.json", "status.json"} {
-		if _, err := os.Stat(filepath.Join(run.Dir, f)); err != nil {
-			t.Errorf("backup lacks %s: %v", f, err)
-		}
-	}
-	b, err := ReadBackup(run.Dir)
-	if err != nil || len(b.Config) != 1 || b.Config[0].Path != "/srv/relist/docker-compose.yml" || b.Env == nil || b.Env.Path != "/srv/relist/.env" {
-		t.Fatalf("backup = %+v, %v", b, err)
-	}
-	if data, _ := os.ReadFile(filepath.Join(run.Dir, "env")); string(data) != "RELIST_DOMAIN=x\n" {
-		t.Fatalf("env copy = %q", data)
-	}
-	if _, err := os.Stat(RunDir(r.dir, "20261031T100000Z")); !os.IsNotExist(err) {
-		t.Fatalf("the previous run's directory stays: %v", err)
-	}
-	// Until MarkStarted the watcher leaves the run alone, though it has no Updater.
-	r.s.watchOnce(t.Context())
-	if st, _ := ReadStatus(run.Dir); st.State != StateBackingUp || !r.s.Locked() {
-		t.Fatalf("watcher touched a guarded run: %+v", st)
-	}
-	// A second run is refused while the lock is on.
-	if _, err := r.s.QuiesceAndBackup(t.Context(), r.install(), "1.3.0", "1.4.0"); !errors.Is(err, ErrUpdateRunning) {
-		t.Fatalf("second run = %v", err)
-	}
-}
-
-func TestQuiesceKeepsPreviousBackupWhenThisOneFails(t *testing.T) {
-	r := newLockRig(t)
-	r.writeRun(t, "20261031T100000Z", StateSucceeded)
-	delete(r.files.files, "/srv/relist/docker-compose.yml") // the Install file cannot be read
-	_, err := r.s.QuiesceAndBackup(t.Context(), r.install(), "1.3.0", "1.4.0")
-	if err == nil {
-		t.Fatal("want an error")
-	}
-	if _, serr := os.Stat(RunDir(r.dir, "20261031T100000Z")); serr != nil {
-		t.Fatalf("previous backup removed: %v", serr)
-	}
-	st, ok, _ := NewestRun(r.dir)
-	if !ok || st.State != StateInterrupted || st.Error == "" || r.s.Locked() {
-		t.Fatalf("newest = %+v locked = %v", st, r.s.Locked())
-	}
-	if ev := r.queue.list(); ev[len(ev)-1] != "release" {
-		t.Fatalf("queue not released: %v", ev)
-	}
-	if rows := r.rows(t); len(rows) != 1 || !strings.HasPrefix(rows[0], "20261101T120000Z:interrupted:") {
-		t.Fatalf("rows = %v", rows)
-	}
-}
-
-func TestQuiesceRefusedWhileMigrationLocked(t *testing.T) {
-	r := newLockRig(t)
-	r.migr = true
-	if _, err := r.s.QuiesceAndBackup(t.Context(), r.install(), "1.3.0", "1.4.0"); !errors.Is(err, ErrMigrationLocked) {
-		t.Fatalf("err = %v", err)
-	}
-	if r.s.Locked() || len(r.queue.list()) != 0 {
-		t.Fatal("lock taken")
-	}
-}
-
-func TestQuiesceWaitsForIdleQueue(t *testing.T) {
-	r := newLockRig(t)
-	r.queue.idle = make(chan struct{})
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() {
-		_, err := r.s.QuiesceAndBackup(ctx, r.install(), "1.3.0", "1.4.0")
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		t.Fatalf("returned before the queue was idle: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	if !r.s.Locked() {
-		t.Fatal("lock off while waiting")
-	}
-	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v", err)
-	}
-	if r.s.Locked() {
-		t.Fatal("lock left on after a failed quiesce")
 	}
 }
 
@@ -479,35 +379,6 @@ func TestWatcherKeepsRunOnInspectError(t *testing.T) {
 	}
 }
 
-func TestMarkStartedHandsRunToWatcher(t *testing.T) {
-	r := newLockRig(t)
-	run, err := r.s.QuiesceAndBackup(t.Context(), r.install(), "1.3.0", "1.4.0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.s.MarkStarted(run)
-	r.s.watchOnce(t.Context()) // no Updater Container: the run is dead
-	if st, _, _ := NewestRun(r.dir); st.State != StateInterrupted || r.s.Locked() {
-		t.Fatalf("status = %+v locked = %v", st, r.s.Locked())
-	}
-}
-
-func TestStatusReportsNewestRun(t *testing.T) {
-	r := newLockRig(t)
-	run, err := r.s.QuiesceAndBackup(t.Context(), r.install(), "1.3.0", "1.4.0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec, st := serve(t, r.s, "GET", "/api/panel-update/status", "")
-	if rec.Code != 200 || !st.Locked || st.Run == nil || st.Run.ID != run.ID || st.Run.State != StateBackingUp || st.Run.BackupPath != run.Dir || st.Run.Terminal {
-		t.Fatalf("status = %d %+v run=%+v", rec.Code, st, st.Run)
-	}
-	want := []BackupFile{{Path: "/srv/relist/docker-compose.yml", Copy: "config-0.yml"}, {Path: "/srv/relist/.env", Copy: "env"}}
-	if !slices.Equal(st.Run.BackupFiles, want) {
-		t.Fatalf("backup files = %+v, want %+v", st.Run.BackupFiles, want)
-	}
-}
-
 func TestStatusFileIsAtomicAndRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	want := RunStatus{Run: "20261101T110000Z", State: StateComposeUp, FromVersion: "a", ToVersion: "b", StartedAt: 5}
@@ -527,33 +398,88 @@ func TestStatusFileIsAtomicAndRoundTrips(t *testing.T) {
 	}
 }
 
-func TestQuiesceKeepsARollbackFailedRunUntilALaterOneSucceeded(t *testing.T) {
+func TestPruneKeepsARollbackFailedRunUntilALaterOneSucceeded(t *testing.T) {
 	r := newLockRig(t)
 	r.writeRun(t, "20261029T100000Z", StateRollbackFailed) // superseded by the next failure
 	r.writeRun(t, "20261030T100000Z", StateRollbackFailed)
 	r.writeRun(t, "20261031T100000Z", StateRolledBack)
-	run, err := r.s.QuiesceAndBackup(t.Context(), r.install(), "1.3.0", "1.4.0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	r.writeRun(t, "20261101T100000Z", StateBackingUp)
+	pruneRuns(r.dir, "20261101T100000Z")
 	exists := func(id string) bool {
 		_, err := os.Stat(RunDir(r.dir, id))
 		return err == nil
 	}
-	if exists("20261029T100000Z") || !exists("20261030T100000Z") || exists("20261031T100000Z") || !exists(run.ID) {
+	if exists("20261029T100000Z") || !exists("20261030T100000Z") || exists("20261031T100000Z") || !exists("20261101T100000Z") {
 		t.Fatal("only the newest rollback-failed run and the new one may stay")
 	}
 	// The new run succeeds; the next backup clears the failed one.
-	r.s.AbortRun(run, "") // lock off
-	if err := r.s.SetRunState(run, StateSucceeded, ""); err != nil {
-		t.Fatal(err)
-	}
-	r.now = time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
-	next, err := r.s.QuiesceAndBackup(t.Context(), r.install(), "1.4.0", "1.5.0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if exists("20261030T100000Z") || exists(run.ID) || !exists(next.ID) {
+	r.writeRun(t, "20261101T100000Z", StateSucceeded)
+	r.writeRun(t, "20261102T100000Z", StateBackingUp)
+	pruneRuns(r.dir, "20261102T100000Z")
+	if exists("20261030T100000Z") || exists("20261101T100000Z") || !exists("20261102T100000Z") {
 		t.Fatal("a later success must release the rollback-failed run")
+	}
+}
+
+func TestStatusReportsNewestRun(t *testing.T) {
+	r := newLockRig(t)
+	r.writeRun(t, "20261101T110000Z", StateBackingUp)
+	dir := RunDir(r.dir, "20261101T110000Z")
+	if err := os.WriteFile(filepath.Join(dir, "config-0.yml"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	meta := `{"config":[{"path":"/srv/relist/docker-compose.yml","copy":"config-0.yml"}],"env":null}`
+	if err := os.WriteFile(filepath.Join(dir, backupMeta), []byte(meta), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.s.StartLocked(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rec, st := serve(t, r.s, "GET", "/api/panel-update/status", "")
+	if rec.Code != 200 || !st.Locked || st.Run == nil || st.Run.ID != "20261101T110000Z" || st.Run.State != StateBackingUp || st.Run.BackupPath != dir || st.Run.Terminal {
+		t.Fatalf("status = %d %+v run=%+v", rec.Code, st, st.Run)
+	}
+	want := []BackupFile{{Path: "/srv/relist/docker-compose.yml", Copy: "config-0.yml"}}
+	if !slices.Equal(st.Run.BackupFiles, want) {
+		t.Fatalf("backup files = %+v, want %+v", st.Run.BackupFiles, want)
+	}
+}
+
+func TestRunInfoCarriesTheOutcome(t *testing.T) {
+	r := newLockRig(t)
+	dir := RunDir(r.dir, "20261101T120000Z")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStatus(dir, RunStatus{Run: "20261101T120000Z", State: StateRollbackFailed, Error: "not healthy", RollbackError: "disk full"}, r.s.d.Now()); err != nil {
+		t.Fatal(err)
+	}
+	_, status := serve(t, r.s, http.MethodGet, "/api/panel-update/status", "")
+	if status.Run == nil || status.Run.State != StateRollbackFailed || !status.Run.Terminal ||
+		status.Run.Error != "not healthy" || status.Run.RollbackError != "disk full" {
+		t.Fatalf("run = %+v", status.Run)
+	}
+}
+
+func TestPreviousImageIsTheLastSucceededRunsFromImage(t *testing.T) {
+	r := newLockRig(t)
+	ctx := context.Background()
+	if got, err := r.s.PreviousImage(ctx); got != "" || err != nil {
+		t.Fatalf("before any run: %q, %v", got, err)
+	}
+	record := func(run, state, image string) {
+		t.Helper()
+		if err := r.s.d.Store.RecordRun(ctx, RunStatus{Run: run, State: state, FromImage: image, ToVersion: "1"}, r.s.d.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record("20261101T120000Z", StateSucceeded, "sha256:one")
+	record("20261102T120000Z", StateRolledBack, "sha256:two")
+	if got, _ := r.s.PreviousImage(ctx); got != "sha256:one" {
+		t.Fatalf("got %q: a rolled-back run's image is not the previous one", got)
+	}
+	record("20261103T120000Z", StateSucceeded, "sha256:three")
+	if got, _ := r.s.PreviousImage(ctx); got != "sha256:three" {
+		t.Fatalf("got %q", got)
 	}
 }

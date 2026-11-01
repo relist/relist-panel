@@ -2,6 +2,7 @@ package panelupdate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -13,6 +14,10 @@ const (
 	// settled; a new run wakes it sooner.
 	watchIdle = time.Minute
 )
+
+// ErrMigrationLocked is the reason the panel refuses a quiesce request while a
+// server Migration holds its lock.
+var ErrMigrationLocked = errors.New("a server Migration holds the lock; Panel update waits until it is over")
 
 // UpdaterState is what the Engine says of an Updater Container.
 type UpdaterState struct {
@@ -87,13 +92,16 @@ func (s *Service) watchOnce(ctx context.Context) (settled bool) {
 	if !ok {
 		return true
 	}
-	if s.guarded(st.Run) {
-		return false
-	}
 	if IsTerminal(st.State) {
+		s.dropQuiesce()
 		return s.settle(ctx, st)
 	}
-	return s.checkUpdater(ctx, st)
+	if s.checkUpdater(ctx, st) {
+		s.dropQuiesce()
+		return true
+	}
+	s.answerQuiesce(ctx, st)
+	return false
 }
 
 // settle copies a finished run to panel_updates, releases the lock and removes
@@ -159,15 +167,15 @@ func (s *Service) checkUpdater(ctx context.Context, st RunStatus) bool {
 }
 
 func (s *Service) settledKey() string {
-	s.guardMu.Lock()
-	defer s.guardMu.Unlock()
+	s.settleMu.Lock()
+	defer s.settleMu.Unlock()
 	return s.settled
 }
 
 func (s *Service) setSettled(key string) {
-	s.guardMu.Lock()
+	s.settleMu.Lock()
 	s.settled = key
-	s.guardMu.Unlock()
+	s.settleMu.Unlock()
 }
 
 // recordNewest copies the newest run to panel_updates when it is over.
