@@ -213,18 +213,25 @@ What Panel update does not promise:
 To try the whole cycle, update and rollback, against two images inside a
 `docker:dind` host: `task probe:panel-update`.
 
+`relist-panel --help` lists the panel's subcommands; an unknown argument prints
+the usage and exits instead of starting the server.
+
 #### One-time manual upgrade
 
 The version that ships Panel update is installed by hand, once:
 
 1. Replace `docker-compose.yml` with the new one.
 2. Move any edits you made to it into `docker-compose.override.yml`.
-3. Run `docker compose pull panel && docker compose up -d`. With no
-   `RELIST_PANEL_IMAGE` in `.env`, this starts
-   `ghcr.io/relist/relist-panel:latest`; the first Panel update pins the digest.
+3. Start it:
+   - **Today** (the Install file builds the panel): run
+     `docker compose up -d --build`.
+   - **Once the Install file uses the published image** (ticket 08): run
+     `docker compose pull panel && docker compose up -d`. With no
+     `RELIST_PANEL_IMAGE` in `.env`, this starts
+     `ghcr.io/relist/relist-panel:latest`; the first Panel update pins the
+     digest.
 
-After that, Panel update does the rest. (Today's Install file still builds the
-panel: use `docker compose up -d --build` instead, as in the install section.)
+After that, Panel update does the rest.
 
 ### Upgrading an existing install
 
