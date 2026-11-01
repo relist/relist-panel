@@ -236,7 +236,9 @@ with 409 if the result differs (the files changed in between). Then:
    - **Scan queue:** gated, the same way it yields to the Migration lock; then wait for
      its current task to finish.
    - **API writes:** refused with 503 `The panel is updating`. These stay allowed:
-     `/healthz`, `/api/auth/*` and `GET /api/panel-update/*`. This is the same
+     `/healthz`, `/api/auth/status`, `/api/auth/login`, `/api/auth/logout` and
+     `GET /api/panel-update/*` (password and 2FA changes are refused: a rollback would
+     silently revert them). This is the same
      middleware shape as the Migration lock (`allowedWhileLocked`), with its own
      allowlist.
 
