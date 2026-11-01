@@ -336,7 +336,9 @@ Read Ant Design's `llms.txt` and the component pages before building. Follow
 **Update** opens a confirm that states:
 - the versions;
 - the Services that will be recreated (and the Traefik warning);
-- that Deployments wait until the update ends.
+- that queued Deployments are cancelled and new ones are refused until the update ends
+  (the same as a Migration lock: a held queue would otherwise keep running rows already
+  queued).
 
 It uses a plain confirm, not a `DangerModal`, because the update rolls itself back.
 
