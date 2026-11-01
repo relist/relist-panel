@@ -79,7 +79,8 @@ func owner(kind Kind, c Candidate, owners Ownership) string {
 	case Volumes, AllVolumes:
 		return owners.Volumes[c.Name]
 	case Images, UnusedImages:
-		for _, ref := range append(append([]string{}, c.Tags...), c.Digests...) {
+		// An image whose tag moved on has none left, so the ID names it too.
+		for _, ref := range append(append([]string{c.ID}, c.Tags...), c.Digests...) {
 			if compose, ok := owners.Images[normalizeReference(ref)]; ok {
 				return compose
 			}

@@ -3,6 +3,7 @@ package panelupdate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -72,12 +73,28 @@ func (s *Store) RecordRun(ctx context.Context, st RunStatus, now time.Time) erro
 	if finished == 0 {
 		finished = now.Unix()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO panel_updates (run_id, from_version, to_version, state, error, started_at, finished_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+	errText := st.Error
+	if st.RollbackError != "" {
+		errText += "; rollback: " + st.RollbackError
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO panel_updates (run_id, from_version, to_version, state, error, started_at, finished_at, from_image)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (run_id) WHERE run_id <> '' DO UPDATE SET
 			state = excluded.state, error = excluded.error, finished_at = excluded.finished_at`,
-		st.Run, st.FromVersion, st.ToVersion, st.State, st.Error, st.StartedAt, finished)
+		st.Run, st.FromVersion, st.ToVersion, st.State, errText, st.StartedAt, finished, st.FromImage)
 	return err
+}
+
+// PreviousImage is the image ID the panel ran from before its last successful
+// update, "" when there has been none.
+func (s *Store) PreviousImage(ctx context.Context) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT from_image FROM panel_updates
+		WHERE state = ? AND from_image <> '' ORDER BY id DESC LIMIT 1`, StateSucceeded).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
 }
 
 // VacuumInto writes a consistent copy of the database to path, which must not

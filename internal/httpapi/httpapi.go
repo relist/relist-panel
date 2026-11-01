@@ -146,7 +146,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	puDeps := panelupdate.Deps{
 		Store: panelupdate.NewStore(db), Version: d.Version, ManifestURL: panelupdate.ManifestURLFromEnv(),
 		Self: d.PanelSelf, Helper: d.PanelHelper, Docker: d.PanelDocker, Updater: d.PanelUpdater,
-		DataDir: dataDir, InstallFile: d.PanelInstallFile, DeploysBusy: queue.Busy, Queue: queue,
+		DataDir: dataDir, InstallFile: d.PanelInstallFile, Domain: d.PanelDomain, DeploysBusy: queue.Busy, Queue: queue,
 		MigrationLocked: func(ctx context.Context) (bool, error) {
 			if migrationOptions == nil {
 				return false, nil
@@ -219,6 +219,13 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 						images[r] = vulnscan.OwnerName
 					}
 					volumes[vulnscan.CacheVolume] = vulnscan.OwnerName
+				}
+			}
+			// The previous panel image stays for a manual rollback.
+			if err == nil && images != nil {
+				var prev string
+				if prev, err = panelUpdates.PreviousImage(ctx); err == nil && prev != "" {
+					images[prev] = panelupdate.OwnerName
 				}
 			}
 			return dockerhost.Ownership{Projects: projects, Volumes: volumes, Images: images}, err

@@ -92,7 +92,7 @@ func (s *Service) QuiesceAndBackup(ctx context.Context, in Install, from, to str
 		s.setGuard("")
 		return Run{}, err
 	}
-	st := RunStatus{Run: run.ID, State: StateQuiescing, FromVersion: from, ToVersion: to, StartedAt: now.Unix()}
+	st := RunStatus{Run: run.ID, State: StateQuiescing, FromImage: in.Image, FromVersion: from, ToVersion: to, StartedAt: now.Unix()}
 	if err := WriteStatus(run.Dir, st, now); err != nil {
 		s.setGuard("")
 		_ = os.RemoveAll(run.Dir)

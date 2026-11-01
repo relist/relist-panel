@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -67,6 +69,9 @@ type ProjectInspector interface {
 type Docker interface {
 	ImagePuller
 	ProjectInspector
+	// ImageID is the ID of a pulled image, which a Container's image matches;
+	// a digest reference is a registry manifest digest, not that ID.
+	ImageID(ctx context.Context, ref string) (string, error)
 }
 
 // Report is the result of one Preflight.
@@ -161,9 +166,30 @@ func (s *Service) Preflight(ctx context.Context) (*Report, error) {
 	// One at a time: the scratch directory keeps only the latest report.
 	s.pfRun.Lock()
 	defer s.pfRun.Unlock()
+	r, _, err := s.preflightLocked(ctx, m)
+	return r, err
+}
+
+// candidate is what a Preflight would write, kept in memory so Apply never
+// reads the scratch directory a later Preflight removes.
+type candidate struct {
+	in    Install
+	m     *Manifest
+	files InstallFiles
+	// install and env are the new Install file and .env.
+	install, env []byte
+	// fingerprint covers everything Apply must find unchanged since the
+	// operator saw the report: it leaves out the id, the time and the live
+	// Gate state.
+	fingerprint string
+}
+
+// preflightLocked is Preflight for a caller that holds pfRun. The candidate is
+// nil when a step failed before there was one.
+func (s *Service) preflightLocked(ctx context.Context, m *Manifest) (*Report, *candidate, error) {
 	id, err := newReportID()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	r := &Report{
 		ID: id, CreatedAt: s.d.Now().UTC(), FromVersion: s.d.Version, ToVersion: m.Version,
@@ -174,14 +200,40 @@ func (s *Service) Preflight(ctx context.Context) (*Report, error) {
 	if r.ManualSteps == nil {
 		r.ManualSteps = []ManualStep{}
 	}
-	s.runSteps(ctx, m, r)
+	cand := &candidate{m: m}
+	s.runSteps(ctx, m, r, cand)
+	cand.fingerprint = fingerprint(r, cand)
 	s.pfMu.Lock()
-	s.latest = r
+	s.latest, s.latestFP = r, cand.fingerprint
 	s.pfMu.Unlock()
-	return r, nil
+	return r, cand, nil
 }
 
-func (s *Service) runSteps(ctx context.Context, m *Manifest, r *Report) {
+// fingerprint hashes what makes two reports the same preflight.
+func fingerprint(r *Report, c *candidate) string {
+	h := sha256.New()
+	enc := json.NewEncoder(h)
+	_ = enc.Encode(struct {
+		From, To, Image, Change, Diff string
+		Failed                        *Failure
+		Ready, Manual                 bool
+		Invariants                    []InvariantResult
+		Recreated                     []string
+		Steps                         []ManualStep
+	}{r.FromVersion, r.ToVersion, c.m.Image, r.Change, r.Diff, r.Failed, r.Ready, r.NeedsManualUpdate, r.Invariants, r.Recreated, r.ManualSteps})
+	h.Write(c.install)
+	h.Write([]byte{0})
+	h.Write(c.env)
+	for _, f := range c.files.Config {
+		h.Write([]byte{0})
+		h.Write(f)
+	}
+	h.Write([]byte{0})
+	h.Write(c.files.Env)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (s *Service) runSteps(ctx context.Context, m *Manifest, r *Report, cand *candidate) {
 	fail := func(step, message string) { r.Failed = &Failure{Step: step, Message: message} }
 
 	// 1. Gate.
@@ -194,6 +246,7 @@ func (s *Service) runSteps(ctx context.Context, m *Manifest, r *Report) {
 		r.NeedsManualUpdate, r.UnknownKinds = true, unknown
 		return
 	}
+	cand.in = in
 	// 2. Pull.
 	if err := s.pull(ctx, m); err != nil {
 		fail(StepPull, err.Error())
@@ -221,6 +274,7 @@ func (s *Service) runSteps(ctx context.Context, m *Manifest, r *Report) {
 		return
 	}
 	env := setEnvKey(files.Env, envImageKey, m.Image)
+	cand.files, cand.install, cand.env = files, candidate, env
 	set, err := writeCandidate(scratch, in, files, candidate, env)
 	if err != nil {
 		fail(StepConfig, "Could not write the candidate files: "+err.Error())

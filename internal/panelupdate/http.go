@@ -15,6 +15,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+base+"/check", s.postCheck)
 	mux.HandleFunc("PUT "+base+"/settings", s.putSettings)
 	mux.HandleFunc("POST "+base+"/preflight", s.postPreflight)
+	mux.HandleFunc("POST "+base+"/apply", s.postApply)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
@@ -47,13 +48,15 @@ type Status struct {
 
 // RunInfo is the newest run's status.json, for the update page.
 type RunInfo struct {
-	ID          string `json:"id"`
-	State       string `json:"state"`
-	Terminal    bool   `json:"terminal"`
-	Error       string `json:"error"`
-	FromVersion string `json:"fromVersion"`
-	ToVersion   string `json:"toVersion"`
-	StartedAt   int64  `json:"startedAt"`
+	ID       string `json:"id"`
+	State    string `json:"state"`
+	Terminal bool   `json:"terminal"`
+	Error    string `json:"error"`
+	// RollbackError is why the rollback failed, set with rollback-failed.
+	RollbackError string `json:"rollbackError"`
+	FromVersion   string `json:"fromVersion"`
+	ToVersion     string `json:"toVersion"`
+	StartedAt     int64  `json:"startedAt"`
 	// BackupPath is the run directory that holds the backup, empty before the
 	// backup is complete.
 	BackupPath string `json:"backupPath"`
@@ -119,7 +122,7 @@ func (s *Service) runInfo() *RunInfo {
 		return nil
 	}
 	info := &RunInfo{
-		ID: st.Run, State: st.State, Terminal: IsTerminal(st.State), Error: st.Error,
+		ID: st.Run, State: st.State, Terminal: IsTerminal(st.State), Error: st.Error, RollbackError: st.RollbackError,
 		FromVersion: st.FromVersion, ToVersion: st.ToVersion, StartedAt: st.StartedAt,
 	}
 	if _, err := ReadBackup(RunDir(s.d.DataDir, st.Run)); err == nil {
@@ -186,5 +189,29 @@ func (s *Service) postPreflight(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "No update is available")
 	default:
 		writeJSON(w, http.StatusOK, report)
+	}
+}
+
+// postApply starts the update. It answers 202 with the run id; the page then
+// follows the run through GET /status. A refusal is 409.
+func (s *Service) postApply(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ReportID        string   `json:"report_id"`
+		ManualStepsDone []string `json:"manual_steps_done"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ReportID == "" {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	id, err := s.Apply(r.Context(), body.ReportID, body.ManualStepsDone)
+	var refusal *Refusal
+	switch {
+	case errors.As(err, &refusal):
+		writeError(w, http.StatusConflict, refusal.Message)
+	case err != nil:
+		log.Printf("panelupdate: apply: %v", err)
+		writeError(w, http.StatusInternalServerError, "could not start the update: "+err.Error())
+	default:
+		writeJSON(w, http.StatusAccepted, map[string]string{"id": id})
 	}
 }

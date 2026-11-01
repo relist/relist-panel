@@ -68,6 +68,8 @@ type Deps struct {
 	Queue   QueueControl
 	Scans   ScanWaiter
 	Updater UpdaterContainers
+	// Domain is RELIST_DOMAIN: the Host and SNI of the Updater's health request.
+	Domain string
 	// After returns a channel that fires after d. Nil means time.After.
 	After func(d time.Duration) <-chan time.Time
 }
@@ -94,6 +96,8 @@ type Service struct {
 	pfRun  sync.Mutex
 	pfMu   sync.Mutex
 	latest *Report
+	// latestFP is the fingerprint of latest.
+	latestFP string
 }
 
 func New(d Deps) *Service {

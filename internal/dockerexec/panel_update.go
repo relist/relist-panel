@@ -209,3 +209,82 @@ func (d *PanelDocker) UpdaterState(ctx context.Context, name string) (panelupdat
 func (d *PanelDocker) RemoveUpdater(ctx context.Context, name string) error {
 	return d.engine.Remove(ctx, name, false, false)
 }
+
+// ImageID is the ID of an image the daemon already holds. A digest reference
+// is a registry manifest digest, which a Container's image never equals.
+func (d *PanelDocker) ImageID(ctx context.Context, ref string) (string, error) {
+	var inspected struct {
+		ID string `json:"Id"`
+	}
+	if err := d.engine.do(ctx, http.MethodGet, "/images/"+ref+"/json", &inspected); err != nil {
+		return "", err
+	}
+	if inspected.ID == "" {
+		return "", errors.New("the daemon returned no image ID")
+	}
+	return inspected.ID, nil
+}
+
+// ListUpdaters lists the Containers named relist-panel-updater-*.
+func (d *PanelDocker) ListUpdaters(ctx context.Context) ([]panelupdate.UpdaterListing, error) {
+	filters, err := json.Marshal(map[string][]string{"name": {updaterNamePrefix}})
+	if err != nil {
+		return nil, err
+	}
+	var listed []struct {
+		Names []string `json:"Names"`
+		State string   `json:"State"`
+	}
+	if err := d.engine.do(ctx, http.MethodGet, "/containers/json?all=1&filters="+url.QueryEscape(string(filters)), &listed); err != nil {
+		return nil, err
+	}
+	var out []panelupdate.UpdaterListing
+	for _, c := range listed {
+		for _, n := range c.Names {
+			// The filter matches anywhere in the name; the prefix is exact.
+			if name := strings.TrimPrefix(n, "/"); strings.HasPrefix(name, updaterNamePrefix) {
+				out = append(out, panelupdate.UpdaterListing{Name: name, Running: c.State != "exited" && c.State != "dead"})
+			}
+		}
+	}
+	return out, nil
+}
+
+const updaterNamePrefix = "relist-panel-updater-"
+
+// StartUpdater is the Engine API form of
+//
+//	docker run -d --name <name> --network relist-network \
+//	  -v /var/run/docker.sock:/var/run/docker.sock \
+//	  -v <install dir>:<install dir> -v <data dir>:<data dir> \
+//	  -e RELIST_DATA_DIR=<data dir> <image> panel-update apply --run <id>
+//
+// It has no Compose labels, no restart policy and is not removed on exit: the
+// watcher removes it once the run is settled, and its logs outlive a failure.
+// It is not locked down: it needs the socket and both directories.
+func (d *PanelDocker) StartUpdater(ctx context.Context, spec panelupdate.UpdaterSpec) error {
+	create := map[string]any{
+		"Image": spec.Image,
+		"Cmd":   []string{"panel-update", "apply", "--run", spec.Run},
+		"Env":   []string{"RELIST_DATA_DIR=" + spec.DataDir},
+		"HostConfig": map[string]any{
+			"Binds": []string{
+				DefaultSocketPath + ":" + DefaultSocketPath,
+				spec.InstallDir + ":" + spec.InstallDir,
+				spec.DataDir + ":" + spec.DataDir,
+			},
+			"NetworkMode": spec.Network,
+		},
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := d.engine.doBody(ctx, http.MethodPost, "/containers/create?name="+url.QueryEscape(spec.Name), create, &created); err != nil {
+		return err
+	}
+	if err := d.engine.do(ctx, http.MethodPost, "/containers/"+url.PathEscape(created.ID)+"/start", nil); err != nil {
+		_ = d.engine.Remove(context.WithoutCancel(ctx), created.ID, true, false)
+		return err
+	}
+	return nil
+}

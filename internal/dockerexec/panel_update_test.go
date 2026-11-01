@@ -2,9 +2,12 @@ package dockerexec_test
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"reflect"
@@ -191,5 +194,149 @@ func TestPanelDockerUpdaterState(t *testing.T) {
 	socket := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }))
 	if _, err := dockerexec.NewPanelDockerAt(socket).UpdaterState(context.Background(), "x"); err == nil {
 		t.Fatal("a daemon error must not read as a missing Container")
+	}
+}
+
+func TestPanelDockerStartUpdaterBody(t *testing.T) {
+	var created map[string]any
+	var name, started string
+	socket := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case strings.HasSuffix(req.URL.Path, "/containers/create"):
+			name = req.URL.Query().Get("name")
+			_ = json.NewDecoder(req.Body).Decode(&created)
+			_, _ = w.Write([]byte(`{"Id":"c1"}`))
+		case strings.HasSuffix(req.URL.Path, "/start"):
+			started = req.URL.Path
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	err := dockerexec.NewPanelDocker(socket).StartUpdater(context.Background(), panelupdate.UpdaterSpec{
+		Name: "relist-panel-updater-20261101T120000Z", Image: "sha256:abc", Run: "20261101T120000Z",
+		InstallDir: "/srv/relist", DataDir: "/var/lib/relist-panel", Network: "relist-network",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := created["HostConfig"].(map[string]any)
+	if name != "relist-panel-updater-20261101T120000Z" || started != "/containers/c1/start" || created["Image"] != "sha256:abc" ||
+		!reflect.DeepEqual(created["Cmd"], []any{"panel-update", "apply", "--run", "20261101T120000Z"}) ||
+		!reflect.DeepEqual(created["Env"], []any{"RELIST_DATA_DIR=/var/lib/relist-panel"}) ||
+		host["NetworkMode"] != "relist-network" ||
+		!reflect.DeepEqual(host["Binds"], []any{"/var/run/docker.sock:/var/run/docker.sock", "/srv/relist:/srv/relist", "/var/lib/relist-panel:/var/lib/relist-panel"}) {
+		t.Fatalf("name %q created %+v", name, created)
+	}
+	// No Compose labels, so `up` never sees an orphan; nothing restarts it or
+	// removes it on exit.
+	if _, ok := created["Labels"]; ok || host["RestartPolicy"] != nil || host["AutoRemove"] != nil {
+		t.Fatalf("created %+v", created)
+	}
+}
+
+func TestPanelDockerStartUpdaterRemovesWhatDidNotStart(t *testing.T) {
+	var deleted string
+	socket := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.Method == http.MethodDelete:
+			deleted = req.URL.Path
+		case strings.HasSuffix(req.URL.Path, "/containers/create"):
+			_, _ = w.Write([]byte(`{"Id":"c1"}`))
+		default:
+			http.Error(w, `{"message":"port is already allocated"}`, http.StatusInternalServerError)
+		}
+	}))
+	err := dockerexec.NewPanelDocker(socket).StartUpdater(context.Background(), panelupdate.UpdaterSpec{Name: "n", Image: "i", Run: "r"})
+	if err == nil || deleted != "/containers/c1" {
+		t.Fatalf("err %v deleted %q", err, deleted)
+	}
+}
+
+func TestPanelDockerListUpdatersKeepsOnlyThePrefix(t *testing.T) {
+	socket := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"Names":["/relist-panel-updater-20261101T120000Z"],"State":"exited"},
+			{"Names":["/relist-panel-updater-20261102T120000Z"],"State":"running"},
+			{"Names":["/not-relist-panel-updater-x"],"State":"running"}]`))
+	}))
+	got, err := dockerexec.NewPanelDocker(socket).ListUpdaters(context.Background())
+	want := []panelupdate.UpdaterListing{
+		{Name: "relist-panel-updater-20261101T120000Z"},
+		{Name: "relist-panel-updater-20261102T120000Z", Running: true},
+	}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestPanelDockerImageID(t *testing.T) {
+	var path string
+	socket := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		path = req.URL.Path
+		_, _ = w.Write([]byte(`{"Id":"sha256:cfg"}`))
+	}))
+	id, err := dockerexec.NewPanelDocker(socket).ImageID(context.Background(), "ghcr.io/x/y@sha256:abc")
+	if err != nil || id != "sha256:cfg" || path != "/images/ghcr.io/x/y@sha256:abc/json" {
+		t.Fatalf("id %q err %v path %q", id, err, path)
+	}
+}
+
+func TestUpdaterHostContainersByComposeLabels(t *testing.T) {
+	var filters string
+	socket := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		filters = req.URL.Query().Get("filters")
+		_, _ = w.Write([]byte(`[{"Id":"t1","ImageID":"sha256:tr","State":"running","NetworkSettings":{"Networks":{"relist-network":{"IPAddress":"172.20.0.2"}}}}]`))
+	}))
+	got, err := dockerexec.NewPanelUpdaterHost(socket).Containers(context.Background(), "relist-panel", "traefik")
+	want := []panelupdate.ContainerInfo{{ID: "t1", ImageID: "sha256:tr", Running: true, IPs: map[string]string{"relist-network": "172.20.0.2"}}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	for _, label := range []string{"com.docker.compose.project=relist-panel", "com.docker.compose.service=traefik"} {
+		if !strings.Contains(filters, label) {
+			t.Fatalf("filters %q lack %q", filters, label)
+		}
+	}
+}
+
+func TestUpdaterHostComposeArgs(t *testing.T) {
+	var got [][]string
+	h := dockerexec.NewPanelUpdaterHostWith(func(_ context.Context, args []string) ([]byte, error) {
+		got = append(got, args)
+		return []byte("boom"), nil
+	})
+	plan := panelupdate.Plan{Project: "relist-panel", InstallDir: "/srv/relist", ConfigFiles: []string{"/srv/relist/a.yml", "/srv/relist/b.yml"}}
+	if err := h.ComposeUp(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ComposeStop(context.Background(), plan, "panel"); err != nil {
+		t.Fatal(err)
+	}
+	prefix := "-p relist-panel --project-directory /srv/relist -f /srv/relist/a.yml -f /srv/relist/b.yml "
+	if strings.Join(got[0], " ") != prefix+"up -d" || strings.Join(got[1], " ") != prefix+"stop panel" {
+		t.Fatalf("args %q", got)
+	}
+}
+
+func TestUpdaterHostHealthzSendsHostAndSNI(t *testing.T) {
+	var host, sni string
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		host = req.Host
+		if req.URL.Path != "/healthz" {
+			t.Errorf("path %q", req.URL.Path)
+		}
+		_, _ = w.Write([]byte("ok"))
+	}))
+	srv.TLS = &tls.Config{GetCertificate: func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		sni = h.ServerName
+		return nil, nil
+	}}
+	srv.StartTLS()
+	defer srv.Close()
+	addr := strings.TrimPrefix(srv.URL, "https://")
+	if err := dockerexec.NewPanelUpdaterHost("").Healthz(context.Background(), addr, "panel.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if host != "panel.example.com" || sni != "panel.example.com" {
+		t.Fatalf("host %q sni %q", host, sni)
 	}
 }

@@ -27,6 +27,10 @@ func (f *fakeDocker) Pull(_ context.Context, ref string) error {
 	return f.pullErr
 }
 
+func (f *fakeDocker) ImageID(_ context.Context, ref string) (string, error) {
+	return "sha256:target", nil
+}
+
 func (f *fakeDocker) ConfigHashes(context.Context, string) ([]ServiceHash, error) {
 	return f.hashes, nil
 }

@@ -48,9 +48,16 @@ func IsTerminal(state string) bool {
 // RunStatus is status.json, the one file the panel and the Updater share. A
 // writer replaces it whole and atomically, so a reader never sees half of it.
 type RunStatus struct {
-	Run         string `json:"run"`
-	State       string `json:"state"`
-	Error       string `json:"error,omitempty"`
+	Run   string `json:"run"`
+	State string `json:"state"`
+	// Error is why the update failed: the reason of a rolled-back run, or of
+	// an interrupted one.
+	Error string `json:"error,omitempty"`
+	// RollbackError is why putting the old version back failed; it is set only
+	// with rollback-failed, next to Error.
+	RollbackError string `json:"rollbackError,omitempty"`
+	// FromImage is the ID of the image the panel ran from before the update.
+	FromImage   string `json:"fromImage,omitempty"`
 	FromVersion string `json:"fromVersion"`
 	ToVersion   string `json:"toVersion"`
 	StartedAt   int64  `json:"startedAt"`
@@ -151,3 +158,7 @@ func NewestRun(dataDir string) (st RunStatus, ok bool, err error) {
 	st.Run = id
 	return st, true, nil
 }
+
+// ValidRunID reports whether id has the form NewRunID makes, so it is safe to
+// join into a path.
+func ValidRunID(id string) bool { return runIDPattern.MatchString(id) }

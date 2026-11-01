@@ -54,35 +54,8 @@ func main() {
 	case actionUsageError:
 		printUsage(os.Stderr)
 		os.Exit(2)
-	}
-	if len(os.Args) > 1 && os.Args[1] == "reset-2fa" {
-		os.Exit(runResetTwoFactor(os.Args[2:], os.Stdout, os.Stderr))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "reset-password" {
-		os.Exit(runResetPassword(os.Args[2:], os.Stdin, os.Stdout, os.Stderr, stdinConsole()))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "create-admin" {
-		os.Exit(runCreateAdmin(os.Args[2:], os.Stdin, os.Stdout, os.Stderr, stdinConsole()))
-	}
-	// Drive a server migration from a terminal in the panel container,
-	// through the running panel's control socket (ADR-0019).
-	if len(os.Args) > 1 && os.Args[1] == "migration" {
-		cfg, err := config.Load()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
-		os.Exit(migrationcli.Run(os.Args[2:], migrationcli.DefaultEnv(cfg)))
-	}
-	// The maintenance container a server migration runs from this image
-	// (ADR-0018): it only answers 503 with the maintenance page.
-	if len(os.Args) > 1 && os.Args[1] == "maintenance-page" {
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		if err := migration.ServeMaintenancePage(ctx, ":8080"); err != nil {
-			log.Fatal(err)
-		}
-		return
+	case actionSubcommand:
+		os.Exit(findSubcommand(os.Args[1]).run(os.Args[2:]))
 	}
 
 	cfg, err := config.Load()
@@ -393,4 +366,27 @@ func cleanSourceStaging(ctx context.Context, db *sql.DB, dataDir string) {
 			log.Printf("warning: clearing staged compose files in %s: %v", dir, err)
 		}
 	}
+}
+
+// runMigration drives a server migration from a terminal in the panel
+// container, through the running panel's control socket (ADR-0019).
+func runMigration(args []string) int {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	return migrationcli.Run(args, migrationcli.DefaultEnv(cfg))
+}
+
+// runMaintenancePage is the maintenance container a server migration runs
+// from this image (ADR-0018): it only answers 503 with the maintenance page.
+func runMaintenancePage([]string) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := migration.ServeMaintenancePage(ctx, ":8080"); err != nil {
+		log.Print(err)
+		return 1
+	}
+	return 0
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 )
 
 // action is what main() does for a given argument list.
@@ -16,14 +17,35 @@ const (
 	actionSubcommand
 )
 
-// subcommands are the first arguments main() hands to their own runners, each
-// with the one-line description usage prints.
-var subcommands = []struct{ name, summary string }{
-	{"reset-2fa", "turn off two-factor sign-in for the admin"},
-	{"reset-password", "set a new admin password and sign every session out"},
-	{"create-admin", "create the first admin account"},
-	{"migration", "drive a server Migration through the running panel"},
-	{"maintenance-page", "answer 503 with the maintenance page (used by a Migration)"},
+// subcommand is a first argument main() hands to its own runner, with the
+// one-line description usage prints. run returns the exit code. One table
+// serves both dispatch and usage, so a subcommand cannot be listed without a
+// runner, and an unlisted one never reaches the server.
+type subcommand struct {
+	name, summary string
+	run           func(args []string) int
+}
+
+var subcommands = []subcommand{
+	{"reset-2fa", "turn off two-factor sign-in for the admin",
+		func(a []string) int { return runResetTwoFactor(a, os.Stdout, os.Stderr) }},
+	{"reset-password", "set a new admin password and sign every session out",
+		func(a []string) int { return runResetPassword(a, os.Stdin, os.Stdout, os.Stderr, stdinConsole()) }},
+	{"create-admin", "create the first admin account",
+		func(a []string) int { return runCreateAdmin(a, os.Stdin, os.Stdout, os.Stderr, stdinConsole()) }},
+	{"migration", "drive a server Migration through the running panel", runMigration},
+	{"maintenance-page", "answer 503 with the maintenance page (used by a Migration)", runMaintenancePage},
+	{"panel-update", "apply a Panel update (run by the Updater Container)", runPanelUpdate},
+}
+
+// findSubcommand is the subcommand named name, nil when there is none.
+func findSubcommand(name string) *subcommand {
+	for i := range subcommands {
+		if subcommands[i].name == name {
+			return &subcommands[i]
+		}
+	}
+	return nil
 }
 
 // serverFlags are the only flags the server itself reads (internal/config).
@@ -42,10 +64,8 @@ func decide(args []string) action {
 	case "--version", "version":
 		return actionVersion
 	}
-	for _, s := range subcommands {
-		if args[0] == s.name {
-			return actionSubcommand
-		}
+	if findSubcommand(args[0]) != nil {
+		return actionSubcommand
 	}
 	for _, a := range args {
 		known := false

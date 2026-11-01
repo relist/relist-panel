@@ -54,10 +54,37 @@ type fakeScans struct{ waited int }
 func (f *fakeScans) WaitIdle(context.Context) error { f.waited++; return nil }
 
 type fakeUpdater struct {
-	mu      sync.Mutex
-	state   map[string]UpdaterState
-	removed []string
-	err     error
+	mu       sync.Mutex
+	state    map[string]UpdaterState
+	removed  []string
+	err      error
+	started  []UpdaterSpec
+	startErr error
+	onStart  func(UpdaterSpec)
+}
+
+func (f *fakeUpdater) ListUpdaters(context.Context) ([]UpdaterListing, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []UpdaterListing
+	for name, st := range f.state {
+		out = append(out, UpdaterListing{Name: name, Running: st.Running})
+	}
+	return out, f.err
+}
+
+func (f *fakeUpdater) StartUpdater(_ context.Context, spec UpdaterSpec) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.startErr != nil {
+		return f.startErr
+	}
+	f.started = append(f.started, spec)
+	f.state[spec.Name] = UpdaterState{Exists: true, Running: true}
+	if f.onStart != nil {
+		f.onStart(spec)
+	}
+	return nil
 }
 
 func (f *fakeUpdater) UpdaterState(_ context.Context, name string) (UpdaterState, error) {
