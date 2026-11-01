@@ -23,38 +23,8 @@ type Run struct {
 	Dir string
 }
 
-// Backup names the copies in a run directory, so the Updater can put every
-// Install file back where it was. Paths are the Install's own.
-type Backup struct {
-	Config []BackupFile `json:"config"`
-	// Env is nil when the Install had no .env.
-	Env *BackupFile `json:"env"`
-}
-
-// BackupFile is one backed-up file: where it lives on the host, and its copy
-// in the run directory.
-type BackupFile struct {
-	Path string `json:"path"`
-	Copy string `json:"copy"`
-}
-
-const (
-	backupDB   = "panel.db"
-	backupMeta = "backup.json"
-)
-
 // DatabaseBackup is the path of the run's copy of panel.db.
 func (r Run) DatabaseBackup() string { return filepath.Join(r.Dir, backupDB) }
-
-// ReadBackup reads a run directory's backup.json.
-func ReadBackup(dir string) (Backup, error) {
-	var b Backup
-	data, err := os.ReadFile(filepath.Join(dir, backupMeta))
-	if err != nil {
-		return b, err
-	}
-	return b, json.Unmarshal(data, &b)
-}
 
 // QuiesceAndBackup is Apply steps 1 and 2. It writes status.json as
 // quiescing, turns the update lock on, waits for the running Deployment and
@@ -154,44 +124,7 @@ func (s *Service) backup(ctx context.Context, run Run, in Install) error {
 	return os.WriteFile(filepath.Join(run.Dir, backupMeta), data, 0o600)
 }
 
-// pruneRuns removes every run directory but keep, which has just been backed
-// up completely, and but the newest run that ended rollback-failed: its backup
-// is what the manual restore commands point at. That one goes only once a
-// later run has succeeded.
-func (s *Service) pruneRuns(keep string) {
-	ids, err := runIDs(s.d.DataDir)
-	if err != nil {
-		log.Printf("panelupdate: list old runs: %v", err)
-		return
-	}
-	state := func(id string) string {
-		st, err := ReadStatus(RunDir(s.d.DataDir, id))
-		if err != nil {
-			return ""
-		}
-		return st.State
-	}
-	// Walk from the newest: a succeeded run settles every older failure.
-	retain, settled := "", false
-	for i := len(ids) - 1; i >= 0; i-- {
-		switch state(ids[i]) {
-		case StateSucceeded:
-			settled = true
-		case StateRollbackFailed:
-			if !settled && ids[i] != keep && retain == "" {
-				retain = ids[i]
-			}
-		}
-	}
-	for _, id := range ids {
-		if id == keep || id == retain {
-			continue
-		}
-		if err := os.RemoveAll(RunDir(s.d.DataDir, id)); err != nil {
-			log.Printf("panelupdate: remove run %s: %v", id, err)
-		}
-	}
-}
+func (s *Service) pruneRuns(keep string) { pruneRuns(s.d.DataDir, keep) }
 
 // SetRunState rewrites the run's status.json with a new state, keeping the
 // rest of it.

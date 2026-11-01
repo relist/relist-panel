@@ -59,15 +59,15 @@ func execCompose(ctx context.Context, args []string) ([]byte, error) {
 // updaterComposeArgs is the common start of the Install's `docker compose` command:
 // its project and directory, and its own files in label order. The Install
 // directory's .env is read as it always is.
-func updaterComposeArgs(p panelupdate.Plan, rest ...string) []string {
-	args := []string{"-p", p.Project, "--project-directory", p.InstallDir}
+func updaterComposeArgs(p panelupdate.Install, rest ...string) []string {
+	args := []string{"-p", p.Project, "--project-directory", p.Dir}
 	for _, f := range p.ConfigFiles {
 		args = append(args, "-f", f)
 	}
 	return append(args, rest...)
 }
 
-func (h *PanelUpdaterHost) compose(ctx context.Context, p panelupdate.Plan, rest ...string) error {
+func (h *PanelUpdaterHost) compose(ctx context.Context, p panelupdate.Install, rest ...string) error {
 	out, err := h.runCompose(ctx, updaterComposeArgs(p, rest...))
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
@@ -75,12 +75,32 @@ func (h *PanelUpdaterHost) compose(ctx context.Context, p panelupdate.Plan, rest
 	return nil
 }
 
-func (h *PanelUpdaterHost) ComposeUp(ctx context.Context, p panelupdate.Plan) error {
+func (h *PanelUpdaterHost) ComposeUp(ctx context.Context, p panelupdate.Install) error {
 	return h.compose(ctx, p, "up", "-d")
 }
 
-func (h *PanelUpdaterHost) ComposeStop(ctx context.Context, p panelupdate.Plan, service string) error {
+func (h *PanelUpdaterHost) ComposeStop(ctx context.Context, p panelupdate.Install, service string) error {
 	return h.compose(ctx, p, "stop", service)
+}
+
+// UpdaterState inspects an Updater Container by name. A Container that is
+// created, restarting or paused counts as running: it may still write.
+func (h *PanelUpdaterHost) UpdaterState(ctx context.Context, name string) (panelupdate.UpdaterState, error) {
+	var inspected struct {
+		State struct {
+			Status string `json:"Status"`
+		} `json:"State"`
+	}
+	err := h.engine.do(ctx, http.MethodGet, "/containers/"+url.PathEscape(name)+"/json", &inspected)
+	var apiErr *engineError
+	if errors.As(err, &apiErr) && apiErr.status == http.StatusNotFound {
+		return panelupdate.UpdaterState{}, nil
+	}
+	if err != nil {
+		return panelupdate.UpdaterState{}, err
+	}
+	status := inspected.State.Status
+	return panelupdate.UpdaterState{Exists: true, Running: status != "exited" && status != "dead"}, nil
 }
 
 // ContainersInDir lists every Container whose Compose working-directory label

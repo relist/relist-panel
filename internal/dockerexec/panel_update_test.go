@@ -305,7 +305,7 @@ func TestUpdaterHostComposeArgs(t *testing.T) {
 		got = append(got, args)
 		return []byte("boom"), nil
 	})
-	plan := panelupdate.Plan{Project: "relist-panel", InstallDir: "/srv/relist", ConfigFiles: []string{"/srv/relist/a.yml", "/srv/relist/b.yml"}}
+	plan := panelupdate.Install{Project: "relist-panel", Dir: "/srv/relist", ConfigFiles: []string{"/srv/relist/a.yml", "/srv/relist/b.yml"}}
 	if err := h.ComposeUp(context.Background(), plan); err != nil {
 		t.Fatal(err)
 	}
@@ -354,5 +354,20 @@ func TestExecComposeDropsRelistDataDir(t *testing.T) {
 	out, err := dockerexec.ExecComposeForTest(context.Background(), []string{"up"})
 	if err != nil || string(out) != "dir=unset other=yes" {
 		t.Fatalf("out = %q, %v", out, err)
+	}
+}
+
+func TestUpdaterHostContainersInDir(t *testing.T) {
+	var filters string
+	socket := newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		filters = req.URL.Query().Get("filters")
+		_, _ = w.Write([]byte(`[{"ImageID":"sha256:p","Labels":{"com.docker.compose.project":"relist-panel","com.docker.compose.project.working_dir":"/opt/x"}}]`))
+	}))
+	got, err := dockerexec.NewPanelUpdaterHost(socket).ContainersInDir(context.Background(), "/opt/x")
+	if err != nil || len(got) != 1 || got[0].ImageID != "sha256:p" || got[0].Labels["com.docker.compose.project"] != "relist-panel" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if !strings.Contains(filters, "com.docker.compose.project.working_dir=/opt/x") {
+		t.Fatalf("filters = %q", filters)
 	}
 }

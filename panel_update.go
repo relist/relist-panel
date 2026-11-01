@@ -1,13 +1,11 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 
-	"relist-panel/internal/dockerexec"
 	"relist-panel/internal/panelupdate"
 )
 
@@ -27,21 +25,8 @@ func runPanelUpdate(args []string) int {
 		fmt.Fprintln(os.Stderr, "panel-update: RELIST_DATA_DIR must be set to the panel's data directory")
 		return 2
 	}
-	u := &panelupdate.Updater{
-		DataDir: dataDir,
-		Host:    dockerexec.NewPanelUpdaterHost(dockerexec.DefaultSocketPath),
-		Logf:    log.Printf,
-	}
-	st, err := u.Apply(context.Background(), run)
-	if err != nil {
-		log.Printf("panel-update: %v", err)
-		return 1
-	}
-	log.Printf("panel-update: run %s ended %s", run, st.State)
-	if st.State != panelupdate.StateSucceeded {
-		return 1
-	}
-	return 0
+	log.Printf("panel-update: the apply command is replaced by `relist-panel update --report <id>`; run %s was not started", run)
+	return 2
 }
 
 // parseApplyArgs accepts exactly `apply --run <id>` (or --run=<id>) with an id
