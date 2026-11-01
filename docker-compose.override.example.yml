@@ -3,9 +3,16 @@
 # docker-compose.yml, and Panel update never replaces it.
 services:
   panel:
-    labels:
-      # One extra label on the panel Service.
-      - com.example.owner=ops
-    volumes:
-      # One extra volume on the panel Service.
-      - /srv/backups:/backups:ro
+    # A checkout that builds the panel from source copies this file to
+    # docker-compose.override.yml and keeps this block. Panel update refuses
+    # such an Install (the service-image invariant), so it never updates itself.
+    build: .
+    image: relist-panel:local
+    pull_policy: build
+    # The rest are examples; uncomment what you need.
+    # labels:
+    #   # One extra label on the panel Service.
+    #   - com.example.owner=ops
+    # volumes:
+    #   # One extra volume on the panel Service.
+    #   - /srv/backups:/backups:ro

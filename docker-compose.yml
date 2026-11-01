@@ -3,11 +3,9 @@
 # docker-compose.override.example.yml) and in .env. See the README.
 services:
   panel:
-    build: .
-    # A stable name for the local build. Never `latest`, which the published
-    # image uses; pull_policy keeps `docker compose pull` from swapping it.
-    image: ghcr.io/relist/relist-panel:local
-    pull_policy: build
+    container_name: relist-panel
+    # Panel update and the Install script write the digest ref here (.env).
+    image: ${RELIST_PANEL_IMAGE:-ghcr.io/relist/relist-panel:latest}
     environment:
       RELIST_PORT: ${RELIST_PORT:-8080}
       RELIST_DATA_DIR: ${RELIST_DATA_DIR:-/var/lib/relist-panel}
@@ -54,6 +52,7 @@ services:
     restart: unless-stopped
 
   traefik:
+    container_name: relist-traefik
     image: traefik:v3.7
     environment:
       # Go can't see the cgroup mem_limit, so without GOMEMLIMIT the heap grows
