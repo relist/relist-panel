@@ -173,8 +173,10 @@ resolve_image() {
 }
 
 require_image() {
+  # The release replaces the placeholder in the IMAGE assignment above and
+  # nowhere else, so an unfilled script is the one whose IMAGE starts with @.
   case $IMAGE in
-    @IMAGE@) die "This script has no image filled in. Download install.sh from a release." ;;
+    @*) die "This script has no image filled in. Download install.sh from a release." ;;
   esac
 }
 

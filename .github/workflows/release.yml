@@ -1,5 +1,5 @@
 # Publishes a release from a v* tag: the image to GHCR, then the signed Update
-# manifest on the GitHub Release (ADR-0024). The signing key is the repo secret
+# manifest and the install script on the GitHub Release (ADR-0024, ADR-0025). The signing key is the repo secret
 # RELIST_RELEASE_KEY; the public half is the constant in
 # internal/panelupdate/key.go, so the workflow never takes it from anywhere else.
 name: release
@@ -88,12 +88,27 @@ jobs:
           PUBLIC_KEY: ${{ steps.meta.outputs.key }}
         run: go run ./cmd/relist-release verify --key "$PUBLIC_KEY"
 
+      # install.sh installs the image released with it: the version and the
+      # digest reference go in where release/install.sh has its placeholders.
+      - name: Write the install script
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          sed -e "s|@VERSION@|$VERSION|g" \
+              -e "s|@IMAGE@|ghcr.io/relist/relist-panel@$DIGEST|g" \
+              release/install.sh > install.sh
+          if grep -q '@VERSION@\|@IMAGE@' install.sh; then
+            echo "::error::install.sh still has a placeholder"; exit 1
+          fi
+          shellcheck -s sh install.sh
+
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" update-manifest.json update-manifest.json.sig \
+          gh release create "$TAG" update-manifest.json update-manifest.json.sig install.sh \
             --title "$TAG" --generate-notes --verify-tag
 
       # :latest moves only after the manifest is signed and verified.
