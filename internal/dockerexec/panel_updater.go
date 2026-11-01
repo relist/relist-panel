@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -81,6 +82,48 @@ func (h *PanelUpdaterHost) ComposeUp(ctx context.Context, p panelupdate.Plan) er
 func (h *PanelUpdaterHost) ComposeStop(ctx context.Context, p panelupdate.Plan, service string) error {
 	return h.compose(ctx, p, "stop", service)
 }
+
+// ContainersInDir lists every Container whose Compose working-directory label
+// is dir, with the labels and image the Install is read from.
+func (h *PanelUpdaterHost) ContainersInDir(ctx context.Context, dir string) ([]panelupdate.Self, error) {
+	filters, err := json.Marshal(map[string][]string{"label": {"com.docker.compose.project.working_dir=" + dir}})
+	if err != nil {
+		return nil, err
+	}
+	var listed []struct {
+		ImageID string            `json:"ImageID"`
+		Labels  map[string]string `json:"Labels"`
+	}
+	if err := h.engine.do(ctx, http.MethodGet, "/containers/json?all=1&filters="+url.QueryEscape(string(filters)), &listed); err != nil {
+		return nil, err
+	}
+	out := make([]panelupdate.Self, 0, len(listed))
+	for _, c := range listed {
+		out = append(out, panelupdate.Self{ImageID: c.ImageID, Labels: c.Labels})
+	}
+	return out, nil
+}
+
+// LocalCompose runs `docker compose` in this process's environment.
+type LocalCompose struct{}
+
+// Run implements panelupdate.ComposeRunner. A non-zero exit is a
+// *panelupdate.HelperExitError carrying the output.
+func (LocalCompose) Run(ctx context.Context, argv []string) ([]byte, error) {
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose"}, argv...)...)
+	cmd.Env = composeEnv(os.Environ())
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return stdout.Bytes(), &panelupdate.HelperExitError{Code: exit.ExitCode(), Stderr: strings.TrimSpace(stderr.String())}
+	}
+	return stdout.Bytes(), err
+}
+
+var _ panelupdate.ComposeRunner = LocalCompose{}
+var _ panelupdate.ProjectFinder = (*PanelUpdaterHost)(nil)
 
 // Containers lists the project's Containers of one Service by Compose labels.
 // The name of a Service is never used as a DNS name: a user Service on the
