@@ -1,6 +1,6 @@
 # 01 — Version stamp, image-based Install file, embedded copy
 
-Status: ready-for-agent
+Status: closed
 
 Spec: [../spec.md](../spec.md) — "Install file and image pin".
 

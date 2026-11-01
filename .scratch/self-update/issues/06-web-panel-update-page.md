@@ -1,6 +1,6 @@
 # 06 — Web: Panel update page
 
-Status: ready-for-agent
+Status: closed
 Blocked by: 03 (status states), 04 (Preview), 05 (Updating onwards)
 
 Spec: [../spec.md](../spec.md) — "Web".

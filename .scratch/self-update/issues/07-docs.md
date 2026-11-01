@@ -1,6 +1,6 @@
 # 07 — README, GUIDELINES and first manifest's invariants
 
-Status: ready-for-agent
+Status: closed
 Blocked by: 01
 
 Spec: [../spec.md](../spec.md) — "One-time manual upgrade".

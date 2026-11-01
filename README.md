@@ -161,45 +161,86 @@ log noise only. Port 443 must be free on the host, or set `TRAEFIK_HTTPS_PORT`
 to another port. Domains that stay on HTTP, such as `myapp.localhost`, behave as
 before.
 
+### Panel update
+
+The **Panel update** page (side menu, or the `Update available` tag in the
+header) updates the panel from the browser. It checks once a day for a signed
+release, **Preview** shows what the update would change, and **Update** applies
+it: the panel backs up its database, pulls the new image, replaces the Install
+file, recreates the Services that changed and restarts. If the new version does
+not answer, it rolls itself back.
+
+Keep your changes to the Install out of the Install file, because Panel update
+replaces it:
+
+- `docker-compose.yml` (the **Install file**) belongs to the panel. Do not edit
+  it. The Updater writes only this file and the `RELIST_PANEL_IMAGE` key in
+  `.env`.
+- Put your own changes in `docker-compose.override.yml` (start from
+  `docker-compose.override.example.yml`) and in `.env`. Compose merges the
+  override on every `docker compose` command.
+
+If you did edit the Install file, Preview merges your edits into the new file
+and shows the diff. A conflict stops the update and shows both sides; move the
+edit into the override and preview again.
+
+What Panel update does not promise:
+
+- **Not available yet.** It needs a published release and an Install file that
+  uses the published image. Until then the Install file builds the panel
+  (`build: .`, image `ghcr.io/relist/relist-panel:local`, `pull_policy: build`)
+  and `docker compose up -d --build` keeps working. A build without a release
+  public key shows "This build has no release key" and offers no updates.
+- **No downgrades,** no choosing a version other than the newest, and no
+  rollback once an update has succeeded.
+- **Deployments stop.** Starting an update cancels queued Deployments and
+  refuses new ones until it ends, the same way a Migration locks the panel.
+- **A rollback loses writes made after the backup:** sessions (sign in again),
+  some metric samples and Scan tasks queued by the daily scheduler.
+  Configuration and Deployment history are not affected, because the panel
+  refuses writes during the run.
+- **Traefik may restart.** The first update driven from the panel can recreate
+  Traefik, and every Domain drops for a few seconds, when the host's
+  `docker compose` version differs from the one in the panel image: Compose
+  compares its own config hash. Preview says so before you confirm.
+- **`--env-file` and `COMPOSE_*` Installs are not detected as such.** Preview
+  then shows failing Install checks or Services it would recreate that you did
+  not expect. Run the Install with the project directory's `.env`.
+- **Releases that need a manual step** list them in Preview; tick each one when
+  done. A release that needs checks this panel does not know is updated by hand
+  (below).
+
+To try the whole cycle, update and rollback, against two images inside a
+`docker:dind` host: `task probe:panel-update`.
+
+#### One-time manual upgrade
+
+The version that ships Panel update is installed by hand, once:
+
+1. Replace `docker-compose.yml` with the new one.
+2. Move any edits you made to it into `docker-compose.override.yml`.
+3. Run `docker compose pull panel && docker compose up -d`. With no
+   `RELIST_PANEL_IMAGE` in `.env`, this starts
+   `ghcr.io/relist/relist-panel:latest`; the first Panel update pins the digest.
+
+After that, Panel update does the rest. (Today's Install file still builds the
+panel: use `docker compose up -d --build` instead, as in the install section.)
+
 ### Upgrading an existing install
 
-A new panel with an old install `docker-compose.yml` has no `websecure`
-entrypoint and no `letsencrypt` resolver, so every HTTPS domain fails and only
-Traefik's log says why. To upgrade:
+What a release asks of an existing Install is in two files, which Preview reads
+and shows: `release/invariants.json` (what the Install file must keep doing) and
+`release/manual-steps.json` (what you do by hand). To upgrade an install that
+builds the panel from source, update `docker-compose.yml` from this version,
+follow the steps in `release/manual-steps.json` and run `docker compose up -d`
+(add `--build`).
 
-1. Update `docker-compose.yml` from this version.
-2. Set `RELIST_ACME_EMAIL` in your `.env`.
-3. Open port 443 on the host's firewall (or the port you set as
-   `TRAEFIK_HTTPS_PORT`).
-4. Run `docker compose up -d`.
+Two notes outside those files:
 
-Composes with hand-written Traefik labels keep routing as before.
-
-Every upgrade that changes the panel's Traefik labels, such as the router
-priority added to keep a Domain from taking the panel's host, needs the panel
-container recreated: run `docker compose up -d` so it picks the labels up.
-
-The panel's published port now listens on `127.0.0.1` only; before, it listened
-on every interface and served the panel over plain HTTP, bypassing Traefik's
-TLS. Recreate the panel container so the new binding applies (`docker compose
-up -d` does it once `docker-compose.yml` is updated). Anything that reached
-`http://<host>:8888/` from another machine must use the panel's domain or an SSH
-tunnel instead.
-
-Uploaded certificates need Traefik's file provider
-(`--providers.file.directory=/letsencrypt/dynamic`). With an older install
-`docker-compose.yml`, Traefik ignores every uploaded certificate and nothing
-says so: update the file and run `docker compose up -d` so Traefik is recreated.
-
-Zero-downtime deploy needs the same file provider: each switched-on Service's
-Domains use a Traefik transport the panel writes there. With an install
-`docker-compose.yml` older than uploaded certificates, those Domains return 404
-after the next deploy. Update the file and recreate Traefik before turning the
-switch on.
-
-`RELIST_ADMIN_EMAIL` and `RELIST_ADMIN_PASSWORD` are no longer read; the
-admin they created stays. Remove them from `.env`, and if **Account** still
-says the password is the one from the env, change it there.
+- Composes with hand-written Traefik labels keep routing as before.
+- `RELIST_ADMIN_EMAIL` and `RELIST_ADMIN_PASSWORD` are no longer read; the
+  admin they created stays. Remove them from `.env`, and if **Account** still
+  says the password is the one from the env, change it there.
 
 ### Networks and internal hostnames
 

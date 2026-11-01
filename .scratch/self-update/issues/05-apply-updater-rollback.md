@@ -1,6 +1,6 @@
 # 05 — Apply: quiesce, backup, Updater, rollback
 
-Status: ready-for-agent
+Status: closed
 Blocked by: 04
 
 Spec: [../spec.md](../spec.md) — "Apply".

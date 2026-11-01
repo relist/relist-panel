@@ -30,3 +30,13 @@ Spec: [../spec.md](../spec.md) — "Releases", "Update manifest".
   checks.
 - Add `release/invariants.json` and `release/manual-steps.json`, edited by hand for each
   release.
+
+## Comments
+
+The code and the workflow are done; what remains is for the owner:
+
+- Run `go run ./cmd/relist-release keygen`.
+- Store the private key as the repo secret `RELIST_RELEASE_KEY`.
+- Commit the public key in `internal/panelupdate/key.go`.
+- After the first push of a release, check the GHCR package is Public and linked to the repo.
+- Verify the pinned action SHAs in `.github/workflows/release.yml`.

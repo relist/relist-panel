@@ -1,6 +1,6 @@
 # 03 — Update check, settings and status API
 
-Status: ready-for-agent
+Status: closed
 Blocked by: 01
 
 Spec: [../spec.md](../spec.md) — "Update check", "API".

@@ -1,6 +1,6 @@
 # 04 — Install discovery and Preflight
 
-Status: ready-for-agent
+Status: closed
 Blocked by: 01, 03
 
 Spec: [../spec.md](../spec.md) — "The Install, found from labels", "Preflight",
