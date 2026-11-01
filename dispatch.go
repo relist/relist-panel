@@ -35,7 +35,7 @@ var subcommands = []subcommand{
 		func(a []string) int { return runCreateAdmin(a, os.Stdin, os.Stdout, os.Stderr, stdinConsole()) }},
 	{"migration", "drive a server Migration through the running panel", runMigration},
 	{"maintenance-page", "answer 503 with the maintenance page (used by a Migration)", runMaintenancePage},
-	{"panel-update", "apply a Panel update (run by the Updater Container)", runPanelUpdate},
+	{"update", "check or apply a Panel update (runs in its own Container)", runUpdate},
 }
 
 // findSubcommand is the subcommand named name, nil when there is none.

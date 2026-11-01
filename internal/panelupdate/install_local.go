@@ -117,3 +117,6 @@ func ResolveInstall(ctx context.Context, a InstallArgs, f ProjectFinder) (Instal
 		labelConfigFiles: strings.Join(files, ","),
 	}})
 }
+
+// EnvValue is the value of key in .env content, empty when it is not set.
+func EnvValue(env []byte, key string) string { return parseEnv(env)[key] }

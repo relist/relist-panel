@@ -22,7 +22,8 @@ func TestDecide(t *testing.T) {
 		{[]string{"create-admin", "--generate"}, actionSubcommand},
 		{[]string{"migration", "status"}, actionSubcommand},
 		{[]string{"maintenance-page"}, actionSubcommand},
-		{[]string{"panel-update", "apply", "--run", "x"}, actionSubcommand},
+		{[]string{"update", "--preflight", "--dir", "/x"}, actionSubcommand},
+		{[]string{"panel-update", "apply", "--run", "x"}, actionUsageError},
 		{[]string{"--insecure-migration-source"}, actionServer},
 		{[]string{"--bogus"}, actionUsageError},
 		{[]string{"--insecure-migration-source", "--bogus"}, actionUsageError},
@@ -61,23 +62,16 @@ func TestEverySubcommandHasARunner(t *testing.T) {
 	}
 }
 
-func TestParseApplyArgs(t *testing.T) {
-	cases := []struct {
-		args []string
-		run  string
-		ok   bool
-	}{
-		{[]string{"apply", "--run", "20261101T120000Z"}, "20261101T120000Z", true},
-		{[]string{"apply", "--run=20261101T120000Z"}, "20261101T120000Z", true},
-		{nil, "", false},
-		{[]string{"apply"}, "", false},
-		{[]string{"apply", "--run", "../../etc"}, "", false},
-		{[]string{"apply", "--run", "20261101T120000Z", "extra"}, "", false},
-		{[]string{"rollback", "--run", "20261101T120000Z"}, "", false},
+func TestDispatchListsUpdateNotPanelUpdate(t *testing.T) {
+	if findSubcommand("update") == nil {
+		t.Error("update is not a subcommand")
 	}
-	for _, c := range cases {
-		if run, ok := parseApplyArgs(c.args); run != c.run && ok || ok != c.ok {
-			t.Errorf("parseApplyArgs(%q) = %q, %v", c.args, run, ok)
-		}
+	if findSubcommand("panel-update") != nil {
+		t.Error("panel-update must be gone")
+	}
+	var b bytes.Buffer
+	printUsage(&b)
+	if !strings.Contains(b.String(), "update") || strings.Contains(b.String(), "panel-update") {
+		t.Errorf("usage = %s", b.String())
 	}
 }
