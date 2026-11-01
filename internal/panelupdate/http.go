@@ -321,6 +321,22 @@ func (s *Service) postApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "A Panel update is already running.")
 		return
 	}
+	// An Updater of any run that still runs refuses this one: two Applies
+	// inside the re-check window would otherwise both start.
+	if s.d.Updater != nil {
+		found, err := s.d.Updater.ListUpdaters(ctx)
+		if err != nil {
+			log.Printf("panelupdate: list the Updater Containers: %v", err)
+			writeError(w, http.StatusInternalServerError, "could not list the Updater Containers")
+			return
+		}
+		for _, u := range found {
+			if u.Running {
+				writeError(w, http.StatusConflict, "The Updater "+u.Name+" is still running. Wait for it, or stop it with docker stop "+u.Name+".")
+				return
+			}
+		}
+	}
 	in, err := s.FindInstall(ctx)
 	if err != nil {
 		writeError(w, http.StatusConflict, "Panel update is unavailable: "+err.Error()+".")

@@ -333,3 +333,20 @@ func TestStatusCarriesWaitingOnAndNote(t *testing.T) {
 		t.Fatalf("run = %+v", st.Run)
 	}
 }
+
+// Two applies inside the Updater's re-check window (two tabs, or the page and
+// install.sh) must not both start: a running Updater of any run refuses the next.
+func TestApplyEndpointRefusesWhileAnUpdaterRuns(t *testing.T) {
+	r := newHTTPRig(t)
+	r.preview(t)
+	r.updater.state["relist-panel-updater-20261101T115959Z"] = UpdaterState{Exists: true, Running: true}
+	rec, _ := postJSON(t, r.s, "/api/panel-update/apply", `{"report_id":"`+httpReportID+`"}`)
+	if rec.Code != 409 || len(r.runner.started) != 0 || !strings.Contains(rec.Body.String(), "relist-panel-updater-20261101T115959Z") {
+		t.Fatalf("code = %d body = %s started = %v", rec.Code, rec.Body, r.runner.started)
+	}
+	// An Updater that has exited does not block.
+	r.updater.state["relist-panel-updater-20261101T115959Z"] = UpdaterState{Exists: true}
+	if rec, _ := postJSON(t, r.s, "/api/panel-update/apply", `{"report_id":"`+httpReportID+`"}`); rec.Code != 202 {
+		t.Fatalf("with only an exited Updater: code = %d", rec.Code)
+	}
+}
