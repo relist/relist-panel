@@ -127,6 +127,10 @@ _Avoid_: admin socket, API socket.
 The Docker Compose project on the host that runs the panel and Traefik: its directory, its Install file, its Install override and its `.env`. The panel finds it from its own Container's Compose labels.
 _Avoid_: Stack, Panel compose (a Compose is something the panel deploys, never the panel itself)
 
+**Install script**:
+The `install.sh` attached to each release, run as `curl … | sh`, that sets up a new Install on a host with Docker, or runs a Panel update with `--update` (ADR-0025).
+_Avoid_: Installer image, Bootstrap, Setup wizard
+
 **Install file**:
 The Install's `docker-compose.yml`, owned by the panel: each version ships one, and a Panel update replaces or merges it.
 _Avoid_: Base file, Main compose
@@ -136,7 +140,7 @@ The Install's `docker-compose.override.yml`, owned by the operator, where the In
 _Avoid_: Custom compose, Local file
 
 **Panel update**:
-One run, started from the web, that moves the Install to a newer panel version and puts the old one back if the new one is not healthy (ADR-0024).
+One run, started from the web or from the Install script's `--update`, that moves the Install to a newer panel version and puts the old one back if the new one is not healthy (ADR-0024, ADR-0025).
 _Avoid_: Upgrade, Release, Deployment (that deploys a Compose), Migration (that moves the panel to another host)
 
 **Update manifest**:
@@ -148,5 +152,5 @@ A property the Install's merged configuration must have for a panel version to r
 _Avoid_: Rule, Requirement
 
 **Updater**:
-The short-lived Container, of the current panel image, that applies a Panel update and rolls it back. It runs outside the Install so it outlives the panel Container it replaces.
+The short-lived Container, of the current panel image, that runs `relist-panel update`: it checks a Panel update, asks the panel to quiesce, backs up, applies and rolls back. It runs outside the Install so it outlives the panel Container it replaces (ADR-0025).
 _Avoid_: Agent, Sidecar, Watchtower

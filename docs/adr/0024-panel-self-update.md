@@ -64,3 +64,4 @@ Checked on 2026-11-01 on the dev host (Docker Compose v5.5.1 on the host, v5.6.1
 - **Each release must state what it needs as Install invariants.** Each item the README used to list under "Upgrading an existing install" becomes an invariant in that release's manifest.
 - Extends ADR-0018 and ADR-0019: Panel update holds the queue the same way the Migration lock does.
 - Spec: `.scratch/self-update/spec.md`.
+- Partly superseded by ADR-0025: the `update` command now does the Preflight, the quiesce and the backup, and the web and the Install script both start it.
