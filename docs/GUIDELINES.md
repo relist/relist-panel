@@ -564,11 +564,17 @@ tag at once. No badge in the menu.
   - **Manual:** a warning `Alert` "This Install needs a manual update" with the reason and a link
     to the README, for an Install the Updater cannot drive or a release with checks this panel does
     not know.
+  - **Waiting:** a card for a run in `quiescing`: what the run waits on (`Deployment api #3`, or
+    a vulnerability scan), the elapsed time, and a **Cancel** button (`danger`) that stops the
+    Updater; nothing has been written yet. The header hides **Check now**.
   - **Updating:** a vertical `Steps` of the run's steps, plus "Roll back" as a final step while it
-    rolls back. No buttons.
+    rolls back. A run that went on without the panel answering shows its note as a warning
+    `Alert`. No buttons.
   - **Restarting:** a card with the elapsed time. After 5 minutes without an answer it becomes
     "The panel is not answering" with the shell commands to run on the host (copyable).
-  - **Result of the last run** (above the card, closable): `Rolled back to X` (warning, with the
+  - **Result of the last run** (above the card, closable): `Update cancelled` (info, "Nothing was
+    written"; a run the panel refused under a Migration lock shows that reason as the title);
+    `Rolled back to X` (warning, with the
     reason); `The rollback failed` (error, with both errors, the backup path and the restore
     commands); `The update was interrupted` (warning, with the backup path and the check
     commands). After a success the page reloads once onto the new bundle and shows a closable
@@ -576,8 +582,12 @@ tag at once. No badge in the menu.
 - **Confirmation:** **Update** is disabled until every manual step is ticked and the preview is
   ready. It opens a `Modal.confirm` "Update to X?" that states the restart, the self-rollback,
   the Services recreated (and Traefik's few seconds of dropped Domains), and that queued
-  Deployments are cancelled and new ones refused until the update ends. A 409 (the files changed
+  Deployments are cancelled, a running Deployment or scan is waited for, and new ones are refused
+  until the update ends. A 409 (the files changed
   since the preview) closes the preview with an error: run it again.
+- **Preview:** the preview is the report of the `update --preflight` Container; the page shows the
+  live gate (Install found, Migration, Deployments running) next to it. A preview that finds the
+  panel up to date shows an info notice instead of a card.
 - **Polling:** the page reads the status every 2 seconds while a run is in flight, including one
   started elsewhere, until it ends; there is no polling otherwise. A failed read during the run
   is "Restarting", not an error; a 401 sends you to sign in (sessions can be lost on a rollback).

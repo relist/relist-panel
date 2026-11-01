@@ -26,23 +26,74 @@ at `<data dir>/panel.db`.
 
 ## Self-hosted install
 
-Ticket 02 adds the install bootstrap: a `docker-compose.yml` that brings up
-the panel, Traefik, and the shared `relist-network` network together.
+On a host with Docker and Docker Compose v2, as root, one command installs the
+panel, Traefik and the first admin account from the latest release:
+
+```sh
+curl -fsSL https://github.com/relist/relist-panel/releases/latest/download/install.sh | sh
+```
+
+It checks the host before it writes anything (root, Docker, the CPU, an empty
+install directory, free ports 80 and 443), asks for the domain and the admin
+email on the terminal, creates `relist-network`, writes `docker-compose.yml` and
+`.env` into `/opt/relist-panel`, starts the stack, waits for the panel to answer
+and creates the admin. It never installs Docker, and it refuses a host that
+already has an install (use `--update`, below).
+
+Options, passed after `sh -s --`:
+
+| Option | Meaning |
+| --- | --- |
+| `--domain HOST` | the panel's host name, like `panel.example.com` (a host name only: no `https://`, path or port) |
+| `--email ADDRESS` | the first admin's email |
+| `--acme-email ADDRESS` | the address Let's Encrypt writes to (default: `--email`; a `.local` address is never used) |
+| `--auto` | ask nothing: needs `--domain`, uses `admin@relist.local` without `--email`, and prints a generated admin password once |
+| `--update` | update an existing install instead of installing |
+| `--dir PATH` | the install directory (default `/opt/relist-panel`) |
+| `--help` | print the options |
+
+```sh
+curl -fsSL https://github.com/relist/relist-panel/releases/latest/download/install.sh \
+  | sh -s -- --auto --domain panel.example.com --email me@example.com
+```
+
+Without a terminal (cron, CI, `ssh host 'curl ... | sh'`) the script cannot ask,
+so it stops and tells you to pass `--auto`.
+
+When it is done the panel is at `https://<domain>`. If routing is not ready
+(DNS not pointing here yet, say), use an SSH tunnel to the panel's loopback-only
+port: `ssh -L 8888:127.0.0.1:8888 <host>`, then open `http://127.0.0.1:8888/`.
+To update later, run the same command with `--update` (see Panel update).
+
+The Containers are named `relist-panel` and `relist-traefik`, so
+`docker exec relist-panel ...` works from anywhere on the host. There is one
+install per Docker host.
+
+### Building from source
+
+To run a checkout instead of a release (development, or a branch), build the
+panel from it. The Install file runs the published image, so a checkout copies
+the build block of the override example first; `docker-compose.override.yml` and
+`.env` are ignored by git:
+
+```sh
+docker network create relist-network   # one-time, safe to re-run
+cp docker-compose.override.example.yml docker-compose.override.yml
+docker compose up -d --build
+```
+
+This builds the panel image (Go binary + embedded frontend, per the
+`Dockerfile`) as `relist-panel:local` and starts it alongside Traefik, both
+attached to `relist-network`. A source build never updates itself: the build
+block fails Panel update's image check, and the page says the Install needs a
+manual update.
 
 `relist-network` is declared `external: true` — it must outlive this install
 stack's own lifecycle, since every Compose deployed through the panel later
 attaches to it too, so `docker compose down` on this stack must never be able
-to delete it out from under a running deployment (ADR-0002). Create it once,
-then bring up the stack:
+to delete it out from under a running deployment (ADR-0002).
 
-```sh
-docker network create relist-network   # one-time, safe to re-run
-docker compose up -d
-```
-
-This builds the panel image (Go binary + embedded frontend, per the
-`Dockerfile`) and starts it alongside Traefik, both attached to
-`relist-network`. The panel is reachable two ways out of the box:
+The panel is reachable two ways out of the box:
 
 - On the host itself, via its published port, which listens on loopback only:
   `http://127.0.0.1:8888/`. From another machine, open an SSH tunnel with
@@ -52,12 +103,12 @@ This builds the panel image (Go binary + embedded frontend, per the
   loopback on most systems without any DNS setup; plain HTTP redirects to it) —
   override the hostname with `RELIST_DOMAIN` for a real domain
 
-Then create the admin account from a terminal on the host. The panel has no
-setup screen: until an admin exists, its sign-in page refuses everyone, and its
-log says to run this.
+The install script creates the admin for you. A source build has no setup screen
+either: until an admin exists, its sign-in page refuses everyone, and its log
+says to run this from a terminal on the host.
 
 ```sh
-docker compose exec panel relist-panel create-admin
+docker exec -it relist-panel relist-panel create-admin
 ```
 
 It asks for the email and the password; leave the password empty to have one
@@ -65,8 +116,8 @@ generated and printed once. For scripts, pass the password on stdin or have it
 generated:
 
 ```sh
-printf '%s\n' "$PASSWORD" | docker compose exec -T panel relist-panel create-admin --email admin@example.com --password-stdin
-docker compose exec -T panel relist-panel create-admin --email admin@example.com --generate
+printf '%s\n' "$PASSWORD" | docker exec -i relist-panel relist-panel create-admin --email admin@example.com --password-stdin
+docker exec relist-panel relist-panel create-admin --email admin@example.com --generate
 ```
 
 The command refuses when an admin already exists. `relist-panel --help` lists
@@ -78,12 +129,12 @@ options as `create-admin` (`--email` is only needed with more than one admin),
 keeps two-factor on, clears any sign-in lock and signs every session out:
 
 ```sh
-docker compose exec panel relist-panel reset-password
-docker compose exec -T panel relist-panel reset-password --generate
+docker exec -it relist-panel relist-panel reset-password
+docker exec relist-panel relist-panel reset-password --generate
 ```
 
-Override the defaults via environment variables (or a `.env` file next to
-`docker-compose.yml`):
+Override the defaults via environment variables (or the `.env` file next to
+`docker-compose.yml`, which the install script writes):
 
 - `RELIST_PORT` (default `8080`) — the panel's port inside the container; when
   set it also becomes the published host port, which otherwise defaults to
@@ -106,6 +157,9 @@ Override the defaults via environment variables (or a `.env` file next to
   (`docker inspect $(hostname)` fails, e.g. a custom `hostname:` on the panel
   service) by adding it to that service's `environment:`. The image must be on
   the host; `docker compose build` puts it there
+- `RELIST_PANEL_IMAGE` — the panel image the Install file runs. The install
+  script and every Panel update write it to `.env` as a digest reference; do not
+  set it by hand
 
 Traefik ships with two entrypoints, `web` (port 80) and `websecure` (port 443),
 and a Let's Encrypt certificate resolver named `letsencrypt` that answers the
@@ -166,9 +220,28 @@ before.
 The **Panel update** page (side menu, or the `Update available` tag in the
 header) updates the panel from the browser. It checks once a day for a signed
 release, **Preview** shows what the update would change, and **Update** applies
-it: the panel backs up its database, pulls the new image, replaces the Install
-file, recreates the Services that changed and restarts. If the new version does
-not answer, it rolls itself back.
+it: a running Deployment or scan finishes first (the page says what it waits
+on, and **Cancel** ends the update before anything is written), then the update
+backs up the database, pulls the new image, replaces the Install file,
+recreates the Services that changed and restarts. If the new version does not
+answer, it rolls itself back.
+
+The same update runs from the shell, and works when the panel does not answer:
+
+```sh
+curl -fsSL https://github.com/relist/relist-panel/releases/latest/download/install.sh | sudo sh -s -- --update
+```
+
+It prints the preview, asks you to confirm each manual step the release lists,
+starts the update in a detached Container (`relist-panel-updater-<run id>`, so a
+dropped SSH session never stops it halfway) and follows its log. Ctrl-C stops
+only the log; the script then prints `docker logs -f relist-panel-updater-<run id>`
+and, while the update still waits for the panel to go quiet,
+`docker stop relist-panel-updater-<run id>`, which cancels it. If the panel does
+not answer within 20 seconds, the update stops it (a running Deployment may be
+cut), says so, and goes on. Both the page and the script run
+`relist-panel update`, which `relist-panel --help` lists. With `--auto` the
+script asks nothing and refuses a release that has manual steps.
 
 Keep your changes to the Install out of the Install file, because Panel update
 replaces it:
@@ -186,15 +259,16 @@ edit into the override and preview again.
 
 What Panel update does not promise:
 
-- **Not available yet.** It needs a published release and an Install file that
-  uses the published image. Until then the Install file builds the panel
-  (`build: .`, image `ghcr.io/relist/relist-panel:local`, `pull_policy: build`)
-  and `docker compose up -d --build` keeps working. A build without a release
-  public key shows "This build has no release key" and offers no updates.
+- **A source build is never updated.** A checkout that builds the panel (the
+  build block in `docker-compose.override.yml`) fails the image check and shows
+  "This Install needs a manual update". A build without a release public key
+  shows "This build has no release key" and offers no updates.
 - **No downgrades,** no choosing a version other than the newest, and no
   rollback once an update has succeeded.
-- **Deployments stop.** Starting an update cancels queued Deployments and
-  refuses new ones until it ends, the same way a Migration locks the panel.
+- **Deployments stop.** Starting an update cancels queued Deployments, waits
+  for the running Deployment and scan, and refuses new ones until it ends, the
+  same way a Migration locks the panel. A Migration in progress refuses the
+  update.
 - **A rollback loses writes made after the backup:** sessions (sign in again),
   some metric samples and Scan tasks queued by the daily scheduler.
   Configuration and Deployment history are not affected, because the panel
@@ -210,38 +284,34 @@ What Panel update does not promise:
   done. A release that needs checks this panel does not know is updated by hand
   (below).
 
-To try the whole cycle, update and rollback, against two images inside a
-`docker:dind` host: `task probe:panel-update`.
+To try the whole cycle against two images inside a `docker:dind` host, install,
+a refused second install, an update that waits for a Deployment, a cancel, a
+rollback and an update with the panel stopped: `task probe:panel-update`.
 
 `relist-panel --help` lists the panel's subcommands; an unknown argument prints
 the usage and exits instead of starting the server.
 
-#### One-time manual upgrade
-
-The version that ships Panel update is installed by hand, once:
-
-1. Replace `docker-compose.yml` with the new one.
-2. Move any edits you made to it into `docker-compose.override.yml`.
-3. Start it:
-   - **Today** (the Install file builds the panel): run
-     `docker compose up -d --build`.
-   - **Once the Install file uses the published image** (its `panel` service has
-     an `image:` from `ghcr.io` and no `build:`): run
-     `docker compose pull panel && docker compose up -d`. With no
-     `RELIST_PANEL_IMAGE` in `.env`, this starts
-     `ghcr.io/relist/relist-panel:latest`; the first Panel update pins the
-     digest.
-
-After that, Panel update does the rest.
-
 ### Upgrading an existing install
+
+An Install from before the install script is moved by hand, once:
+
+1. Replace `docker-compose.yml` with the new one, and move any edits you had made
+   to it into `docker-compose.override.yml`.
+2. A checkout that builds from source: copy the build block of
+   `docker-compose.override.example.yml` into `docker-compose.override.yml`.
+3. Run `docker compose up -d` (with `--build` for a source checkout). The
+   Containers are recreated once under their new names, `relist-panel` and
+   `relist-traefik`. Commands that named `relist-panel-panel-1` now name
+   `relist-panel`.
+
+After that, Panel update does the rest, except for a source checkout.
 
 What a release asks of an existing Install is in two files, which Preview reads
 and shows: `release/invariants.json` (what the Install file must keep doing) and
-`release/manual-steps.json` (what you do by hand). To upgrade an install that
-builds the panel from source, update `docker-compose.yml` from this version,
-follow the steps in `release/manual-steps.json` and run `docker compose up -d`
-(add `--build`).
+`release/manual-steps.json` (what you do by hand). To upgrade an install by hand
+(a release that needs checks this panel does not know), update
+`docker-compose.yml` from that version, follow the steps in
+`release/manual-steps.json` and run `docker compose up -d`.
 
 Two notes outside those files:
 

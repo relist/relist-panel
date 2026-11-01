@@ -7,8 +7,13 @@ Left open on purpose. The final whole-branch review triaged these as able to wai
 - Ticket 02's owner steps: see `issues/02-release-workflow-and-key.md` → Comments.
   The pinned action SHAs were checked on 2026-11-01. The workflow runs on
   `workflow_dispatch` only until the tag trigger is put back.
-- Ticket 08: switch the Install file to the published image. Until then Panel update
-  stays unavailable (`service-image` fails on `build:`).
+- The live install on the dev host runs from this checkout. Before its next
+  `docker compose up -d`, copy `docker-compose.override.example.yml` to
+  `docker-compose.override.yml` (the build block), or it runs `latest` from GHCR. The
+  Containers are renamed once, to `relist-panel` and `relist-traefik`.
+- `shellcheck -s sh release/install.sh` and `actionlint` were not available where the
+  one-updater rework was built; the release workflow runs `shellcheck` on the filled
+  script, and `actionlint` has not run on the workflow.
 
 ## Can wait
 
@@ -21,38 +26,24 @@ Left open on purpose. The final whole-branch review triaged these as able to wai
   - No test covers the AppShell tag or the menu entry.
   - `revalidateOnReconnect` is left at its default.
 - Lock
-  - Quiescing blocks the Apply request. `QuiesceAndBackup` waits for the running
-    Deployment and scan on `r.Context()` with no timeout of its own, so a 10-minute
-    build keeps **Update** spinning for 10 minutes. The page cannot say what it is
-    waiting for. Closing the tab cancels the context, and the run is aborted and the
-    lock released, so this is safe but opaque. Fix: Apply returns as soon as
-    `status.json` says `quiescing`; quiesce, backup and the Updater start continue
-    in the background; the page shows the Quiescing step with the Deployment or scan
-    it waits on; Cancel aborts the run.
   - A narrow TOCTOU between the update lock's unlock and a Migration start.
   - The metrics sampler and the vuln daily scheduler still write while locked; the
     README documents this.
   - `settle` logs on every pass if `UpdaterState` keeps failing.
 - Updater
-  - It has no signal handling; a `docker stop` leaves the run interrupted with no
-    rollback.
   - `healthyOnce` hides the last real error when the context expires.
   - The `ImageID` ref goes into the URL unescaped. The ref is signed.
-  - A refusal ended by `AbortRun` (e.g. files changed while quiescing) shows the
-    "Interrupted" alert.
-  - A cancelled Updater create can leave a `created` container. That container blocks
-    the next Apply until someone removes it with `docker rm -f`.
+  - A failed `docker run -d` can leave a `created` Updater container. The next Apply
+    starts a new run id, so it is not blocked; remove the old one with `docker rm -f`.
 - Preflight
   - Cancelling the context replaces a Ready report.
   - A queued preflight waits on `pfRun` and ignores its context.
   - The `service-image` invariant's own image field is not compared with the
     manifest's image.
-  - The helper may auto-create the scratch host dir.
   - The blame wording does not match the doc comment.
 - Discovery
-  - A `:` or `,` in the `working_dir` label would break the `-v` spec. The labels come
-    from the panel's own container.
-  - The helper's stdout buffer is unbounded.
+  - A `:` or `,` in the `working_dir` label would break the `-v` spec of the update
+    Container. The labels come from the panel's own container.
 - Update check
   - `s.mu` is held across the 30 s fetch.
   - `best()` reads the store twice.
