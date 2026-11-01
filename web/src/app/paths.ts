@@ -19,6 +19,7 @@ export const paths = {
   certificates: '/certificates',
   vulnerabilities: '/vulnerabilities',
   docker: '/docker',
+  panelUpdate: '/panel-update',
   environment: (projectId: number | string, environmentId: number | string, tab = 'composes') =>
     `/projects/${projectId}/env/${environmentId}/${tab}`,
   monitoring: '/monitoring',
@@ -60,6 +61,7 @@ export const routePaths = [
   { path: 'certificates' },
   { path: 'vulnerabilities' },
   { path: 'docker' },
+  { path: 'panel-update' },
   { path: 'deployments' },
   { path: 'account' },
   { path: 'projects' },

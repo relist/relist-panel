@@ -9,6 +9,7 @@ import { DockerPage } from '../pages/DockerPage';
 import { ImagesPage } from '../pages/ImagesPage';
 import { MonitoringPage } from '../pages/MonitoringPage';
 import { NotFoundPage } from '../pages/NotFoundPage';
+import { PanelUpdatePage } from '../pages/PanelUpdatePage';
 import { OverviewPage } from '../pages/OverviewPage';
 import { ProjectPage } from '../pages/ProjectPage';
 import { ProjectsPage } from '../pages/ProjectsPage';
@@ -38,6 +39,7 @@ const elements: Record<string, ReactElement> = {
   'certificates': <CertificatesPage />,
   'vulnerabilities': <VulnerabilitiesPage />,
   'docker': <DockerPage />,
+  'panel-update': <PanelUpdatePage />,
   'deployments': <DeploymentsPage />,
   'monitoring': <MonitoringPage />,
   'projects': <ProjectsPage />,

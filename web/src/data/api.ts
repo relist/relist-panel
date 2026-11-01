@@ -61,6 +61,7 @@ import type {
 } from './types';
 import type { MetricWindow } from './types';
 import type { MigrationStatus } from './migration';
+import type { PanelUpdateStatus, PreflightReport } from './panel-update';
 
 export type AuthStatus = {
   authenticated: boolean;
@@ -253,6 +254,21 @@ function jsonInit(method: string, body: unknown): RequestInit {
 export const api = {
   // A server Migration's lock on the old host (ADR-0018).
   migrationStatus: () => request<MigrationStatus>('/api/migration/status'),
+  panelUpdateStatus: () => request<PanelUpdateStatus>('/api/panel-update/status'),
+  panelUpdateCheck: () => request<PanelUpdateStatus>('/api/panel-update/check', { method: 'POST' }),
+  panelUpdateSettings: (checkEnabled: boolean) =>
+    request<PanelUpdateStatus>('/api/panel-update/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ checkEnabled }),
+    }),
+  panelUpdatePreflight: () => request<PreflightReport>('/api/panel-update/preflight', { method: 'POST' }),
+  panelUpdateApply: (reportId: string, manualStepsDone: string[]) =>
+    request<{ id: string }>('/api/panel-update/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ report_id: reportId, manual_steps_done: manualStepsDone }),
+    }),
   resumeDocker: (confirm: string) => request<{ resumed: boolean }>('/api/docker/recover', jsonInit('POST', { confirm })),
   dockerReport: (refresh = false) => request<DockerReport>(`/api/docker${refresh ? '?refresh=1' : ''}`),
   dockerPrunePlan: (kind: DockerPruneKind) => request<DockerPrunePlan>(`/api/docker/prune-plan?kind=${encodeURIComponent(kind)}`),

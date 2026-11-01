@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, CloudDownloadOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -11,6 +11,7 @@ import {
   Flex,
   Layout,
   Menu,
+  Tag,
   Tooltip,
   Typography,
   theme,
@@ -24,6 +25,7 @@ import { DiskPressureFooter } from '../components/DiskPressureFooter';
 import { PasswordFromEnvBanner } from '../components/PasswordFromEnvBanner';
 import { useDiskPressure } from '../data/useDiskPressure';
 import { useGlobalDeploymentQueue } from '../data/useGlobalDeploymentQueue';
+import { usePanelUpdateStatus } from '../data/usePanelUpdate';
 import { useVulnSummary } from '../data/useVulnSummary';
 import { summaryBadge } from '../pages/vulnerabilities-view';
 import { usePanel } from '../data/store';
@@ -52,6 +54,8 @@ export function AppShell() {
   const diskPressure = useDiskPressure(auth.authenticated);
   const queuedCount = deploymentQueue?.filter((d) => d.status === 'queued').length ?? 0;
   const { data: vulnSummary } = useVulnSummary({}, auth.authenticated);
+  const updateStatus = usePanelUpdateStatus(auth.authenticated);
+  const updateAvailable = !!updateStatus?.available && !updateStatus.development;
   const criticalCount = summaryBadge(vulnSummary)?.critical ?? 0;
   const [loadError, setLoadError] = useState<string>();
   const [refreshing, setRefreshing] = useState(false);
@@ -90,6 +94,8 @@ export function AppShell() {
             ? 'deployments'
           : resolved.pattern === 'docker'
             ? 'docker'
+          : resolved.pattern === 'panel-update'
+            ? 'panel-update'
           : resolved.pattern === 'images'
             ? 'images'
           : resolved.pattern === 'ssh-keys'
@@ -128,6 +134,7 @@ export function AppShell() {
     },
     { key: 'monitoring', icon: <DashboardOutlined />, label: 'Monitoring' },
     { key: 'docker', icon: <CloudServerOutlined />, label: 'Docker' },
+    { key: 'panel-update', icon: <CloudDownloadOutlined />, label: 'Panel update' },
     { key: 'images', icon: <ContainerOutlined />, label: 'Images' },
     {
       key: 'vulnerabilities', icon: <SafetyOutlined />,
@@ -161,6 +168,7 @@ export function AppShell() {
     if (key === 'monitoring') return navigate(paths.monitoring);
     if (key === 'deployments') return navigate(paths.deployments);
     if (key === 'docker') return navigate(paths.docker);
+    if (key === 'panel-update') return navigate(paths.panelUpdate);
     if (key === 'images') return navigate(paths.images);
     if (key === 'ssh-keys') return navigate(paths.sshKeys);
     if (key === 'certificates') return navigate(paths.certificates);
@@ -182,6 +190,8 @@ export function AppShell() {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Deployments' });
       } else if (resolved?.pattern === 'docker') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Docker' });
+      } else if (resolved?.pattern === 'panel-update') {
+        trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Panel update' });
       } else if (resolved?.pattern === 'images') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Images' });
       } else if (resolved?.pattern === 'ssh-keys') {
@@ -317,6 +327,16 @@ export function AppShell() {
                 the cluster on the left of the Overview header that way. The
                 cluster's right edge lands on the 24px gutter on every route. */}
             <Flex align="center" gap={8} style={{ marginInlineStart: 'auto' }}>
+              {updateStatus && (
+                <Flex align="center" gap={8}>
+                  <Text type="secondary">{updateStatus.version}</Text>
+                  {updateAvailable && (
+                    <Link to={paths.panelUpdate}>
+                      <Tag color="processing" style={{ cursor: 'pointer', marginInlineEnd: 0 }}>Update available</Tag>
+                    </Link>
+                  )}
+                </Flex>
+              )}
               <Tooltip title="Re-read container status from the host">
                 <Badge count={attention} offset={[-4, 4]} size="small">
                   <Button
