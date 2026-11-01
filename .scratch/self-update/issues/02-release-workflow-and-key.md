@@ -39,4 +39,7 @@ The code and the workflow are done; what remains is for the owner:
 - Store the private key as the repo secret `RELIST_RELEASE_KEY`.
 - Commit the public key in `internal/panelupdate/key.go`.
 - After the first push of a release, check the GHCR package is Public and linked to the repo.
-- Verify the pinned action SHAs in `.github/workflows/release.yml`.
+- ~~Verify the pinned action SHAs in `.github/workflows/release.yml`.~~ Checked
+  2026-11-01 with `git ls-remote`: all six match their tags.
+- Enable the workflow: it runs on `workflow_dispatch` only for now. Put back the
+  `push: tags: ["v*"]` trigger written in its header comment.

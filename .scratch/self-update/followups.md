@@ -5,7 +5,8 @@ Left open on purpose. The final whole-branch review triaged these as able to wai
 ## Before the first release tag
 
 - Ticket 02's owner steps: see `issues/02-release-workflow-and-key.md` → Comments.
-  Includes checking the pinned action SHAs in `.github/workflows/release.yml`.
+  The pinned action SHAs were checked on 2026-11-01. The workflow runs on
+  `workflow_dispatch` only until the tag trigger is put back.
 - Ticket 08: switch the Install file to the published image. Until then Panel update
   stays unavailable (`service-image` fails on `build:`).
 
@@ -20,6 +21,14 @@ Left open on purpose. The final whole-branch review triaged these as able to wai
   - No test covers the AppShell tag or the menu entry.
   - `revalidateOnReconnect` is left at its default.
 - Lock
+  - Quiescing blocks the Apply request. `QuiesceAndBackup` waits for the running
+    Deployment and scan on `r.Context()` with no timeout of its own, so a 10-minute
+    build keeps **Update** spinning for 10 minutes. The page cannot say what it is
+    waiting for. Closing the tab cancels the context, and the run is aborted and the
+    lock released, so this is safe but opaque. Fix: Apply returns as soon as
+    `status.json` says `quiescing`; quiesce, backup and the Updater start continue
+    in the background; the page shows the Quiescing step with the Deployment or scan
+    it waits on; Cancel aborts the run.
   - A narrow TOCTOU between the update lock's unlock and a Migration start.
   - The metrics sampler and the vuln daily scheduler still write while locked; the
     README documents this.
