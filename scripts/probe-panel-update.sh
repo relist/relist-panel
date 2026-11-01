@@ -1,29 +1,39 @@
 #!/usr/bin/env bash
-# Probe a Panel update against real Docker (ADR-0024), as `task probe:panel-update`.
+# Probe the Install script and the Panel update against real Docker (ADR-0024,
+# ADR-0025), as `task probe:panel-update`.
 #
 # Everything runs inside one docker:dind host, a separate Docker daemon, so
-# nothing here touches the daemon this script runs on: a second panel with the
-# Install file's Traefik labels would be picked up by a live Traefik, which owns
-# ports 80/443 and the shared relist-network on the host.
+# nothing here touches the daemon this script runs on: the probe's panel has the
+# same Container names, router names, ports (80/443) and network (relist-network)
+# as a live install, and a live Traefik would pick it up. It refuses to run
+# anywhere else.
 #
 # Inside the dind host:
-#   - a registry:2 on localhost:5000, because the preflight pulls the manifest's
-#     image by digest and a locally built image has no digest;
-#   - the install stack (panel + Traefik) from a sandbox Install file, with the
-#     panel at version 1.0.0 (su-test/panel:a);
-#   - a manifest server (busybox httpd) on relist-network, which the panel reads
-#     through RELIST_UPDATE_MANIFEST_URL.
+#   - a registry:2 on localhost:5000, because an update pulls the manifest's image
+#     by digest and a locally built image has no digest;
+#   - a manifest server (busybox httpd, "su-manifest") on relist-network, which
+#     the update command reads through RELIST_UPDATE_MANIFEST_URL;
+#   - the Install script (release/install.sh), piped into `sh` as `curl | sh`
+#     would, with RELIST_INSTALL_IMAGE pointing at the registry.
 # The manifests are signed with a throwaway key, built into both panel images.
 #
-# Two updates are run through the panel's own API:
-#   1. 1.0.0 -> 1.1.0 (su-test/panel:b), which must succeed;
-#   2. 1.1.0 -> 1.2.0, the same image with `command: ["--bogus"]` in the new
-#      Install file, so the panel never answers; it must roll back.
+# The six steps, in order, each printed as PASS or FAIL:
+#   1. install.sh --auto installs 1.0.0 and prints the admin password;
+#   2. a second install.sh is refused;
+#   3. a slow Deployment runs; install.sh --update to 1.1.0 logs what it waits
+#      on, then succeeds;
+#   4. an update cancelled with `docker stop` while quiescing ends aborted and
+#      the panel's lock is released;
+#   5. an update whose new panel never answers rolls back, and every Install
+#      file and .env match their bytes from before the run;
+#   6. with the panel stopped, install.sh --update notes the panel did not
+#      answer, takes the backup and succeeds.
 #
 # It needs a Docker that can run privileged containers, internet access for
-# registry:2 and busybox (unless the host has them), and a few GB of disk. It
-# removes the dind host, the network, and the two images it built on exit;
-# KEEP=1 leaves the dind host running for debugging.
+# registry:2, busybox and traefik (unless the host has them), and a few GB of
+# disk. It removes the dind host and the two images it built on exit; KEEP=1
+# leaves the dind host running for debugging. Step 5 waits the 180 s health
+# deadline.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -31,25 +41,36 @@ DIND=su-test-update-dind
 IMG=su-test/panel
 CTX=$(mktemp -d -t su-test-ctx.XXXXXX)
 WORK=$(mktemp -d -t su-test-work.XXXXXX)
-HEALTH_DEADLINE=${HEALTH_DEADLINE:-420}
+INSTALL_DIR=/opt/relist-panel
+DATA_DIR=/var/lib/relist-panel
+ADMIN=admin@relist.local
 
 say() { printf '\033[1mprobe:\033[0m %s\n' "$*" >&2; }
+PASSED=()
+pass() { PASSED+=("$1"); printf '\033[32mprobe: PASS\033[0m step %s\n' "$1" >&2; }
 fail() { printf '\033[31mprobe: FAIL\033[0m %s\n' "$*" >&2; exit 1; }
-
+summary() {
+	local status=$?
+	if [ $status -ne 0 ]; then
+		printf '\033[31mprobe: FAILED\033[0m (passed steps: %s)\n' "${PASSED[*]:-none}" >&2
+		# What the Updater said, for the one that was running.
+		docker exec "$DIND" sh -c 'for c in $(docker ps -aq --filter name=relist-panel-updater-); do docker logs --tail 30 $c 2>&1; done' >&2 2>/dev/null || true
+	fi
+	cleanup
+	exit $status
+}
 cleanup() {
+	[ "${KEEP:-}" = 1 ] && return 0
 	docker rm -fv "$DIND" >/dev/null 2>&1 || true
 	docker rmi -f "$IMG:a" "$IMG:b" >/dev/null 2>&1 || true
 	rm -rf "$CTX" "$WORK"
 }
-[ "${KEEP:-}" = 1 ] || trap cleanup EXIT
+trap summary EXIT
 
 # dind runs a command in the dind host.
 dind() { docker exec -i "$DIND" "$@"; }
 # put DEST: stdin becomes a file in the dind host.
 put() { docker exec -i "$DIND" sh -c "cat > $1"; }
-# panel prints the ID of the running panel Container in the dind host, found by label
-# (its name is the project's, not fixed).
-panel() { dind docker ps -q --filter label=com.docker.compose.project=su-test-update --filter label=com.docker.compose.service=panel </dev/null; }
 
 # api METHOD PATH [BODY]: one JSON call to the panel from a curl container that
 # shares the dind host's network, keeping the session in $WORK/jar.
@@ -62,28 +83,36 @@ api() {
 body() { sed '$d'; }
 code() { tail -n1; }
 json() { python3 -c "import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[1], {'d': d}))" "$1"; }
+status() { api GET /api/panel-update/status 2>/dev/null | body; }
 
-# ---- the throwaway release key and the two Install files ----
+# install_sh ARGS...: the Install script, piped into sh like `curl | sh`, with
+# the image and the manifest location of the probe. Output goes to stdout and
+# stderr; the exit code is the script's.
+install_sh() {
+	docker exec -i -e "RELIST_INSTALL_IMAGE=$REF_A" -e RELIST_UPDATE_MANIFEST_URL=http://su-manifest/update-manifest.json \
+		"$DIND" sh -s -- "$@" <"$ROOT/release/install.sh"
+}
+
+# Every Docker command below that touches an install runs inside $DIND, a
+# privileged docker:dind container with its own daemon; the host's daemon only
+# builds the two images and starts the dind host.
+command -v docker >/dev/null || fail "docker is not installed"
+
+# ---- the throwaway release key and the Install files ----
 say "making the key and the Install files"
 openssl genpkey -algorithm ed25519 -out "$WORK/key.pem" 2>/dev/null
 KEY=$(openssl pkey -in "$WORK/key.pem" -pubout -outform DER | tail -c 32 | base64 -w0)
-python3 - "$ROOT/docker-compose.yml" "$WORK" <<'PY'
-import re, sys
-src = open(sys.argv[1]).read()
-head = re.compile(r"    build: \.\n(?:    #.*\n)*    image: ghcr\.io/relist/relist-panel:local\n    pull_policy: build\n")
-if not head.search(src):
-    sys.exit("the panel service of docker-compose.yml has changed shape: update the probe")
-a = head.sub("    image: ${RELIST_PANEL_IMAGE:-su-test/panel:a}\n", src)
-# Version 1.1.0's file differs from 1.0.0's, so the update has something to write.
-b = "# su-test: the Install file of 1.1.0\n" + a
-bad = b.replace("# su-test: the Install file of 1.1.0", "# su-test: the Install file of 1.2.0 (broken)").replace(
-    "    image: ${RELIST_PANEL_IMAGE:-su-test/panel:a}\n", "    image: ${RELIST_PANEL_IMAGE:-su-test/panel:a}\n    command: [\"--bogus\"]\n", 1)
-for name, text in (("install-a.yml", a), ("install-b.yml", b), ("install-bad.yml", bad)):
-    open(f"{sys.argv[2]}/{name}", "w").write(text)
-PY
+# 1.0.0 ships the repo's Install file as it is; each later version differs by a
+# first comment line, so an update has something to write.
+cp "$ROOT/docker-compose.yml" "$WORK/install-a.yml"
+{ echo "# su-test: the Install file of 1.1.0"; cat "$ROOT/docker-compose.yml"; } >"$WORK/install-b.yml"
+{ echo "# su-test: the Install file of 1.2.0"; cat "$ROOT/docker-compose.yml"; } >"$WORK/install-c.yml"
+# The same, with a panel command that never starts, so the health check fails.
+{ echo "# su-test: the Install file of 1.2.0 (broken)"; sed '0,/^    container_name: relist-panel$/s//    container_name: relist-panel\n    command: ["--bogus"]/' "$ROOT/docker-compose.yml"; } >"$WORK/install-bad.yml"
+grep -q -- '--bogus' "$WORK/install-bad.yml" || fail "the panel service of docker-compose.yml has changed shape: update the probe"
 
 # ---- the two panel images, built from a copy of this checkout whose
-# docker-compose.yml is the sandbox Install file the image embeds ----
+# docker-compose.yml is the Install file the image embeds ----
 say "building $IMG:a (1.0.0) and $IMG:b (1.1.0)"
 tar -C "$ROOT" --exclude=.git --exclude=node_modules --exclude=.scratch --exclude=.superpowers --exclude=.claude -cf - . | tar -C "$CTX" -xf -
 build() { # VERSION TAG INSTALL_FILE
@@ -110,43 +139,27 @@ done
 docker save "$IMG:a" | dind docker load -q >/dev/null
 docker save "$IMG:b" | dind docker load -q >/dev/null
 
-say "pushing $IMG:b to a registry in the dind host"
+say "pushing both panel images to a registry in the dind host"
 dind docker run -d --name su-registry -p 5000:5000 registry:2 >/dev/null
 for _ in $(seq 30); do dind wget -qO- http://127.0.0.1:5000/v2/ >/dev/null 2>&1 && break; sleep 1; done
-dind docker tag "$IMG:b" "localhost:5000/$IMG:b"
-dind docker push -q "localhost:5000/$IMG:b" >/dev/null
+for t in a b; do
+	dind docker tag "$IMG:$t" "localhost:5000/$IMG:$t"
+	dind docker push -q "localhost:5000/$IMG:$t" >/dev/null
+done
+REF_A=$(dind docker inspect -f '{{index .RepoDigests 0}}' "localhost:5000/$IMG:a")
 REF_B=$(dind docker inspect -f '{{index .RepoDigests 0}}' "localhost:5000/$IMG:b")
 ID_B=$(dind docker inspect -f '{{.Id}}' "$IMG:b")
-case "$REF_B" in localhost:5000/*@sha256:*) ;; *) fail "no digest reference for b: $REF_B" ;; esac
-# Only the registry holds b from here on, so the preflight's pull is real.
-dind docker rmi "$IMG:b" "localhost:5000/$IMG:b" >/dev/null
-say "b is $REF_B (image $ID_B)"
+case "$REF_A$REF_B" in localhost:5000/*@sha256:*localhost:5000/*@sha256:*) ;; *) fail "no digest references: $REF_A $REF_B" ;; esac
+# Only the registry holds them from here on, so every pull is real.
+dind docker rmi "$IMG:a" "$IMG:b" "localhost:5000/$IMG:a" "localhost:5000/$IMG:b" >/dev/null
+say "a is $REF_A; b is $REF_B"
 
-# ---- the Install ----
-say "starting the install stack at 1.0.0"
-dind mkdir -p /install /srv/manifest /srv/su-data
-put /install/docker-compose.yml <"$WORK/install-a.yml"
-put /install/.env <<'ENV'
-RELIST_DOMAIN=panel.test
-RELIST_DATA_DIR=/srv/su-data
-ENV
-put /install/docker-compose.override.yml <<'YML'
-services:
-  panel:
-    environment:
-      RELIST_UPDATE_MANIFEST_URL: http://su-manifest/update-manifest.json
-YML
+# The shared network and the manifest server. install.sh creates relist-network
+# when it is missing; the probe creates it first so the manifest server can sit
+# on it.
 dind docker network create relist-network >/dev/null
+dind mkdir -p /srv/manifest
 dind docker run -d --name su-manifest --network relist-network -v /srv/manifest:/www busybox:1.37 httpd -f -p 80 -h /www >/dev/null
-dind sh -c 'cd /install && docker compose -p su-test-update up -d --no-build' >/dev/null 2>&1 || fail "docker compose up"
-
-for _ in $(seq 60); do [ "$(api GET /healthz | code)" = 200 ] && break; sleep 1; done
-[ "$(api GET /healthz | code)" = 200 ] || fail "the panel does not answer"
-PANEL_ID=$(panel)
-printf '%s\n' 'probe password 123' | dind docker exec -i "$PANEL_ID" relist-panel create-admin --email probe@example.com --password-stdin >/dev/null || fail "create-admin"
-[ "$(api POST /api/auth/login '{"email":"probe@example.com","password":"probe password 123"}' | code)" = 200 ] || fail "login"
-VERSION_NOW=$(api GET /api/panel-update/status | body | json 'd["version"]')
-[ "$VERSION_NOW" = 1.0.0 ] || fail "running version $VERSION_NOW, want 1.0.0"
 
 # publish VERSION INSTALL_FILE: sign and serve a manifest naming b's digest.
 publish() {
@@ -163,7 +176,7 @@ manifest = {
         {"kind": "service-network", "service": "panel", "network": "relist-network"},
         {"kind": "network-external", "network": "relist-network", "name": "relist-network"},
     ],
-    "manual_steps": [{"id": "open-443", "text": "Open port 443."}],
+    "manual_steps": [],
 }
 open(out, "w").write(json.dumps(manifest))
 PY
@@ -172,88 +185,159 @@ PY
 	put /srv/manifest/update-manifest.json.sig <"$WORK/manifest.json.sig"
 }
 
-# update VERSION: check, preview, apply, and wait for the run to end. Prints
-# the final run as JSON.
-update() {
-	local want=$1 out report run state=""
-	[ "$(api POST /api/panel-update/check | code)" = 200 ] || fail "check"
-	out=$(api GET /api/panel-update/status)
-	[ "$(echo "$out" | body | json 'd["available"]["version"]')" = "$want" ] || fail "available version is not $want: $(echo "$out" | body)"
-	out=$(api POST /api/panel-update/preflight)
-	[ "$(echo "$out" | code)" = 200 ] || fail "preflight: $(echo "$out" | body)"
-	echo "$out" | body | json '"probe: preflight: ready=%s change=%s recreated=%s traefikRecreated=%s failed=%s invariants=%s" % (d["ready"], d["change"], d["recreated"], d["traefikRecreated"], d["failed"], [(i["kind"], i["ok"]) for i in d["invariants"]])' >&2
-	[ "$(echo "$out" | body | json 'd["ready"]')" = True ] || fail "the preflight is not ready: $(echo "$out" | body)"
-	report=$(echo "$out" | body | json 'd["id"]')
-	out=$(api POST /api/panel-update/apply "{\"report_id\":\"$report\",\"manual_steps_done\":[\"open-443\"]}")
-	[ "$(echo "$out" | code)" = 202 ] || fail "apply: $(echo "$out" | body)"
-	run=$(echo "$out" | body | json 'd["id"]')
-	say "run $run started"
-	local deadline=$((SECONDS + HEALTH_DEADLINE)) last=""
-	while [ $SECONDS -lt $deadline ]; do
-		out=$(api GET /api/panel-update/status 2>/dev/null || true)
-		if [ "$(echo "$out" | code)" = 200 ]; then
-			state=$(echo "$out" | body | json '(d["run"] or {}).get("state", "")')
-			[ "$state" != "$last" ] && say "  state: $state" && last=$state
-			case "$state" in succeeded | rolled-back | rollback-failed | interrupted)
-				echo "$out" | body
-				return 0
-				;;
-			esac
-		else
-			[ "$last" != restarting ] && say "  the panel does not answer (restarting)" && last=restarting
-		fi
+# slow_deployment NAME: a Compose whose `up` blocks for about a minute (its
+# dependency is healthy only after sleeping), deployed through the panel's API,
+# so a Deployment is running while the update asks the panel to quiesce.
+SLOW_PROJECT=""
+SLOW_ENV=""
+slow_deployment() {
+	local name=$1 out compose yaml
+	if [ -z "$SLOW_PROJECT" ]; then
+		out=$(api POST /api/projects '{"name":"probe","description":""}')
+		[ "$(echo "$out" | code)" = 201 ] || fail "create project: $(echo "$out" | body)"
+		SLOW_PROJECT=$(echo "$out" | body | json 'd["id"]')
+		out=$(api POST "/api/projects/$SLOW_PROJECT/environments" '{"name":"prod"}')
+		[ "$(echo "$out" | code)" = 201 ] || fail "create environment: $(echo "$out" | body)"
+		SLOW_ENV=$(echo "$out" | body | json 'd["id"]')
+	fi
+	yaml=$(python3 - <<'PY'
+import json
+print(json.dumps("""services:
+  slow:
+    image: busybox:1.37
+    command: ["sh", "-c", "sleep 60; touch /tmp/ready; sleep 3600"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+  app:
+    image: busybox:1.37
+    command: ["sleep", "3600"]
+    depends_on:
+      slow:
+        condition: service_healthy
+"""))
+PY
+)
+	out=$(api POST "/api/projects/$SLOW_PROJECT/environments/$SLOW_ENV/composes" "{\"name\":\"$name\",\"yamlContent\":$yaml}")
+	[ "$(echo "$out" | code)" = 201 ] || fail "create compose: $(echo "$out" | body)"
+	compose=$(echo "$out" | body | json 'd["id"]')
+	out=$(api POST "/api/projects/$SLOW_PROJECT/environments/$SLOW_ENV/composes/$compose/deployments" '{"mode":"deploy"}')
+	case "$(echo "$out" | code)" in 200 | 201 | 202) ;; *) fail "deploy $name: $(echo "$out" | body)" ;; esac
+	for _ in $(seq 30); do
+		[ "$(api GET /api/deployments/queue | body | json 'any(x.get("status") == "running" for x in d)' 2>/dev/null || echo False)" = True ] && return 0
+		sleep 1
+	done
+	fail "the Deployment of $name did not start running"
+}
+
+# wait_unlocked: the panel's watcher settles a finished run and releases the lock.
+wait_unlocked() {
+	for _ in $(seq 60); do
+		[ "$(status | json 'd["locked"]' 2>/dev/null || echo True)" = False ] && return 0
 		sleep 2
 	done
-	fail "run $run did not end within ${HEALTH_DEADLINE}s (last state: $state)"
+	fail "the update lock is still on"
 }
-panel_image() { dind docker ps --filter label=com.docker.compose.project=su-test-update --filter label=com.docker.compose.service=panel --format '{{.ID}}' | xargs -r -n1 docker exec "$DIND" docker inspect -f '{{.Image}}'; }
+panel_image() { dind docker inspect -f '{{.Image}}' relist-panel; }
 
-# ---- 1. 1.0.0 -> 1.1.0 ----
-say "update 1: 1.0.0 -> 1.1.0 (must succeed)"
+# ============ 1. install.sh --auto installs 1.0.0 ============
+say "step 1: install.sh --auto --domain panel.localhost"
+install_sh --auto --domain panel.localhost >"$WORK/install1.out" 2>&1 || { cat "$WORK/install1.out" >&2; fail "step 1: install.sh --auto exited non-zero"; }
+PASSWORD=$(sed -n 's/^Password: //p' "$WORK/install1.out" | head -n1)
+[ -n "$PASSWORD" ] || { cat "$WORK/install1.out" >&2; fail "step 1: no password line in the output"; }
+[ "$(dind docker ps --filter name=relist-panel --filter status=running -q | wc -l)" -ge 1 ] || fail "step 1: relist-panel is not running"
+[ "$(dind docker ps --filter name=relist-traefik --filter status=running -q | wc -l)" = 1 ] || fail "step 1: relist-traefik is not running"
+dind grep -q "^RELIST_PANEL_IMAGE=$REF_A\$" "$INSTALL_DIR/.env" || fail "step 1: .env does not pin a"
+[ "$(api POST /api/auth/login "{\"email\":\"$ADMIN\",\"password\":\"$PASSWORD\"}" | code)" = 200 ] || fail "step 1: the printed password does not sign in"
+[ "$(status | json 'd["version"]')" = 1.0.0 ] || fail "step 1: running version is not 1.0.0"
+pass 1
+
+# ============ 2. a second install.sh is refused ============
+say "step 2: a second install.sh"
+if install_sh --auto --domain panel.localhost >"$WORK/install2.out" 2>&1; then
+	fail "step 2: the second install.sh succeeded"
+fi
+grep -q -- '--update' "$WORK/install2.out" || { cat "$WORK/install2.out" >&2; fail "step 2: the refusal does not point to --update"; }
+[ "$(status | json 'd["version"]')" = 1.0.0 ] || fail "step 2: the refused install disturbed the panel"
+pass 2
+
+# ============ 3. a running Deployment is waited for ============
+say "step 3: install.sh --update to 1.1.0 while a Deployment runs"
 publish 1.1.0 install-b.yml
-RUN1=$(update 1.1.0)
-echo "$RUN1" | json 'd["run"]'
-[ "$(echo "$RUN1" | json 'd["run"]["state"]')" = succeeded ] || fail "update 1 did not succeed: $(echo "$RUN1" | json 'd["run"]')"
-# The page's success test: the version from the status is the target. The
-# watcher in the new panel settles the run and releases the lock.
-for _ in $(seq 30); do
-	[ "$(api GET /api/panel-update/status | body | json 'd["version"]')" = 1.1.0 ] && [ "$(api GET /api/panel-update/status | body | json 'd["locked"]')" = False ] && break
-	sleep 2
-done
-[ "$(api GET /api/panel-update/status | body | json 'd["version"]')" = 1.1.0 ] || fail "the panel did not come up at 1.1.0"
-[ "$(api GET /api/panel-update/status | body | json 'd["locked"]')" = False ] || fail "the update lock is still on"
-[ "$(panel_image)" = "$ID_B" ] || fail "the panel runs $(panel_image), want $ID_B"
-dind grep -q "^RELIST_PANEL_IMAGE=$REF_B\$" /install/.env || fail ".env does not pin b"
-dind grep -q 'the Install file of 1.1.0' /install/docker-compose.yml || fail "the Install file was not replaced"
-[ "$(dind docker ps -aq --filter name=relist-panel-updater- | wc -l)" = 0 ] || fail "the exited Updater was not removed"
-[ "$(api GET /api/auth/status | code)" = 200 ] || fail "the session did not survive"
-say "update 1 succeeded: running $ID_B, .env pinned, Install file replaced, Updater removed"
-# The previous panel image is owned by Panel update, so a prune plan skips it.
-ID_A=$(dind docker inspect -f '{{.Id}}' "$IMG:a")
-
-# ---- 2. 1.1.0 -> 1.2.0 with a panel that never answers ----
-say "update 2: 1.1.0 -> 1.2.0, forced to fail health (must roll back; waits up to 180 s)"
-INSTALL_BEFORE=$(dind cat /install/docker-compose.yml | sha256sum)
-ENV_BEFORE=$(dind cat /install/.env | sha256sum)
-publish 1.2.0 install-bad.yml
-RUN2=$(update 1.2.0)
-echo "$RUN2" | json 'd["run"]'
-[ "$(echo "$RUN2" | json 'd["run"]["state"]')" = rolled-back ] || fail "update 2 did not roll back: $(echo "$RUN2" | json 'd["run"]')"
-for _ in $(seq 30); do [ "$(api GET /api/panel-update/status | body | json 'd["locked"]' 2>/dev/null)" = False ] && break; sleep 2; done
-[ "$(api GET /api/panel-update/status | body | json 'd["version"]')" = 1.1.0 ] || fail "the old panel is not back"
-[ "$(api GET /api/panel-update/status | body | json 'd["locked"]')" = False ] || fail "the update lock is still on after the rollback"
-[ "$(panel_image)" = "$ID_B" ] || fail "the panel runs $(panel_image) after the rollback, want $ID_B"
-[ "$(dind cat /install/docker-compose.yml | sha256sum)" = "$INSTALL_BEFORE" ] || fail "the Install file was not restored"
-[ "$(dind cat /install/.env | sha256sum)" = "$ENV_BEFORE" ] || fail ".env was not restored"
-dind grep -q bogus /install/docker-compose.yml && fail "the broken Install file is still in place"
-[ "$(dind docker ps -aq --filter name=relist-panel-updater- | wc -l)" = 0 ] || fail "the exited Updater was not removed"
-say "update 2 rolled back: running $ID_B again, Install file and .env restored, Updater removed"
-
-# ---- prune ownership ----
+slow_deployment slow3
+install_sh --update --auto >"$WORK/update3.out" 2>&1 || { cat "$WORK/update3.out" >&2; fail "step 3: install.sh --update exited non-zero"; }
+grep -q 'waiting on Deployment' "$WORK/update3.out" || { cat "$WORK/update3.out" >&2; fail "step 3: the log never said what the update waited on"; }
+grep -q 'Update succeeded' "$WORK/update3.out" || { cat "$WORK/update3.out" >&2; fail "step 3: the update did not report success"; }
+for _ in $(seq 30); do [ "$(status | json 'd["version"]' 2>/dev/null)" = 1.1.0 ] && break; sleep 2; done
+[ "$(status | json 'd["version"]')" = 1.1.0 ] || fail "step 3: the panel did not come up at 1.1.0"
+[ "$(panel_image)" = "$ID_B" ] || fail "step 3: the panel runs $(panel_image), want $ID_B"
+dind grep -q "^RELIST_PANEL_IMAGE=$REF_B\$" "$INSTALL_DIR/.env" || fail "step 3: .env does not pin b"
+dind grep -q 'the Install file of 1.1.0' "$INSTALL_DIR/docker-compose.yml" || fail "step 3: the Install file was not replaced"
+wait_unlocked
 # The image 1.0.0 ran from is unused now; a prune plan names it as the Panel
-# update's, and skips it.
+# update's, and skips it. (Checked here: a later successful update, step 6,
+# makes the previous image the one that is still running.)
 PLAN=$(api GET '/api/docker/prune-plan?kind=unused-images')
-[ "$(echo "$PLAN" | code)" = 200 ] || fail "prune plan: $(echo "$PLAN" | body)"
-echo "$PLAN" | body | json '"prune plan: skip=%s delete=%s" % (d["skip"], [e["name"] for e in d["delete"]])'
-echo "$PLAN" | body | json '[s for s in d["skip"] if s.get("compose") == "Panel update"][0]["name"]' >/dev/null || fail "the previous panel image is not skipped as Panel update's"
-say "ALL PASSED (the previous image was $ID_A)"
+[ "$(echo "$PLAN" | code)" = 200 ] || fail "step 3: prune plan: $(echo "$PLAN" | body)"
+echo "$PLAN" | body | json '[s for s in d["skip"] if s.get("compose") == "Panel update"][0]["name"]' >/dev/null || fail "step 3: the previous panel image is not skipped as Panel update's"
+pass 3
+
+# ============ 4. a cancelled update ends aborted ============
+say "step 4: cancel an update while it is quiescing"
+publish 1.2.0 install-c.yml
+slow_deployment slow4
+install_sh --update --auto >"$WORK/update4.out" 2>&1 &
+UPDATE4=$!
+for _ in $(seq 60); do
+	[ "$(status | json '(d["run"] or {}).get("state", "")' 2>/dev/null)" = quiescing ] && break
+	sleep 1
+done
+[ "$(status | json '(d["run"] or {}).get("state", "")')" = quiescing ] || { cat "$WORK/update4.out" >&2; fail "step 4: the run never reached quiescing"; }
+UPDATER=$(dind docker ps --filter name=relist-panel-updater- --format '{{.Names}}' | head -n1)
+[ -n "$UPDATER" ] || fail "step 4: no Updater Container"
+dind docker stop "$UPDATER" >/dev/null
+wait "$UPDATE4" || true
+for _ in $(seq 30); do [ "$(status | json '(d["run"] or {}).get("state", "")' 2>/dev/null)" = aborted ] && break; sleep 1; done
+[ "$(status | json 'd["run"]["state"]')" = aborted ] || fail "step 4: the run is $(status | json 'd["run"]["state"]'), want aborted"
+wait_unlocked
+[ "$(status | json 'd["locked"]')" = False ] || fail "step 4: the lock was not released"
+dind grep -q 'the Install file of 1.1.0' "$INSTALL_DIR/docker-compose.yml" || fail "step 4: the Install file changed"
+pass 4
+
+# ============ 5. a failed health check rolls back byte for byte ============
+say "step 5: the new panel never answers (waits up to 180 s, then rolls back)"
+for f in docker-compose.yml .env; do dind cat "$INSTALL_DIR/$f" >"$WORK/before-$f"; done
+dind sh -c "ls $INSTALL_DIR" >"$WORK/before-ls"
+publish 1.2.0 install-bad.yml
+if install_sh --update --auto >"$WORK/update5.out" 2>&1; then
+	cat "$WORK/update5.out" >&2
+	fail "step 5: the update succeeded with a panel that cannot start"
+fi
+grep -q 'rolled-back' "$WORK/update5.out" || { cat "$WORK/update5.out" >&2; fail "step 5: the run did not end rolled-back"; }
+for f in docker-compose.yml .env; do
+	dind cat "$INSTALL_DIR/$f" | cmp -s - "$WORK/before-$f" || fail "step 5: $f differs from its bytes before the run"
+done
+[ "$(dind sh -c "ls $INSTALL_DIR")" = "$(cat "$WORK/before-ls")" ] || fail "step 5: the Install directory holds other files than before"
+wait_unlocked
+[ "$(status | json 'd["version"]')" = 1.1.0 ] || fail "step 5: the old panel is not back"
+[ "$(panel_image)" = "$ID_B" ] || fail "step 5: the panel runs $(panel_image) after the rollback"
+dind grep -q bogus "$INSTALL_DIR/docker-compose.yml" && fail "step 5: the broken Install file is still in place"
+pass 5
+
+# ============ 6. an update with the panel stopped ============
+say "step 6: install.sh --update with relist-panel stopped"
+publish 1.2.0 install-c.yml
+dind docker stop relist-panel >/dev/null
+install_sh --update --auto >"$WORK/update6.out" 2>&1 || { cat "$WORK/update6.out" >&2; fail "step 6: install.sh --update exited non-zero"; }
+grep -q 'did not answer' "$WORK/update6.out" || { cat "$WORK/update6.out" >&2; fail "step 6: the log does not say the panel did not answer"; }
+grep -q 'Update succeeded' "$WORK/update6.out" || { cat "$WORK/update6.out" >&2; fail "step 6: the update did not report success"; }
+dind grep -q 'the Install file of 1.2.0' "$INSTALL_DIR/docker-compose.yml" || fail "step 6: the Install file was not replaced"
+LAST_RUN=$(dind sh -c "ls -1 $DATA_DIR/.panel-update | grep -E '^[0-9]{8}T[0-9]{6}Z\$' | tail -n1")
+dind test -s "$DATA_DIR/.panel-update/$LAST_RUN/panel.db" || fail "step 6: no database backup in run $LAST_RUN"
+for _ in $(seq 30); do [ "$(api GET /healthz | code 2>/dev/null)" = 200 ] && break; sleep 2; done
+[ "$(api GET /healthz | code)" = 200 ] || fail "step 6: the panel does not answer after the update"
+pass 6
+
+say "ALL PASSED: steps ${PASSED[*]}"
