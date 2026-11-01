@@ -14,3 +14,5 @@ func NewPanelSelfNamed(socketPath, hostname string) *PanelSelf {
 func NewPanelHelperWith(run func(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) error) *PanelHelper {
 	return &PanelHelper{runDocker: run}
 }
+
+func NewPanelDockerAt(socketPath string) *PanelDocker { return NewPanelDocker(socketPath) }

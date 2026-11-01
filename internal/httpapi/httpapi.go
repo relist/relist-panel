@@ -74,6 +74,9 @@ type Deps struct {
 	// PanelSelf and PanelHelper let Panel update find and read the Install.
 	PanelSelf   panelupdate.SelfInspector
 	PanelHelper panelupdate.Helper
+	PanelDocker panelupdate.Docker
+	// PanelInstallFile is the Install file this build embeds.
+	PanelInstallFile []byte
 	// PanelDomain is the install's RELIST_DOMAIN. A Domain cannot take this
 	// host, or Traefik could route the panel's own traffic to an app. Empty
 	// means unknown and refuses nothing.
@@ -154,7 +157,15 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	}
 	panelUpdates := panelupdate.New(panelupdate.Deps{
 		Store: panelupdate.NewStore(db), Version: d.Version, ManifestURL: panelupdate.ManifestURLFromEnv(),
-		Self: d.PanelSelf, Helper: d.PanelHelper,
+		Self: d.PanelSelf, Helper: d.PanelHelper, Docker: d.PanelDocker,
+		DataDir: dataDir, InstallFile: d.PanelInstallFile, DeploysBusy: queue.Busy,
+		MigrationLocked: func(ctx context.Context) (bool, error) {
+			if migrationOptions == nil {
+				return false, nil
+			}
+			step, _, err := migration.NewStore(db, nil).Lock(ctx)
+			return step != migration.StepNone, err
+		},
 	})
 	panelUpdates.RegisterRoutes(mux)
 	worker.Add(1)

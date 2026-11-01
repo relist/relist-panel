@@ -18,7 +18,7 @@ const (
 	labelConfigFiles = "com.docker.compose.project.config_files"
 )
 
-// Reasons an Install is unavailable. Task 4 adds the config-hash one.
+// Reasons an Install is unavailable.
 const (
 	reasonNotCompose  = "this panel was not started with Docker Compose"
 	reasonNoInspect   = "this panel cannot inspect its own Container"
@@ -69,7 +69,10 @@ type SelfInspector interface {
 type HelperRun struct {
 	Image string
 	Dir   string
-	Argv  []string
+	// Scratch, when set, is a second directory mounted read-only at its own
+	// path: the Preflight's candidate files.
+	Scratch string
+	Argv    []string
 }
 
 // HelperExitError is a command that ran and exited non-zero.
@@ -83,8 +86,7 @@ func (e *HelperExitError) Error() string {
 }
 
 // Helper runs one command in a helper Container and streams its stdout.
-// Reading files is built on it; Task 4 runs `docker compose config` the same
-// way.
+// Reading files is built on it, and so is `docker compose config`.
 type Helper interface {
 	Run(ctx context.Context, run HelperRun, stdout io.Writer) error
 }

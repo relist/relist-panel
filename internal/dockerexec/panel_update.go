@@ -3,6 +3,7 @@ package dockerexec
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -66,8 +67,9 @@ func (h *PanelHelper) Run(ctx context.Context, run panelupdate.HelperRun, stdout
 	return fmt.Errorf("docker run: %w: %s", err, message)
 }
 
-// helperArgv is the whole command line, argv[0] included. The one mount is
-// the Install directory, read-only; DAC_READ_SEARCH lets root read a 0600
+// helperArgv is the whole command line, argv[0] included. The mounts are the
+// Install directory and, for a Preflight, its scratch directory, both
+// read-only; DAC_READ_SEARCH lets root read a 0600
 // .env owned by someone else, and nothing can write.
 func helperArgv(run panelupdate.HelperRun) []string {
 	argv := []string{
@@ -80,13 +82,105 @@ func helperArgv(run panelupdate.HelperRun) []string {
 		"--security-opt", "no-new-privileges",
 		"--memory", "256m",
 		"-v", run.Dir + ":" + run.Dir + ":ro",
-		"--entrypoint", run.Argv[0],
-		run.Image,
 	}
+	if run.Scratch != "" {
+		argv = append(argv, "-v", run.Scratch+":"+run.Scratch+":ro")
+	}
+	argv = append(argv, "--entrypoint", run.Argv[0], run.Image)
 	return append(argv, run.Argv[1:]...)
 }
 
+// PanelDocker implements panelupdate.Docker over the Engine API.
+type PanelDocker struct {
+	engine *Engine
+}
+
+func NewPanelDocker(socketPath string) *PanelDocker {
+	return &PanelDocker{engine: NewEngine(socketPath)}
+}
+
+// Pull pulls ref through the Engine API (`POST /images/create`), as the CLI
+// does, and returns Docker's own words when the pull fails. The Engine reports
+// a failure inside the 200 stream, so the stream is read to its end.
+func (d *PanelDocker) Pull(ctx context.Context, ref string) error {
+	repo, tag := ref, ""
+	if i := strings.Index(ref, "@"); i >= 0 {
+		repo, tag = ref[:i], ref[i+1:]
+	}
+	query := url.Values{"fromImage": {repo}}
+	if tag != "" {
+		query.Set("tag", tag)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker/images/create?"+query.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := d.engine.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("docker api: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return pullMessage(body, resp.Status)
+	}
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var msg struct {
+			Error string `json:"error"`
+		}
+		if err := dec.Decode(&msg); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("read the pull stream: %w", err)
+		}
+		if msg.Error != "" {
+			return errors.New(msg.Error)
+		}
+	}
+}
+
+func pullMessage(body []byte, status string) error {
+	var msg struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &msg) == nil && msg.Message != "" {
+		return errors.New(msg.Message)
+	}
+	if text := strings.TrimSpace(string(body)); text != "" {
+		return errors.New(text)
+	}
+	return errors.New(status)
+}
+
+// ConfigHashes lists the config-hash label of every Container of project.
+func (d *PanelDocker) ConfigHashes(ctx context.Context, project string) ([]panelupdate.ServiceHash, error) {
+	filters, err := json.Marshal(map[string][]string{"label": {
+		"com.docker.compose.project=" + project,
+		"com.docker.compose.oneoff=False",
+	}})
+	if err != nil {
+		return nil, err
+	}
+	var listed []struct {
+		Labels map[string]string `json:"Labels"`
+	}
+	path := "/containers/json?all=1&filters=" + url.QueryEscape(string(filters))
+	if err := d.engine.do(ctx, http.MethodGet, path, &listed); err != nil {
+		return nil, err
+	}
+	out := make([]panelupdate.ServiceHash, 0, len(listed))
+	for _, c := range listed {
+		out = append(out, panelupdate.ServiceHash{
+			Service: c.Labels["com.docker.compose.service"], Hash: c.Labels["com.docker.compose.config-hash"],
+		})
+	}
+	return out, nil
+}
+
 var (
+	_ panelupdate.Docker        = (*PanelDocker)(nil)
 	_ panelupdate.SelfInspector = (*PanelSelf)(nil)
 	_ panelupdate.Helper        = (*PanelHelper)(nil)
 )

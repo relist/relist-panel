@@ -13,6 +13,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+base+"/status", s.getStatus)
 	mux.HandleFunc("POST "+base+"/check", s.postCheck)
 	mux.HandleFunc("PUT "+base+"/settings", s.putSettings)
+	mux.HandleFunc("POST "+base+"/preflight", s.postPreflight)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
@@ -129,4 +130,18 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respondStatus(w, r)
+}
+
+// postPreflight runs the Preflight and returns its report. A step that fails
+// is part of the report, not an HTTP error.
+func (s *Service) postPreflight(w http.ResponseWriter, r *http.Request) {
+	report, err := s.Preflight(r.Context())
+	switch {
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "could not run the preflight")
+	case report == nil:
+		writeError(w, http.StatusConflict, "No update is available")
+	default:
+		writeJSON(w, http.StatusOK, report)
+	}
 }

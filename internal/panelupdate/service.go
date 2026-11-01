@@ -51,6 +51,18 @@ type Deps struct {
 	// Self and Helper find and read the Install. Nil makes it unavailable.
 	Self   SelfInspector
 	Helper Helper
+	// Docker pulls the new image and lists the running Containers' config
+	// hashes for the Preflight. Nil makes the Preflight fail at that step.
+	Docker Docker
+	// DataDir holds the Preflight's scratch directory.
+	DataDir string
+	// InstallFile is the Install file this build embeds: the base of the
+	// change check and the merge.
+	InstallFile []byte
+	// MigrationLocked and DeploysBusy are the Preflight's Gate. Nil means
+	// not locked and not busy.
+	MigrationLocked func(ctx context.Context) (bool, error)
+	DeploysBusy     func() bool
 	// After returns a channel that fires after d. Nil means time.After.
 	After func(d time.Duration) <-chan time.Time
 }
@@ -61,6 +73,10 @@ type Service struct {
 	// locked reports whether the update lock is on. While it is, the check
 	// writes nothing. Task 5 wires it; until then it is always false.
 	locked atomic.Pointer[func() bool]
+	// pfRun serializes Preflights; pfMu guards latest.
+	pfRun  sync.Mutex
+	pfMu   sync.Mutex
+	latest *Report
 }
 
 func New(d Deps) *Service {
