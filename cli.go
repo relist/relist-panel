@@ -118,6 +118,10 @@ func runChangeEmail(args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
+	if result.OldEmail == result.NewEmail {
+		fmt.Fprintf(stdout, "Email is already %s; nothing changed.\n", result.NewEmail)
+		return 0
+	}
 	fmt.Fprintf(stdout, "Changed email from %s to %s.\n", result.OldEmail, result.NewEmail)
 	return 0
 }

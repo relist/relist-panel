@@ -150,7 +150,8 @@ every command; an unknown argument prints that help and exits 2 instead of
 starting the server.
 
 If you lose the password, reset it from the same terminal. It takes the same
-options as `create-admin` (`--email` is only needed with more than one admin),
+options as `create-admin` (`--email` is optional: it only names the account to
+reset),
 keeps two-factor on, clears any sign-in lock and signs every session out:
 
 ```sh
@@ -158,9 +159,10 @@ docker exec -it relist-panel relist-panel reset-password
 docker exec relist-panel relist-panel reset-password --generate
 ```
 
-To change the sign-in email, pass the new address (`--email` names the current
-one and is only needed with more than one admin). The password, two-factor and
-open sessions stay as they are:
+To change the sign-in email, pass the new address (`--email` is optional: it
+only names the current one). The password, two-factor and open sessions stay as
+they are. An authenticator app keeps showing the old address as the account
+name; its codes keep working:
 
 ```sh
 docker exec relist-panel relist-panel change-email --new-email new@example.com
