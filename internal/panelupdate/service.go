@@ -93,10 +93,12 @@ type Service struct {
 	qs   *quiesceState
 	beat atomic.Int64
 	// pfRun serializes previews; pfMu guards latestID, the id of the report
-	// the last preview returned: an Apply must name it.
-	pfRun    sync.Mutex
-	pfMu     sync.Mutex
-	latestID string
+	// the last preview returned: an Apply must name it, and latestReady,
+	// whether that report was ready.
+	pfRun       sync.Mutex
+	pfMu        sync.Mutex
+	latestID    string
+	latestReady bool
 }
 
 func New(d Deps) *Service {

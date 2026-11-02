@@ -230,6 +230,43 @@ func TestPreflightEndpointRefusedWhileUpdating(t *testing.T) {
 	}
 }
 
+// Between an Apply's 202 and the update lock turning on, the Updater is
+// already running: a preview then must not replace the report it applies.
+func TestPreflightEndpointRefusedWhileARunIsStarting(t *testing.T) {
+	r := newHTTPRig(t)
+	r.updater.state["relist-panel-updater-20261101T115959Z"] = UpdaterState{Exists: true, Running: true}
+	if rec, _ := postJSON(t, r.s, "/api/panel-update/preflight", ""); rec.Code != 409 || len(r.runner.specs) != 0 {
+		t.Fatalf("with a running Updater: code = %d specs = %d", rec.Code, len(r.runner.specs))
+	}
+	delete(r.updater.state, "relist-panel-updater-20261101T115959Z")
+	r.writeRun(t, "20261101T115959Z", StateQuiescing)
+	if rec, _ := postJSON(t, r.s, "/api/panel-update/preflight", ""); rec.Code != 409 || len(r.runner.specs) != 0 {
+		t.Fatalf("with a run not over: code = %d specs = %d", rec.Code, len(r.runner.specs))
+	}
+}
+
+func TestApplyEndpointRefusesReportNotReady(t *testing.T) {
+	r := newHTTPRig(t)
+	r.runner.stdout = []byte(`{"id":"` + httpReportID + `","ready":false,"toVersion":"1.4.0","invariants":[]}`)
+	r.runner.code = 1
+	r.preview(t)
+	rec, _ := postJSON(t, r.s, "/api/panel-update/apply", `{"report_id":"`+httpReportID+`"}`)
+	if rec.Code != 409 || len(r.runner.started) != 0 || !strings.Contains(rec.Body.String(), "not ready") {
+		t.Fatalf("code = %d body = %s started = %v", rec.Code, rec.Body, r.runner.started)
+	}
+}
+
+func TestStatusOmitsWaitingOnOfAFinishedRun(t *testing.T) {
+	r := newHTTPRig(t)
+	dir := RunDir(r.dir, "20261101T110000Z")
+	_ = os.MkdirAll(dir, 0o700)
+	_ = WriteStatus(dir, RunStatus{Run: "20261101T110000Z", State: StateAborted, Error: "cancelled", WaitingOn: "Deployment api #3"}, r.s.d.Now())
+	_, st := serve(t, r.s, "GET", "/api/panel-update/status", "")
+	if st.Run == nil || st.Run.WaitingOn != "" {
+		t.Fatalf("run = %+v", st.Run)
+	}
+}
+
 func TestApplyEndpointStartsDetachedAndReturns(t *testing.T) {
 	r := newHTTPRig(t)
 	r.preview(t)

@@ -397,6 +397,22 @@ func TestApplyStalledHeartbeatPanelGone(t *testing.T) {
 	}
 }
 
+// A run that ends while waiting does not keep saying what it waited on.
+func TestApplyEndedWhileWaitingClearsWaitingOn(t *testing.T) {
+	r := newUpdaterRig(t, true)
+	r.acks = []PanelAck{
+		{Run: r.run, State: AckWaiting, WaitingOn: "Deployment api #3", Heartbeat: 1},
+		{Run: r.run, State: AckRefused, Reason: "a server Migration holds the lock", Heartbeat: 2},
+	}
+	st := r.apply(t)
+	if st.State != StateAborted || st.WaitingOn != "" {
+		t.Fatalf("status = %+v", st)
+	}
+	if onDisk, err := ReadStatus(r.dir); err != nil || onDisk.WaitingOn != "" {
+		t.Fatalf("status.json = %+v err = %v", onDisk, err)
+	}
+}
+
 func TestApplyRefusedIsAborted(t *testing.T) {
 	r := newUpdaterRig(t, true)
 	r.acks = []PanelAck{{Run: r.run, State: AckRefused, Reason: "a server Migration holds the lock", Heartbeat: 1}}

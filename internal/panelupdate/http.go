@@ -137,6 +137,11 @@ func (s *Service) runInfo() *RunInfo {
 		WaitingOn: st.WaitingOn, Note: st.Note,
 		FromVersion: st.FromVersion, ToVersion: st.ToVersion, StartedAt: st.StartedAt,
 	}
+	// Runs that ended before the Updater cleared it, or that the panel marked
+	// interrupted, may still carry it.
+	if info.Terminal {
+		info.WaitingOn = ""
+	}
 	info.BackupFiles = []BackupFile{}
 	if b, err := ReadBackup(RunDir(s.d.DataDir, st.Run)); err == nil {
 		info.BackupPath = RunDir(s.d.DataDir, st.Run)
@@ -240,12 +245,12 @@ func (s *Service) updateSpec(in Install, name string, args []string) UpdateSpec 
 // an HTTP error.
 func (s *Service) postPreflight(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	switch {
-	case s.Development():
+	if s.Development() {
 		writeError(w, http.StatusConflict, developmentMessage)
 		return
-	case s.Locked():
-		writeError(w, http.StatusConflict, "A Panel update is already running.")
+	}
+	if code, msg := s.runBusy(ctx); code != 0 {
+		writeError(w, code, msg)
 		return
 	}
 	in, err := s.FindInstall(ctx)
@@ -285,7 +290,7 @@ func (s *Service) postPreflight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.pfMu.Lock()
-	s.latestID = report.ID
+	s.latestID, s.latestReady = report.ID, report.Ready
 	s.pfMu.Unlock()
 	writeJSON(w, http.StatusOK, previewResponse{Report: &report, Gate: s.liveGate(ctx, true)})
 }
@@ -311,31 +316,19 @@ func (s *Service) postApply(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	s.pfMu.Lock()
-	latest := s.latestID
+	latest, ready := s.latestID, s.latestReady
 	s.pfMu.Unlock()
 	if latest == "" || latest != body.ReportID {
 		writeError(w, http.StatusConflict, "The preview is out of date. Run the preview again.")
 		return
 	}
-	if st, ok, _ := NewestRun(s.d.DataDir); s.Locked() || ok && !IsTerminal(st.State) {
-		writeError(w, http.StatusConflict, "A Panel update is already running.")
+	if !ready {
+		writeError(w, http.StatusConflict, "The preview is not ready to update. Fix what it reports and run the preview again.")
 		return
 	}
-	// An Updater of any run that still runs refuses this one: two Applies
-	// inside the re-check window would otherwise both start.
-	if s.d.Updater != nil {
-		found, err := s.d.Updater.ListUpdaters(ctx)
-		if err != nil {
-			log.Printf("panelupdate: list the Updater Containers: %v", err)
-			writeError(w, http.StatusInternalServerError, "could not list the Updater Containers")
-			return
-		}
-		for _, u := range found {
-			if u.Running {
-				writeError(w, http.StatusConflict, "The Updater "+u.Name+" is still running. Wait for it to finish: docker logs -f "+u.Name+".")
-				return
-			}
-		}
+	if code, msg := s.runBusy(ctx); code != 0 {
+		writeError(w, code, msg)
+		return
 	}
 	in, err := s.FindInstall(ctx)
 	if err != nil {
@@ -359,6 +352,31 @@ func (s *Service) postApply(w http.ResponseWriter, r *http.Request) {
 	}
 	s.poke()
 	writeJSON(w, http.StatusAccepted, map[string]string{"run": run})
+}
+
+// runBusy refuses a preview or an Apply while a Panel update runs: the lock is
+// on, the newest run is not over, or an Updater of any run still runs. The last
+// covers the seconds between an Apply's 202 and the lock: two Applies, or a
+// preview that would replace the report being applied. It returns the HTTP
+// status and message, or 0.
+func (s *Service) runBusy(ctx context.Context) (int, string) {
+	if st, ok, _ := NewestRun(s.d.DataDir); s.Locked() || ok && !IsTerminal(st.State) {
+		return http.StatusConflict, "A Panel update is already running."
+	}
+	if s.d.Updater == nil {
+		return 0, ""
+	}
+	found, err := s.d.Updater.ListUpdaters(ctx)
+	if err != nil {
+		log.Printf("panelupdate: list the Updater Containers: %v", err)
+		return http.StatusInternalServerError, "could not list the Updater Containers"
+	}
+	for _, u := range found {
+		if u.Running {
+			return http.StatusConflict, "The Updater " + u.Name + " is still running. Wait for it to finish: docker logs -f " + u.Name + "."
+		}
+	}
+	return 0, ""
 }
 
 // postCancel stops the Updater while its run is quiescing. Until the backup

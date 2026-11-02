@@ -371,6 +371,7 @@ func (u *Updater) step(dir string, st *RunStatus, state string) error {
 // finds the run not over and marks it interrupted.
 func (u *Updater) finish(dir string, st RunStatus, state, errText, rollbackErr string) RunStatus {
 	st.State, st.Error, st.RollbackError = state, errText, rollbackErr
+	st.WaitingOn = ""
 	if err := WriteStatus(dir, st, u.now()); err != nil {
 		u.logf("write the final state %s: %v", state, err)
 	}

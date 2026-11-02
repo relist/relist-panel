@@ -319,17 +319,20 @@ Run states: `quiescing`, `backing-up`, `writing-files`, `compose-up`, `waiting-h
   - **Deployment queue:** held; queued Deployments are cancelled (a held queue would
     otherwise run the rows already queued); the running one finishes.
   - **Scan queue:** gated; the running scan finishes.
-  - **API writes:** refused with 503 `The panel is updating`. Allowed: `/healthz`,
-    `/api/auth/status`, `/api/auth/login`, `/api/auth/logout`, `GET /api/panel-update/*`
-    and `POST /api/panel-update/cancel`. Password and 2FA changes are refused: a rollback
+  - **API writes:** refused with 503 `The panel is updating`. Allowed: `/api/auth/login`,
+    `/api/auth/logout` and `POST /api/panel-update/cancel`. Reads (`GET`, `HEAD`) pass, so
+    the pages keep working while a run waits, except a Terminal, which opens a session in
+    a Container the update would cut. Password and 2FA changes are refused: a rollback
     would silently revert them.
 
   The daily update check skips its write while the lock is on.
 - **Start locked:** a panel process reads the newest `status.json` before it serves
   requests or starts any worker, and starts with the lock on if the run is not terminal.
 - **Preview:** `POST /api/panel-update/preflight` runs the `update --preflight --json`
-  Container with `--rm`, waits for it, and returns its report.
-- **Apply:** `POST /api/panel-update/apply` checks the report id is the latest, starts the
+  Container with `--rm`, waits for it, and returns its report. Refused (409) while a run is
+  not over or any Updater Container still runs, so it cannot replace the report being applied.
+- **Apply:** `POST /api/panel-update/apply` checks the report id is the latest and the
+  report is ready, refuses while a run is not over or any Updater still runs, starts the
   Updater detached with `--report` and `--steps-done`, and returns the run id at once.
 - **Cancel:** `POST /api/panel-update/cancel` sends SIGTERM to the running Updater (`docker kill --signal TERM`; never `docker stop`, whose SIGKILL after the grace period could kill an Updater that has moved past quiescing)
   while the run is `quiescing`, and refuses otherwise.
