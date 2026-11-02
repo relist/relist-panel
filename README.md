@@ -1,8 +1,24 @@
 # Relist Panel
 
-Relist Panel is a small self-hosted UI for managing Docker Compose deployments.
-Ticket 01 provides the walking skeleton: a Go HTTP server, embedded Vite/React
-shell, SQLite database, and goose migrations.
+Relist Panel is a small self-hosted web UI for deploying Docker Compose stacks
+on one Docker host, with Traefik in front. It is one Go binary with an embedded
+React frontend and a SQLite database.
+
+- Projects and Environments that hold Compose files, edited in the browser
+- Builds from a Git repository (HTTPS or SSH) or a zip upload
+- Domains routed by Traefik, with Let's Encrypt or uploaded Certificates
+- Variables scoped to an Environment or a Compose, with secrets
+- Zero-downtime deploys, a Deployment log and history, and a Terminal into
+  each Service
+- Volume files, host monitoring, Docker cleanup and vulnerability scans (Trivy)
+- Two-factor sign-in, moving to a new server, and updating the panel itself
+
+It is a personal project, built for one operator on one host: no multi-host,
+no teams, no database-as-a-service. Use it at your own risk; see
+[License](#license).
+
+The domain language is in [CONTEXT.md](CONTEXT.md) and the design decisions
+are in [docs/adr](docs/adr).
 
 ## Development
 
@@ -585,3 +601,7 @@ secrets:
   npm_token:
     environment: NPM_TOKEN     # a Compose Variable, flagged secret
 ```
+
+## License
+
+[MIT](LICENSE). The software is provided as is, without warranty of any kind.
