@@ -192,6 +192,23 @@ describe('Zero-downtime refusal', () => {
   });
 });
 
+describe('Compose variables on a cold deep link', () => {
+  it('loads them once the Project tree arrives instead of failing before it', async () => {
+    vi.spyOn(api, 'getSource').mockResolvedValue(null);
+    vi.spyOn(api, 'listVariableSets').mockResolvedValue([]);
+    const composes = deferred<Compose[]>();
+    vi.mocked(api.listComposes).mockReturnValue(composes.promise);
+    vi.mocked(api.listComposeVariables).mockResolvedValue([
+      { composeId: 7, id: 1, key: 'GREETING', secret: false, value: 'hello' },
+    ]);
+    renderPage(7, 'variables');
+
+    await act(async () => { composes.resolve([compose(7), compose(8)]); });
+    await screen.findByText('GREETING');
+    expect(screen.queryByText(/Could not load this Compose's variables/)).toBeNull();
+  });
+});
+
 describe('Zero-downtime switches', () => {
   // Each read runs `docker compose config` on the host.
   it('reads them once for the Domains tab', async () => {

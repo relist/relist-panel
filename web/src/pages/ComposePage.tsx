@@ -247,25 +247,28 @@ export function ComposePage() {
 
   // This Compose's own variables: the Variables tab edits them and the
   // Environment card counts them, so the page owns the list. Keyed to its
-  // Compose so a slow answer never shows on another one.
+  // Compose so a slow answer never shows on another one. Loaded once the
+  // deep link has resolved its Compose: the request path needs the tree.
   const [composeVariables, setComposeVariables] = useState<{ composeId: number; list?: ComposeVariable[]; error?: string }>();
   const composeVariablesRequest = useRef(0);
+  const variablesComposeId = compose?.id;
   const reloadComposeVariables = useCallback(() => {
-    if (!Number.isInteger(composeId)) {
+    if (variablesComposeId === undefined) {
       return;
     }
+    const id = variablesComposeId;
     const mine = ++composeVariablesRequest.current;
-    loadComposeVariables(composeId)
+    loadComposeVariables(id)
       .then((list) => {
-        if (composeVariablesRequest.current === mine) setComposeVariables({ composeId, list });
+        if (composeVariablesRequest.current === mine) setComposeVariables({ composeId: id, list });
       })
       .catch((reason: unknown) => {
         if (composeVariablesRequest.current === mine) {
           const error = reason instanceof Error ? reason.message : 'Something went wrong';
-          setComposeVariables((previous) => ({ composeId, error, list: previous?.composeId === composeId ? previous.list : undefined }));
+          setComposeVariables((previous) => ({ composeId: id, error, list: previous?.composeId === id ? previous.list : undefined }));
         }
       });
-  }, [composeId, loadComposeVariables]);
+  }, [loadComposeVariables, variablesComposeId]);
   useEffect(() => {
     reloadComposeVariables();
   }, [reloadComposeVariables]);
