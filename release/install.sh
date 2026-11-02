@@ -58,6 +58,8 @@ valid_domain() {
 }
 
 valid_email() {
+  # '\' is a literal backslash, not an escaped quote.
+  # shellcheck disable=SC1003
   case $1 in
     *'
 '* | *' '* | *'$'* | *'"'* | *"'"* | *'`'* | *'#'* | *'\'*) return 1 ;;
