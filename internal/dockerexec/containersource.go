@@ -158,7 +158,7 @@ func (s *ContainerSource) get(ctx context.Context, path string, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("docker api %s: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
+		return &engineError{status: resp.StatusCode, msg: fmt.Sprintf("docker api %s: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))}
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return fmt.Errorf("docker api %s: decode: %w", path, err)

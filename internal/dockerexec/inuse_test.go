@@ -87,3 +87,43 @@ func TestInUseHostnameNotAContainer(t *testing.T) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 }
+
+// A redeploy can delete a container's image between the list and the
+// inspect: that container is skipped, the rest of the list still answers.
+func TestInUseSkipsAnImageThatVanished(t *testing.T) {
+	engine := serveEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/containers/json":
+			io.WriteString(w, `[
+			 {"Id":"c1","ImageID":"`+imgOther+`","Labels":{"com.docker.compose.project":"shop-prod-web","com.docker.compose.service":"old"}},
+			 {"Id":"c2","ImageID":"`+imgApp+`","Labels":{"com.docker.compose.project":"shop-prod-web","com.docker.compose.service":"api"}}
+			]`)
+		case "/images/" + imgApp + "/json":
+			io.WriteString(w, `{"Id":"`+imgApp+`","RepoTags":["shop-web:latest"]}`)
+		default:
+			http.Error(w, `{"message":"No such image"}`, http.StatusNotFound)
+		}
+	}))
+	u := NewInUse(engine, identities, func() (string, error) { return "", nil })
+	got, err := u.Images(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ImageID != imgApp {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestInUseImageInspectFailureIsAnError(t *testing.T) {
+	engine := serveEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/containers/json" {
+			io.WriteString(w, `[{"Id":"c1","ImageID":"`+imgApp+`","Labels":{"com.docker.compose.project":"shop-prod-web","com.docker.compose.service":"api"}}]`)
+			return
+		}
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	u := NewInUse(engine, identities, func() (string, error) { return "", nil })
+	if _, err := u.Images(context.Background()); err == nil {
+		t.Fatal("want an error")
+	}
+}
