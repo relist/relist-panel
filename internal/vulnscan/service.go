@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -34,6 +35,9 @@ type Service struct {
 	hubClient *http.Client
 	// mu serializes changes to the switches and the Scanner image.
 	mu sync.Mutex
+	// working is true from before the worker checks the Deployment gate until
+	// its task is done, so WaitIdle after a Hold cannot miss a task about to start.
+	working atomic.Bool
 }
 
 func New(d Deps) *Service {

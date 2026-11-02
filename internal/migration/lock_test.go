@@ -405,3 +405,21 @@ func TestVulnerabilitiesGatedByLock(t *testing.T) {
 		}
 	}
 }
+
+func TestStartRefusedWhileUpdateLockIsOn(t *testing.T) {
+	f := newSourceFixture(t)
+	f.src.d.UpdateLocked = func() bool { return true }
+	if _, err := f.src.Start(context.Background(), nil); !errors.Is(err, ErrUpdating) {
+		t.Fatalf("Start = %v, want ErrUpdating", err)
+	}
+	if ev := f.queue.eventList(); len(ev) != 0 {
+		t.Fatalf("the queue was touched: %v", ev)
+	}
+	if step, _, _ := f.store.Lock(context.Background()); step != StepNone {
+		t.Fatalf("lock = %q", step)
+	}
+	f.src.d.UpdateLocked = func() bool { return false }
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatalf("Start after the update = %v", err)
+	}
+}

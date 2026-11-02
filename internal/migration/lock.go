@@ -22,6 +22,10 @@ import (
 // cancels.
 const reasonMigration = "server migration"
 
+// ErrUpdating refuses a Migration lock while a Panel update holds its own.
+// The two share the Deployment queue's hold, so they exclude each other.
+var ErrUpdating = errors.New("a Panel update is running; a Migration waits until it is over")
+
 // UnstartedError reports Composes that did not start again on Resume. The
 // lock is cleared all the same.
 type UnstartedError struct{ Err error }
@@ -74,6 +78,9 @@ type OldHostDeps struct {
 	DataDir         string
 	ReportedDataDir string
 	Install         config.InstallSettings
+	// UpdateLocked, when set, reports that the update lock is on, and Start
+	// then refuses to take the Migration lock.
+	UpdateLocked func() bool
 }
 
 // TerminalCloser ends every open Terminal Session; *terminal.Service is one.
@@ -166,6 +173,9 @@ func (s *OldHost) start(ctx context.Context, hostPaths []string) (Manifest, erro
 	step, st, err := s.d.Store.Lock(ctx)
 	if err != nil {
 		return Manifest{}, err
+	}
+	if step == StepNone && s.d.UpdateLocked != nil && s.d.UpdateLocked() {
+		return Manifest{}, ErrUpdating
 	}
 	s.d.Queue.Hold()
 	if step == StepNone {

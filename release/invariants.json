@@ -1,0 +1,15 @@
+[
+  {"kind": "service-image", "service": "panel"},
+  {"kind": "service-mount", "service": "panel", "source": "/var/run/docker.sock", "target": "/var/run/docker.sock"},
+  {"kind": "data-dir-same-path", "service": "panel"},
+  {"kind": "service-mount", "service": "panel", "source": "/proc", "target": "/host/proc", "read_only": true},
+  {"kind": "service-network", "service": "panel", "network": "relist-network"},
+  {"kind": "service-network", "service": "traefik", "network": "relist-network"},
+  {"kind": "network-external", "network": "relist-network", "name": "relist-network"},
+  {"kind": "service-command-has", "service": "traefik", "arg": "--entrypoints.websecure.address=:443"},
+  {"kind": "service-command-has", "service": "traefik", "arg": "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"},
+  {"kind": "service-command-has", "service": "traefik", "arg": "--providers.file.directory=/letsencrypt/dynamic"},
+  {"kind": "service-label", "service": "panel", "key": "traefik.http.routers.panel.entrypoints", "value": "websecure"},
+  {"kind": "service-label", "service": "panel", "key": "traefik.http.routers.panel.tls.certresolver", "value": "letsencrypt"},
+  {"kind": "service-label", "service": "panel", "key": "traefik.http.routers.panel.priority", "value": "100000"}
+]

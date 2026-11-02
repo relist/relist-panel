@@ -98,3 +98,15 @@ func TestPlanSkipsPanelOwned(t *testing.T) {
 		t.Fatalf("image skip = %+v", plan.Skip)
 	}
 }
+
+func TestPlanOwnsAnImageByIDWhenItsTagMovedOn(t *testing.T) {
+	owners := Ownership{Images: map[string]string{"sha256:previous": "Panel update"}}
+	images := []Candidate{
+		{ID: "sha256:previous", Name: "sha256:previous"},
+		{ID: "sha256:other", Name: "sha256:other"},
+	}
+	plan := Plan(UnusedImages, images, owners, false)
+	if got := names(plan.Delete); !reflect.DeepEqual(got, []string{"sha256:other"}) || len(plan.Skip) != 1 || plan.Skip[0].Compose != "Panel update" {
+		t.Fatalf("plan: %+v", plan)
+	}
+}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"errors"
 	"fmt"
 	"log"
@@ -32,35 +33,29 @@ import (
 	"relist-panel/internal/vulnscan"
 )
 
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
+
+// installFile is the Install file this build ships, embedded so Panel update
+// can compare it with the copy on the host. It is handed to internal packages
+// as a value, since go:embed cannot reach the repo root from them.
+//
+//go:embed docker-compose.yml
+var installFile []byte
+
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "reset-2fa" {
-		os.Exit(runResetTwoFactor(os.Args[2:], os.Stdout, os.Stderr))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "reset-password" {
-		os.Exit(runResetPassword(os.Args[2:], os.Stdin, os.Stdout, os.Stderr, stdinConsole()))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "create-admin" {
-		os.Exit(runCreateAdmin(os.Args[2:], os.Stdin, os.Stdout, os.Stderr, stdinConsole()))
-	}
-	// Drive a server migration from a terminal in the panel container,
-	// through the running panel's control socket (ADR-0019).
-	if len(os.Args) > 1 && os.Args[1] == "migration" {
-		cfg, err := config.Load()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
-		os.Exit(migrationcli.Run(os.Args[2:], migrationcli.DefaultEnv(cfg)))
-	}
-	// The maintenance container a server migration runs from this image
-	// (ADR-0018): it only answers 503 with the maintenance page.
-	if len(os.Args) > 1 && os.Args[1] == "maintenance-page" {
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		if err := migration.ServeMaintenancePage(ctx, ":8080"); err != nil {
-			log.Fatal(err)
-		}
+	switch decide(os.Args[1:]) {
+	case actionHelp:
+		printUsage(os.Stdout)
 		return
+	case actionVersion:
+		fmt.Println(version)
+		return
+	case actionUsageError:
+		printUsage(os.Stderr)
+		os.Exit(2)
+	case actionSubcommand:
+		os.Exit(findSubcommand(os.Args[1]).run(os.Args[2:]))
 	}
 
 	cfg, err := config.Load()
@@ -178,11 +173,13 @@ func main() {
 	}
 
 	control := http.NewServeMux()
+	panelDocker := dockerexec.NewPanelDocker(dockerexec.DefaultSocketPath)
 	handler, waitDeployments := httpapi.NewHandler(ctx, httpapi.Deps{
 		DB:             db,
 		Runner:         dockerexec.New(),
 		Engine:         dockerexec.NewEngine(dockerexec.DefaultSocketPath),
 		DataDir:        cfg.DataDir,
+		Version:        version,
 		History:        sampler,
 		Services:       collector,
 		VolumeRunner:   volumeRunner,
@@ -196,10 +193,13 @@ func main() {
 			Restart:  restart,
 			Control:  control,
 		},
-		Docker:      dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
-		VulnScanner: dockerexec.NewTrivyScanner(dockerexec.DefaultSocketPath, cfg.DataDir),
-		VulnInUse:   dockerexec.NewInUse(dockerexec.DefaultSocketPath, composeIdentities(db), os.Hostname),
-		PanelDomain: cfg.Install.Domain,
+		Docker:       dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
+		VulnScanner:  dockerexec.NewTrivyScanner(dockerexec.DefaultSocketPath, cfg.DataDir),
+		VulnInUse:    dockerexec.NewInUse(dockerexec.DefaultSocketPath, composeIdentities(db), os.Hostname),
+		PanelSelf:    dockerexec.NewPanelSelf(dockerexec.DefaultSocketPath),
+		PanelRunner:  dockerexec.NewPanelUpdateRunner(),
+		PanelUpdater: panelDocker,
+		PanelDomain:  cfg.Install.Domain,
 	})
 	server := newServer(cfg.Address(), handler)
 	controlServer, err := serveControl(cfg.ControlSocket, control)
@@ -207,7 +207,7 @@ func main() {
 		log.Printf("warning: no migration control socket, so this panel cannot migrate or resume a migration lock; set RELIST_CONTROL_SOCKET to a writable path and restart: %v", err)
 	}
 
-	log.Printf("relist-panel listening on %s", cfg.Address())
+	log.Printf("relist-panel %s listening on %s", version, cfg.Address())
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- server.ListenAndServe()
@@ -364,4 +364,27 @@ func cleanSourceStaging(ctx context.Context, db *sql.DB, dataDir string) {
 			log.Printf("warning: clearing staged compose files in %s: %v", dir, err)
 		}
 	}
+}
+
+// runMigration drives a server migration from a terminal in the panel
+// container, through the running panel's control socket (ADR-0019).
+func runMigration(args []string) int {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	return migrationcli.Run(args, migrationcli.DefaultEnv(cfg))
+}
+
+// runMaintenancePage is the maintenance container a server migration runs
+// from this image (ADR-0018): it only answers 503 with the maintenance page.
+func runMaintenancePage([]string) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := migration.ServeMaintenancePage(ctx, ":8080"); err != nil {
+		log.Print(err)
+		return 1
+	}
+	return 0
 }

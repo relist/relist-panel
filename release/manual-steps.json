@@ -1,0 +1,5 @@
+[
+  {"id": "set-acme-email", "text": "Set RELIST_ACME_EMAIL in your .env."},
+  {"id": "open-443", "text": "Open port 443 on the host's firewall (or the port you set as TRAEFIK_HTTPS_PORT)."},
+  {"id": "loopback-panel-port", "text": "The panel's published port now listens on 127.0.0.1 only. Anything that reached http://<host>:8888/ from another machine must use the panel's domain or an SSH tunnel."}
+]

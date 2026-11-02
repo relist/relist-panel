@@ -58,8 +58,8 @@ func TestNoAdminRefusesSignInLikeAWrongPassword(t *testing.T) {
 	server := newTestServer(t)
 
 	response := server.request(t, http.MethodGet, "/api/auth/status", nil)
-	if body := readBody(t, response); response.StatusCode != http.StatusOK || strings.TrimSpace(body) != `{"authenticated":false}` {
-		t.Fatalf("auth status = %d %s, want only authenticated false", response.StatusCode, body)
+	if body := readBody(t, response); response.StatusCode != http.StatusOK || strings.TrimSpace(body) != `{"authenticated":false,"version":""}` {
+		t.Fatalf("auth status = %d %s, want only authenticated false and the version", response.StatusCode, body)
 	}
 
 	login := postJSON(t, server, "/api/auth/login", map[string]string{

@@ -1,0 +1,120 @@
+# Publishes a release from a v* tag: the image to GHCR, then the signed Update
+# manifest and the install script on the GitHub Release (ADR-0024, ADR-0025). The signing key is the repo secret
+# RELIST_RELEASE_KEY; the public half is the constant in
+# internal/panelupdate/key.go, so the workflow never takes it from anywhere else.
+name: release
+
+# Disabled until the owner steps of ticket 02 are done (release key, secret,
+# public key in key.go). To enable, replace this trigger with:
+#
+#   on:
+#     push:
+#       tags: ["v*"]
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Read the version and the public key
+        id: meta
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag $TAG is not vMAJOR.MINOR.PATCH"; exit 1
+          fi
+          key=$(sed -n 's/^var releasePublicKey = "\(.*\)"$/\1/p' internal/panelupdate/key.go)
+          if [ -z "$key" ]; then
+            echo "::error::releasePublicKey in internal/panelupdate/key.go is empty; commit the real public key first"; exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Test the release tooling and the update code
+        run: go test ./cmd/relist-release ./internal/panelupdate
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the image
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: |
+            ghcr.io/relist/relist-panel:${{ steps.meta.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            RELEASE_KEY=${{ steps.meta.outputs.key }}
+
+      - name: Write the Update manifest
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: go run ./cmd/relist-release manifest --version "$VERSION" --digest "$DIGEST"
+
+      # The only step that sees the private key.
+      - name: Sign the Update manifest
+        env:
+          RELIST_RELEASE_KEY: ${{ secrets.RELIST_RELEASE_KEY }}
+        run: go run ./cmd/relist-release sign
+
+      # Fails when the secret is not the private half of the committed key.
+      - name: Verify the signature
+        env:
+          PUBLIC_KEY: ${{ steps.meta.outputs.key }}
+        run: go run ./cmd/relist-release verify --key "$PUBLIC_KEY"
+
+      # install.sh installs the image released with it: the version and the
+      # digest reference go in where release/install.sh has its placeholders.
+      - name: Write the install script
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          sed -e "s|@VERSION@|$VERSION|g" \
+              -e "s|@IMAGE@|ghcr.io/relist/relist-panel@$DIGEST|g" \
+              release/install.sh > install.sh
+          if grep -q '@VERSION@\|@IMAGE@' install.sh; then
+            echo "::error::install.sh still has a placeholder"; exit 1
+          fi
+          shellcheck -s sh install.sh
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" update-manifest.json update-manifest.json.sig install.sh \
+            --title "$TAG" --generate-notes --verify-tag
+
+      # :latest moves only after the manifest is signed and verified.
+      - name: Tag the image latest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker buildx imagetools create -t ghcr.io/relist/relist-panel:latest \
+            "ghcr.io/relist/relist-panel@$DIGEST"

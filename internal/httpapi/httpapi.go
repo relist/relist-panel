@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	"relist-panel/internal/images"
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/migration"
+	"relist-panel/internal/panelupdate"
 	"relist-panel/internal/projects"
 	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
@@ -70,10 +72,18 @@ type Deps struct {
 	// nil leaves the feature out.
 	VulnScanner vulnscan.Scanner
 	VulnInUse   vulnscan.InUse
+	// PanelSelf lets Panel update find the Install, and PanelRunner starts the
+	// `update` Container.
+	PanelSelf   panelupdate.SelfInspector
+	PanelRunner panelupdate.UpdateRunner
+	// PanelUpdater finds and removes the Updater Container.
+	PanelUpdater panelupdate.UpdaterContainers
 	// PanelDomain is the install's RELIST_DOMAIN. A Domain cannot take this
 	// host, or Traefik could route the panel's own traffic to an app. Empty
 	// means unknown and refuses nothing.
 	PanelDomain string
+	// Version is the build version, shown by GET /api/auth/status.
+	Version string
 }
 
 // NewHandler builds the top-level HTTP handler for the panel.
@@ -85,7 +95,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	migrationOptions := d.Migration
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
-	authService := auth.New(db)
+	authService := auth.New(db).WithVersion(d.Version)
 	authService.RegisterRoutes(mux)
 	composesService := composes.New(db, runner, dataDir).WithEngine(d.Engine)
 	projectsService := projects.New(db, composesService)
@@ -130,6 +140,28 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		vulnService = vulnscan.New(vulnscan.Deps{Store: vulnscan.NewStore(db), Scanner: d.VulnScanner, InUse: d.VulnInUse, Gate: queue})
 		vulnService.RegisterRoutes(mux)
 	}
+	// The update lock is checked before any worker starts: a Panel update that
+	// is not over keeps this panel from running Deployments or taking writes.
+	puDeps := panelupdate.Deps{
+		Store: panelupdate.NewStore(db), Version: d.Version, ManifestURL: panelupdate.ManifestURLFromEnv(),
+		Self: d.PanelSelf, Runner: d.PanelRunner, Updater: d.PanelUpdater,
+		DataDir: dataDir, DeploysBusy: queue.Busy, Queue: queue,
+		WaitingOn: func() string { return updateWaitingOn(ctx, db, queue) },
+		MigrationLocked: func(ctx context.Context) (bool, error) {
+			if migrationOptions == nil {
+				return false, nil
+			}
+			step, _, err := migration.NewStore(db, nil).Lock(ctx)
+			return step != migration.StepNone, err
+		},
+	}
+	if vulnService != nil {
+		puDeps.Scans = vulnService
+	}
+	panelUpdates := panelupdate.New(puDeps)
+	if err := panelUpdates.StartLocked(ctx); err != nil {
+		log.Printf("panelupdate: start locked: %v", err)
+	}
 	worker.Add(1)
 	go func() {
 		defer worker.Done()
@@ -146,6 +178,16 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			vulnService.RunScheduler(ctx)
 		}()
 	}
+	panelUpdates.RegisterRoutes(mux)
+	worker.Add(2)
+	go func() {
+		defer worker.Done()
+		panelUpdates.RunScheduler(ctx)
+	}()
+	go func() {
+		defer worker.Done()
+		panelUpdates.Watch(ctx)
+	}()
 	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
 	sshkeys.New(db).RegisterRoutes(mux)
 	certificates.New(db, dataDir).RegisterRoutes(mux)
@@ -179,6 +221,13 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 					volumes[vulnscan.CacheVolume] = vulnscan.OwnerName
 				}
 			}
+			// The previous panel image stays for a manual rollback.
+			if err == nil && images != nil {
+				var prev string
+				if prev, err = panelUpdates.PreviousImage(ctx); err == nil && prev != "" {
+					images[prev] = panelupdate.OwnerName
+				}
+			}
 			return dockerhost.Ownership{Projects: projects, Volumes: volumes, Images: images}, err
 		}
 		dockerhost.NewAPI(d.Docker, hostGuard, pending, owners).RegisterRoutes(mux)
@@ -187,7 +236,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		metricsService := metrics.New(metrics.NewStore(db), d.History, d.Services)
 		metricsService.RegisterRoutes(mux)
 	}
-	var inner http.Handler = gate.middleware(mux)
+	var inner http.Handler = panelUpdates.Middleware(gate.middleware(mux))
 	if migrationOptions != nil {
 		domainStore := domains.NewStore(db)
 		oldHost := migration.NewOldHost(migration.OldHostDeps{
@@ -203,6 +252,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			DataDir:         dataDir,
 			ReportedDataDir: migrationOptions.ReportedDataDir,
 			Install:         migrationOptions.Install,
+			UpdateLocked:    panelUpdates.Locked,
 		})
 		oldHost.RegisterRoutes(mux)
 		local := migration.LocalHost{DB: db, Docker: migrationOptions.Docker, DataDir: dataDir, Install: migrationOptions.Install}
@@ -250,4 +300,19 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 	if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
 		log.Printf("write health response: %v", err)
 	}
+}
+
+// updateWaitingOn says what a quiescing Panel update waits for. It is asked
+// only while the Deployment queue or the scan queue is not idle, so with no
+// Deployment running the wait is the scan worker's current task.
+func updateWaitingOn(ctx context.Context, db *sql.DB, queue *deployments.Queue) string {
+	composeID, number, ok := queue.Running()
+	if !ok {
+		return "a vulnerability scan"
+	}
+	var name string
+	if err := db.QueryRowContext(ctx, "SELECT name FROM composes WHERE id = ?", composeID).Scan(&name); err != nil {
+		return fmt.Sprintf("Deployment #%d", number)
+	}
+	return fmt.Sprintf("Deployment %s #%d", name, number)
 }

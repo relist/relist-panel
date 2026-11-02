@@ -1,6 +1,11 @@
+# Install file: Panel update replaces this file, so do not edit it.
+# Put your changes in docker-compose.override.yml (see
+# docker-compose.override.example.yml) and in .env. See the README.
 services:
   panel:
-    build: .
+    container_name: relist-panel
+    # Panel update and the Install script write the digest ref here (.env).
+    image: ${RELIST_PANEL_IMAGE:-ghcr.io/relist/relist-panel:latest}
     environment:
       RELIST_PORT: ${RELIST_PORT:-8080}
       RELIST_DATA_DIR: ${RELIST_DATA_DIR:-/var/lib/relist-panel}
@@ -47,6 +52,7 @@ services:
     restart: unless-stopped
 
   traefik:
+    container_name: relist-traefik
     image: traefik:v3.7
     environment:
       # Go can't see the cgroup mem_limit, so without GOMEMLIMIT the heap grows

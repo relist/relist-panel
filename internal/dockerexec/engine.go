@@ -1,6 +1,7 @@
 package dockerexec
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -129,9 +130,25 @@ func (e *engineError) Error() string { return e.msg }
 
 // do sends one request and decodes a JSON body into out when out is set.
 func (e *Engine) do(ctx context.Context, method, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, method, "http://docker"+path, nil)
+	return e.doBody(ctx, method, path, nil, out)
+}
+
+// doBody is do with a JSON request body when body is not nil.
+func (e *Engine) doBody(ctx context.Context, method, path string, body, out any) error {
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("docker api %s: %w", path, err)
+		}
+		reader = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "http://docker"+path, reader)
 	if err != nil {
 		return fmt.Errorf("docker api %s: %w", path, err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := e.client.Do(req)
 	if err != nil {

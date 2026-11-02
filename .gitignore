@@ -6,3 +6,5 @@
 /.claude/
 /.task/
 /.superpowers/
+docker-compose.override.yml
+.env

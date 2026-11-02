@@ -36,18 +36,17 @@ func (s *Service) Run(ctx context.Context) {
 			}
 			continue
 		}
-		for s.d.Gate.Busy() && ctx.Err() == nil {
-			sleep(ctx, s.d.Tick)
-		}
-		if ctx.Err() != nil {
+		if !s.claim(ctx) {
 			return
 		}
 		if err := s.d.Store.Start(ctx, task.ID, s.d.Now()); err != nil {
+			s.working.Store(false)
 			logf("start task %d: %v", task.ID, err)
 			sleep(ctx, 5*time.Second)
 			continue
 		}
 		s.process(ctx, task)
+		s.working.Store(false)
 		if ctx.Err() != nil {
 			// A shutdown interrupted the task: it stays started, so the next
 			// start requeues it instead of recording a failure it did not have.
@@ -58,6 +57,35 @@ func (s *Service) Run(ctx context.Context) {
 			sleep(ctx, 5*time.Second)
 		}
 	}
+}
+
+// claim waits while the Deployment queue is busy and then marks the worker as
+// working. working is set before the gate is read: a caller that holds the
+// queue and then calls WaitIdle either finds the gate busy here, or finds
+// working set. It returns false when ctx ends.
+func (s *Service) claim(ctx context.Context) bool {
+	for ctx.Err() == nil {
+		s.working.Store(true)
+		if !s.d.Gate.Busy() {
+			return true
+		}
+		s.working.Store(false)
+		sleep(ctx, s.d.Tick)
+	}
+	return false
+}
+
+// WaitIdle returns once the worker is not on a task, or when ctx ends. With the
+// Deployment queue held it stays idle, so this is the wait for the current scan.
+func (s *Service) WaitIdle(ctx context.Context) error {
+	for s.working.Load() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return nil
 }
 
 func sleep(ctx context.Context, d time.Duration) {

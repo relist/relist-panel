@@ -40,6 +40,8 @@ type Service struct {
 	// selfAuthenticated names further paths the cookie check skips because
 	// their handlers authenticate on their own.
 	selfAuthenticated func(path string) bool
+	// version is the build's version, shown by the public status route.
+	version string
 }
 
 // AllowSelfAuthenticated lets requests to the paths allow reports true for
@@ -70,6 +72,12 @@ type admin struct {
 // database.
 func New(db *sql.DB) *Service {
 	return newServiceWithClock(db, time.Now)
+}
+
+// WithVersion sets the build version that GET /api/auth/status reports.
+func (s *Service) WithVersion(version string) *Service {
+	s.version = version
+	return s
 }
 
 // RegisterRoutes adds the public authentication endpoints to mux. The account
@@ -133,7 +141,7 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 		clearSessionCookieIfPresent(w, r)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": authenticated})
+	writeJSON(w, http.StatusOK, map[string]any{"authenticated": authenticated, "version": s.version})
 }
 
 func (s *Service) login(w http.ResponseWriter, r *http.Request) {
