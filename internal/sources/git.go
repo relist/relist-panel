@@ -156,6 +156,14 @@ func (g Git) Fetch(ctx context.Context, src Source, composeDir string, out io.Wr
 	if err := step(append(fetch, "origin", revision)...); err != nil {
 		return Ref{}, err
 	}
+	// Cone mode quietly checks out nothing for a missing path or a file, and
+	// the build would then fail far from the cause.
+	for _, p := range src.SparsePaths {
+		var kind bytes.Buffer
+		if err := g.run(ctx, srcDir, env, &kind, io.Discard, "cat-file", "-t", "FETCH_HEAD:"+p); err != nil || strings.TrimSpace(kind.String()) != "tree" {
+			return Ref{}, fmt.Errorf("path %q is not a directory in the repository", p)
+		}
+	}
 	if err := step("checkout", "--force", "FETCH_HEAD"); err != nil {
 		return Ref{}, err
 	}

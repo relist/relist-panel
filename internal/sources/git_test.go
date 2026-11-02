@@ -404,3 +404,17 @@ func TestFetchSparsePathsSkipsSubmodulesOutside(t *testing.T) {
 		t.Fatal("submodule outside the paths was checked out")
 	}
 }
+
+func TestFetchRefusesAPathThatIsNotADirectory(t *testing.T) {
+	r := newRemoteRepo(t)
+	r.serveFilters()
+	r.commit("main", "root.txt", "root", "root")
+	for _, path := range []string{"missing", "root.txt"} {
+		s := gitSource(r.url, "main")
+		s.SparsePaths = []string{path}
+		_, err := (Git{}).Fetch(context.Background(), s, t.TempDir(), &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "is not a directory") {
+			t.Fatalf("Fetch(%q) err = %v", path, err)
+		}
+	}
+}
