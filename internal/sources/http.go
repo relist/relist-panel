@@ -84,20 +84,24 @@ type sshKeyJSON struct {
 
 // sourceJSON is the Source as the API shows it. It has no private key field.
 type sourceJSON struct {
-	Kind       Kind          `json:"kind"`
-	RepoURL    string        `json:"repoUrl"`
-	Branch     string        `json:"branch"`
-	Submodules bool          `json:"submodules"`
-	SSHKey     *sshKeyJSON   `json:"sshKey"`
-	HeadSHA    string        `json:"headSha"`
-	LastTest   *lastTestJSON `json:"lastTest"`
-	Zip        *zipJSON      `json:"zip"`
+	Kind        Kind          `json:"kind"`
+	RepoURL     string        `json:"repoUrl"`
+	Branch      string        `json:"branch"`
+	Submodules  bool          `json:"submodules"`
+	SparsePaths []string      `json:"sparsePaths"`
+	SSHKey      *sshKeyJSON   `json:"sshKey"`
+	HeadSHA     string        `json:"headSha"`
+	LastTest    *lastTestJSON `json:"lastTest"`
+	Zip         *zipJSON      `json:"zip"`
 }
 
 func toJSON(src Source) sourceJSON {
 	j := sourceJSON{
 		Kind: src.Kind, RepoURL: src.RepoURL, Branch: src.Branch, Submodules: src.Submodules,
-		HeadSHA: src.HeadSHA,
+		SparsePaths: src.SparsePaths, HeadSHA: src.HeadSHA,
+	}
+	if j.SparsePaths == nil {
+		j.SparsePaths = []string{}
 	}
 	if src.SSHKeyID != nil {
 		j.SSHKey = &sshKeyJSON{ID: *src.SSHKeyID, Name: src.SSHKeyName, PublicKey: src.PublicKey}
@@ -180,11 +184,12 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 }
 
 type putInput struct {
-	Kind       Kind   `json:"kind"`
-	RepoURL    string `json:"repoUrl"`
-	Branch     string `json:"branch"`
-	Submodules bool   `json:"submodules"`
-	SSHKeyID   *int64 `json:"sshKeyId"`
+	Kind        Kind     `json:"kind"`
+	RepoURL     string   `json:"repoUrl"`
+	Branch      string   `json:"branch"`
+	Submodules  bool     `json:"submodules"`
+	SparsePaths []string `json:"sparsePaths"`
+	SSHKeyID    *int64   `json:"sshKeyId"`
 }
 
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
@@ -207,6 +212,11 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	branch, err := ValidateBranch(in.Branch)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	sparsePaths, err := ValidateSparsePaths(in.SparsePaths)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -240,7 +250,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load source")
 		return
 	}
-	next := Source{ComposeID: t.id, Kind: KindGit, RepoURL: repoURL, Branch: branch, Submodules: in.Submodules, SSHKeyID: in.SSHKeyID}
+	next := Source{ComposeID: t.id, Kind: KindGit, RepoURL: repoURL, Branch: branch, Submodules: in.Submodules, SparsePaths: sparsePaths, SSHKeyID: in.SSHKeyID}
 	if err == nil && existing.Kind == KindZip {
 		// An uploaded tree may carry its own .git/config; git init must never
 		// run inside it. EnsureOwnedSrc above already vouched that src/ is ours.

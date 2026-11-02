@@ -642,6 +642,8 @@ export interface ComposeSource {
   repoUrl: string;
   branch: string;
   submodules: boolean;
+  /** Directories the Git Source checks out; empty means the whole repository. */
+  sparsePaths: string[];
   sshKey: { id: number; name: string; publicKey: string } | null;
   headSha: string;
   lastTest: { at: string; ok: boolean } | null;
@@ -653,6 +655,7 @@ export interface SourceInput {
   repoUrl: string;
   branch: string;
   submodules: boolean;
+  sparsePaths: string[];
   sshKeyId: number | null;
 }
 

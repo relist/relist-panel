@@ -39,6 +39,7 @@ const saved: ComposeSource = {
   sshKey: { id: 1, name: 'ci', publicKey: 'ssh-ed25519 AAAA relist-ci' },
   repoUrl: URL,
   submodules: false,
+  sparsePaths: [],
   zip: null,
 };
 
@@ -69,7 +70,7 @@ describe('SourceModal', () => {
     await user.click(screen.getByTitle('ci'));
 
     await waitFor(() =>
-      expect(api.saveSource).toHaveBeenCalledWith(location, { branch: '', kind: 'git', repoUrl: URL, sshKeyId: 1, submodules: false }),
+      expect(api.saveSource).toHaveBeenCalledWith(location, { branch: '', kind: 'git', repoUrl: URL, sparsePaths: [], sshKeyId: 1, submodules: false }),
     );
     expect(await screen.findByText('ssh-ed25519 AAAA relist-ci')).toBeTruthy();
     expect(screen.getByRole('button', { name: /copy/i })).toBeTruthy();
@@ -88,7 +89,7 @@ describe('SourceModal', () => {
     await user.tab();
 
     await waitFor(() =>
-      expect(api.saveSource).toHaveBeenCalledWith(location, { branch: '', kind: 'git', repoUrl: 'git@github.com:acme/other.git', sshKeyId: 1, submodules: false }),
+      expect(api.saveSource).toHaveBeenCalledWith(location, { branch: '', kind: 'git', repoUrl: 'git@github.com:acme/other.git', sparsePaths: [], sshKeyId: 1, submodules: false }),
     );
   });
 
@@ -219,8 +220,29 @@ describe('SourceModal', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(api.saveSource).toHaveBeenLastCalledWith(location, { branch: 'dev', kind: 'git', repoUrl: URL, sshKeyId: 1, submodules: false });
+    expect(api.saveSource).toHaveBeenLastCalledWith(location, { branch: 'dev', kind: 'git', repoUrl: URL, sparsePaths: [], sshKeyId: 1, submodules: false });
     expect(onSaved.mock.calls[0][1]).toBe(false);
+  });
+
+  it('shows the saved paths and saves the ones typed', async () => {
+    api.saveSource.mockResolvedValue({ ...saved, branch: 'main', sparsePaths: ['web', 'api'] });
+    const user = userEvent.setup();
+    renderModal({ ...saved, branch: 'main', sparsePaths: ['web'] });
+
+    expect(screen.getByTitle('web')).toBeTruthy();
+    await user.type(screen.getByRole('combobox', { name: 'Paths' }), 'api{enter}');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(api.saveSource).toHaveBeenLastCalledWith(location, {
+        branch: 'main',
+        kind: 'git',
+        repoUrl: URL,
+        sparsePaths: ['web', 'api'],
+        sshKeyId: 1,
+        submodules: false,
+      }),
+    );
   });
 
   it('reports a first save as firstTime', async () => {

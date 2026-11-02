@@ -14,7 +14,7 @@ const otherPath = { composeId: 8, environmentId: 2, projectId: 1 };
 const source: ComposeSource = {
   branch: 'main', headSha: '', kind: 'git', lastTest: null,
   sshKey: { id: 1, name: 'ci', publicKey: 'ssh-ed25519 AAAA relist-ci' }, repoUrl: 'git@github.com:acme/shop.git',
-  submodules: false, zip: null,
+  submodules: false, sparsePaths: [], zip: null,
 };
 
 function deferred<T>() {

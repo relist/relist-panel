@@ -50,6 +50,7 @@ const source: ComposeSource = {
   sshKey: { id: 1, name: 'ci', publicKey: 'ssh-ed25519 AAAA relist-ci' },
   repoUrl: 'git@github.com:acme/old.git',
   submodules: false,
+  sparsePaths: [],
   zip: null,
 };
 

@@ -53,7 +53,7 @@ One CVE matched against one package in one Image: severity, installed version, f
 _Avoid_: Issue, Alert
 
 **Source**:
-The source code of one Compose, from a Git repository or an uploaded zip, kept in `<compose dir>/src/`. A Compose has at most one. A Git Source chooses an SSH key. What to build from it is the Compose file's own `build:` (ADR-0016).
+The source code of one Compose, from a Git repository or an uploaded zip, kept in `<compose dir>/src/`. A Compose has at most one. A Git Source chooses an SSH key, and may check out only some directories (its sparse paths) plus the files at the repository root. What to build from it is the Compose file's own `build:` (ADR-0016).
 _Avoid_: Repo (a zip Source has none), App, Application
 
 **SSH key**:

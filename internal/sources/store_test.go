@@ -129,3 +129,41 @@ func TestSourceCascadesWithCompose(t *testing.T) {
 		t.Fatalf("Get after compose delete err = %v, want sql.ErrNoRows", err)
 	}
 }
+
+func TestChangingSparsePathsDropsTheBuiltTree(t *testing.T) {
+	db, a, _ := newDB(t)
+	s := NewStore(db)
+	ctx := context.Background()
+	src := Source{ComposeID: a, Kind: KindGit, RepoURL: "git@github.com:o/r.git", Branch: "main", SparsePaths: []string{"web"}}
+	if err := s.Save(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Get(ctx, a); err != nil || len(got.SparsePaths) != 1 || got.SparsePaths[0] != "web" {
+		t.Fatalf("Get = %+v, %v", got.SparsePaths, err)
+	}
+	if err := s.RecordMaterialization(ctx, src, "/tree"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(ctx, a); got.TreeDirectory != "/tree" {
+		t.Fatalf("same paths lost the built tree: %q", got.TreeDirectory)
+	}
+
+	// A Deployment queued before the edit must not publish its tree either.
+	built := src
+	src.SparsePaths = nil
+	if err := s.Save(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(ctx, a); got.TreeDirectory != "" || got.SparsePaths == nil || len(got.SparsePaths) != 0 {
+		t.Fatalf("after changing paths: tree %q, paths %#v", got.TreeDirectory, got.SparsePaths)
+	}
+	if err := s.RecordMaterialization(ctx, built, "/stale"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(ctx, a); got.TreeDirectory != "" {
+		t.Fatalf("a tree built with the old paths was recorded: %q", got.TreeDirectory)
+	}
+}
