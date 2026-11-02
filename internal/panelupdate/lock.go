@@ -93,11 +93,13 @@ func (s *Service) StartLocked(ctx context.Context) error {
 	return s.lock(ctx)
 }
 
-// Middleware refuses every /api request with a 503 while the lock is on, like
-// the Migration lock, except these: /healthz, /api/auth/status, /api/auth/login
-// and /api/auth/logout, GET /api/panel-update/* and POST /api/panel-update/cancel, and everything that is not
-// under /api (the SPA shell, which renders the lock page). A password or 2FA
-// change would be lost or fought over by the restore, so it waits.
+// Middleware refuses /api writes with a 503 while the lock is on, like the
+// Migration lock, except /api/auth/login, /api/auth/logout and
+// POST /api/panel-update/cancel. Reads pass, so the pages keep showing the
+// panel while a run waits, but a Terminal does not: it opens a session in a
+// Container that the update would cut. Everything not under /api passes too.
+// A password or 2FA change would be lost or fought over by the restore, so it
+// waits.
 func (s *Service) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.Locked() || allowedWhileUpdating(r.Method, r.URL.Path) {
@@ -116,8 +118,10 @@ func allowedWhileUpdating(method, path string) bool {
 		return true
 	case path == "/api/panel-update/cancel":
 		return method == http.MethodPost
-	case strings.HasPrefix(path, "/api/panel-update/"):
-		return method == http.MethodGet || method == http.MethodHead
+	case strings.HasSuffix(path, "/terminal"):
+		return false
+	case method == http.MethodGet || method == http.MethodHead:
+		return true
 	}
 	return path != "/api" && !strings.HasPrefix(path, "/api/")
 }
