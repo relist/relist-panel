@@ -125,11 +125,12 @@ func TestParseNetDevGolden(t *testing.T) {
 		t.Fatalf("ParseNetDev() error = %v", err)
 	}
 	// lo excluded: its counters are the host's own local traffic, and
-	// counting it would double every loopback byte.
+	// counting it would double every loopback byte. Docker's bridges and
+	// veths excluded: a container's download is eth0 rx, then bridge tx and
+	// veth tx again, so counting them reports it as twice its size in Sent.
 	want := []NetCounters{
 		{Device: "eth0", RXBytes: 5273301899, TXBytes: 698000000},
 		{Device: "eth1", RXBytes: 1000, TXBytes: 2000},
-		{Device: "docker0", RXBytes: 5000, TXBytes: 6000},
 	}
 	if !reflect.DeepEqual(ifaces, want) {
 		t.Errorf("ParseNetDev() = %+v, want %+v", ifaces, want)
@@ -139,6 +140,7 @@ func TestParseNetDevGolden(t *testing.T) {
 func TestParseNetDevErrors(t *testing.T) {
 	for name, text := range map[string]string{
 		"loopback only": "Inter-|   Receive  |  Transmit\n face |bytes packets|bytes packets\n    lo:  200 1 0 0 0 0 0 0   200 1 0 0 0 0 0 0\n",
+		"docker only":   "Inter-|   Receive  |  Transmit\n face |bytes packets|bytes packets\n docker0:  200 1 0 0 0 0 0 0   200 1 0 0 0 0 0 0\n veth9f8e:  200 1 0 0 0 0 0 0   200 1 0 0 0 0 0 0\n",
 		"headers only":  "Inter-|   Receive  |  Transmit\n face |bytes packets|bytes packets\n",
 		"empty":         "",
 	} {

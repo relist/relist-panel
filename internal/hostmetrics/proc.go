@@ -177,8 +177,11 @@ type NetCounters struct {
 }
 
 // ParseNetDev reads /proc/net/dev (the host's, via PID 1's namespace —
-// ADR-0006), skipping loopback so local traffic is not counted twice. It
-// errors when no other interface matched.
+// ADR-0006), skipping loopback so local traffic is not counted twice, and
+// Docker's bridges and veths, which relay a container's traffic that the
+// host's real interface already counted: a container's download is eth0 rx,
+// then bridge tx and veth tx again. It errors when no other interface
+// matched.
 func ParseNetDev(text string) ([]NetCounters, error) {
 	var interfaces []NetCounters
 	for _, line := range strings.Split(text, "\n") {
@@ -187,7 +190,7 @@ func ParseNetDev(text string) ([]NetCounters, error) {
 			continue
 		}
 		name = strings.TrimSpace(name)
-		if name == "" || name == "lo" {
+		if name == "" || name == "lo" || isDockerInterface(name) {
 			continue
 		}
 		fields := strings.Fields(rest)
@@ -205,9 +208,17 @@ func ParseNetDev(text string) ([]NetCounters, error) {
 		interfaces = append(interfaces, NetCounters{Device: name, RXBytes: rx, TXBytes: tx})
 	}
 	if len(interfaces) == 0 {
-		return nil, errors.New("no non-loopback interface found")
+		return nil, errors.New("no interface found besides loopback and Docker's")
 	}
 	return interfaces, nil
+}
+
+// isDockerInterface reports whether name is one Docker creates on the host:
+// the default bridge, the swarm gateway bridge, a user network's bridge
+// (br-<network id>) or a container's veth end.
+func isDockerInterface(name string) bool {
+	return name == "docker0" || name == "docker_gwbridge" ||
+		strings.HasPrefix(name, "br-") || strings.HasPrefix(name, "veth")
 }
 
 func allLetters(s string) bool {
