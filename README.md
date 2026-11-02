@@ -158,6 +158,14 @@ docker exec -it relist-panel relist-panel reset-password
 docker exec relist-panel relist-panel reset-password --generate
 ```
 
+To change the sign-in email, pass the new address (`--email` names the current
+one and is only needed with more than one admin). The password, two-factor and
+open sessions stay as they are:
+
+```sh
+docker exec relist-panel relist-panel change-email --new-email new@example.com
+```
+
 Override the defaults via environment variables (or the `.env` file next to
 `docker-compose.yml`, which the install script writes):
 

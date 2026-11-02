@@ -213,3 +213,47 @@ func TestResetPasswordUnknownEmail(t *testing.T) {
 		t.Fatalf("ResetPassword() error = %v, want ErrAccountNotFound", err)
 	}
 }
+
+func TestChangeEmailReplacesTheAddressAndKeepsTheRest(t *testing.T) {
+	db := openResetDatabase(t)
+	seedResetAdmin(t, db, sql.NullString{String: "SECRET", Valid: true})
+	seedResetSession(t, db, "session-one")
+
+	result, err := ChangeEmail(context.Background(), db, "", "  New@Example.com ")
+	if err != nil {
+		t.Fatalf("ChangeEmail() error = %v", err)
+	}
+	want := ChangeEmailResult{OldEmail: "admin@example.com", NewEmail: "new@example.com"}
+	if result != want {
+		t.Fatalf("ChangeEmail() = %+v, want %+v", result, want)
+	}
+
+	var email, hash string
+	var secret sql.NullString
+	if err := db.QueryRow("SELECT email, password_hash, totp_secret FROM admin_credentials WHERE id = 1").Scan(&email, &hash, &secret); err != nil {
+		t.Fatalf("read admin: %v", err)
+	}
+	if email != "new@example.com" || hash != "hash" || !secret.Valid {
+		t.Fatalf("email = %q, hash = %q, secret = %v; want only the email changed", email, hash, secret)
+	}
+	var sessions int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&sessions); err != nil || sessions != 1 {
+		t.Fatalf("sessions = %d, err = %v; want 1", sessions, err)
+	}
+}
+
+func TestChangeEmailRejectsInvalidAndUnknown(t *testing.T) {
+	db := openResetDatabase(t)
+	seedResetAdmin(t, db, sql.NullString{})
+
+	if _, err := ChangeEmail(context.Background(), db, "", "not-an-email"); err == nil {
+		t.Fatal("ChangeEmail() accepted an invalid email")
+	}
+	if _, err := ChangeEmail(context.Background(), db, "nobody@example.com", "new@example.com"); !errors.Is(err, ErrAccountNotFound) {
+		t.Fatalf("ChangeEmail() error = %v, want ErrAccountNotFound", err)
+	}
+	var email string
+	if err := db.QueryRow("SELECT email FROM admin_credentials").Scan(&email); err != nil || email != "admin@example.com" {
+		t.Fatalf("email = %q, err = %v; want it untouched", email, err)
+	}
+}
