@@ -1,0 +1,55 @@
+# Contributing
+
+Relist Panel is a personal project. Issues and pull requests are welcome, but
+there is no promise that either gets a reply or a review, or how soon.
+
+## Issues
+
+- **Bugs:** use the bug report template. Say which version you run and include the
+  panel's log (`docker logs relist-panel`).
+- **Security problems:** do not open an issue; see [SECURITY.md](SECURITY.md).
+- **Ideas:** open an issue before writing code, so you know whether it fits. The
+  panel stays small on purpose: one operator, one Docker host, Compose files only
+  (see the scope in [CONTEXT.md](CONTEXT.md)).
+
+## Pull requests
+
+- Keep one change per pull request, with tests for it.
+- Commit messages follow Conventional Commits without a scope: `feat: ...`,
+  `fix: ...`, `docs: ...`, `chore: ...`.
+- Never edit a migration that is already on `main`; add a new one.
+- A change to how the panel works may need an ADR in [docs/adr](docs/adr) and the
+  words in [CONTEXT.md](CONTEXT.md).
+- Frontend changes follow [docs/GUIDELINES.md](docs/GUIDELINES.md) and Ant Design's
+  components.
+
+## Build and test
+
+You need Go (see `go.mod`), Node.js with pnpm, and [go-task](https://taskfile.dev).
+
+```sh
+pnpm --dir web install
+task build        # the embedded frontend and the binary
+task test         # the Go tests
+task typecheck    # the frontend types
+pnpm --dir web test
+```
+
+Run the binary with its own data directory, never the one of a real install:
+
+```sh
+RELIST_DATA_DIR="$PWD/.data" ./relist-panel
+```
+
+The probes under `scripts/` (`task probe:panel-update`, `task probe:migration`)
+run real Docker inside `docker:dind` and need privileged Containers.
+
+## Working with AI agents
+
+Most of this repo was written with AI coding agents. [AGENTS.md](AGENTS.md) and
+[docs/agents](docs/agents) hold the instructions they follow; they apply to
+human contributors too.
+
+## Code of conduct
+
+This project follows the [Code of Conduct](CODE_OF_CONDUCT.md).

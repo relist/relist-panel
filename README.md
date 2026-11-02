@@ -20,6 +20,15 @@ no teams, no database-as-a-service. Use it at your own risk; see
 The domain language is in [CONTEXT.md](CONTEXT.md) and the design decisions
 are in [docs/adr](docs/adr).
 
+## Security model
+
+The panel mounts the Docker socket, so signing in to it is the same as root on
+the host. Turn on two-factor sign-in, and if you can, reach the panel over a VPN
+or an SSH tunnel rather than the public internet. Report vulnerabilities
+privately: see [SECURITY.md](SECURITY.md).
+
+Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Development
 
 Install [go-task](https://taskfile.dev) and the frontend dependencies, then
