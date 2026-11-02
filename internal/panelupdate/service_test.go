@@ -343,12 +343,15 @@ func TestSchedulerSkipsWhileLocked(t *testing.T) {
 }
 
 func TestBuildWithoutReleaseKeyVerifiesNothing(t *testing.T) {
+	saved := releasePublicKey
+	releasePublicKey = ""
+	t.Cleanup(func() { releasePublicKey = saved })
 	_, priv := newKey(t)
 	rel := newRelease(t, priv)
 	rel.publish(manifestJSON("1.4.0"))
 	s := New(Deps{Store: NewStore(newDB(t)), Version: "1.3.0", ManifestURL: rel.srv.URL + "/m.json"})
 	if !s.NoKey() {
-		t.Fatal("the placeholder is no key")
+		t.Fatal("an empty releasePublicKey is no key")
 	}
 	if err := s.CheckNow(context.Background()); err != ErrNoKey {
 		t.Fatalf("err = %v, want ErrNoKey", err)

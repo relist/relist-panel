@@ -4,14 +4,9 @@
 # internal/panelupdate/key.go, so the workflow never takes it from anywhere else.
 name: release
 
-# Disabled until the owner steps of ticket 02 are done (release key, secret,
-# public key in key.go). To enable, replace this trigger with:
-#
-#   on:
-#     push:
-#       tags: ["v*"]
 on:
-  workflow_dispatch:
+  push:
+    tags: ["v*"]
 
 permissions:
   contents: write
