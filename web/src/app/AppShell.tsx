@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CloudDownloadOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, GlobalOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, BuildOutlined, CloudDownloadOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, GlobalOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -99,6 +99,8 @@ export function AppShell() {
             ? 'panel-update'
           : resolved.pattern === 'images'
             ? 'images'
+          : resolved.pattern === 'builders'
+            ? 'builders'
           : resolved.pattern === 'ssh-keys'
             ? 'ssh-keys'
           : resolved.pattern === 'certificates'
@@ -139,6 +141,7 @@ export function AppShell() {
     { key: 'docker', icon: <CloudServerOutlined />, label: 'Docker' },
     { key: 'panel-update', icon: <CloudDownloadOutlined />, label: 'Panel update' },
     { key: 'images', icon: <ContainerOutlined />, label: 'Images' },
+    { key: 'builders', icon: <BuildOutlined />, label: 'Builders' },
     {
       key: 'vulnerabilities', icon: <SafetyOutlined />,
       label: <Flex align="center" justify="space-between" gap={8}><span>Vulnerabilities</span>{criticalCount > 0 && <Badge count={criticalCount} color={token.colorError} title={`${criticalCount} Critical vulnerabilities`} />}</Flex>,
@@ -174,6 +177,7 @@ export function AppShell() {
     if (key === 'docker') return navigate(paths.docker);
     if (key === 'panel-update') return navigate(paths.panelUpdate);
     if (key === 'images') return navigate(paths.images);
+    if (key === 'builders') return navigate(paths.builders);
     if (key === 'ssh-keys') return navigate(paths.sshKeys);
     if (key === 'certificates') return navigate(paths.certificates);
     if (key === 'traefik') return navigate(paths.traefik);
@@ -199,6 +203,8 @@ export function AppShell() {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Panel update' });
       } else if (resolved?.pattern === 'images') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Images' });
+      } else if (resolved?.pattern === 'builders') {
+        trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Builders' });
       } else if (resolved?.pattern === 'ssh-keys') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'SSH keys' });
       } else if (resolved?.pattern === 'certificates') {

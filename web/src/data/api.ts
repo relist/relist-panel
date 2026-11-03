@@ -63,6 +63,9 @@ import type {
   VolumeAccess,
   VolumeListing,
   ZeroDowntimeService,
+  Builder,
+  BuilderInput,
+  BuildersResponse,
 } from './types';
 import type { MetricWindow } from './types';
 import type { MigrationStatus } from './migration';
@@ -416,6 +419,18 @@ export const api = {
   createSshKey: (name: string) => request<SshKey>('/api/ssh-keys', jsonInit('POST', { name })),
   renameSshKey: (id: number, name: string) => request<SshKey>(`/api/ssh-keys/${id}`, jsonInit('PATCH', { name })),
   deleteSshKey: (id: number) => request<void>(`/api/ssh-keys/${id}`, { method: 'DELETE' }),
+  // Builders: resource-limited buildx builders, and the BuildKit image they run.
+  listBuilders: () => request<BuildersResponse>('/api/builders'),
+  setBuildKitImage: (buildkitImage: string) =>
+    request<void>('/api/builders/settings', jsonInit('PUT', { buildkitImage })),
+  createBuilder: (input: BuilderInput) => request<Builder>('/api/builders', jsonInit('POST', input)),
+  updateBuilder: (id: number, input: BuilderInput) => request<Builder>(`/api/builders/${id}`, jsonInit('PUT', input)),
+  deleteBuilder: (id: number) => request<void>(`/api/builders/${id}`, { method: 'DELETE' }),
+  /** 0 makes Docker default the panel default. */
+  setDefaultBuilder: (builderId: number) => request<void>('/api/builders/default', jsonInit('PUT', { builderId })),
+  startBuilder: (id: number) => request<Builder>(`/api/builders/${id}/start`, { method: 'POST' }),
+  builderDiskUsage: (id: number) => request<{ bytes: number }>(`/api/builders/${id}/disk-usage`),
+  pruneBuilder: (id: number) => request<void>(`/api/builders/${id}/prune`, { method: 'POST' }),
   listCertificates: () => request<Certificate[]>('/api/certificates'),
   createCertificate: (input: CertificateInput) => request<Certificate>('/api/certificates', jsonInit('POST', input)),
   replaceCertificate: (id: number, input: Omit<CertificateInput, 'name'>) =>
