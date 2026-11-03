@@ -55,7 +55,7 @@ func TestValidateSparsePaths(t *testing.T) {
 		t.Fatalf("ValidateSparsePaths(nil) = %#v, %v, want empty", got, err)
 	}
 	for _, bad := range []string{
-		"/abs", "..", "a/../..", "a/../../b", ".", "./", "-x", ".git", "a/.git/b",
+		"/abs", "..", "a/../..", "a/../../b", ".", "./", "-x", ":(exclude)x", ":/x", ".git", "a/.git/b",
 		"a*", "a?", "a[b]", `a\b`, "!a", "#a", "a\tb", "a\x7f", strings.Repeat("a", 256),
 	} {
 		if _, err := ValidateSparsePaths([]string{bad}); err == nil {

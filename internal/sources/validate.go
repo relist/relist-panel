@@ -117,6 +117,10 @@ func ValidateSparsePaths(in []string) ([]string, error) {
 		if strings.HasPrefix(p, "-") {
 			return bad("starts with `-`")
 		}
+		// git reads a leading `:` in a pathspec as magic such as `:(exclude)`.
+		if strings.HasPrefix(p, ":") {
+			return bad("starts with `:`")
+		}
 		if !seen[p] {
 			seen[p] = true
 			out = append(out, p)
