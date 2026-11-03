@@ -176,6 +176,24 @@ func TestVersionComparesNumerically(t *testing.T) {
 	}
 }
 
+// A release candidate build is offered the stable release of its own version
+// and anything newer, never an older stable release (ADR-0026).
+func TestReleaseCandidateBuildIsOfferedStable(t *testing.T) {
+	for latest, want := range map[string]string{"0.1.0": "0.1.0", "0.0.2": "", "0.1.0-rc.1": "", "0.1.0-rc.2": "0.1.0-rc.2"} {
+		s, rel := newService(t, "0.1.0-rc.1")
+		rel.publish(manifestJSON(latest))
+		if err := s.CheckNow(context.Background()); err != nil {
+			t.Fatalf("%s: %v", latest, err)
+		}
+		if s.Development() {
+			t.Fatal("a release candidate build counts as a development build")
+		}
+		if v := availableVersion(t, s); v != want {
+			t.Errorf("latest %s: offered %q, want %q", latest, v, want)
+		}
+	}
+}
+
 func TestDevelopmentBuildIsNeverOffered(t *testing.T) {
 	s, rel := newService(t, "dev")
 	rel.publish(manifestJSON("1.4.0"))
