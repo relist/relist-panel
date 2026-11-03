@@ -2,6 +2,8 @@
 # manifest and the install script on the GitHub Release (ADR-0024, ADR-0025). The signing key is the repo secret
 # RELIST_RELEASE_KEY; the public half is the constant in
 # internal/panelupdate/key.go, so the workflow never takes it from anywhere else.
+# A vX.Y.Z-rc.N tag is published as a GitHub pre-release and never moves
+# :latest, so only `install.sh --update --version` reaches it (ADR-0026).
 name: release
 
 on:
@@ -29,8 +31,8 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::tag $TAG is not vMAJOR.MINOR.PATCH"; exit 1
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error::tag $TAG is not vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc.N"; exit 1
           fi
           key=$(sed -n 's/^var releasePublicKey = "\(.*\)"$/\1/p' internal/panelupdate/key.go)
           if [ -z "$key" ]; then
@@ -38,6 +40,11 @@ jobs:
           fi
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "key=$key" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *-rc.* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Test the release tooling and the update code
         run: go test ./cmd/relist-release ./internal/panelupdate
@@ -102,12 +109,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
         run: |
+          flags=""
+          if [ "$PRERELEASE" = true ]; then
+            flags=--prerelease
+          fi
+          # shellcheck disable=SC2086
           gh release create "$TAG" update-manifest.json update-manifest.json.sig install.sh \
-            --title "$TAG" --generate-notes --verify-tag
+            --title "$TAG" --generate-notes --verify-tag $flags
 
       # :latest moves only after the manifest is signed and verified.
       - name: Tag the image latest
+        if: steps.meta.outputs.prerelease != 'true'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |

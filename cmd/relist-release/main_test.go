@@ -258,6 +258,7 @@ func TestManifestRejectsAMalformedDigest(t *testing.T) {
 
 type workflowStep struct {
 	Name string            `yaml:"name"`
+	If   string            `yaml:"if"`
 	Uses string            `yaml:"uses"`
 	Run  string            `yaml:"run"`
 	Env  map[string]string `yaml:"env"`
@@ -320,5 +321,34 @@ func TestReleaseWorkflowHandlesTheKeyAndLatestCarefully(t *testing.T) {
 	checkout := index(func(s workflowStep) bool { return strings.HasPrefix(s.Uses, "actions/checkout@") })
 	if steps[checkout].With["persist-credentials"] != false {
 		t.Error("checkout must not persist credentials")
+	}
+}
+
+// An rc tag is a GitHub pre-release and never moves :latest (ADR-0026).
+func TestReleaseWorkflowReleaseCandidates(t *testing.T) {
+	var meta, create, latest *workflowStep
+	steps := releaseSteps(t)
+	for i := range steps {
+		s := &steps[i]
+		switch {
+		case strings.Contains(s.Run, "GITHUB_OUTPUT") && strings.Contains(s.Run, "version="):
+			meta = s
+		case strings.Contains(s.Run, "gh release create"):
+			create = s
+		case strings.Contains(s.Run, ":latest"):
+			latest = s
+		}
+	}
+	if meta == nil || create == nil || latest == nil {
+		t.Fatalf("steps not found: meta %v create %v latest %v", meta != nil, create != nil, latest != nil)
+	}
+	if !strings.Contains(meta.Run, `^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`) || !strings.Contains(meta.Run, "prerelease=") {
+		t.Errorf("meta step does not accept rc tags or set prerelease: %q", meta.Run)
+	}
+	if !strings.Contains(create.Run, "--prerelease") {
+		t.Errorf("release step never passes --prerelease: %q", create.Run)
+	}
+	if latest.If != "steps.meta.outputs.prerelease != 'true'" {
+		t.Errorf("latest step if = %q", latest.If)
 	}
 }
