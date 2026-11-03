@@ -321,3 +321,75 @@ func TestUnpackUnderRefusesALinkWhereADirectoryWas(t *testing.T) {
 		})
 	}
 }
+
+// hookWriter runs hook once, on the first write that is exactly content: a
+// file's bytes, written after its header and after its directory was listed.
+type hookWriter struct {
+	w       io.Writer
+	content string
+	hook    func()
+}
+
+func (h *hookWriter) Write(p []byte) (int, error) {
+	if h.hook != nil && string(p) == h.content {
+		h.hook()
+		h.hook = nil
+	}
+	return h.w.Write(p)
+}
+
+func unpackedFiles(t *testing.T, buf *bytes.Buffer) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	tr := tar.NewReader(buf)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return files
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.Typeflag == tar.TypeReg {
+			raw, _ := io.ReadAll(tr)
+			files[h.Name] = string(raw)
+		}
+	}
+}
+
+// Traefik appends to its Access log in the data directory while a Migration
+// packs it: the entry keeps the bytes the file had when it was opened.
+func TestPackFileThatGrowsWhilePacked(t *testing.T) {
+	src := t.TempDir()
+	log := filepath.Join(src, "access.log")
+	os.WriteFile(log, []byte("line1\n"), 0o644)
+	var buf bytes.Buffer
+	w := &hookWriter{w: &buf, content: "line1\n", hook: func() {
+		f, _ := os.OpenFile(log, os.O_APPEND|os.O_WRONLY, 0)
+		f.WriteString("line2\n")
+		f.Close()
+	}}
+	if err := openRoot(t, src).Pack(".", w); err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	if got := unpackedFiles(t, &buf)["access.log"]; got != "line1\n" {
+		t.Fatalf("access.log = %q, want the bytes at open", got)
+	}
+}
+
+// A file removed between listing its directory and packing it (the Access
+// log rotator gzips and expires files) is left out, not a failure.
+func TestPackSkipsFileThatVanishes(t *testing.T) {
+	src := t.TempDir()
+	os.WriteFile(filepath.Join(src, "a"), []byte("a"), 0o644)
+	os.WriteFile(filepath.Join(src, "b"), []byte("b"), 0o644)
+	var buf bytes.Buffer
+	w := &hookWriter{w: &buf, content: "a", hook: func() { os.Remove(filepath.Join(src, "b")) }}
+	if err := openRoot(t, src).Pack(".", w); err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	files := unpackedFiles(t, &buf)
+	if files["a"] != "a" || len(files) != 1 {
+		t.Fatalf("files = %v, want only a", files)
+	}
+}

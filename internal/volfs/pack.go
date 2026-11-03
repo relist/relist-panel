@@ -53,6 +53,11 @@ func (p packer) entry(name string) error {
 		return nil
 	}
 	entry, err := p.fs.Stat(name)
+	if name != "." && errors.Is(err, os.ErrNotExist) {
+		// Removed since its directory was listed: a live data directory
+		// (the Access log rotator, ADR-0026) changes while it is packed.
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -87,12 +92,30 @@ func (p packer) entry(name string) error {
 		}
 		return nil
 	case KindFile:
+		// The size comes from the open file and exactly that many bytes are
+		// copied, so a file still being appended to (Traefik's Access log)
+		// packs as it was when opened instead of overrunning its header.
+		f, err := p.fs.root.Open(name)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read %q: %w", name, err)
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil {
+			return fmt.Errorf("read %q: %w", name, err)
+		}
 		hdr.Typeflag = tar.TypeReg
-		hdr.Size = entry.Size
+		hdr.Size = info.Size()
 		if err := p.tw.WriteHeader(hdr); err != nil {
 			return err
 		}
-		return p.fs.Read(name, p.tw)
+		if _, err := io.CopyN(p.tw, f, hdr.Size); err != nil {
+			return fmt.Errorf("read %q: %w", name, err)
+		}
+		return nil
 	case KindSymlink:
 		hdr.Typeflag = tar.TypeSymlink
 		hdr.Linkname = entry.Link
