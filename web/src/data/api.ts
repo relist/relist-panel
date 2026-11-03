@@ -28,8 +28,13 @@ import type {
   SourceInput,
   SourceTestResult,
   SshKey,
+  AccessLogList,
+  AccessLogSettings,
+  AccessLogSettingsInput,
   Certificate,
   CertificateInput,
+  TraefikLogs,
+  TraefikStatus,
   ScannerTag,
   VulnCvePage,
   VulnCveQuery,
@@ -416,6 +421,13 @@ export const api = {
   replaceCertificate: (id: number, input: Omit<CertificateInput, 'name'>) =>
     request<Certificate>(`/api/certificates/${id}`, jsonInit('PUT', input)),
   deleteCertificate: (id: number) => request<void>(`/api/certificates/${id}`, { method: 'DELETE' }),
+  // Traefik's log and the Access log (ADR-0026).
+  traefikLogs: () => request<TraefikLogs>('/api/traefik/logs'),
+  traefikStatus: () => request<TraefikStatus>('/api/traefik/status'),
+  listAccessLogs: () => request<AccessLogList>('/api/traefik/access-logs'),
+  accessLogSettings: () => request<AccessLogSettings>('/api/traefik/access-log-settings'),
+  saveAccessLogSettings: (input: AccessLogSettingsInput) =>
+    request<AccessLogSettings>('/api/traefik/access-log-settings', jsonInit('PUT', input)),
   // Vulnerability scanning (ADR-0021).
   vulnSettings: () => request<VulnSettingsResponse>(`${VULN_URL}/settings`),
   saveVulnSettings: (settings: VulnSettings) => request<VulnSettingsResponse>(`${VULN_URL}/settings`, jsonInit('PUT', settings)),
@@ -630,6 +642,11 @@ function composeVariablesPath(location: ComposePath): string {
 
 function domainsPath(location: ComposePath): string {
   return `${composePath(location)}/domains`;
+}
+
+/** The direct download URL for one Access log file. */
+export function accessLogDownloadUrl(name: string): string {
+  return `/api/traefik/access-logs/${encodeURIComponent(name)}`;
 }
 
 /**

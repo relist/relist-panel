@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CloudDownloadOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, CloudDownloadOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, GlobalOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -103,6 +103,8 @@ export function AppShell() {
             ? 'ssh-keys'
           : resolved.pattern === 'certificates'
             ? 'certificates'
+          : resolved.pattern === 'traefik'
+            ? 'traefik'
           : resolved.pattern === 'vulnerabilities'
             ? 'vulnerabilities'
           : resolved.pattern === '/'
@@ -143,6 +145,7 @@ export function AppShell() {
     },
     { key: 'ssh-keys', icon: <KeyOutlined />, label: 'SSH keys' },
     { key: 'certificates', icon: <SafetyCertificateOutlined />, label: 'Certificates' },
+    { key: 'traefik', icon: <GlobalOutlined />, label: 'Traefik' },
     {
       type: 'group',
       label: 'Recent Projects',
@@ -173,6 +176,7 @@ export function AppShell() {
     if (key === 'images') return navigate(paths.images);
     if (key === 'ssh-keys') return navigate(paths.sshKeys);
     if (key === 'certificates') return navigate(paths.certificates);
+    if (key === 'traefik') return navigate(paths.traefik);
     if (key === 'vulnerabilities') return navigate(paths.vulnerabilities);
     const projectId = Number(String(key).replace('project-', ''));
     if (Number.isFinite(projectId)) void navigate(paths.project(projectId));
@@ -199,6 +203,8 @@ export function AppShell() {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'SSH keys' });
       } else if (resolved?.pattern === 'certificates') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Certificates' });
+      } else if (resolved?.pattern === 'traefik') {
+        trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Traefik' });
       } else if (resolved?.pattern === 'vulnerabilities') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Vulnerabilities' });
       }
