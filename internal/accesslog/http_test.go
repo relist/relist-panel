@@ -204,3 +204,20 @@ func TestSettingsRoundTrip(t *testing.T) {
 		t.Fatalf("after bad PUTs = %v", got)
 	}
 }
+
+// A symlink in the access directory is never followed, even under a valid
+// name: List skips links, so download refuses them too.
+func TestDownloadRefusesSymlink(t *testing.T) {
+	ts := newService(t)
+	dir := Dir(ts.dataDir)
+	os.MkdirAll(dir, 0o755)
+	secret := filepath.Join(ts.dataDir, "panel.db.copy")
+	os.WriteFile(secret, []byte("secret"), 0o600)
+	if err := os.Symlink(secret, filepath.Join(dir, "access-2026-11-02.log")); err != nil {
+		t.Fatal(err)
+	}
+	rec := ts.do("GET", "/api/traefik/access-logs/access-2026-11-02.log", "")
+	if rec.Code != 404 || strings.Contains(rec.Body.String(), "secret") {
+		t.Fatalf("status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+}

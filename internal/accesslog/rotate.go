@@ -262,7 +262,12 @@ func gzipFile(path string) error {
 	}
 	defer src.Close()
 	tmp := path + ".gz.tmp"
-	dst, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	// A leftover temp, or a link planted under its name, is removed and the
+	// temp created fresh with O_EXCL, so nothing is written through a link.
+	if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	dst, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}

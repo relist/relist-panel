@@ -341,3 +341,24 @@ func TestRetentionSkipsFileStillWritten(t *testing.T) {
 	f.r.RunOnce(context.Background())
 	wantNames(t, f.dir, "access-2026-08-01.log")
 }
+
+// A symlink planted at the gzip temp name is replaced, never written through.
+func TestGzipTmpSymlinkNotFollowed(t *testing.T) {
+	f := newRotator(t, testNow)
+	outside := filepath.Join(t.TempDir(), "outside")
+	os.WriteFile(outside, []byte("keep"), 0o644)
+	write(t, f.dir, "access-2026-11-01.log", "whole\n", testNow.Add(-time.Hour))
+	if err := os.Symlink(outside, filepath.Join(f.dir, "access-2026-11-01.log.gz.tmp")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(outside); string(raw) != "keep" {
+		t.Fatalf("outside = %q, written through the link", raw)
+	}
+	wantNames(t, f.dir, "access-2026-11-01.log.gz")
+	if got := gunzip(t, filepath.Join(f.dir, "access-2026-11-01.log.gz")); got != "whole\n" {
+		t.Fatalf("gunzip = %q", got)
+	}
+}

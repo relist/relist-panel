@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -130,7 +131,9 @@ func (s *Service) download(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	file, err := os.Open(filepath.Join(s.dir, name))
+	// O_NOFOLLOW: List skips symlinks, so a link under a valid name is never
+	// served, whatever it points at.
+	file, err := os.OpenFile(filepath.Join(s.dir, name), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		http.NotFound(w, r)
 		return
