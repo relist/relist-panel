@@ -2,7 +2,9 @@ package dockerexec
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 
 	"relist-panel/internal/vulnscan"
@@ -64,6 +66,10 @@ func (u *InUse) Images(ctx context.Context) ([]vulnscan.UsedImage, error) {
 		i, ok := index[c.ImageID]
 		if !ok {
 			refs, err := u.refs(ctx, c.ImageID)
+			var apiErr *engineError
+			if errors.As(err, &apiErr) && apiErr.status == http.StatusNotFound {
+				continue // the image went between the list and this inspect: a redeploy race
+			}
 			if err != nil {
 				return nil, err
 			}

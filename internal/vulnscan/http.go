@@ -288,7 +288,7 @@ type imageResponse struct {
 func (s *Service) getImages(w http.ResponseWriter, r *http.Request) {
 	used, err := s.UsedImages(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "could not list the images in use")
+		usedImagesFailed(w, err)
 		return
 	}
 	results, err := s.d.Store.ImageResults(r.Context(), imageIDs(used))
@@ -309,6 +309,13 @@ func (s *Service) getImages(w http.ResponseWriter, r *http.Request) {
 		out = append(out, row)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// usedImagesFailed answers a failed UsedImages. The cause is logged: the
+// answer names no cause, and it can be Docker or the database.
+func usedImagesFailed(w http.ResponseWriter, err error) {
+	logf("list the images in use: %v", err)
+	writeError(w, http.StatusBadGateway, "could not list the images in use")
 }
 
 func imageIDs(used []UsedImage) []string {
@@ -407,7 +414,7 @@ func (s *Service) getCVEs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "could not list the images in use")
+		usedImagesFailed(w, err)
 		return
 	}
 	query.PageSize = min(query.PageSize, 200)
@@ -452,7 +459,7 @@ func (s *Service) getSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "could not list the images in use")
+		usedImagesFailed(w, err)
 		return
 	}
 	counts, err := s.d.Store.Counts(r.Context(), imageIDs(used))
