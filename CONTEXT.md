@@ -28,6 +28,10 @@ _Avoid_: Route, Hostname (as the entity name)
 A TLS certificate and its private key, uploaded by the operator to the host-wide Certificates page and handed to Traefik's file provider. Traefik serves it to any HTTPS Domain on provider None whose host it covers, chosen by SNI; the panel does not link a Certificate to a Domain (ADR-0022).
 _Avoid_: SSL, Cert (as the entity name), Certificate resolver (that is how Traefik obtains certificates, e.g. Let's Encrypt)
 
+**Access log**:
+The record of every HTTP request Traefik receives, kept as JSON lines in `<data dir>/.traefik/access/`, one gzipped file per day, and deleted by the panel after the retention period. It is host-wide, not per Compose (ADR-0027).
+_Avoid_: Request log, Traffic log (as the entity name). "Traefik log" means Traefik's own log on stdout, not this.
+
 **Internal hostname**:
 A `.internal` alias a Service answers to on `relist-network`, injected on deploy (ADR-0014): the stable `<service>.<docker compose project>.internal` and the readable `<service>.<compose>.<environment>.<project>.internal`. Only Services with a Domain, Traefik labels or an explicit `relist-network` get them.
 _Avoid_: Service name (the bare name is ambiguous across Composes), DNS name

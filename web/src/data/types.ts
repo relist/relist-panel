@@ -688,6 +688,40 @@ export interface Certificate {
 
 export type CertificateInput = { name: string; certificate: string; privateKey: string };
 
+/** Traefik's own log; `found` is false when the install has no Traefik container. */
+export interface TraefikLogs {
+  logs: string;
+  found: boolean;
+}
+
+/** What the running Traefik was started with (ADR-0027). */
+export interface TraefikStatus {
+  found: boolean;
+  accessLogEnabled: boolean;
+  trustedIps: string;
+}
+
+/** One Access log file; `date` is null for the live `access.log`. */
+export interface AccessLogFile {
+  name: string;
+  date: string | null;
+  size: number;
+}
+
+export interface AccessLogList {
+  files: AccessLogFile[];
+  totalSize: number;
+}
+
+export interface AccessLogSettings {
+  retentionDays: number;
+  keepForever: boolean;
+  lastRotatedAt: string | null;
+  lastError: string;
+}
+
+export type AccessLogSettingsInput = Pick<AccessLogSettings, 'retentionDays' | 'keepForever'>;
+
 export interface SourceTestResult {
   ok: boolean;
   branches: string[];

@@ -49,6 +49,13 @@ services:
       - traefik.http.services.panel.loadbalancer.server.port=${RELIST_PORT:-8080}
     cpus: 0.25
     mem_limit: 256M
+    # Docker's json-file driver never rotates by default; cap it so stdout
+    # cannot fill the disk. Long-term records are the Access log (ADR-0027).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     restart: unless-stopped
 
   traefik:
@@ -79,6 +86,23 @@ services:
       # certificate here from panel.db; Traefik serves them by SNI.
       - --providers.file.directory=/letsencrypt/dynamic
       - --providers.file.watch=true
+      # Traefik's own log, where ACME errors show up; the panel's Traefik page
+      # reads it. Without a TTY Traefik still colours it, so turn that off.
+      - --log.level=INFO
+      - --log.nocolor=true
+      # The Access log (ADR-0027): JSON lines in <data dir>/.traefik/access,
+      # rotated daily by the panel with USR1. Request headers are dropped so
+      # Authorization and Cookie never reach the file.
+      - --accesslog=true
+      - --accesslog.filepath=/letsencrypt/access/access.log
+      - --accesslog.format=json
+      - --accesslog.fields.headers.defaultmode=drop
+      - --accesslog.fields.headers.names.User-Agent=keep
+      # Proxies in front of Traefik (e.g. Cloudflare) whose X-Forwarded-For is
+      # trusted for the client address; set TRAEFIK_TRUSTED_IPS in .env. Empty
+      # trusts no one.
+      - --entrypoints.web.forwardedheaders.trustedips=${TRAEFIK_TRUSTED_IPS:-}
+      - --entrypoints.websecure.forwardedheaders.trustedips=${TRAEFIK_TRUSTED_IPS:-}
     ports:
       - "${TRAEFIK_HTTP_PORT:-80}:80"
       - "${TRAEFIK_HTTPS_PORT:-443}:443"
@@ -92,6 +116,13 @@ services:
       - relist-network
     cpus: 1
     mem_limit: 512M
+    # Docker's json-file driver never rotates by default; cap it so stdout
+    # cannot fill the disk. Long-term records are the Access log (ADR-0027).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     restart: unless-stopped
 
 # relist-network is external: it must outlive this install stack's own

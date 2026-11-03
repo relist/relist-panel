@@ -183,6 +183,10 @@ Override the defaults via environment variables (or the `.env` file next to
   entrypoint is published on
 - `TRAEFIK_HTTPS_PORT` (default `443`) — the host port Traefik's HTTPS
   entrypoint is published on
+- `TRAEFIK_TRUSTED_IPS` (empty by default) — comma-separated IPs or CIDRs of
+  proxies in front of Traefik, such as Cloudflare's ranges. Traefik takes the
+  client address from `X-Forwarded-For` only when the request comes from one
+  of them, and the Access log records it as `ClientHost`. Empty trusts no one
 - `RELIST_ACME_EMAIL` (unset by default; optional but recommended) — the
   contact address for your Let's Encrypt account. Traefik's reference marks it
   as required, but an empty value registers an account anyway (ADR-0013). Set
@@ -367,6 +371,9 @@ and shows: `release/invariants.json` (what the Install file must keep doing) and
 Two notes outside those files:
 
 - Composes with hand-written Traefik labels keep routing as before.
+- The Access log and the caps on the Containers' Docker logs start only once a
+  Panel update brings the Install file that has them. Until then the
+  **Traefik** page says the Access log is not on.
 - `RELIST_ADMIN_EMAIL` and `RELIST_ADMIN_PASSWORD` are no longer read; the
   admin they created stays. Remove them from `.env`, and if **Account** still
   says the password is the one from the env, change it there.
