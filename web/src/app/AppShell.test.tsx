@@ -99,3 +99,17 @@ describe('Deployments navigation', () => {
     expect(quiet.querySelector('.ant-badge-count')).toBeNull();
   });
 });
+
+describe('Panel version footer', () => {
+  it('shows the running version under the sider', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true });
+    vi.spyOn(api, 'account').mockResolvedValue({ email: 'admin@example.com', passwordFromEnv: false, twoFactorEnabled: false });
+    vi.spyOn(api, 'listProjects').mockResolvedValue([]);
+    vi.spyOn(api, 'globalDeploymentQueue').mockResolvedValue([]);
+    vi.spyOn(api, 'panelUpdateStatus').mockResolvedValue({ version: '0.1.0-rc.1', development: false, available: null } as never);
+    const router = createMemoryRouter([{ element: <AppShell />, children: [{ path: '/', element: <h1>Home</h1> }] }]);
+    render(<SWRConfig value={{ provider: () => new Map() }}><App><PanelProvider><RouterProvider router={router} /></PanelProvider></App></SWRConfig>);
+    const link = await screen.findByRole('link', { name: 'Relist Panel 0.1.0-rc.1' });
+    expect(link.getAttribute('href')).toBe('/panel-update');
+  });
+});

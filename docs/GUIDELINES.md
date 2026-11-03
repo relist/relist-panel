@@ -619,6 +619,8 @@ One vocabulary, everywhere a Compose state appears. Derived entirely from the AP
   and links to Monitoring. It refreshes every 10 seconds while signed in. Missing
   readings are unavailable; readings older than 30 seconds or from a failed
   refresh are labelled stale, with the last reading identified explicitly.
+  Under it, a secondary `Relist Panel <version>` line (`dev` for an unstamped
+  build) links to Panel update; it is hidden until the status has loaded.
   Below the `lg` breakpoint navigation opens as an overlay, preserving the page
   width; its trigger, backdrop or a navigation selection can close it.
 - The header's right cluster (search / refresh / theme / account) is pushed out by

@@ -22,6 +22,7 @@ import type { ReactNode } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router';
 
 import { DiskPressureFooter } from '../components/DiskPressureFooter';
+import { PanelVersionFooter } from '../components/PanelVersionFooter';
 import { PasswordFromEnvBanner } from '../components/PasswordFromEnvBanner';
 import { useDiskPressure } from '../data/useDiskPressure';
 import { useGlobalDeploymentQueue } from '../data/useGlobalDeploymentQueue';
@@ -307,6 +308,7 @@ export function AppShell() {
           />
         </nav>
         <DiskPressureFooter onNavigate={closeMobileSidebar} pressure={diskPressure} />
+        <PanelVersionFooter onNavigate={closeMobileSidebar} version={updateStatus?.version} />
       </Layout.Sider>
 
       <Layout>

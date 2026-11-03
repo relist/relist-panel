@@ -47,8 +47,10 @@ func newEnv(t *testing.T) env {
 
 func (e env) path(n string) string { return filepath.Join(e.dir, n) }
 
-func (e env) manifest(t *testing.T) error {
-	return run([]string{"manifest", "--version", "1.4.0", "--digest", testDigest,
+func (e env) manifest(t *testing.T) error { return e.manifestAt(t, "1.4.0") }
+
+func (e env) manifestAt(t *testing.T, version string) error {
+	return run([]string{"manifest", "--version", version, "--digest", testDigest,
 		"--compose", e.path("compose.yml"), "--invariants", e.path("inv.json"),
 		"--manual-steps", e.path("steps.json"), "--out", e.path("m.json")}, &bytes.Buffer{}, os.Getenv, fixedNow)
 }
@@ -105,6 +107,29 @@ func TestManifestSignVerifyRoundTrip(t *testing.T) {
 		m.InstallFile != "services:\n  panel:\n    image: x\n" ||
 		len(m.Invariants) != 2 || m.Invariants[0].Kind != "service-image" ||
 		len(m.ManualSteps) != 1 || m.ManualSteps[0].ID != "open-443" {
+		t.Fatalf("manifest = %+v", m)
+	}
+}
+
+func TestManifestSignVerifyReleaseCandidate(t *testing.T) {
+	e := newEnv(t)
+	if err := e.manifestAt(t, "0.1.0-rc.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.sign(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.verify(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(e.path("m.json"))
+	sig, _ := os.ReadFile(e.path("m.json.sig"))
+	key, _ := panelupdate.DecodeKey(e.pub)
+	m, err := panelupdate.ParseManifest(data, sig, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Version != "0.1.0-rc.1" || m.NotesURL != "https://github.com/relist/relist-panel/releases/tag/v0.1.0-rc.1" {
 		t.Fatalf("manifest = %+v", m)
 	}
 }
@@ -233,6 +258,7 @@ func TestManifestRejectsAMalformedDigest(t *testing.T) {
 
 type workflowStep struct {
 	Name string            `yaml:"name"`
+	If   string            `yaml:"if"`
 	Uses string            `yaml:"uses"`
 	Run  string            `yaml:"run"`
 	Env  map[string]string `yaml:"env"`
@@ -295,5 +321,34 @@ func TestReleaseWorkflowHandlesTheKeyAndLatestCarefully(t *testing.T) {
 	checkout := index(func(s workflowStep) bool { return strings.HasPrefix(s.Uses, "actions/checkout@") })
 	if steps[checkout].With["persist-credentials"] != false {
 		t.Error("checkout must not persist credentials")
+	}
+}
+
+// An rc tag is a GitHub pre-release and never moves :latest (ADR-0026).
+func TestReleaseWorkflowReleaseCandidates(t *testing.T) {
+	var meta, create, latest *workflowStep
+	steps := releaseSteps(t)
+	for i := range steps {
+		s := &steps[i]
+		switch {
+		case strings.Contains(s.Run, "GITHUB_OUTPUT") && strings.Contains(s.Run, "version="):
+			meta = s
+		case strings.Contains(s.Run, "gh release create"):
+			create = s
+		case strings.Contains(s.Run, ":latest"):
+			latest = s
+		}
+	}
+	if meta == nil || create == nil || latest == nil {
+		t.Fatalf("steps not found: meta %v create %v latest %v", meta != nil, create != nil, latest != nil)
+	}
+	if !strings.Contains(meta.Run, `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$`) || !strings.Contains(meta.Run, "prerelease=") {
+		t.Errorf("meta step does not accept rc tags or set prerelease: %q", meta.Run)
+	}
+	if !strings.Contains(create.Run, "--prerelease") {
+		t.Errorf("release step never passes --prerelease: %q", create.Run)
+	}
+	if latest.If != "steps.meta.outputs.prerelease != 'true'" {
+		t.Errorf("latest step if = %q", latest.If)
 	}
 }

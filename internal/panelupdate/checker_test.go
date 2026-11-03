@@ -116,6 +116,24 @@ func TestCheckUpToDate(t *testing.T) {
 	}
 }
 
+func TestCheckReleaseCandidates(t *testing.T) {
+	for _, c := range []struct {
+		running, manifest string
+		upToDate          bool
+	}{
+		{"0.1.0-rc.2", "0.1.0", false},
+		{"0.1.0", "0.1.0-rc.2", true},
+		{"0.1.0-rc.2", "0.1.0-rc.2", true},
+		{"0.0.2", "0.1.0-rc.1", false},
+	} {
+		r := newCRig(t, crigOpts{current: embeddedFile, theirs: newerFile, version: c.running, manifestV: c.manifest})
+		rep, _ := r.check(t)
+		if rep.UpToDate != c.upToDate || rep.Failed != nil {
+			t.Errorf("running %s, manifest %s: up to date %v, failed %+v", c.running, c.manifest, rep.UpToDate, rep.Failed)
+		}
+	}
+}
+
 func TestCheckUnknownKindStopsBeforePull(t *testing.T) {
 	r := newCRig(t, crigOpts{current: embeddedFile, theirs: newerFile, invariants: []m{{"kind": "service-image", "service": "panel"}, {"kind": "from-the-future"}}})
 	rep, _ := r.check(t)

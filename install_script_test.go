@@ -115,7 +115,7 @@ func TestInstallScriptUsageErrors(t *testing.T) {
 func TestInstallScriptHelp(t *testing.T) {
 	for _, shell := range shells(t) {
 		r := runScript(t, shell, true, nil, "--help")
-		if r.code != 0 || !strings.Contains(r.stdout, "--auto") || !strings.Contains(r.stdout, "--update") || r.docker != "" {
+		if r.code != 0 || !strings.Contains(r.stdout, "--auto") || !strings.Contains(r.stdout, "--update") || !strings.Contains(r.stdout, "--version") || r.docker != "" {
 			t.Errorf("%s: code %d stdout %q", shell, r.code, r.stdout)
 		}
 	}
@@ -156,6 +156,100 @@ func TestInstallScriptUpdateNeedsAnInstallDir(t *testing.T) {
 		r := runScript(t, shell, true, nil, "--update", "--dir", filepath.Join(t.TempDir(), "none"))
 		if r.code == 0 {
 			t.Errorf("%s: code 0", shell)
+		}
+	}
+}
+
+func TestInstallScriptVersionUsageErrors(t *testing.T) {
+	type tc struct {
+		args []string
+		env  []string
+		want string
+	}
+	cases := map[string]tc{
+		"without update": {[]string{"--version", "0.1.0-rc.1"}, nil, "--version needs --update"},
+		"with url env":   {[]string{"--update", "--version", "0.1.0-rc.1"}, []string{"RELIST_UPDATE_MANIFEST_URL=http://x/m.json"}, "either --version or RELIST_UPDATE_MANIFEST_URL, not both"},
+		"missing value":  {[]string{"--update", "--version"}, nil, ""},
+	}
+	for _, bad := range []string{"0.1.0-rc1", "0.1", "latest", "0.1.0-beta.1", "0.1.0\nEVIL=1", "0.1.0 ", "", "0.1.0-rc.01", "01.1.0", "0.01.0"} {
+		cases["bad "+bad] = tc{[]string{"--update", "--version", bad}, nil, "--version takes a version like 0.1.0 or 0.1.0-rc.1"}
+	}
+	for _, shell := range shells(t) {
+		for name, c := range cases {
+			r := runScript(t, shell, true, c.env, c.args...)
+			if r.code != 2 || r.docker != "" || !strings.Contains(r.stderr, c.want) {
+				t.Errorf("%s %s: code %d stderr %q docker %q", shell, name, r.code, r.stderr, r.docker)
+			}
+		}
+	}
+}
+
+// The script prints the manifest URL before it checks root, so a test that
+// is not root still sees it.
+func TestInstallScriptVersionPrintsTheManifestURL(t *testing.T) {
+	const want = "Update manifest: https://github.com/relist/relist-panel/releases/download/v0.1.0-rc.1/update-manifest.json"
+	for _, shell := range shells(t) {
+		for _, args := range [][]string{
+			{"--update", "--version", "0.1.0-rc.1"},
+			{"--update", "--version", "v0.1.0-rc.1"},
+			{"--update", "--version=0.1.0-rc.1"},
+		} {
+			r := runScript(t, shell, true, nil, args...)
+			if !strings.Contains(r.stdout, want) {
+				t.Errorf("%s %q: code %d stdout %q stderr %q", shell, args, r.code, r.stdout, r.stderr)
+			}
+		}
+		if r := runScript(t, shell, true, nil, "--update"); strings.Contains(r.stdout, "Update manifest:") {
+			t.Errorf("%s --update alone printed %q", shell, r.stdout)
+		}
+	}
+}
+
+// runScriptUpdate runs the script's update path past check_root and check_docker:
+// a fake id says root and a fake docker answers everything, so the test sees
+// the arguments of the preflight Container.
+func runScriptUpdate(t *testing.T, shell string, args ...string) scriptRun {
+	t.Helper()
+	bin := t.TempDir()
+	log := filepath.Join(t.TempDir(), "docker.log")
+	fakes := map[string]string{
+		"id":     "#!/bin/sh\necho 0\n",
+		"docker": "#!/bin/sh\necho \"$@\" >> '" + log + "'\n[ \"$1 $2\" = 'compose version' ] && echo 2.29.0\nexit 0\n",
+	}
+	for name, body := range fakes {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(shell, append([]string{"release/install.sh", "--update", "--dir", dir}, args...)...)
+	cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + t.TempDir()}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	err := cmd.Run()
+	code := 0
+	if exit, ok := err.(*exec.ExitError); ok {
+		code = exit.ExitCode()
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	called, _ := os.ReadFile(log)
+	return scriptRun{code: code, stdout: stdout.String(), stderr: stderr.String(), docker: string(called)}
+}
+
+func TestInstallScriptVersionReachesTheUpdateContainer(t *testing.T) {
+	const want = "-e RELIST_UPDATE_MANIFEST_URL=https://github.com/relist/relist-panel/releases/download/v0.1.0-rc.1/update-manifest.json"
+	for _, shell := range shells(t) {
+		r := runScriptUpdate(t, shell, "--version", "0.1.0-rc.1")
+		if !strings.Contains(r.docker, want+" ") || !strings.Contains(r.docker, "update --preflight") {
+			t.Errorf("%s: code %d stderr %q docker %q", shell, r.code, r.stderr, r.docker)
+		}
+		if r := runScriptUpdate(t, shell); strings.Contains(r.docker, "RELIST_UPDATE_MANIFEST_URL") {
+			t.Errorf("%s without --version: docker %q", shell, r.docker)
 		}
 	}
 }

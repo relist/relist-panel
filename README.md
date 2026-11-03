@@ -74,6 +74,7 @@ Options, passed after `sh -s --`:
 | `--acme-email ADDRESS` | the address Let's Encrypt writes to (default: `--email`; a `.local` address is never used) |
 | `--auto` | ask nothing: needs `--domain`, uses `admin@relist.local` without `--email`, and prints a generated admin password once |
 | `--update` | update an existing install instead of installing |
+| `--version VERSION` | with `--update`: update to this release, like `0.1.0-rc.1` |
 | `--dir PATH` | the install directory (default `/opt/relist-panel`) |
 | `--help` | print the options |
 
@@ -279,6 +280,19 @@ not answer within 20 seconds, the update stops it (a running Deployment may be
 cut), says so, and goes on. Both the page and the script run
 `relist-panel update`, which `relist-panel --help` lists. With `--auto` the
 script asks nothing and refuses a release that has manual steps.
+
+Release candidates (`X.Y.Z-rc.N`) are GitHub pre-releases: neither the page nor
+`--update` alone ever offers one. To try one on a test Install, name it:
+
+```sh
+curl -fsSL https://github.com/relist/relist-panel/releases/latest/download/install.sh | sudo sh -s -- --update --version 0.1.0-rc.1
+```
+
+Run `--update` without `--version` to go back to stable releases. A Panel
+update never moves backwards, so the Install stays on the candidate until a
+stable release is newer. 0.0.1 cannot read a candidate's manifest; update it to
+a newer stable release first. An Install that builds the panel from source
+never updates (see above).
 
 Keep your changes to the Install out of the Install file, because Panel update
 replaces it:

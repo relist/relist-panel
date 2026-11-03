@@ -176,6 +176,24 @@ func TestVersionComparesNumerically(t *testing.T) {
 	}
 }
 
+// A release candidate build is offered the stable release of its own version
+// and anything newer, never an older stable release (ADR-0026).
+func TestReleaseCandidateBuildIsOfferedStable(t *testing.T) {
+	for latest, want := range map[string]string{"0.1.0": "0.1.0", "0.0.2": "", "0.1.0-rc.1": "", "0.1.0-rc.2": "0.1.0-rc.2"} {
+		s, rel := newService(t, "0.1.0-rc.1")
+		rel.publish(manifestJSON(latest))
+		if err := s.CheckNow(context.Background()); err != nil {
+			t.Fatalf("%s: %v", latest, err)
+		}
+		if s.Development() {
+			t.Fatal("a release candidate build counts as a development build")
+		}
+		if v := availableVersion(t, s); v != want {
+			t.Errorf("latest %s: offered %q, want %q", latest, v, want)
+		}
+	}
+}
+
 func TestDevelopmentBuildIsNeverOffered(t *testing.T) {
 	s, rel := newService(t, "dev")
 	rel.publish(manifestJSON("1.4.0"))
@@ -413,9 +431,27 @@ func TestLockTurningOnDuringFetchWritesNothing(t *testing.T) {
 }
 
 func TestVersionParsing(t *testing.T) {
-	for in, ok := range map[string]bool{"1.2.3": true, "v1.2.3": true, "dev": false, "1.2": false, "1.2.3-rc1": false, "": false} {
+	for in, ok := range map[string]bool{
+		"1.2.3": true, "v1.2.3": true, "1.2.3-rc.1": true, "v1.2.3-rc.10": true, "0.0.1-rc.0": true,
+		"dev": false, "1.2": false, "1.2.3-rc1": false, "1.2.3-rc.": false, "1.2.3-beta.1": false,
+		"1.2.3-rc.1+x": false, "1.2.3-rc.-1": false, "1.2.3\n": false, "": false,
+		"0.0.0": true, "10.20.30-rc.100": true,
+		"01.2.3": false, "1.02.3": false, "1.2.03": false, "1.2.3-rc.01": false, "1.2.3-rc.00": false,
+	} {
 		if _, got := parseVersion(in); got != ok {
 			t.Errorf("parseVersion(%q) = %v, want %v", in, got, ok)
+		}
+	}
+}
+
+func TestVersionOrder(t *testing.T) {
+	chain := []string{"0.1.0-rc.1", "0.1.0-rc.2", "0.1.0-rc.9", "0.1.0-rc.10", "0.1.0", "0.1.1-rc.1", "0.1.1", "1.0.0-rc.1"}
+	for i := range chain {
+		for j := range chain {
+			a, b := mustVersion(chain[i]), mustVersion(chain[j])
+			if got, want := a.greater(b), i > j; got != want {
+				t.Errorf("%s > %s = %v, want %v", chain[i], chain[j], got, want)
+			}
 		}
 	}
 }

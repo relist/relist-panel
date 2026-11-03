@@ -167,3 +167,13 @@ func TestUpdateDirFromFile(t *testing.T) {
 		t.Fatalf("flags = %+v, ok = %v", f, ok)
 	}
 }
+
+// The manifest may name a release that is not the newest, such as one picked
+// with install.sh --version, so the report never calls it the latest.
+func TestPrintReportNamesTheManifestVersion(t *testing.T) {
+	var out bytes.Buffer
+	printReport(&out, &panelupdate.Report{FromVersion: "0.1.0", ToVersion: "0.1.0-rc.2", UpToDate: true})
+	if !strings.Contains(out.String(), "Manifest version: 0.1.0-rc.2\n") || strings.Contains(out.String(), "Latest") {
+		t.Fatalf("report = %q", out.String())
+	}
+}
