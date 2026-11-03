@@ -160,6 +160,11 @@ func TestScanArgvLockdown(t *testing.T) {
 		{"--input", "/work/image.tar"},
 		{"--scanners", "vuln"},
 		{"-f", "json"},
+		// Java archives are skipped: scanning them needs the Java DB.
+		{"--skip-files", "**/*.jar"},
+		{"--skip-files", "**/*.war"},
+		{"--skip-files", "**/*.ear"},
+		{"--skip-files", "**/*.par"},
 	} {
 		if !pair(argv, p[0], p[1]) {
 			t.Errorf("missing %s %s in %v", p[0], p[1], argv)
