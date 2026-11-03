@@ -147,6 +147,10 @@ _Avoid_: Upgrade, Release, Deployment (that deploys a Compose), Migration (that 
 The signed description of one panel version: its image digest, its Install file, its Install invariants and the manual steps it needs.
 _Avoid_: Release notes, Changelog
 
+**Release candidate**:
+A panel version `X.Y.Z-rc.N`, published as a GitHub pre-release and reached only with `install.sh --update --version` (ADR-0026).
+_Avoid_: Beta, Pre-release channel
+
 **Install invariant**:
 A property the Install's merged configuration must have for a panel version to run, such as the Docker socket mount on the panel Service. Each Update manifest lists its own.
 _Avoid_: Rule, Requirement
