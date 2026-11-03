@@ -184,3 +184,39 @@ func findResetTarget(ctx context.Context, tx *sql.Tx, email string) (resetTarget
 		return resetTarget{}, ErrEmailRequired
 	}
 }
+
+// ChangeEmailResult records the old and new address, so the command can print
+// them.
+type ChangeEmailResult struct {
+	OldEmail string
+	NewEmail string
+}
+
+// ChangeEmail replaces the sign-in email of one admin account. Sessions,
+// password and two-factor are untouched. Account selection is as in
+// ResetTwoFactor; newEmail is validated and normalized like create-admin's.
+func ChangeEmail(ctx context.Context, db *sql.DB, email, newEmail string) (ChangeEmailResult, error) {
+	normalized, err := validateEmail(newEmail)
+	if err != nil {
+		return ChangeEmailResult{}, err
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return ChangeEmailResult{}, err
+	}
+	defer tx.Rollback()
+
+	account, err := findResetTarget(ctx, tx, email)
+	if err != nil {
+		return ChangeEmailResult{}, err
+	}
+
+	if _, err := tx.ExecContext(ctx, "UPDATE admin_credentials SET email = ? WHERE id = ?", normalized, account.id); err != nil {
+		return ChangeEmailResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ChangeEmailResult{}, err
+	}
+	return ChangeEmailResult{OldEmail: account.email, NewEmail: normalized}, nil
+}

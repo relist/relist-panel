@@ -329,3 +329,65 @@ func TestResetPasswordCommandUnknownEmail(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %q; want 1 and the email", code, stderr)
 	}
 }
+
+func runChangeEmailCmd(t *testing.T, args []string) (int, string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := runChangeEmail(args, &stdout, &stderr)
+	return code, stdout.String(), stderr.String()
+}
+
+func TestChangeEmailCommand(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+	seedCLIAdmin(t)
+
+	code, stdout, stderr := runChangeEmailCmd(t, []string{"--new-email", "New@Example.com"})
+	if code != 0 || stdout != "Changed email from admin@example.com to new@example.com.\n" {
+		t.Fatalf("exit code = %d, stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if email, _, _ := storedAdmin(t); email != "new@example.com" {
+		t.Fatalf("stored email = %q", email)
+	}
+}
+
+func TestChangeEmailCommandUsageAndErrors(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+	seedCLIAdmin(t)
+
+	if code, _, stderr := runChangeEmailCmd(t, nil); code != 2 || !strings.Contains(stderr, "usage: relist-panel change-email") {
+		t.Fatalf("no --new-email: exit code = %d, stderr = %q; want 2 and the usage", code, stderr)
+	}
+	if code, _, stderr := runChangeEmailCmd(t, []string{"--new-email", "a@example.com", "extra"}); code != 2 || !strings.Contains(stderr, "usage: relist-panel change-email") {
+		t.Fatalf("stray argument: exit code = %d, stderr = %q; want 2 and the usage", code, stderr)
+	}
+	if code, _, stderr := runChangeEmailCmd(t, []string{"--new-email", "bad"}); code != 1 || !strings.Contains(stderr, "must be valid") {
+		t.Fatalf("invalid email: exit code = %d, stderr = %q; want 1 and a validation message", code, stderr)
+	}
+	code, _, stderr := runChangeEmailCmd(t, []string{"--email", "nobody@example.com", "--new-email", "new@example.com"})
+	if code != 1 || !strings.Contains(stderr, "nobody@example.com") {
+		t.Fatalf("unknown email: exit code = %d, stderr = %q", code, stderr)
+	}
+}
+
+func TestChangeEmailCommandMatchesCurrentEmailLoosely(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+	seedCLIAdmin(t)
+
+	code, stdout, stderr := runChangeEmailCmd(t, []string{"--email", "  Admin@Example.com ", "--new-email", "new@example.com"})
+	if code != 0 || stdout != "Changed email from admin@example.com to new@example.com.\n" {
+		t.Fatalf("exit code = %d, stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+}
+
+func TestChangeEmailCommandSameAddressChangesNothing(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+	seedCLIAdmin(t)
+
+	code, stdout, stderr := runChangeEmailCmd(t, []string{"--new-email", "Admin@Example.com"})
+	if code != 0 || stdout != "Email is already admin@example.com; nothing changed.\n" {
+		t.Fatalf("exit code = %d, stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if email, _, _ := storedAdmin(t); email != "admin@example.com" {
+		t.Fatalf("stored email = %q", email)
+	}
+}

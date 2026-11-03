@@ -19,6 +19,7 @@ func TestDecide(t *testing.T) {
 		{[]string{"version"}, actionVersion},
 		{[]string{"reset-2fa"}, actionSubcommand},
 		{[]string{"reset-password"}, actionSubcommand},
+		{[]string{"change-email", "--new-email", "a@example.com"}, actionSubcommand},
 		{[]string{"create-admin", "--generate"}, actionSubcommand},
 		{[]string{"migration", "status"}, actionSubcommand},
 		{[]string{"maintenance-page"}, actionSubcommand},

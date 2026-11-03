@@ -73,6 +73,59 @@ func runResetTwoFactor(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+const changeEmailUsage = "usage: relist-panel change-email --new-email ADDRESS [--email ADDRESS]"
+
+// runChangeEmail implements `relist-panel change-email`. It returns the exit
+// code: 0 on success, 1 for a failed change, 2 for a usage error.
+func runChangeEmail(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("change-email", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.Usage = func() {
+		fmt.Fprintln(stderr, changeEmailUsage)
+	}
+	email := flags.String("email", "", "current email of the admin account")
+	newEmail := flags.String("new-email", "", "the new email address")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() > 0 || *newEmail == "" {
+		fmt.Fprintln(stderr, changeEmailUsage)
+		return 2
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(stderr, "change-email: %v\n", err)
+		return 1
+	}
+	db, err := database.OpenAndMigrate(cfg.DatabasePath())
+	if err != nil {
+		fmt.Fprintf(stderr, "change-email: %v\n", err)
+		return 1
+	}
+	defer db.Close()
+
+	result, err := auth.ChangeEmail(context.Background(), db, *email, *newEmail)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrAccountNotFound):
+			fmt.Fprintf(stderr, "change-email: no admin account matches %q\n", *email)
+		case errors.Is(err, auth.ErrEmailRequired):
+			fmt.Fprintln(stderr, "change-email: more than one admin account exists; pass --email")
+		default:
+			fmt.Fprintf(stderr, "change-email: %v\n", err)
+		}
+		return 1
+	}
+	if result.OldEmail == result.NewEmail {
+		fmt.Fprintf(stdout, "Email is already %s; nothing changed.\n", result.NewEmail)
+		return 0
+	}
+	fmt.Fprintf(stdout, "Changed email from %s to %s.\n", result.OldEmail, result.NewEmail)
+	return 0
+}
+
 const createAdminUsage = "usage: relist-panel create-admin [--email ADDRESS] [--generate | --password-stdin]"
 
 // console is what create-admin needs of the terminal on stdin: whether there

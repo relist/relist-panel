@@ -31,6 +31,8 @@ var subcommands = []subcommand{
 		func(a []string) int { return runResetTwoFactor(a, os.Stdout, os.Stderr) }},
 	{"reset-password", "set a new admin password and sign every session out",
 		func(a []string) int { return runResetPassword(a, os.Stdin, os.Stdout, os.Stderr, stdinConsole()) }},
+	{"change-email", "change the admin's sign-in email",
+		func(a []string) int { return runChangeEmail(a, os.Stdout, os.Stderr) }},
 	{"create-admin", "create the first admin account",
 		func(a []string) int { return runCreateAdmin(a, os.Stdin, os.Stdout, os.Stderr, stdinConsole()) }},
 	{"migration", "drive a server Migration through the running panel", runMigration},
