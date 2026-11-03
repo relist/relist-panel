@@ -128,7 +128,7 @@ func (s *Store) SetDefault(ctx context.Context, id int64) error {
 	return err
 }
 
-// BuildKitImage is the BuildKit image setting, '' for the release's default.
+// BuildKitImage is the BuildKit image setting; empty means the release's default.
 func (s *Store) BuildKitImage(ctx context.Context) (string, error) {
 	var ref string
 	err := s.db.QueryRowContext(ctx, `SELECT buildkit_image FROM builder_settings WHERE id = 1`).Scan(&ref)
