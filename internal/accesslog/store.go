@@ -48,8 +48,13 @@ func (s *Store) SaveRetention(ctx context.Context, days int, forever bool) error
 	return err
 }
 
-// RecordRun stores when a rotation run finished and its error, "" for none.
-func (s *Store) RecordRun(ctx context.Context, at time.Time, runErr string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE access_log_settings SET last_rotated_at = ?, last_error = ? WHERE id = 1`, at.Unix(), runErr)
+// RecordRun stores a run's error, "" for none, and when it rotated a file;
+// a nil rotatedAt keeps the previous rotation time.
+func (s *Store) RecordRun(ctx context.Context, rotatedAt *time.Time, runErr string) error {
+	if rotatedAt == nil {
+		_, err := s.db.ExecContext(ctx, `UPDATE access_log_settings SET last_error = ? WHERE id = 1`, runErr)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE access_log_settings SET last_rotated_at = ?, last_error = ? WHERE id = 1`, rotatedAt.Unix(), runErr)
 	return err
 }

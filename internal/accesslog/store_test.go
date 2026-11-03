@@ -52,7 +52,7 @@ func TestStoreRecordRun(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)
 	t0 := time.Date(2026, 11, 3, 0, 0, 30, 0, time.UTC)
-	if err := s.RecordRun(ctx, t0, "boom"); err != nil {
+	if err := s.RecordRun(ctx, &t0, "boom"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Get(ctx)
@@ -62,10 +62,18 @@ func TestStoreRecordRun(t *testing.T) {
 	if got.LastRotatedAt == nil || !got.LastRotatedAt.Equal(t0) || got.LastError != "boom" {
 		t.Fatalf("settings = %+v, want run at %v with error boom", got, t0)
 	}
-	if err := s.RecordRun(ctx, t0.Add(time.Hour), ""); err != nil {
+	t1 := t0.Add(time.Hour)
+	if err := s.RecordRun(ctx, &t1, ""); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ = s.Get(ctx); got.LastError != "" || !got.LastRotatedAt.Equal(t0.Add(time.Hour)) {
+	if got, _ = s.Get(ctx); got.LastError != "" || !got.LastRotatedAt.Equal(t1) {
 		t.Fatalf("settings = %+v, want the error cleared", got)
+	}
+	// A run that rotated nothing keeps the last rotation time.
+	if err := s.RecordRun(ctx, nil, "later"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx); got.LastError != "later" || !got.LastRotatedAt.Equal(t1) {
+		t.Fatalf("settings = %+v, want the rotation time kept", got)
 	}
 }

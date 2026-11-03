@@ -264,9 +264,11 @@ func TestUnmatchedFilesUntouched(t *testing.T) {
 
 func TestRecordRunOnSuccess(t *testing.T) {
 	f := newRotator(t, testNow)
-	if err := f.r.Store.RecordRun(context.Background(), testNow.Add(-24*time.Hour), "old"); err != nil {
+	yesterday := testNow.Add(-24 * time.Hour)
+	if err := f.r.Store.RecordRun(context.Background(), &yesterday, "old"); err != nil {
 		t.Fatal(err)
 	}
+	write(t, f.dir, "access.log", line1102, testNow)
 	if err := f.r.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -360,5 +362,29 @@ func TestGzipTmpSymlinkNotFollowed(t *testing.T) {
 	wantNames(t, f.dir, "access-2026-11-01.log.gz")
 	if got := gunzip(t, filepath.Join(f.dir, "access-2026-11-01.log.gz")); got != "whole\n" {
 		t.Fatalf("gunzip = %q", got)
+	}
+}
+
+// A request that started before midnight but was logged after it belongs to
+// today's file: rotation goes by when the line was written (Traefik's
+// "time"), not when the request started.
+func TestRotateUsesLineTimeNotStart(t *testing.T) {
+	f := newRotator(t, testNow)
+	write(t, f.dir, "access.log", `{"StartUTC":"2026-11-02T23:59:00Z","time":"2026-11-03T00:00:20Z"}`+"\n", testNow)
+	if err := f.r.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantNames(t, f.dir, "access.log")
+}
+
+// last_rotated_at is when a file was last rotated, not when the job last ran.
+func TestRecordRunKeepsRotatedAtWhenNothingRotated(t *testing.T) {
+	f := newRotator(t, testNow)
+	if err := f.r.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := f.r.Store.Get(context.Background())
+	if got.LastRotatedAt != nil {
+		t.Fatalf("LastRotatedAt = %v after a run that rotated nothing", got.LastRotatedAt)
 	}
 }

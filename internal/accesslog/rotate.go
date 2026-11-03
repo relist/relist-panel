@@ -81,8 +81,13 @@ func nextWake(now time.Time, pending bool) time.Duration {
 func (r *Rotator) RunOnce(ctx context.Context) error {
 	now := r.Now().UTC()
 	var errs []error
-	if err := r.rotate(ctx, now); err != nil {
-		errs = append(errs, err)
+	var rotatedAt *time.Time
+	rotated, rotateErr := r.rotate(ctx, now)
+	if rotateErr != nil {
+		errs = append(errs, rotateErr)
+	}
+	if rotated {
+		rotatedAt = &now
 	}
 	if err := r.gzipQuiet(now); err != nil {
 		errs = append(errs, err)
@@ -95,7 +100,7 @@ func (r *Rotator) RunOnce(ctx context.Context) error {
 	if err != nil {
 		msg = err.Error()
 	}
-	if recErr := r.Store.RecordRun(ctx, now, msg); recErr != nil {
+	if recErr := r.Store.RecordRun(ctx, rotatedAt, msg); recErr != nil {
 		log.Printf("accesslog: record run: %v", recErr)
 	}
 	return err
@@ -106,41 +111,43 @@ func today(now time.Time) time.Time {
 }
 
 // rotate renames access.log when it holds lines from before today, then has
-// Traefik reopen it.
-func (r *Rotator) rotate(ctx context.Context, now time.Time) error {
+// Traefik reopen it. rotated reports whether the rename happened.
+func (r *Rotator) rotate(ctx context.Context, now time.Time) (rotated bool, err error) {
 	live := filepath.Join(r.Dir, liveName)
 	if _, err := os.Lstat(live); errors.Is(err, os.ErrNotExist) {
 		// Reopen creates access.log at once, so a missing one next to a
 		// rotated file still being written means the last Reopen failed.
 		writing, err := r.stillWritten(now)
 		if err != nil || !writing {
-			return err
+			return false, err
 		}
 		if err := r.Traefik.Reopen(ctx); err != nil {
-			return fmt.Errorf("have Traefik reopen the Access log: %w", err)
+			return false, fmt.Errorf("have Traefik reopen the Access log: %w", err)
 		}
-		return nil
+		return false, nil
 	}
-	started, ok, err := firstLineTime(live)
-	if err != nil || !ok || !started.Before(today(now)) {
-		return err
+	written, ok, err := firstLineTime(live)
+	if err != nil || !ok || !written.Before(today(now)) {
+		return false, err
 	}
 	name, err := r.freeName(today(now).AddDate(0, 0, -1).Format(dateLayout))
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := os.Rename(live, filepath.Join(r.Dir, name)); err != nil {
-		return fmt.Errorf("rotate: %w", err)
+		return false, fmt.Errorf("rotate: %w", err)
 	}
 	if err := r.Traefik.Reopen(ctx); err != nil {
-		return fmt.Errorf("have Traefik reopen the Access log: %w", err)
+		return true, fmt.Errorf("have Traefik reopen the Access log: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
-// firstLineTime is when the file's first request started, from its StartUTC,
-// or the file's mtime when that line does not parse. ok is false for a
-// missing or empty file.
+// firstLineTime is when the file's first line was written: Traefik's "time"
+// (when the request finished), else its StartUTC, else the file's mtime when
+// the line does not parse. A request that spans midnight is logged after it,
+// so "time" keeps it in the new day's file. ok is false for a missing or
+// empty file.
 func firstLineTime(path string) (time.Time, bool, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -156,10 +163,16 @@ func firstLineTime(path string) (time.Time, bool, error) {
 	}
 	line, _ := bufio.NewReader(io.LimitReader(file, 64<<10)).ReadString('\n')
 	var entry struct {
+		Time     time.Time `json:"time"`
 		StartUTC time.Time `json:"StartUTC"`
 	}
-	if json.Unmarshal([]byte(line), &entry) == nil && !entry.StartUTC.IsZero() {
-		return entry.StartUTC, true, nil
+	if json.Unmarshal([]byte(line), &entry) == nil {
+		if !entry.Time.IsZero() {
+			return entry.Time, true, nil
+		}
+		if !entry.StartUTC.IsZero() {
+			return entry.StartUTC, true, nil
+		}
 	}
 	return info.ModTime(), true, nil
 }
