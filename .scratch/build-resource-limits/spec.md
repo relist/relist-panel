@@ -200,9 +200,17 @@ the panel's own versions during implementation.
 
 ### Docker page cleanup
 
-- Builder containers and their `_state` volumes must not be removed by the Docker
-  page's cleanup actions. The Docker page's **Prune build cache** keeps covering
-  Docker default only, and its copy says so and links to the Builders page.
+- No exclusion code is needed. The panel never stops a Builder (there is no Stop
+  action), and `restart=unless-stopped` brings it back after a reboot, so a Builder
+  container is never a candidate for the containers prune.
+- If a Builder container is removed anyway, the next ensure-on-use re-creates it,
+  and its cache survives. Probed: after `docker rm -f` on the container, the
+  re-created Builder still hit the cache. The cache is lost only if a volumes prune
+  ran while the container was gone. That costs one cold build.
+- A running Builder's `_state` volume is in use, so the volumes prune never selects
+  it.
+- The Docker page's **Prune build cache** keeps covering Docker default only. Its copy
+  says so and links to the Builders page.
 
 ### Migration
 
@@ -235,24 +243,37 @@ It records:
 - the pinned BuildKit image as a pull exception;
 - that the container is privileged, and why that adds no risk beyond the socket.
 
-## Open questions (verify at implementation)
+## Probes inside the panel image (2026-11-04)
 
-1. Do `RUN` steps on a `docker-container` Builder resolve DNS and reach the network
-   the same way as on Docker default (corporate DNS, `extra_hosts`,
-   `network: host` in `build:`)? `network: host` needs the
-   `network.host` entitlement on a container Builder.
-2. Do `build.secrets`, `ssh`, and `additional_contexts` written by the user in a
-   Compose file behave the same on a container Builder? The panel itself injects none
-   of them: `.ssh` in the snapshot is used only by the Git fetch.
-3. Does the Docker page's container or volume prune touch a stopped Builder container
-   or its `_state` volume today? If so, exclude them by name prefix or label.
-4. Can the Builder container get a label (`--driver-opt` has none), or must the panel
-   identify Builders by the `buildx_buildkit_relist-builder-` name prefix?
-5. Is a disk-use readout per Builder fast enough to show on page load? If not, load
-   it after the page.
-6. Are large builds noticeably slower? All probes used tiny contexts and images. On a
-   container Builder, the context streams in over `docker exec`, and the image comes
-   back as an OCI tar to load. Measure with a real Source and an image of 1 GB or more.
-7. Each Builder runs its own BuildKit garbage collection, so N Builders hold N caches.
-   Should the panel set `gckeepstorage` in `buildkitd.toml`, as a fixed value or a
-   per-Builder field?
+These ran inside the dev panel image `relist-panel-panel` (Compose v5.6.1,
+buildx 0.38.1, root, `HOME=/root`) with the Docker socket mounted. Each was run on
+Docker default and on a container Builder pinned to the BuildKit digest, with
+`memory=2g` and `max-parallelism = 2`. Builder state lands in
+`/root/.docker/buildx/instances/<name>`.
+
+| Probe | Docker default | Container Builder |
+|---|---|---|
+| DNS and HTTPS from `RUN` | OK | OK |
+| `build.extra_hosts` | OK | OK |
+| `build.secrets` (file secret) | OK | OK |
+| `build.ssh: [default=<key file>]` | OK | OK |
+| `additional_contexts: { base: "service:base" }` | OK | OK, so the sibling-Service case has a workaround |
+| `build.network: host` | fails: needs `--allow=network.host` | the same failure |
+| `FROM` an image that exists only on the host | OK | fails (see Decisions) |
+| node:24 + new 400 MB layer, image 2.47 GB | 20 s, then 16 s | 54 s cold (it pulls node:24 itself), then 27 s and 15 s |
+
+- A warm build of a large image runs at about the same speed. The first build on a
+  Builder is slower, because base images come from the registry, not the host store.
+- The Builder's cache held 4.17 GB after these builds. The image itself was 2.47 GB in
+  the host store. This is the duplicated disk use. **Prune cache** is the remedy.
+- `buildx create` without `image=` pulled the unpinned `moby/buildkit:buildx-stable-1`.
+  Ensure-on-use must always pass the pinned `image=`.
+
+## Settled questions
+
+- Builders are identified by the `relist-builder-<id>` name. Containers get no
+  labels: buildx sets none, and `--driver-opt` has no label option.
+- Cache size: `buildx du` runs per Builder. The Builders page fetches sizes after the
+  list renders, so a slow Builder never blocks the page.
+- No `gckeepstorage` in v1. BuildKit's own default GC plus **Prune cache** is enough
+  until real usage says otherwise.
