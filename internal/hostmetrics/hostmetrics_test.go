@@ -30,10 +30,15 @@ const (
 		"   3       0 hda 111 0 222 3 44 0 55 6 0 0 0 0 0\n"
 )
 
-// v2Netdev is the golden set with eth0 grown by 30000 rx / 50000 tx bytes.
+// v2Netdev is the golden set with eth0 grown by 30000 rx / 50000 tx bytes,
+// and Docker's bridges and veth grown too — they relay eth0's traffic, so
+// the rates must not move with them.
 var v2Netdev = netdevLine("eth0", 5273331899, 698050000) +
 	netdevLine("eth1", 1000, 2000) +
-	netdevLine("docker0", 5000, 6000)
+	netdevLine("docker0", 905000, 906000) +
+	netdevLine("br-3f2a9c1d7e4b", 907000, 909000) +
+	netdevLine("veth1a2b3c4", 908000, 910000) +
+	netdevLine("docker_gwbridge", 900300, 900400)
 
 // A just-booted host: tiny counters across every file.
 const (
