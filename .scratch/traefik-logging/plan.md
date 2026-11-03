@@ -100,7 +100,7 @@
   - `TestStoreSaveRetention`: save `(30, true)`, then `Get` returns 30 and true. `(0, false)` returns `ErrInvalidRetention`, and the row is unchanged.
   - `TestStoreRecordRun`: `RecordRun(t0, "boom")`, then `Get` returns `LastRotatedAt == t0` (UTC) and `LastError == "boom"`. `RecordRun(t1, "")` clears the error.
 - [ ] **Step 2: Run** `go test ./internal/accesslog/`. Expected: FAIL (package missing).
-- [ ] **Step 3: Implement** the migration and `store.go`. Add a package doc comment on `store.go` pointing at ADR-0026.
+- [ ] **Step 3: Implement** the migration and `store.go`. Add a package doc comment on `store.go` pointing at ADR-0027.
 - [ ] **Step 4: Run** `go test ./internal/accesslog/ ./internal/database/...`. Expected: PASS.
 - [ ] **Step 5: Commit:** `feat: store access log retention settings`
 
@@ -287,7 +287,7 @@
 ### Task 7: Docs
 
 **Files:**
-- Create: `docs/adr/0026-access-log-rotated-by-panel.md`, in the style of ADR-0022:
+- Create: `docs/adr/0027-access-log-rotated-by-panel.md`, in the style of ADR-0022:
   - Problem: no request record, and Docker logs are lost on recreate and rotated by size.
   - Decision: a JSON file in `.traefik/access`, rotated by the panel with USR1, and retention in `panel.db`.
   - Considered options: Docker json logs, host `logrotate`, a sidecar.

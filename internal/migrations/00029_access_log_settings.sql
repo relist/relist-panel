@@ -1,5 +1,5 @@
 -- +goose Up
--- How long the panel keeps rotated Access log files (ADR-0026), and how its
+-- How long the panel keeps rotated Access log files (ADR-0027), and how its
 -- last rotation run went. One row.
 CREATE TABLE access_log_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),

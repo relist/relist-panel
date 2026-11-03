@@ -80,7 +80,7 @@ type Deps struct {
 	// PanelUpdater finds and removes the Updater Container.
 	PanelUpdater panelupdate.UpdaterContainers
 	// Traefik reaches the install's Traefik for the Traefik page and the
-	// Access log rotation (ADR-0026). Nil leaves rotation off and the page
+	// Access log rotation (ADR-0027). Nil leaves rotation off and the page
 	// reports no Traefik.
 	Traefik accesslog.Traefik
 	// PanelDomain is the install's RELIST_DOMAIN. A Domain cannot take this

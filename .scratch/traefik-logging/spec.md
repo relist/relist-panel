@@ -64,11 +64,11 @@ happens on every Panel update.
   **Access log**:
   The record of every HTTP request Traefik receives, kept as JSON lines in
   `<data dir>/.traefik/access/`, one gzipped file per day, and deleted by the panel after
-  the retention period. It is host-wide, not per Compose (ADR-0026).
+  the retention period. It is host-wide, not per Compose (ADR-0027).
   _Avoid_: Request log, Traffic log (as the entity name). "Traefik log" means Traefik's own
   log on stdout, not this.
 
-- ADR-0026 records the decision: the Access log goes to a file in the data directory
+- ADR-0027 records the decision: the Access log goes to a file in the data directory
   rather than Docker logs, and the panel rotates it rather than host `logrotate` or a
   sidecar.
 
@@ -241,7 +241,7 @@ the components against the installed `antd` version.
 
 ## Docs
 
-- ADR-0026 (see Domain changes).
+- ADR-0027 (see Domain changes).
 - `CONTEXT.md`: **Access log** entry.
 - README: `TRAEFIK_TRUSTED_IPS` in the `.env` reference. The "Upgrading an existing
   install" section notes that the Access log only starts after a Panel update, and that

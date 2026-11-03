@@ -50,7 +50,7 @@ services:
     cpus: 0.25
     mem_limit: 256M
     # Docker's json-file driver never rotates by default; cap it so stdout
-    # cannot fill the disk. Long-term records are the Access log (ADR-0026).
+    # cannot fill the disk. Long-term records are the Access log (ADR-0027).
     logging:
       driver: json-file
       options:
@@ -90,7 +90,7 @@ services:
       # reads it. Without a TTY Traefik still colours it, so turn that off.
       - --log.level=INFO
       - --log.nocolor=true
-      # The Access log (ADR-0026): JSON lines in <data dir>/.traefik/access,
+      # The Access log (ADR-0027): JSON lines in <data dir>/.traefik/access,
       # rotated daily by the panel with USR1. Request headers are dropped so
       # Authorization and Cookie never reach the file.
       - --accesslog=true
@@ -117,7 +117,7 @@ services:
     cpus: 1
     mem_limit: 512M
     # Docker's json-file driver never rotates by default; cap it so stdout
-    # cannot fill the disk. Long-term records are the Access log (ADR-0026).
+    # cannot fill the disk. Long-term records are the Access log (ADR-0027).
     logging:
       driver: json-file
       options:

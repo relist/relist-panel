@@ -55,7 +55,7 @@ func (p packer) entry(name string) error {
 	entry, err := p.fs.Stat(name)
 	if name != "." && errors.Is(err, os.ErrNotExist) {
 		// Removed since its directory was listed: a live data directory
-		// (the Access log rotator, ADR-0026) changes while it is packed.
+		// (the Access log rotator, ADR-0027) changes while it is packed.
 		return nil
 	}
 	if err != nil {

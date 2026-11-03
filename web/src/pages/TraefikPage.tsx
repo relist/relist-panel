@@ -33,7 +33,7 @@ function errorMessage(reason: unknown, fallback: string): string {
 
 /**
  * Traefik: its own log, the Access log files and how long they are kept
- * (ADR-0026). The panel rotates the Access log; this page only reads it.
+ * (ADR-0027). The panel rotates the Access log; this page only reads it.
  */
 export function TraefikPage() {
   const { token } = theme.useToken();

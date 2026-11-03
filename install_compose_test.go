@@ -128,7 +128,7 @@ func TestGitignoreKeepsInstallLocalFiles(t *testing.T) {
 	}
 }
 
-// Traefik's own log and the Access log (ADR-0026): the Access log goes to a
+// Traefik's own log and the Access log (ADR-0027): the Access log goes to a
 // file in the data directory that the panel rotates, and Docker's json-file
 // logs of both containers are capped so stdout can never fill the disk.
 func TestInstallComposeTraefikLogging(t *testing.T) {

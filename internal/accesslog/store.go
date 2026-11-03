@@ -1,4 +1,4 @@
-// Package accesslog keeps Traefik's Access log (ADR-0026): it rotates the file
+// Package accesslog keeps Traefik's Access log (ADR-0027): it rotates the file
 // Traefik writes under <data dir>/.traefik/access, deletes rotated files past
 // the retention period, and serves Traefik's own log and the files to the
 // Traefik page.

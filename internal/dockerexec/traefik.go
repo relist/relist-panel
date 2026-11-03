@@ -13,7 +13,7 @@ import (
 )
 
 // TraefikDocker reaches the install's Traefik for the Traefik page and the
-// Access log rotation (ADR-0026).
+// Access log rotation (ADR-0027).
 type TraefikDocker struct {
 	runDocker func(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) error
 	hostname  func() string

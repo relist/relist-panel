@@ -421,7 +421,7 @@ export const api = {
   replaceCertificate: (id: number, input: Omit<CertificateInput, 'name'>) =>
     request<Certificate>(`/api/certificates/${id}`, jsonInit('PUT', input)),
   deleteCertificate: (id: number) => request<void>(`/api/certificates/${id}`, { method: 'DELETE' }),
-  // Traefik's log and the Access log (ADR-0026).
+  // Traefik's log and the Access log (ADR-0027).
   traefikLogs: () => request<TraefikLogs>('/api/traefik/logs'),
   traefikStatus: () => request<TraefikStatus>('/api/traefik/status'),
   listAccessLogs: () => request<AccessLogList>('/api/traefik/access-logs'),

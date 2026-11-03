@@ -694,7 +694,7 @@ export interface TraefikLogs {
   found: boolean;
 }
 
-/** What the running Traefik was started with (ADR-0026). */
+/** What the running Traefik was started with (ADR-0027). */
 export interface TraefikStatus {
   found: boolean;
   accessLogEnabled: boolean;
