@@ -74,6 +74,7 @@ Options, passed after `sh -s --`:
 | `--acme-email ADDRESS` | the address Let's Encrypt writes to (default: `--email`; a `.local` address is never used) |
 | `--auto` | ask nothing: needs `--domain`, uses `admin@relist.local` without `--email`, and prints a generated admin password once |
 | `--update` | update an existing install instead of installing |
+| `--version VERSION` | with `--update`: update to this release, like `0.1.0-rc.1` |
 | `--dir PATH` | the install directory (default `/opt/relist-panel`) |
 | `--help` | print the options |
 

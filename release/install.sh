@@ -32,6 +32,7 @@ Options:
   --acme-email ADDRESS the email Let's Encrypt writes to (default: --email)
   --auto               ask nothing; needs --domain
   --update             update an existing install instead of installing
+  --version VERSION    with --update: update to this release, like 0.1.0-rc.1
   --dir PATH           the install directory (default $DEFAULT_DIR)
   --help               print this help
 USAGE
@@ -113,6 +114,8 @@ parse_args() {
   EMAIL=""
   ACME_EMAIL=""
   ACME_SET=0
+  VERSION_ARG=""
+  VERSION_SET=0
   while [ $# -gt 0 ]; do
     case $1 in
       --help | -h)
@@ -121,7 +124,7 @@ parse_args() {
         ;;
       --auto) AUTO=1 ;;
       --update) UPDATE=1 ;;
-      --domain | --email | --acme-email | --dir)
+      --domain | --email | --acme-email | --dir | --version)
         [ $# -ge 2 ] || usage_error "$1 needs a value"
         case $1 in
           --domain) DOMAIN=$2 ;;
@@ -131,6 +134,10 @@ parse_args() {
             ACME_SET=1
             ;;
           --dir) DIR=$2 ;;
+          --version)
+            VERSION_ARG=$2
+            VERSION_SET=1
+            ;;
         esac
         shift
         ;;
@@ -141,6 +148,10 @@ parse_args() {
         ACME_SET=1
         ;;
       --dir=*) DIR=${1#*=} ;;
+      --version=*)
+        VERSION_ARG=${1#*=}
+        VERSION_SET=1
+        ;;
       *) usage_error "unknown option: $1" ;;
     esac
     shift
@@ -162,12 +173,32 @@ validate_args() {
   if [ -n "$ACME_EMAIL" ] && ! valid_email "$ACME_EMAIL"; then
     usage_error "--acme-email is not an email address"
   fi
+  if [ "$VERSION_SET" -eq 1 ]; then
+    validate_version
+  fi
   if [ "$UPDATE" -eq 0 ] && [ "$AUTO" -eq 1 ] && [ -z "$DOMAIN" ]; then
     usage_error "--auto needs --domain"
   fi
   if [ "$UPDATE" -eq 0 ] && [ "$AUTO" -eq 0 ] && ! have_tty; then
     usage_error "No terminal to ask on; pass --auto with --domain and --email"
   fi
+}
+
+# validate_version checks --version and turns it into the manifest URL the
+# update Container reads (ADR-0026).
+validate_version() {
+  [ "$UPDATE" -eq 1 ] || usage_error "--version needs --update"
+  VERSION_ARG=${VERSION_ARG#v}
+  case $VERSION_ARG in
+    *'
+'*) usage_error "--version takes a version like 0.1.0 or 0.1.0-rc.1" ;;
+  esac
+  printf '%s\n' "$VERSION_ARG" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' ||
+    usage_error "--version takes a version like 0.1.0 or 0.1.0-rc.1"
+  if [ -n "${RELIST_UPDATE_MANIFEST_URL:-}" ]; then
+    usage_error "Give either --version or RELIST_UPDATE_MANIFEST_URL, not both"
+  fi
+  RELIST_UPDATE_MANIFEST_URL="https://github.com/relist/relist-panel/releases/download/v$VERSION_ARG/update-manifest.json"
 }
 
 resolve_image() {
@@ -393,6 +424,9 @@ run_state() {
 }
 
 do_update() {
+  if [ "$VERSION_SET" -eq 1 ]; then
+    say "Update manifest: $RELIST_UPDATE_MANIFEST_URL"
+  fi
   check_root
   check_docker
   [ -f "$DIR/docker-compose.yml" ] || die "$DIR holds no install (no docker-compose.yml). To install, run this script without --update."

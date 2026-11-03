@@ -115,7 +115,7 @@ func TestInstallScriptUsageErrors(t *testing.T) {
 func TestInstallScriptHelp(t *testing.T) {
 	for _, shell := range shells(t) {
 		r := runScript(t, shell, true, nil, "--help")
-		if r.code != 0 || !strings.Contains(r.stdout, "--auto") || !strings.Contains(r.stdout, "--update") || r.docker != "" {
+		if r.code != 0 || !strings.Contains(r.stdout, "--auto") || !strings.Contains(r.stdout, "--update") || !strings.Contains(r.stdout, "--version") || r.docker != "" {
 			t.Errorf("%s: code %d stdout %q", shell, r.code, r.stdout)
 		}
 	}
@@ -156,6 +156,51 @@ func TestInstallScriptUpdateNeedsAnInstallDir(t *testing.T) {
 		r := runScript(t, shell, true, nil, "--update", "--dir", filepath.Join(t.TempDir(), "none"))
 		if r.code == 0 {
 			t.Errorf("%s: code 0", shell)
+		}
+	}
+}
+
+func TestInstallScriptVersionUsageErrors(t *testing.T) {
+	type tc struct {
+		args []string
+		env  []string
+		want string
+	}
+	cases := map[string]tc{
+		"without update": {[]string{"--version", "0.1.0-rc.1"}, nil, "--version needs --update"},
+		"with url env":   {[]string{"--update", "--version", "0.1.0-rc.1"}, []string{"RELIST_UPDATE_MANIFEST_URL=http://x/m.json"}, "either --version or RELIST_UPDATE_MANIFEST_URL, not both"},
+		"missing value":  {[]string{"--update", "--version"}, nil, ""},
+	}
+	for _, bad := range []string{"0.1.0-rc1", "0.1", "latest", "0.1.0-beta.1", "0.1.0\nEVIL=1", "0.1.0 ", ""} {
+		cases["bad "+bad] = tc{[]string{"--update", "--version", bad}, nil, "--version takes a version like 0.1.0 or 0.1.0-rc.1"}
+	}
+	for _, shell := range shells(t) {
+		for name, c := range cases {
+			r := runScript(t, shell, true, c.env, c.args...)
+			if r.code != 2 || r.docker != "" || !strings.Contains(r.stderr, c.want) {
+				t.Errorf("%s %s: code %d stderr %q docker %q", shell, name, r.code, r.stderr, r.docker)
+			}
+		}
+	}
+}
+
+// The script prints the manifest URL before it checks root, so a test that
+// is not root still sees it.
+func TestInstallScriptVersionPrintsTheManifestURL(t *testing.T) {
+	const want = "Update manifest: https://github.com/relist/relist-panel/releases/download/v0.1.0-rc.1/update-manifest.json"
+	for _, shell := range shells(t) {
+		for _, args := range [][]string{
+			{"--update", "--version", "0.1.0-rc.1"},
+			{"--update", "--version", "v0.1.0-rc.1"},
+			{"--update", "--version=0.1.0-rc.1"},
+		} {
+			r := runScript(t, shell, true, nil, args...)
+			if !strings.Contains(r.stdout, want) {
+				t.Errorf("%s %q: code %d stdout %q stderr %q", shell, args, r.code, r.stdout, r.stderr)
+			}
+		}
+		if r := runScript(t, shell, true, nil, "--update"); strings.Contains(r.stdout, "Update manifest:") {
+			t.Errorf("%s --update alone printed %q", shell, r.stdout)
 		}
 	}
 }
