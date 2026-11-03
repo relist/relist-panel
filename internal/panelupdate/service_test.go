@@ -417,6 +417,8 @@ func TestVersionParsing(t *testing.T) {
 		"1.2.3": true, "v1.2.3": true, "1.2.3-rc.1": true, "v1.2.3-rc.10": true, "0.0.1-rc.0": true,
 		"dev": false, "1.2": false, "1.2.3-rc1": false, "1.2.3-rc.": false, "1.2.3-beta.1": false,
 		"1.2.3-rc.1+x": false, "1.2.3-rc.-1": false, "1.2.3\n": false, "": false,
+		"0.0.0": true, "10.20.30-rc.100": true,
+		"01.2.3": false, "1.02.3": false, "1.2.03": false, "1.2.3-rc.01": false, "1.2.3-rc.00": false,
 	} {
 		if _, got := parseVersion(in); got != ok {
 			t.Errorf("parseVersion(%q) = %v, want %v", in, got, ok)

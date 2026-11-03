@@ -5,7 +5,10 @@ import (
 	"strconv"
 )
 
-var semverPattern = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$`)
+var semverPattern = regexp.MustCompile(`^v?` + num + `\.` + num + `\.` + num + `(?:-rc\.` + num + `)?$`)
+
+// num is a semver number: no leading zeros, so each version has one spelling.
+const num = `(0|[1-9]\d*)`
 
 type semver struct {
 	core [3]int
@@ -15,8 +18,8 @@ type semver struct {
 }
 
 // parseVersion reads MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-rc.N with an
-// optional leading "v" (ADR-0026). Anything else, "dev" included, is not a
-// release version.
+// optional leading "v" and no leading zeros (ADR-0026). Anything else, "dev"
+// included, is not a release version.
 func parseVersion(s string) (semver, bool) {
 	m := semverPattern.FindStringSubmatch(s)
 	if m == nil {

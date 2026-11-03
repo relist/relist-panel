@@ -171,7 +171,7 @@ func TestInstallScriptVersionUsageErrors(t *testing.T) {
 		"with url env":   {[]string{"--update", "--version", "0.1.0-rc.1"}, []string{"RELIST_UPDATE_MANIFEST_URL=http://x/m.json"}, "either --version or RELIST_UPDATE_MANIFEST_URL, not both"},
 		"missing value":  {[]string{"--update", "--version"}, nil, ""},
 	}
-	for _, bad := range []string{"0.1.0-rc1", "0.1", "latest", "0.1.0-beta.1", "0.1.0\nEVIL=1", "0.1.0 ", ""} {
+	for _, bad := range []string{"0.1.0-rc1", "0.1", "latest", "0.1.0-beta.1", "0.1.0\nEVIL=1", "0.1.0 ", "", "0.1.0-rc.01", "01.1.0", "0.01.0"} {
 		cases["bad "+bad] = tc{[]string{"--update", "--version", bad}, nil, "--version takes a version like 0.1.0 or 0.1.0-rc.1"}
 	}
 	for _, shell := range shells(t) {

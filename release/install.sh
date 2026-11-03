@@ -193,7 +193,7 @@ validate_version() {
     *'
 '*) usage_error "--version takes a version like 0.1.0 or 0.1.0-rc.1" ;;
   esac
-  printf '%s\n' "$VERSION_ARG" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' ||
+  printf '%s\n' "$VERSION_ARG" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$' ||
     usage_error "--version takes a version like 0.1.0 or 0.1.0-rc.1"
   if [ -n "${RELIST_UPDATE_MANIFEST_URL:-}" ]; then
     usage_error "Give either --version or RELIST_UPDATE_MANIFEST_URL, not both"

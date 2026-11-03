@@ -31,7 +31,7 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$ ]]; then
             echo "::error::tag $TAG is not vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc.N"; exit 1
           fi
           key=$(sed -n 's/^var releasePublicKey = "\(.*\)"$/\1/p' internal/panelupdate/key.go)

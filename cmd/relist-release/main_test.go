@@ -342,7 +342,7 @@ func TestReleaseWorkflowReleaseCandidates(t *testing.T) {
 	if meta == nil || create == nil || latest == nil {
 		t.Fatalf("steps not found: meta %v create %v latest %v", meta != nil, create != nil, latest != nil)
 	}
-	if !strings.Contains(meta.Run, `^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`) || !strings.Contains(meta.Run, "prerelease=") {
+	if !strings.Contains(meta.Run, `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$`) || !strings.Contains(meta.Run, "prerelease=") {
 		t.Errorf("meta step does not accept rc tags or set prerelease: %q", meta.Run)
 	}
 	if !strings.Contains(create.Run, "--prerelease") {

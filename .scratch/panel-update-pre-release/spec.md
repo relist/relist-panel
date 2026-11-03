@@ -34,7 +34,8 @@ manifest signature, Preflight, Apply and rollback need no change.
 ### 1. Versions
 
 - A release version is `MAJOR.MINOR.PATCH` or `MAJOR.MINOR.PATCH-rc.N`, with an
-  optional leading `v`. Each of the four numbers is a decimal integer. Nothing
+  optional leading `v`. Each of the four numbers is a decimal integer with no
+  leading zeros (`0`, or a number that does not start with `0`). Nothing
   else is a release version. For example, `1.2.3-rc1`, `1.2.3-beta.1` and
   `1.2.3-rc.1+x` are rejected.
 - Order follows semver precedence: `0.1.0-rc.1 < 0.1.0-rc.2 < 0.1.0-rc.10 <

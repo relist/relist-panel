@@ -4,7 +4,7 @@ Panel update (ADR-0024) read a release version as `MAJOR.MINOR.PATCH` and nothin
 
 **Decision:** a release can be a release candidate, `X.Y.Z-rc.N`, which only an Install that asks for it by version is moved to.
 
-- **The release version grammar is `MAJOR.MINOR.PATCH` or `MAJOR.MINOR.PATCH-rc.N`**, with an optional leading `v`, every number decimal. Nothing else is a release version. The order is semver's: `0.1.0-rc.1 < 0.1.0-rc.2 < 0.1.0-rc.10 < 0.1.0 < 0.1.1-rc.1`. This amends ADR-0024, whose code read only `MAJOR.MINOR.PATCH`.
+- **The release version grammar is `MAJOR.MINOR.PATCH` or `MAJOR.MINOR.PATCH-rc.N`**, with an optional leading `v`, every number decimal with no leading zeros, so `rc.01` is not a second spelling of `rc.1`. Nothing else is a release version. The order is semver's: `0.1.0-rc.1 < 0.1.0-rc.2 < 0.1.0-rc.10 < 0.1.0 < 0.1.1-rc.1`. This amends ADR-0024, whose code read only `MAJOR.MINOR.PATCH`.
 - **An rc tag is a GitHub pre-release and never moves `:latest`.** GitHub never resolves `releases/latest/...` to a pre-release, so the web banner, `install.sh --update` and `curl | sh` installs see only stable releases. The rc image, its signed manifest and its `install.sh` are published as for any release.
 - **The only way onto a candidate is `install.sh --update --version X.Y.Z-rc.N`.** The script turns the version into that release's manifest URL for the update Container. Nothing in the panel stores a channel.
 - **A Panel update never moves backwards.** `--update` alone from a candidate moves on only once a stable release is greater than it.
