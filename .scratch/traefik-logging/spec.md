@@ -80,6 +80,7 @@ Panel update replaces this file, so every updated install gets these changes.
 
 ```
 - --log.level=INFO
+- --log.nocolor=true
 - --accesslog=true
 - --accesslog.filepath=/letsencrypt/access/access.log
 - --accesslog.format=json
@@ -245,3 +246,13 @@ the components against the installed `antd` version.
 - README: `TRAEFIK_TRUSTED_IPS` in the `.env` reference. The "Upgrading an existing
   install" section notes that the Access log only starts after a Panel update, and that
   the Traefik page warns until then.
+
+## Comments
+
+**Probe, 2026-11-03, `traefik:v3.7`** (scratch container, `whoami` backend):
+
+1. Peer `172.20.0.1` in `trustedips`, `X-Forwarded-For: 203.0.113.9` → `ClientHost` `203.0.113.9`, `ClientAddr` `172.20.0.1:34646`. With `trustedips=` (empty) the same spoofed header → `ClientHost` `172.20.0.1`. Pass.
+2. `--entrypoints.web.forwardedheaders.trustedips=` (empty) starts cleanly. Pass; the default stays empty.
+3. Traefik creates the missing `access/` directory itself (as root, `0755`; the file is `0644`). The panel runs as root, so it can rename and delete there. Pass; no separate mount needed.
+4. `mv access.log access-x.log` + `docker kill --signal=USR1` → Traefik logs "Closing and re-opening log files for rotation" and the next request lands in a fresh `access.log`. Pass.
+5. Traefik's own log goes to **stdout**, levels shown as `ERR`, `WRN`, `INF` (`DBG`) after the timestamp, e.g. `2026-11-03T07:32:27Z ERR Error matching constraints expression ...`. Without a TTY it still emits **ANSI colour codes**, so the install also gets `--log.nocolor=true`.

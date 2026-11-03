@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -58,6 +59,10 @@ type composeDoc struct {
 		Build         any      `yaml:"build"`
 		PullPolicy    string   `yaml:"pull_policy"`
 		Command       []string `yaml:"command"`
+		Logging       struct {
+			Driver  string            `yaml:"driver"`
+			Options map[string]string `yaml:"options"`
+		} `yaml:"logging"`
 	} `yaml:"services"`
 }
 
@@ -119,6 +124,35 @@ func TestGitignoreKeepsInstallLocalFiles(t *testing.T) {
 	for _, want := range []string{"docker-compose.override.yml", ".env"} {
 		if !slices.Contains(lines, want) {
 			t.Errorf(".gitignore lacks line %q", want)
+		}
+	}
+}
+
+// Traefik's own log and the Access log (ADR-0026): the Access log goes to a
+// file in the data directory that the panel rotates, and Docker's json-file
+// logs of both containers are capped so stdout can never fill the disk.
+func TestInstallComposeTraefikLogging(t *testing.T) {
+	doc := readComposeDoc(t, "docker-compose.yml")
+	traefik := doc.Services["traefik"]
+	for _, flag := range []string{
+		"--log.level=INFO",
+		"--log.nocolor=true",
+		"--accesslog=true",
+		"--accesslog.filepath=/letsencrypt/access/access.log",
+		"--accesslog.format=json",
+		"--accesslog.fields.headers.defaultmode=drop",
+		"--accesslog.fields.headers.names.User-Agent=keep",
+		"--entrypoints.web.forwardedheaders.trustedips=${TRAEFIK_TRUSTED_IPS:-}",
+		"--entrypoints.websecure.forwardedheaders.trustedips=${TRAEFIK_TRUSTED_IPS:-}",
+	} {
+		if !slices.Contains(traefik.Command, flag) {
+			t.Errorf("traefik command lacks %s", flag)
+		}
+	}
+	for _, name := range []string{"traefik", "panel"} {
+		logging := doc.Services[name].Logging
+		if logging.Driver != "json-file" || !maps.Equal(logging.Options, map[string]string{"max-size": "10m", "max-file": "5"}) {
+			t.Errorf("%s logging = %+v, want json-file max-size 10m max-file 5", name, logging)
 		}
 	}
 }
