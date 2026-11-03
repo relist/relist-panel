@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"relist-panel/internal/accesslog"
 	"relist-panel/internal/auth"
 	"relist-panel/internal/certificates"
 	"relist-panel/internal/composes"
@@ -78,6 +79,10 @@ type Deps struct {
 	PanelRunner panelupdate.UpdateRunner
 	// PanelUpdater finds and removes the Updater Container.
 	PanelUpdater panelupdate.UpdaterContainers
+	// Traefik reaches the install's Traefik for the Traefik page and the
+	// Access log rotation (ADR-0026). Nil leaves rotation off and the page
+	// reports no Traefik.
+	Traefik accesslog.Traefik
 	// PanelDomain is the install's RELIST_DOMAIN. A Domain cannot take this
 	// host, or Traefik could route the panel's own traffic to an app. Empty
 	// means unknown and refuses nothing.
@@ -191,6 +196,15 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
 	sshkeys.New(db).RegisterRoutes(mux)
 	certificates.New(db, dataDir).RegisterRoutes(mux)
+	accessLogs := accesslog.New(db, dataDir, d.Traefik)
+	accessLogs.RegisterRoutes(mux)
+	if d.Traefik != nil {
+		worker.Add(1)
+		go func() {
+			defer worker.Done()
+			accessLogs.Rotator().Run(ctx)
+		}()
+	}
 	domains.New(db).WithPanelHost(d.PanelDomain).RegisterRoutes(mux)
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
