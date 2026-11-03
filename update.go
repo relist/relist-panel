@@ -178,12 +178,12 @@ func summarizeRun(st panelupdate.RunStatus) string {
 // printReport writes the text form of a preflight report. install.sh reads the
 // "Report:" and "Manual step" lines.
 func printReport(w io.Writer, r *panelupdate.Report) {
-	fmt.Fprintf(w, "Running version: %s\n", r.FromVersion)
+	fmt.Fprintf(w, "Running version:  %s\n", r.FromVersion)
 	if r.ToVersion != "" {
-		fmt.Fprintf(w, "Latest version:  %s\n", r.ToVersion)
+		fmt.Fprintf(w, "Manifest version: %s\n", r.ToVersion)
 	}
 	if r.NotesURL != "" {
-		fmt.Fprintf(w, "Release notes:   %s\n", r.NotesURL)
+		fmt.Fprintf(w, "Release notes:    %s\n", r.NotesURL)
 	}
 	switch {
 	case r.UpToDate:
