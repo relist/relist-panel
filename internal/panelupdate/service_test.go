@@ -413,9 +413,25 @@ func TestLockTurningOnDuringFetchWritesNothing(t *testing.T) {
 }
 
 func TestVersionParsing(t *testing.T) {
-	for in, ok := range map[string]bool{"1.2.3": true, "v1.2.3": true, "dev": false, "1.2": false, "1.2.3-rc1": false, "": false} {
+	for in, ok := range map[string]bool{
+		"1.2.3": true, "v1.2.3": true, "1.2.3-rc.1": true, "v1.2.3-rc.10": true, "0.0.1-rc.0": true,
+		"dev": false, "1.2": false, "1.2.3-rc1": false, "1.2.3-rc.": false, "1.2.3-beta.1": false,
+		"1.2.3-rc.1+x": false, "1.2.3-rc.-1": false, "1.2.3\n": false, "": false,
+	} {
 		if _, got := parseVersion(in); got != ok {
 			t.Errorf("parseVersion(%q) = %v, want %v", in, got, ok)
+		}
+	}
+}
+
+func TestVersionOrder(t *testing.T) {
+	chain := []string{"0.1.0-rc.1", "0.1.0-rc.2", "0.1.0-rc.9", "0.1.0-rc.10", "0.1.0", "0.1.1-rc.1", "0.1.1", "1.0.0-rc.1"}
+	for i := range chain {
+		for j := range chain {
+			a, b := mustVersion(chain[i]), mustVersion(chain[j])
+			if got, want := a.greater(b), i > j; got != want {
+				t.Errorf("%s > %s = %v, want %v", chain[i], chain[j], got, want)
+			}
 		}
 	}
 }

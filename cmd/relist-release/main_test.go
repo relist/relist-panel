@@ -47,8 +47,10 @@ func newEnv(t *testing.T) env {
 
 func (e env) path(n string) string { return filepath.Join(e.dir, n) }
 
-func (e env) manifest(t *testing.T) error {
-	return run([]string{"manifest", "--version", "1.4.0", "--digest", testDigest,
+func (e env) manifest(t *testing.T) error { return e.manifestAt(t, "1.4.0") }
+
+func (e env) manifestAt(t *testing.T, version string) error {
+	return run([]string{"manifest", "--version", version, "--digest", testDigest,
 		"--compose", e.path("compose.yml"), "--invariants", e.path("inv.json"),
 		"--manual-steps", e.path("steps.json"), "--out", e.path("m.json")}, &bytes.Buffer{}, os.Getenv, fixedNow)
 }
@@ -105,6 +107,29 @@ func TestManifestSignVerifyRoundTrip(t *testing.T) {
 		m.InstallFile != "services:\n  panel:\n    image: x\n" ||
 		len(m.Invariants) != 2 || m.Invariants[0].Kind != "service-image" ||
 		len(m.ManualSteps) != 1 || m.ManualSteps[0].ID != "open-443" {
+		t.Fatalf("manifest = %+v", m)
+	}
+}
+
+func TestManifestSignVerifyReleaseCandidate(t *testing.T) {
+	e := newEnv(t)
+	if err := e.manifestAt(t, "0.1.0-rc.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.sign(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.verify(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(e.path("m.json"))
+	sig, _ := os.ReadFile(e.path("m.json.sig"))
+	key, _ := panelupdate.DecodeKey(e.pub)
+	m, err := panelupdate.ParseManifest(data, sig, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Version != "0.1.0-rc.1" || m.NotesURL != "https://github.com/relist/relist-panel/releases/tag/v0.1.0-rc.1" {
 		t.Fatalf("manifest = %+v", m)
 	}
 }
