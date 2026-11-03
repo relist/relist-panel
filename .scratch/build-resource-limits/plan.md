@@ -543,7 +543,12 @@
   4. Switch the Compose to Docker default and deploy again. Expected: success.
   5. Delete `small`. Expected: the 409 used-by copy names the Compose.
   6. Set the BuildKit image to `moby/buildkit:v0.34.1@sha256:<digest from docker buildx imagetools inspect moby/buildkit:v0.34.1>`. Expected: the save succeeds after a pull.
-  7. Deploy on a second Builder. Expected: the log shows `switching BuildKit image to …`, and an unchanged step is still `CACHED`. Then press **Use default** and save.
+  7. Point the Compose at `small` again and deploy. Expected:
+     - the log shows `Builder small: switching BuildKit image to …`;
+     - the steps before the memory hog are `CACHED`;
+     - the build still fails on the memory hog, as before.
+
+     Then press **Use default** and save.
   8. Set the Compose back to the panel default, delete `small` again, and confirm that `docker ps -a` and `docker volume ls` show no `relist-builder-` leftovers.
 
 - [ ] **Step 4: Commit** `docs: record Builders in the ADRs and glossary`
