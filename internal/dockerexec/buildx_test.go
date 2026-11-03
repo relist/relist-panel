@@ -308,11 +308,42 @@ func TestPullArgs(t *testing.T) {
 
 func TestPruneArgs(t *testing.T) {
 	cli := recordCLI(t, nil)
+	b := newBuildx(t, &containerDaemon{containers: map[string]map[string]any{container3: container(true, builders.DefaultBuildKitImage, 150000, 2<<30)}})
+	if err := b.Prune(context.Background(), "relist-builder-3"); err != nil {
+		t.Fatal(err)
+	}
+	if got := cli.joined(); !reflect.DeepEqual(got, []string{"buildx inspect relist-builder-3", "buildx prune -af --builder relist-builder-3"}) {
+		t.Fatalf("calls = %q", got)
+	}
+}
+
+// A rebuilt panel has a fresh ~/.docker, where buildx answers `no builder
+// "…" found` for --builder; Prune attaches first.
+func TestPruneAttachesAnUnknownInstance(t *testing.T) {
+	cli := recordCLI(t, func(args []string) bool {
+		return reflect.DeepEqual(args, []string{"buildx", "inspect", "relist-builder-3"})
+	})
+	b := newBuildx(t, &containerDaemon{containers: map[string]map[string]any{container3: container(true, builders.DefaultBuildKitImage, 150000, 2<<30)}})
+	if err := b.Prune(context.Background(), "relist-builder-3"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"buildx inspect relist-builder-3",
+		"buildx create --name relist-builder-3 --driver docker-container",
+		"buildx prune -af --builder relist-builder-3",
+	}
+	if got := cli.joined(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %q", got)
+	}
+}
+
+func TestPruneWithoutAContainerIsANoOp(t *testing.T) {
+	cli := recordCLI(t, nil)
 	b := newBuildx(t, &containerDaemon{})
 	if err := b.Prune(context.Background(), "relist-builder-3"); err != nil {
 		t.Fatal(err)
 	}
-	if got := cli.joined(); !reflect.DeepEqual(got, []string{"buildx prune -af --builder relist-builder-3"}) {
-		t.Fatalf("calls = %q", got)
+	if got := cli.joined(); len(got) != 0 {
+		t.Fatalf("calls = %q, want none for a Builder never created", got)
 	}
 }

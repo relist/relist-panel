@@ -2,7 +2,7 @@ import { DeleteOutlined, EditOutlined, PlayCircleOutlined, PlusOutlined, ReloadO
 import { Alert, App, Button, Card, Flex, Form, Input, InputNumber, Modal, Popconfirm, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useEffect, useState } from 'react';
-import useSWR from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 
 import { formatBytes } from '../components/MetricChart';
 import { DangerModal } from '../components/DangerModal';
@@ -37,13 +37,19 @@ function failure(reason: unknown, fallback: string): string {
 export function BuildersPage() {
   const { message } = App.useApp();
   const { data, error, isLoading, mutate } = useSWR(BUILDERS_KEY, () => api.listBuilders());
+  const { mutate: mutateKeys } = useSWRConfig();
   const [editing, setEditing] = useState<Builder | 'new'>();
   const [deleting, setDeleting] = useState<Builder>();
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [busyAction, setBusyAction] = useState<string>();
 
-  const reload = () => void mutate();
+  // Cache sizes have their own keys under the list's; a prune or a refresh
+  // must not leave the old size on screen.
+  const reload = () => {
+    void mutate();
+    void mutateKeys((key) => typeof key === 'string' && key.startsWith(`${BUILDERS_KEY}/`));
+  };
 
   // Each row action keeps its own spinner and reports a refusal on the page.
   const act = async (key: string, run: () => Promise<unknown>, done: string) => {

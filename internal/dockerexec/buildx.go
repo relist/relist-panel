@@ -146,8 +146,20 @@ func (b *Buildx) Pull(ctx context.Context, ref string) error {
 	return err
 }
 
+// Prune empties the builder's cache. A builder never created has none; one
+// this CLI does not know (a rebuilt panel) is attached first, since buildx
+// resolves --builder only from ~/.docker.
 func (b *Buildx) Prune(ctx context.Context, name string) error {
-	_, err := cli(ctx, "buildx", "prune", "-af", "--builder", name)
+	c, err := b.container(ctx, name)
+	if err != nil || c == nil {
+		return err
+	}
+	if !b.known(ctx, name) {
+		if err := b.attach(ctx, name); err != nil {
+			return err
+		}
+	}
+	_, err = cli(ctx, "buildx", "prune", "-af", "--builder", name)
 	return err
 }
 

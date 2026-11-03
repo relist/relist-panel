@@ -397,3 +397,71 @@ func TestValidate(t *testing.T) {
 		t.Fatalf("Update keeping its own name = %v", err)
 	}
 }
+
+func TestStartWaitsForAnImageSwitch(t *testing.T) {
+	ctx := context.Background()
+	f := newServiceFixture(t)
+	b := f.builder(t, "large")
+	if err := f.store.SetBuildKitImage(ctx, newRef); err != nil {
+		t.Fatal(err)
+	}
+	f.engine.inspection = Inspection{State: StateRunning, Image: DefaultBuildKitImage}
+	f.engine.recreateHit = make(chan struct{})
+	acquired := make(chan error, 1)
+	go func() {
+		_, release, err := f.svc.Acquire(ctx, b.ID, &bytes.Buffer{})
+		if err == nil {
+			release()
+		}
+		acquired <- err
+	}()
+	for f.engine.count("Recreate") == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	if _, err := f.svc.Start(waitCtx, b.ID); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Start during an image switch = %v, want it to wait", err)
+	}
+	close(f.engine.recreateHit)
+	if err := <-acquired; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpdateWaitsForABringUp(t *testing.T) {
+	ctx := context.Background()
+	f := newServiceFixture(t)
+	b := f.builder(t, "large")
+	f.engine.inspection = Inspection{State: StateRunning, Image: DefaultBuildKitImage}
+	f.engine.ensureHit = make(chan struct{})
+	acquired := make(chan error, 1)
+	go func() {
+		_, release, err := f.svc.Acquire(ctx, b.ID, &bytes.Buffer{})
+		if err == nil {
+			release()
+		}
+		acquired <- err
+	}()
+	for f.engine.count("Ensure") == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	edited := b
+	edited.MemoryMB = 1024
+	updated := make(chan error, 1)
+	go func() { _, err := f.svc.Update(ctx, edited); updated <- err }()
+	time.Sleep(20 * time.Millisecond)
+	if n := f.engine.count("Ensure"); n != 1 {
+		t.Fatalf("Ensure calls while an Acquire brings the Builder up = %d, want the edit to wait", n)
+	}
+	close(f.engine.ensureHit)
+	if err := <-acquired; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-updated; err != nil {
+		t.Fatal(err)
+	}
+	if spec := f.engine.lastSpec(); spec.MemoryBytes != 1024<<20 {
+		t.Fatalf("last spec = %+v, want the edit applied last", spec)
+	}
+}

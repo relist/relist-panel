@@ -165,4 +165,17 @@ describe('BuildersPage', () => {
     await userEvent.click(within(card).getByRole('button', { name: /Save/ }));
     await waitFor(() => expect(api.setBuildKitImage).toHaveBeenLastCalledWith(''));
   });
+
+  it('reloads the cache size after a prune', async () => {
+    api.listBuilders.mockResolvedValue(listing());
+    api.pruneBuilder.mockResolvedValue(undefined);
+    api.builderDiskUsage.mockResolvedValueOnce({ bytes: 4_172_000_000 }).mockResolvedValue({ bytes: 0 });
+    show();
+    await screen.findByText('large');
+    expect(await within(row('large')).findByText('3.9 GB')).toBeTruthy();
+    await userEvent.click(within(row('large')).getByRole('button', { name: /Prune cache/ }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Prune' }));
+    await waitFor(() => expect(api.pruneBuilder).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(within(row('large')).getByText('0 B')).toBeTruthy());
+  });
 });

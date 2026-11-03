@@ -164,3 +164,22 @@ func TestPruneWhileBuildingIs409(t *testing.T) {
 		t.Fatalf("prune while busy = %d %v", code, out)
 	}
 }
+
+func TestDockerRefusalsAre502WithDockersWords(t *testing.T) {
+	f := newServiceFixture(t)
+	f.builder(t, "large")
+	f.engine.inspection = Inspection{State: StateRunning, Image: DefaultBuildKitImage}
+	f.engine.ensureErr = errors.New("Cannot update container: memory is below usage")
+	code, out := f.do(t, "PUT", "/api/builders/1", `{"name":"large","cpus":2,"memoryMb":1024,"maxParallelism":4}`)
+	if code != 502 || out["error"] != "Docker refused: Cannot update container: memory is below usage" {
+		t.Fatalf("PUT refused = %d %v", code, out)
+	}
+	f.engine.pruneErr = errors.New("prune failed")
+	if code, out := f.do(t, "POST", "/api/builders/1/prune", ""); code != 502 || out["error"] != "Docker refused: prune failed" {
+		t.Fatalf("prune refused = %d %v", code, out)
+	}
+	f.engine.removeErr = errors.New("remove failed")
+	if code, out := f.do(t, "DELETE", "/api/builders/1", ""); code != 502 || out["error"] != "Docker refused: remove failed" {
+		t.Fatalf("delete refused = %d %v", code, out)
+	}
+}

@@ -20,6 +20,9 @@ type fakeEngine struct {
 	images      map[string]bool
 	diskUsage   int64
 	recreateHit chan struct{} // when set, Recreate blocks until it is closed
+	ensureHit   chan struct{} // when set, Ensure blocks until it is closed
+	pruneErr    error
+	removeErr   error
 }
 
 func newFakeEngine() *fakeEngine {
@@ -59,6 +62,9 @@ func (f *fakeEngine) lastSpec() HostSpec {
 
 func (f *fakeEngine) Ensure(_ context.Context, spec HostSpec) error {
 	f.record("Ensure "+spec.Name, &spec)
+	if f.ensureHit != nil {
+		<-f.ensureHit
+	}
 	return f.ensureErr
 }
 
@@ -72,7 +78,7 @@ func (f *fakeEngine) Recreate(_ context.Context, spec HostSpec) error {
 
 func (f *fakeEngine) Remove(_ context.Context, name string) error {
 	f.record("Remove "+name, nil)
-	return nil
+	return f.removeErr
 }
 
 func (f *fakeEngine) Inspect(_ context.Context, name string) (Inspection, error) {
@@ -94,7 +100,7 @@ func (f *fakeEngine) DiskUsage(_ context.Context, name string) (int64, error) {
 
 func (f *fakeEngine) Prune(_ context.Context, name string) error {
 	f.record("Prune "+name, nil)
-	return nil
+	return f.pruneErr
 }
 
 func (f *fakeEngine) Capacity(context.Context) (int, int64, error) {

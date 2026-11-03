@@ -49,6 +49,20 @@ func (e *StartError) Error() string {
 }
 func (e *StartError) Unwrap() error { return e.Err }
 
+// EngineError is Docker refusing a change to a Builder, in Docker's words.
+type EngineError struct{ Err error }
+
+func (e *EngineError) Error() string { return "Docker refused: " + e.Err.Error() }
+func (e *EngineError) Unwrap() error { return e.Err }
+
+// refused wraps a Docker error so the operator sees Docker's message.
+func refused(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &EngineError{Err: err}
+}
+
 // PullError is a BuildKit image the panel could not pull.
 type PullError struct {
 	Ref string
@@ -72,11 +86,14 @@ type Deps struct {
 }
 
 // runtime is a Builder's in-memory state: how many builds hold it, and a
-// channel that is open while an exclusive change (re-create, prune, delete)
-// runs. Builds wait for the change; changes refuse while builds hold it.
+// channel that is open while an exclusive change (re-create, image switch,
+// prune, delete) runs. Builds wait for the change; changes refuse while other
+// builds hold it. config serialises everything that reads the stored row and
+// then changes the container to match, so a bring-up never undoes an edit.
 type runtime struct {
 	busy     int
 	changing chan struct{}
+	config   sync.Mutex
 }
 
 type Service struct {
@@ -99,6 +116,14 @@ func (s *Service) runtimeOf(id int64) *runtime {
 		s.state[id] = r
 	}
 	return r
+}
+
+// config locks Builder id's container changes; the caller unlocks it.
+func (s *Service) config(id int64) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := &s.runtimeOf(id).config
+	return m
 }
 
 func (s *Service) busy(id int64) int {
@@ -128,18 +153,37 @@ func (s *Service) exclusive(id int64, fn func() error) error {
 	return fn()
 }
 
+// claimSwitch marks an image switch as an exclusive change when the caller's
+// own hold is the only one, so new holders wait for it. It returns false
+// when another build holds the Builder; the caller then keeps the old image.
+func (s *Service) claimSwitch(id int64) (done func(), ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.runtimeOf(id)
+	if r.busy != 1 || r.changing != nil {
+		return nil, false
+	}
+	ch := make(chan struct{})
+	r.changing = ch
+	return func() {
+		s.mu.Lock()
+		r.changing = nil
+		s.mu.Unlock()
+		close(ch)
+	}, true
+}
+
 // hold waits out an exclusive change, then counts one more build on the
-// Builder. It returns whether no other build held it.
-func (s *Service) hold(ctx context.Context, id int64) (alone bool, release func(), err error) {
+// Builder.
+func (s *Service) hold(ctx context.Context, id int64) (release func(), err error) {
 	for {
 		s.mu.Lock()
 		r := s.runtimeOf(id)
 		if r.changing == nil {
-			alone = r.busy == 0
 			r.busy++
 			s.mu.Unlock()
 			var once sync.Once
-			return alone, func() {
+			return func() {
 				once.Do(func() {
 					s.mu.Lock()
 					r.busy--
@@ -152,7 +196,7 @@ func (s *Service) hold(ctx context.Context, id int64) (alone bool, release func(
 		select {
 		case <-wait:
 		case <-ctx.Done():
-			return false, nil, ctx.Err()
+			return nil, ctx.Err()
 		}
 	}
 }
@@ -188,11 +232,11 @@ func (s *Service) Acquire(ctx context.Context, id int64, out io.Writer) (string,
 		fmt.Fprintln(out, "Builder: Docker default (no limits)")
 		return "", func() {}, nil
 	}
-	alone, release, err := s.hold(ctx, id)
+	release, err := s.hold(ctx, id)
 	if err != nil {
 		return "", nil, err
 	}
-	b, err := s.bringUp(ctx, id, alone, out)
+	b, err := s.bringUp(ctx, id, out)
 	if err != nil {
 		release()
 		return "", nil, err
@@ -203,15 +247,18 @@ func (s *Service) Acquire(ctx context.Context, id int64, out io.Writer) (string,
 
 // Start brings Builder id up without a build.
 func (s *Service) Start(ctx context.Context, id int64) (Builder, error) {
-	alone, release, err := s.hold(ctx, id)
+	release, err := s.hold(ctx, id)
 	if err != nil {
 		return Builder{}, err
 	}
 	defer release()
-	return s.bringUp(ctx, id, alone, io.Discard)
+	return s.bringUp(ctx, id, io.Discard)
 }
 
-func (s *Service) bringUp(ctx context.Context, id int64, alone bool, out io.Writer) (Builder, error) {
+func (s *Service) bringUp(ctx context.Context, id int64, out io.Writer) (Builder, error) {
+	lock := s.config(id)
+	lock.Lock()
+	defer lock.Unlock()
 	b, err := s.d.Store.Get(ctx, id)
 	if err != nil {
 		return Builder{}, err
@@ -220,7 +267,7 @@ func (s *Service) bringUp(ctx context.Context, id int64, alone bool, out io.Writ
 	if err != nil {
 		return Builder{}, err
 	}
-	err = s.converge(ctx, b, want, alone, out)
+	err = s.converge(ctx, b, want, out)
 	if err != nil {
 		_ = s.d.Store.SetLastError(ctx, id, err.Error())
 		return Builder{}, &StartError{Name: b.Name, Err: err}
@@ -234,7 +281,7 @@ func (s *Service) bringUp(ctx context.Context, id int64, alone bool, out io.Writ
 	return b, nil
 }
 
-func (s *Service) converge(ctx context.Context, b Builder, want string, alone bool, out io.Writer) error {
+func (s *Service) converge(ctx context.Context, b Builder, want string, out io.Writer) error {
 	insp, err := s.d.Engine.Inspect(ctx, HostName(b.ID))
 	if err != nil {
 		return err
@@ -243,7 +290,8 @@ func (s *Service) converge(ctx context.Context, b Builder, want string, alone bo
 	if insp.State == StateMissing || insp.Image == want {
 		return s.d.Engine.Ensure(ctx, spec)
 	}
-	if alone {
+	if done, ok := s.claimSwitch(b.ID); ok {
+		defer done()
 		fmt.Fprintf(out, "Builder %s: switching BuildKit image to %s\n", b.Name, want)
 		return s.d.Engine.Recreate(ctx, spec)
 	}
@@ -298,6 +346,9 @@ func (s *Service) Create(ctx context.Context, b Builder) (Builder, error) {
 // it, which waits for no build to hold it. When Docker refuses, the row is
 // left as it was.
 func (s *Service) Update(ctx context.Context, b Builder) (Builder, error) {
+	lock := s.config(b.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	old, err := s.d.Store.Get(ctx, b.ID)
 	if err != nil {
 		return Builder{}, err
@@ -316,13 +367,13 @@ func (s *Service) Update(ctx context.Context, b Builder) (Builder, error) {
 			if err != nil {
 				return Builder{}, err
 			}
-			err = s.exclusive(b.ID, func() error { return s.d.Engine.Recreate(ctx, SpecFor(b, want)) })
+			err = s.exclusive(b.ID, func() error { return refused(s.d.Engine.Recreate(ctx, SpecFor(b, want))) })
 			if err != nil {
 				return Builder{}, err
 			}
 		case b.CPUsMilli != old.CPUsMilli || b.MemoryMB != old.MemoryMB:
 			if err := s.d.Engine.Ensure(ctx, SpecFor(b, insp.Image)); err != nil {
-				return Builder{}, err
+				return Builder{}, refused(err)
 			}
 		}
 	}
@@ -361,7 +412,7 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	}
 	return s.exclusive(id, func() error {
 		if err := s.d.Engine.Remove(ctx, HostName(id)); err != nil {
-			return err
+			return refused(err)
 		}
 		return s.d.Store.Delete(ctx, id)
 	})
@@ -383,7 +434,7 @@ func (s *Service) Prune(ctx context.Context, id int64) error {
 	if _, err := s.d.Store.Get(ctx, id); err != nil {
 		return err
 	}
-	return s.exclusive(id, func() error { return s.d.Engine.Prune(ctx, HostName(id)) })
+	return s.exclusive(id, func() error { return refused(s.d.Engine.Prune(ctx, HostName(id))) })
 }
 
 func (s *Service) DiskUsage(ctx context.Context, id int64) (int64, error) {

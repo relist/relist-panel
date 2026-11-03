@@ -260,6 +260,7 @@ func (s *Service) fail(w http.ResponseWriter, action string, err error) {
 	var inUse *InUseError
 	var start *StartError
 	var pull *PullError
+	var engine *EngineError
 	switch {
 	case errors.As(err, &validation):
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": validation.Message, "field": validation.Field})
@@ -271,7 +272,7 @@ func (s *Service) fail(w http.ResponseWriter, action string, err error) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.As(err, &inUse), errors.Is(err, ErrBusy), errors.Is(err, ErrIsDefault), errors.Is(err, ErrQueued):
 		writeError(w, http.StatusConflict, err.Error())
-	case errors.As(err, &start), errors.As(err, &pull):
+	case errors.As(err, &start), errors.As(err, &pull), errors.As(err, &engine):
 		writeError(w, http.StatusBadGateway, err.Error())
 	case errors.Is(err, context.Canceled):
 		writeError(w, http.StatusServiceUnavailable, "request canceled")
