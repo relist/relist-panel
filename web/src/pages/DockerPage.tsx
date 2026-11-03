@@ -55,7 +55,7 @@ const operations: Record<
   'build-cache': {
     title: 'Prune build cache',
     description:
-      'Removes unused cache from the Docker default builder. Future builds may take longer.',
+      'Removes unused cache from the Docker default builder. Future builds may take longer. Covers Docker default only: Builders have their own caches on the Builders page.',
   },
   images: {
     title: 'Prune dangling images',

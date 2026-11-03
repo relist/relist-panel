@@ -66,6 +66,7 @@ import type {
   Builder,
   BuilderInput,
   BuildersResponse,
+  ComposeBuilderChoice,
 } from './types';
 import type { MetricWindow } from './types';
 import type { MigrationStatus } from './migration';
@@ -479,6 +480,9 @@ export const api = {
 
   /** The Compose's domains, and the saved YAML's Services a domain can point at. */
   listDomains: (location: ComposePath) => request<ComposeDomains>(domainsPath(location)),
+  getComposeBuilder: (location: ComposePath) => request<ComposeBuilderChoice>(`${composePath(location)}/builder`),
+  setComposeBuilder: (location: ComposePath, choice: ComposeBuilderChoice) =>
+    request<void>(`${composePath(location)}/builder`, jsonInit('PUT', choice)),
   listZeroDowntime: (location: ComposePath) => request<ZeroDowntimeService[]>(`${composePath(location)}/zero-downtime`),
   setZeroDowntime: (location: ComposePath, service: string, enabled: boolean) =>
     request<void>(`${composePath(location)}/zero-downtime/${encodeURIComponent(service)}`, jsonInit('PUT', { enabled })),
