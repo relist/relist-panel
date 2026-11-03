@@ -334,3 +334,23 @@ func TestKeyRouteIsGone(t *testing.T) {
 		t.Fatalf("POST /key returned a public key: %s", rec.Body)
 	}
 }
+
+func TestPutSparsePaths(t *testing.T) {
+	f := newHTTPFixture(t)
+	if _, body := f.putSource(t, nil, repoA); fmt.Sprint(body["sparsePaths"]) != "[]" {
+		t.Fatalf("default sparsePaths = %v, want []", body["sparsePaths"])
+	}
+	put := func(paths string) *httptest.ResponseRecorder {
+		body := `{"kind":"git","repoUrl":"` + repoA + `","branch":"main","sparsePaths":` + paths + `}`
+		return f.serve(httptest.NewRequest(http.MethodPut, f.base, strings.NewReader(body)))
+	}
+	rec := put(`["web/", "api", "web"]`)
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if rec.Code != http.StatusOK || fmt.Sprint(body["sparsePaths"]) != "[web api]" {
+		t.Fatalf("PUT paths = %d %s", rec.Code, rec.Body)
+	}
+	if rec := put(`["../etc"]`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "inside the repository") {
+		t.Fatalf("PUT escaping path = %d %s", rec.Code, rec.Body)
+	}
+}

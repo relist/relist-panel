@@ -3,6 +3,7 @@ package sources
 import (
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 )
@@ -68,4 +69,58 @@ func ValidateBranch(v string) (string, error) {
 		}
 	}
 	return v, nil
+}
+
+const (
+	maxSparsePaths   = 32
+	maxSparsePathLen = 255
+)
+
+// ValidateSparsePaths cleans the directories a Git Source checks out and
+// drops duplicates. Each is relative to the repository root and stays inside
+// it; none can be read as a git option or a sparse-checkout pattern. No paths
+// means the whole repository.
+func ValidateSparsePaths(in []string) ([]string, error) {
+	if len(in) > maxSparsePaths {
+		return nil, fmt.Errorf("at most %d paths", maxSparsePaths)
+	}
+	out := []string{}
+	seen := map[string]bool{}
+	for _, v := range in {
+		raw := strings.TrimSpace(v)
+		bad := func(why string) ([]string, error) {
+			return nil, fmt.Errorf("path %q %s", raw, why)
+		}
+		if raw == "" {
+			continue
+		}
+		if len(raw) > maxSparsePathLen {
+			return nil, fmt.Errorf("a path must be at most %d characters", maxSparsePathLen)
+		}
+		if strings.HasPrefix(raw, "/") {
+			return bad("must be relative to the repository root")
+		}
+		for _, r := range raw {
+			if r < 0x20 || r == 0x7f || strings.ContainsRune(`*?[]\!#`, r) {
+				return bad("contains a forbidden character")
+			}
+		}
+		p := path.Clean(raw)
+		if p == "." {
+			return bad("is the repository root; leave paths empty to check out everything")
+		}
+		for _, part := range strings.Split(p, "/") {
+			if part == ".." || part == ".git" {
+				return bad("must stay inside the repository")
+			}
+		}
+		if strings.HasPrefix(p, "-") {
+			return bad("starts with `-`")
+		}
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }

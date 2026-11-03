@@ -318,3 +318,103 @@ func TestFetchKeepsSymlinksInsideTree(t *testing.T) {
 		t.Fatalf("read through inside link = %q, %v", b, err)
 	}
 }
+
+// serveFilters lets the bare remote answer partial fetches, as GitHub does.
+// Without it git falls back to a full fetch and a test proves nothing.
+func (r *remoteRepo) serveFilters() {
+	bare := strings.TrimPrefix(r.url, "file://")
+	runGit(r.t, bare, "config", "uploadpack.allowFilter", "true")
+	runGit(r.t, bare, "config", "uploadpack.allowAnySHA1InWant", "true")
+}
+
+func TestFetchSparsePaths(t *testing.T) {
+	r := newRemoteRepo(t)
+	r.serveFilters()
+	r.commit("main", "root.txt", "root", "root")
+	for _, f := range []string{"app/a.txt", "big/b.txt"} {
+		if err := os.MkdirAll(filepath.Join(r.work, filepath.Dir(f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.commit("main", "app/a.txt", "a", "app")
+	r.commit("main", "big/b.txt", "b", "big")
+	bigBlob := runGit(t, r.work, "rev-parse", "HEAD:big/b.txt")
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	fetch := func(paths ...string) {
+		t.Helper()
+		s := gitSource(r.url, "main")
+		s.SparsePaths = paths
+		var out bytes.Buffer
+		if _, err := (Git{}).Fetch(context.Background(), s, dir, &out); err != nil {
+			t.Fatalf("Fetch(%q): %v\n%s", paths, err, out.String())
+		}
+	}
+
+	fetch("app")
+	if !exists(filepath.Join(src, "app", "a.txt")) || !exists(filepath.Join(src, "root.txt")) {
+		t.Fatal("sparse checkout is missing app/a.txt or a root file")
+	}
+	if exists(filepath.Join(src, "big")) {
+		t.Fatal("big/ was checked out outside the paths")
+	}
+	missing := runGit(t, src, "rev-list", "--objects", "--missing=print", "HEAD")
+	if !strings.Contains(missing, "?"+bigBlob) {
+		t.Fatalf("big/b.txt was downloaded; rev-list:\n%s", missing)
+	}
+
+	fetch()
+	if !exists(filepath.Join(src, "big", "b.txt")) {
+		t.Fatal("no paths did not check out the whole repository")
+	}
+
+	fetch("app")
+	if exists(filepath.Join(src, "big")) {
+		t.Fatal("narrowing again left big/ in place")
+	}
+}
+
+func TestFetchSparsePathsSkipsSubmodulesOutside(t *testing.T) {
+	sub := newRemoteRepo(t)
+	sub.commit("main", "lib.txt", "lib", "lib")
+	r := newRemoteRepo(t)
+	r.serveFilters()
+	if err := os.MkdirAll(filepath.Join(r.work, "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.commit("main", "app/a.txt", "a", "a")
+	runGit(t, r.work, "submodule", "add", sub.url, "app/inside")
+	runGit(t, r.work, "submodule", "add", sub.url, "outside")
+	runGit(t, r.work, "commit", "-m", "add submodules")
+	runGit(t, r.work, "push", "origin", "main")
+
+	dir := t.TempDir()
+	s := gitSource(r.url, "main")
+	s.Submodules = true
+	s.SparsePaths = []string{"app"}
+	var out bytes.Buffer
+	if _, err := (Git{}).Fetch(context.Background(), s, dir, &out); err != nil {
+		t.Fatalf("Fetch: %v\n%s", err, out.String())
+	}
+	if !exists(filepath.Join(dir, "src", "app", "inside", "lib.txt")) {
+		t.Fatal("submodule inside the paths is missing")
+	}
+	if exists(filepath.Join(dir, "src", "outside", "lib.txt")) {
+		t.Fatal("submodule outside the paths was checked out")
+	}
+}
+
+func TestFetchRefusesAPathThatIsNotADirectory(t *testing.T) {
+	r := newRemoteRepo(t)
+	r.serveFilters()
+	r.commit("main", "root.txt", "root", "root")
+	for _, path := range []string{"missing", "root.txt"} {
+		s := gitSource(r.url, "main")
+		s.SparsePaths = []string{path}
+		_, err := (Git{}).Fetch(context.Background(), s, t.TempDir(), &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "is not a directory") {
+			t.Fatalf("Fetch(%q) err = %v", path, err)
+		}
+	}
+}

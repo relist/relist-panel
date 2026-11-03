@@ -101,7 +101,8 @@ func (g Git) run(ctx context.Context, dir string, env []string, stdout, stderr i
 }
 
 // Fetch makes the Compose's src/ a clean shallow checkout of the Source's
-// branch and returns the commit it holds. Progress is written to out.
+// branch, limited to its SparsePaths when it has any, and returns the commit
+// it holds. Progress is written to out.
 func (g Git) Fetch(ctx context.Context, src Source, composeDir string, out io.Writer) (Ref, error) {
 	if src.Branch == "" && src.PinnedSHA == "" {
 		return Ref{}, errors.New("the Source has no branch")
@@ -141,8 +142,27 @@ func (g Git) Fetch(ctx context.Context, src Source, composeDir string, out io.Wr
 	if src.PinnedSHA != "" {
 		revision = src.PinnedSHA
 	}
-	if err := step("fetch", "--depth", "1", "origin", revision); err != nil {
+	// With paths, only their files are downloaded: the fetch leaves out every
+	// file's contents and checkout fetches the ones the sparse tree needs.
+	fetch := []string{"fetch", "--depth", "1"}
+	if len(src.SparsePaths) > 0 {
+		if err := step(append([]string{"sparse-checkout", "set", "--cone", "--"}, src.SparsePaths...)...); err != nil {
+			return Ref{}, err
+		}
+		fetch = append(fetch, "--filter=blob:none")
+	} else if err := step("sparse-checkout", "disable"); err != nil {
 		return Ref{}, err
+	}
+	if err := step(append(fetch, "origin", revision)...); err != nil {
+		return Ref{}, err
+	}
+	// Cone mode quietly checks out nothing for a missing path or a file, and
+	// the build would then fail far from the cause.
+	for _, p := range src.SparsePaths {
+		var kind bytes.Buffer
+		if err := g.run(ctx, srcDir, env, &kind, io.Discard, "cat-file", "-t", "FETCH_HEAD:"+p); err != nil || strings.TrimSpace(kind.String()) != "tree" {
+			return Ref{}, fmt.Errorf("path %q is not a directory in the repository", p)
+		}
 	}
 	if err := step("checkout", "--force", "FETCH_HEAD"); err != nil {
 		return Ref{}, err
@@ -160,6 +180,10 @@ func (g Git) Fetch(ctx context.Context, src Source, composeDir string, out io.Wr
 			args = append(args, "-c", "protocol.file.allow=always")
 		}
 		args = append(args, "submodule", "update", "--init", "--recursive", "--depth", "1")
+		// git would otherwise also clone submodules outside the paths.
+		if len(src.SparsePaths) > 0 {
+			args = append(append(args, "--"), src.SparsePaths...)
+		}
 		if err := step(args...); err != nil {
 			return Ref{}, err
 		}

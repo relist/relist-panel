@@ -45,3 +45,24 @@ func TestValidateBranch(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateSparsePaths(t *testing.T) {
+	got, err := ValidateSparsePaths([]string{" web/ ", "", "api", "./web", "docs/a b", "a/./b"})
+	if err != nil || strings.Join(got, "|") != "web|api|docs/a b|a/b" {
+		t.Fatalf("ValidateSparsePaths = %q, %v", got, err)
+	}
+	if got, err := ValidateSparsePaths(nil); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("ValidateSparsePaths(nil) = %#v, %v, want empty", got, err)
+	}
+	for _, bad := range []string{
+		"/abs", "..", "a/../..", "a/../../b", ".", "./", "-x", ".git", "a/.git/b",
+		"a*", "a?", "a[b]", `a\b`, "!a", "#a", "a\tb", "a\x7f", strings.Repeat("a", 256),
+	} {
+		if _, err := ValidateSparsePaths([]string{bad}); err == nil {
+			t.Errorf("ValidateSparsePaths(%q) accepted", bad)
+		}
+	}
+	if _, err := ValidateSparsePaths(make([]string, 33)); err == nil {
+		t.Error("33 paths accepted")
+	}
+}

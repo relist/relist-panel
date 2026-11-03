@@ -5,6 +5,7 @@ package sources
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
@@ -21,6 +22,7 @@ type Source struct {
 	RepoURL       string
 	Branch        string
 	Submodules    bool
+	SparsePaths   []string // directories to check out; empty means the whole repository
 	SSHKeyID      *int64
 	SSHKeyName    string // joined from ssh_keys by Get; never saved
 	PrivateKey    string // joined from ssh_keys by Get; never saved
@@ -48,7 +50,7 @@ func NewStore(db *sql.DB) *Store {
 
 // columns are the compose_sources columns Save writes. The retired
 // ssh_private_key and ssh_public_key columns keep their defaults.
-const columns = `compose_id, kind, repo_url, branch, submodules, ssh_key_id,
+const columns = `compose_id, kind, repo_url, branch, submodules, sparse_paths, ssh_key_id,
 	head_sha, last_test_at, last_test_ok, zip_name, zip_size, zip_files, uploaded_at, created_at, updated_at`
 
 // Get returns the Source of a Compose, or sql.ErrNoRows when it has none.
@@ -58,15 +60,16 @@ func (s *Store) Get(ctx context.Context, composeID int64) (Source, error) {
 		keyID                      sql.NullInt64
 		kind                       string
 		submodules                 int
+		sparsePaths                string
 		testAt, testOK, uploadedAt sql.NullInt64
 		createdAt, updatedAt       int64
 	)
-	err := s.db.QueryRowContext(ctx, `SELECT cs.compose_id, cs.kind, cs.repo_url, cs.branch, cs.submodules, cs.ssh_key_id,
+	err := s.db.QueryRowContext(ctx, `SELECT cs.compose_id, cs.kind, cs.repo_url, cs.branch, cs.submodules, cs.sparse_paths, cs.ssh_key_id,
 	COALESCE(k.name, ''), COALESCE(k.private_key, ''), COALESCE(k.public_key, ''),
 	cs.head_sha, cs.last_test_at, cs.last_test_ok, cs.zip_name, cs.zip_size, cs.zip_files, cs.uploaded_at, cs.created_at, cs.updated_at,
 	COALESCE((SELECT source_dir FROM compose_source_materializations m WHERE m.compose_id = cs.compose_id), '')
 FROM compose_sources cs LEFT JOIN ssh_keys k ON k.id = cs.ssh_key_id WHERE cs.compose_id = ?`, composeID).Scan(
-		&src.ComposeID, &kind, &src.RepoURL, &src.Branch, &submodules, &keyID,
+		&src.ComposeID, &kind, &src.RepoURL, &src.Branch, &submodules, &sparsePaths, &keyID,
 		&src.SSHKeyName, &src.PrivateKey, &src.PublicKey,
 		&src.HeadSHA, &testAt, &testOK, &src.ZipName, &src.ZipSize, &src.ZipFiles, &uploadedAt, &createdAt, &updatedAt, &src.TreeDirectory,
 	)
@@ -78,6 +81,9 @@ FROM compose_sources cs LEFT JOIN ssh_keys k ON k.id = cs.ssh_key_id WHERE cs.co
 		src.SSHKeyID = &keyID.Int64
 	}
 	src.Submodules = submodules != 0
+	if err := json.Unmarshal([]byte(sparsePaths), &src.SparsePaths); err != nil {
+		return Source{}, err
+	}
 	src.LastTestAt = nullTime(testAt)
 	if testOK.Valid {
 		ok := testOK.Int64 != 0
@@ -101,24 +107,28 @@ func (s *Store) Save(ctx context.Context, src Source) error {
 	if updated.IsZero() {
 		updated = now
 	}
+	paths, err := sparsePathsJSON(src.SparsePaths)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM compose_source_materializations WHERE compose_id = ? AND (? = 'zip' OR NOT EXISTS (SELECT 1 FROM compose_sources WHERE compose_id = ? AND kind = 'git' AND repo_url = ? AND branch = ? AND submodules = ?))`, src.ComposeID, string(src.Kind), src.ComposeID, src.RepoURL, src.Branch, boolInt(src.Submodules)); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM compose_source_materializations WHERE compose_id = ? AND (? = 'zip' OR NOT EXISTS (SELECT 1 FROM compose_sources WHERE compose_id = ? AND kind = 'git' AND repo_url = ? AND branch = ? AND submodules = ? AND sparse_paths = ?))`, src.ComposeID, string(src.Kind), src.ComposeID, src.RepoURL, src.Branch, boolInt(src.Submodules), paths); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO compose_sources (`+columns+`)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(compose_id) DO UPDATE SET
 	kind = excluded.kind, repo_url = excluded.repo_url, branch = excluded.branch,
-	submodules = excluded.submodules, ssh_key_id = excluded.ssh_key_id, head_sha = excluded.head_sha,
+	submodules = excluded.submodules, sparse_paths = excluded.sparse_paths, ssh_key_id = excluded.ssh_key_id, head_sha = excluded.head_sha,
 	last_test_at = excluded.last_test_at, last_test_ok = excluded.last_test_ok,
 	zip_name = excluded.zip_name, zip_size = excluded.zip_size, zip_files = excluded.zip_files,
 	uploaded_at = excluded.uploaded_at, updated_at = excluded.updated_at`,
-		src.ComposeID, string(src.Kind), src.RepoURL, src.Branch, boolInt(src.Submodules),
+		src.ComposeID, string(src.Kind), src.RepoURL, src.Branch, boolInt(src.Submodules), paths,
 		src.SSHKeyID, src.HeadSHA, unixPtr(src.LastTestAt), boolPtr(src.LastTestOK),
 		src.ZipName, src.ZipSize, src.ZipFiles, unixPtr(src.UploadedAt), created.Unix(), updated.Unix())
 	if err != nil {
@@ -130,10 +140,24 @@ ON CONFLICT(compose_id) DO UPDATE SET
 // RecordMaterialization publishes an immutable tree only if the Source still
 // matches the queued input. It never overwrites current Source configuration.
 func (s *Store) RecordMaterialization(ctx context.Context, src Source, dir string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO compose_source_materializations (compose_id, source_dir)
-SELECT compose_id, ? FROM compose_sources WHERE compose_id = ? AND kind = 'git' AND repo_url = ? AND branch = ? AND submodules = ?
-ON CONFLICT(compose_id) DO UPDATE SET source_dir = excluded.source_dir`, dir, src.ComposeID, src.RepoURL, src.Branch, boolInt(src.Submodules))
+	paths, err := sparsePathsJSON(src.SparsePaths)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO compose_source_materializations (compose_id, source_dir)
+SELECT compose_id, ? FROM compose_sources WHERE compose_id = ? AND kind = 'git' AND repo_url = ? AND branch = ? AND submodules = ? AND sparse_paths = ?
+ON CONFLICT(compose_id) DO UPDATE SET source_dir = excluded.source_dir`, dir, src.ComposeID, src.RepoURL, src.Branch, boolInt(src.Submodules), paths)
 	return err
+}
+
+// sparsePathsJSON is the stored form of SparsePaths. No paths is always "[]",
+// so the materialization guards compare equal values.
+func sparsePathsJSON(paths []string) (string, error) {
+	if len(paths) == 0 {
+		return "[]", nil
+	}
+	raw, err := json.Marshal(paths)
+	return string(raw), err
 }
 
 func (s *Store) Delete(ctx context.Context, composeID int64) error {

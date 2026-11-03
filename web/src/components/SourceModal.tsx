@@ -22,7 +22,7 @@ const SAVE_URL_DELAY_MS = 600;
 /**
  * Configures a Compose's Source. The Git flow saves the SSH URL as soon as it
  * is valid; the SSH key comes from the library; Test connection fills Branch; Save stores
- * branch and submodules. Every API failure shows in an Alert inside the modal.
+ * branch, submodules and paths. Every API failure shows in an Alert inside the modal.
  * `onSaved(source, firstTime)`: `firstTime` is true when this save or upload
  * created the Source.
  */
@@ -50,6 +50,7 @@ export function SourceModal({
   const [url, setUrl] = useState('');
   const [branch, setBranch] = useState('');
   const [submodules, setSubmodules] = useState(false);
+  const [sparsePaths, setSparsePaths] = useState<string[]>([]);
   const [branches, setBranches] = useState<string[]>([]);
   const [keys, setKeys] = useState<SshKey[] | null>(null);
   const [keysFailed, setKeysFailed] = useState(false);
@@ -76,6 +77,7 @@ export function SourceModal({
     savedUrl.current = repoUrl;
     setBranch(current?.branch ?? '');
     setSubmodules(current?.submodules ?? false);
+    setSparsePaths(current?.sparsePaths ?? []);
     setBranches([]);
     setSshKeyId(current?.sshKey?.id ?? null);
     setTestError('');
@@ -131,6 +133,7 @@ export function SourceModal({
         branch: sourceRef.current?.branch ?? '',
         kind: 'git',
         repoUrl: trimmed,
+        sparsePaths,
         submodules,
         sshKeyId,
       });
@@ -159,6 +162,7 @@ export function SourceModal({
         branch: sourceRef.current?.branch ?? '',
         kind: 'git',
         repoUrl: trimmed,
+        sparsePaths,
         submodules,
         sshKeyId: id,
       });
@@ -218,7 +222,14 @@ export function SourceModal({
 
   const save = () =>
     run('save', async () => {
-      const saved = await api.saveSource(location, { branch, kind: 'git', repoUrl: url.trim(), submodules, sshKeyId });
+      const saved = await api.saveSource(location, {
+        branch,
+        kind: 'git',
+        repoUrl: url.trim(),
+        sparsePaths,
+        submodules,
+        sshKeyId,
+      });
       onSaved(saved, wasNew.current);
       onClose();
     });
@@ -349,6 +360,26 @@ export function SourceModal({
                 placeholder="Test the connection to list branches"
                 value={branch || undefined}
               />
+            </Flex>
+            <Flex gap={4} vertical>
+              <label htmlFor="source-paths">
+                <Text strong>Paths</Text>
+              </label>
+              <Select
+                aria-label="Paths"
+                id="source-paths"
+                mode="tags"
+                onChange={setSparsePaths}
+                open={false}
+                placeholder="Whole repository"
+                suffixIcon={null}
+                tokenSeparators={[',', '\n']}
+                value={sparsePaths}
+              />
+              <Text style={{ fontSize: 12 }} type="secondary">
+                Only these directories are downloaded, plus the files at the repository root. They must hold every
+                build context and file the YAML uses from ./src.
+              </Text>
             </Flex>
             <Flex align="center" gap={8}>
               <Switch aria-label="Submodules" checked={submodules} onChange={setSubmodules} />
