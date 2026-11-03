@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"relist-panel/internal/composes"
 	"relist-panel/internal/database"
 )
 
@@ -367,5 +368,29 @@ func TestCancelQueuedNumberLeavesOtherNumbers(t *testing.T) {
 	}
 	if ok, err := s.CancelQueuedNumber(ctx, a, second.Number, t0); err != nil || !ok {
 		t.Fatalf("cancel of queued = %v %v", ok, err)
+	}
+}
+
+func TestUsesBuilder(t *testing.T) {
+	ctx := context.Background()
+	db, a, b := newDB(t)
+	s := NewStore(db)
+	snap := func(id int64) *executionSnapshot {
+		return &executionSnapshot{Version: 1, Files: &composes.ExecutionSnapshot{BuilderID: id}}
+	}
+	if _, _, err := s.enqueue(ctx, a, ModeBuild, false, false, time.Unix(1, 0), snap(7)); err != nil {
+		t.Fatal(err)
+	}
+	done, _, err := s.enqueue(ctx, b, ModeBuild, false, false, time.Unix(1, 0), snap(8))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE deployments SET status = 'succeeded' WHERE id = ?`, done.ID); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[int64]bool{7: true, 8: false, 9: false} {
+		if got, err := s.UsesBuilder(ctx, id); err != nil || got != want {
+			t.Errorf("UsesBuilder(%d) = %v, %v; want %v", id, got, err, want)
+		}
 	}
 }

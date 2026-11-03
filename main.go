@@ -201,6 +201,7 @@ func main() {
 		PanelUpdater: panelDocker,
 		PanelDomain:  cfg.Install.Domain,
 		Traefik:      dockerexec.NewTraefikDocker(),
+		Buildx:       dockerexec.NewBuildx(dockerexec.DefaultSocketPath),
 	})
 	server := newServer(cfg.Address(), handler)
 	controlServer, err := serveControl(cfg.ControlSocket, control)

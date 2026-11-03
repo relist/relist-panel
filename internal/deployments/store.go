@@ -474,3 +474,12 @@ func boolInt(b bool) int {
 func isUniqueConstraint(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "unique constraint")
 }
+
+// UsesBuilder reports whether a queued or running Deployment's snapshot will
+// build on Builder id.
+func (s *Store) UsesBuilder(ctx context.Context, id int64) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM deployments d JOIN deployment_snapshots ds ON ds.deployment_id = d.id
+		WHERE d.status IN ('queued', 'running') AND json_extract(ds.snapshot, '$.Files.BuilderID') = ?`, id).Scan(&n)
+	return n > 0, err
+}
