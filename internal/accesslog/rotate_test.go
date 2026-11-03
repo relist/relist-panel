@@ -296,3 +296,48 @@ func TestNextWake(t *testing.T) {
 		}
 	}
 }
+
+// Traefik keeps writing to the renamed file until a Reopen succeeds; with no
+// access.log and a rotated file still being written, the next run signals
+// again.
+func TestReopenRetriedNextRun(t *testing.T) {
+	f := newRotator(t, testNow)
+	f.traefik.reopenErr = errors.New("docker hiccup")
+	write(t, f.dir, "access.log", line1102, testNow)
+	if err := f.r.RunOnce(context.Background()); err == nil {
+		t.Fatal("first run succeeded, want the Reopen error")
+	}
+	f.traefik.reopenErr = nil
+	if err := f.r.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if f.traefik.reopens != 2 {
+		t.Fatalf("reopens = %d, want a retry on the second run", f.traefik.reopens)
+	}
+	got, _ := f.r.Store.Get(context.Background())
+	if got.LastError != "" {
+		t.Fatalf("LastError = %q after the retry succeeded", got.LastError)
+	}
+}
+
+func TestReopenNotRetriedOnceQuiet(t *testing.T) {
+	f := newRotator(t, testNow)
+	write(t, f.dir, "access-2026-11-01.log", "x\n", testNow.Add(-time.Hour))
+	if err := f.r.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.traefik.reopens != 0 {
+		t.Fatalf("reopens = %d, want 0 for a file no one writes", f.traefik.reopens)
+	}
+}
+
+// Retention never deletes a rotated file Traefik may still be writing.
+func TestRetentionSkipsFileStillWritten(t *testing.T) {
+	f := newRotator(t, testNow)
+	if err := f.r.Store.SaveRetention(context.Background(), 1, false); err != nil {
+		t.Fatal(err)
+	}
+	write(t, f.dir, "access-2026-08-01.log", "x\n", testNow.Add(-time.Minute))
+	f.r.RunOnce(context.Background())
+	wantNames(t, f.dir, "access-2026-08-01.log")
+}

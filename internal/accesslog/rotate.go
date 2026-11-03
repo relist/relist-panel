@@ -109,6 +109,18 @@ func today(now time.Time) time.Time {
 // Traefik reopen it.
 func (r *Rotator) rotate(ctx context.Context, now time.Time) error {
 	live := filepath.Join(r.Dir, liveName)
+	if _, err := os.Lstat(live); errors.Is(err, os.ErrNotExist) {
+		// Reopen creates access.log at once, so a missing one next to a
+		// rotated file still being written means the last Reopen failed.
+		writing, err := r.stillWritten(now)
+		if err != nil || !writing {
+			return err
+		}
+		if err := r.Traefik.Reopen(ctx); err != nil {
+			return fmt.Errorf("have Traefik reopen the Access log: %w", err)
+		}
+		return nil
+	}
 	started, ok, err := firstLineTime(live)
 	if err != nil || !ok || !started.Before(today(now)) {
 		return err
@@ -190,6 +202,25 @@ func (r *Rotator) rotatedFiles() ([]os.DirEntry, error) {
 	return out, err
 }
 
+// stillWritten reports whether a plain rotated file was modified within
+// QuietFor, so Traefik may still hold it open.
+func (r *Rotator) stillWritten(now time.Time) (bool, error) {
+	files, err := r.rotatedFiles()
+	for _, e := range files {
+		if !strings.HasSuffix(e.Name(), ".log") {
+			continue
+		}
+		if info, statErr := e.Info(); statErr == nil && r.recent(info, now) {
+			return true, err
+		}
+	}
+	return false, err
+}
+
+func (r *Rotator) recent(info os.FileInfo, now time.Time) bool {
+	return now.Sub(info.ModTime()) < r.QuietFor
+}
+
 func (r *Rotator) pendingGzip() (bool, error) {
 	files, err := r.rotatedFiles()
 	for _, e := range files {
@@ -212,7 +243,7 @@ func (r *Rotator) gzipQuiet(now time.Time) error {
 			continue
 		}
 		info, err := e.Info()
-		if err != nil || now.Sub(info.ModTime()) < r.QuietFor {
+		if err != nil || r.recent(info, now) {
 			continue
 		}
 		if err := gzipFile(filepath.Join(r.Dir, e.Name())); err != nil {
@@ -270,6 +301,11 @@ func (r *Rotator) expire(ctx context.Context, now time.Time) error {
 	var errs []error
 	for _, e := range files {
 		date := rotatedPattern.FindStringSubmatch(e.Name())[1]
+		if info, err := e.Info(); err == nil && r.recent(info, now) {
+			// Traefik may still be writing it; deleting would lose every
+			// later line into an unlinked file.
+			continue
+		}
 		if date < cutoff {
 			if err := os.Remove(filepath.Join(r.Dir, e.Name())); err != nil {
 				errs = append(errs, err)

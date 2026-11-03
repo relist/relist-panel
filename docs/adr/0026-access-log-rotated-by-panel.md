@@ -18,9 +18,9 @@ The client address comes from `X-Forwarded-For` only when the peer is listed in 
 
 ## Consequences
 
-- **The Access log moves with a Migration**: it is part of the data directory (ADR-0018).
+- **The Access log moves with a Migration**: it is part of the data directory (ADR-0018). Traefik keeps appending while the data directory is packed, so the pack copies each file as it was when opened (and skips one the rotator removed meanwhile); lines Traefik writes after that stay on the old host.
 - **Files are dated in UTC.** A rotated file is named after the last day it covers; after the panel was down for days, one file covers them all and is deleted later than its first day alone would require, never sooner.
-- **If `USR1` fails while Traefik runs, Traefik keeps writing to the renamed file.** The 5-minute rule leaves it ungzipped, the error shows on the Traefik page, and the next run signals again.
+- **If `USR1` fails while Traefik runs, Traefik keeps writing to the renamed file.** The 5-minute rule leaves it ungzipped and retention never deletes it while it is still written. With no `access.log` beside it, the next run, ten minutes later, signals again, and the error stays on the Traefik page until a signal succeeds.
 - **An install that has not had a Panel update writes no Access log.** The panel reads Traefik's arguments with `docker inspect` and the Traefik page says so.
 - **`TRAEFIK_TRUSTED_IPS` and the log level stay in `.env` and the install file** until the panel manages Traefik's static config, which needs its own decision: Traefik takes static config from one source only, so that change moves all of it.
 - Spec: `.scratch/traefik-logging/spec.md`.
