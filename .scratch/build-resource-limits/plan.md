@@ -21,10 +21,13 @@
 ## Global Constraints
 
 - **Migrations:** never edit committed migrations. The only schema change is the new `internal/migrations/00030_builders.sql`.
-- **BuildKit image:** `moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe`.
-  - It goes in `builders.BuildKitImage`.
+- **Default BuildKit image:** `moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe`.
+  - It goes in `builders.DefaultBuildKitImage`.
+  - The panel-wide setting `builder_settings.buildkit_image` overrides it. Empty means the default.
+  - A custom value must match `^[a-z0-9][a-z0-9._/:-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$`, the same pattern as `vulnscan.ValidScannerRef`. Anything else is `422 BuildKit image must be repo[:tag]@sha256:<64 hex digits>`.
+  - Saving pulls it with a 2-minute timeout. A failure is `502 Could not pull <ref>: <err>`, and the old value is kept.
   - Re-check it before Task 2 is committed: `docker buildx imagetools inspect moby/buildkit:v0.34.2`.
-  - Every `buildx create` passes it as `--driver-opt image=…`. An unpinned create pulls `buildx-stable-1`, which was probed.
+  - Every `buildx create` passes the effective image as `--driver-opt image=…`. An unpinned create pulls `buildx-stable-1`, which was probed.
 - **Host names:**
   - builder `relist-builder-<id>`;
   - container `buildx_buildkit_relist-builder-<id>0`;
@@ -52,6 +55,8 @@
   - local image hint: `<image> exists on this host, but Builders cannot use local images. Pick Docker default for this Compose, or push the image to a registry.`
   - Docker default description: `No CPU or memory limit. When a build uses up the host's memory, the kernel may kill a running app instead of the build. It can build FROM images that exist only on this host.`
   - CPU help: `Tools inside the build still see every host CPU (nproc); the limit slows them down rather than shrinking their thread pools.`
+  - image switch: `Builder <name>: switching BuildKit image to <ref>`
+  - image switch deferred: `Builder <name> still runs <old ref>; it switches to <ref> once its other builds finish`
 - **Commits:** Conventional Commits with no scope, and no `Co-Authored-By` or `Claude-Session` trailers (`docs/agents/commit-conventions.md`).
 - **Frontend:** before touching `web/`, read https://ant.design/llms.txt and the pages for Table, Form, InputNumber, Select, Modal, Popconfirm, Tag, Alert and Descriptions. Check them against antd 6.5.1. Follow `docs/GUIDELINES.md`.
 - **Tests:** `go test ./...`, `pnpm --dir web test` and `pnpm --dir web typecheck`. `task build` rebuilds `internal/webassets/dist`, which is committed.
@@ -68,6 +73,10 @@
 - **Acquire only when the Deployment builds:** `len(snapshot.Services) > 0`, and the plan has a `kindBuild` step or an apply step with `build=true`. A Compose without `build:` never creates a Builder container.
 - **Disk usage is the state volume's size** from `GET /system/df?type=volume`. `buildx du` prints humanized strings per record and was not used.
 - **There is no Stop action.** **Start** runs Ensure.
+- **Image switch happens in Acquire and Start, never on save.**
+  - Saving the setting only pulls the image and stores it.
+  - The next Acquire or Start of each Builder inspects the container. If its image differs from the effective one and no other build holds the Builder (busy is 0 before this Acquire), it re-creates the Builder with `--keep-state`. Otherwise it runs on the old image and logs the deferred line.
+  - A panel update that bumps `DefaultBuildKitImage` takes the same path.
 - **"Error" status** comes from `builders.last_error`. A failed Ensure sets it, and a successful one clears it.
 
 ## Review Focus
@@ -76,7 +85,8 @@
 2. **A Builder container removed by hand, or by the Docker page's container prune.** The next Acquire must re-create it. Task 2: `Ensure` treats a missing container as "create".
 3. **Old queued snapshots without `BuilderID`.** They must build on Docker default and never fail decode. Task 5 has `TestOldSnapshotBuildsOnDockerDefault`.
 4. **Lowering memory while a build runs.** If Docker refuses, the stored row must stay unchanged and the error must surface. Task 3 has `TestUpdateKeepsRowWhenDockerRefuses`.
-5. **A Compose with no `build:` Service.** It must never touch the Builder, even if its choice names one. Task 5 has `TestNoBuildServicesNeverAcquires`.
+5. **A panel update bumps the default image while Builders exist.** Each one must switch on its next build, keep its cache, and never switch under another running build. Task 3 has `TestAcquireSwitchesImageWhenIdle` and `TestAcquireDefersImageSwitchWhenBusy`.
+6. **A Compose with no `build:` Service.** It must never touch the Builder, even if its choice names one. Task 5 has `TestNoBuildServicesNeverAcquires`.
 
 ---
 
@@ -101,6 +111,8 @@
   - `SetLastError(ctx, id, msg string) error`
   - `DefaultID(ctx) (int64, error)`, which returns 0 for Docker default
   - `SetDefault(ctx, id int64) error`, where 0 means Docker default
+  - `BuildKitImage(ctx) (string, error)`, where `''` means the default
+  - `SetBuildKitImage(ctx, ref string) error`
   - `ComposeChoice(ctx, composeID) (Choice, error)`
   - `SetComposeChoice(ctx, composeID, c Choice) error`, which returns `ErrUnknownBuilder` for a missing builder or an unknown mode
   - `Resolve(ctx, composeID) (int64, error)`
@@ -110,7 +122,7 @@
 
   It creates three tables:
   - `builders`: `id INTEGER PRIMARY KEY AUTOINCREMENT`, `name TEXT NOT NULL UNIQUE COLLATE NOCASE`, `cpus_milli INTEGER NOT NULL`, `memory_mb INTEGER NOT NULL`, `max_parallelism INTEGER NOT NULL DEFAULT 0`, `last_error TEXT NOT NULL DEFAULT ''`, `created_at INTEGER NOT NULL` and `updated_at INTEGER NOT NULL`.
-  - `builder_settings`: `id INTEGER PRIMARY KEY CHECK (id = 1)` and `default_builder_id INTEGER REFERENCES builders(id) ON DELETE RESTRICT`. The migration inserts row 1 with NULL.
+  - `builder_settings`: `id INTEGER PRIMARY KEY CHECK (id = 1)`, `default_builder_id INTEGER REFERENCES builders(id) ON DELETE RESTRICT` and `buildkit_image TEXT NOT NULL DEFAULT ''`. The migration inserts row 1 with NULL and `''`.
   - `compose_builders`: `compose_id INTEGER PRIMARY KEY REFERENCES composes(id) ON DELETE CASCADE` and `builder_id INTEGER REFERENCES builders(id) ON DELETE RESTRICT`.
 
   The Down drops all three. A header comment points at the spec, in the style of `00029_access_log_settings.sql`.
@@ -128,6 +140,7 @@
   - `TestDeleteRestrictedByForeignKey`: `Delete` of a Builder a Compose uses returns an error, which is the RESTRICT backstop.
   - `TestComposeDeleteCascadesChoice`.
   - `TestSetComposeChoiceUnknownBuilder`: returns `ErrUnknownBuilder`.
+  - `TestBuildKitImageRoundTrip`: it starts as `''`, and a set then a get round-trips.
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
@@ -154,16 +167,20 @@
 
 **Interfaces:**
 - Produces, in `internal/builders/engine.go`:
-  - `const BuildKitImage = "moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe"`
-  - `type HostSpec struct { Name string; CPUQuota, CPUPeriod, MemoryBytes int64; MaxParallelism int }`
-  - `func SpecFor(b Builder) HostSpec`, which uses `HostName(b.ID)`, period 100000, quota `CPUsMilli*100` and memory `MemoryMB<<20`
+  - `const DefaultBuildKitImage = "moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe"`
+  - `func ValidImageRef(ref string) bool`
+  - `func EffectiveImage(setting string) string`, which returns `DefaultBuildKitImage` when the setting is `''`
+  - `type HostSpec struct { Name, Image string; CPUQuota, CPUPeriod, MemoryBytes int64; MaxParallelism int }`
+  - `func SpecFor(b Builder, image string) HostSpec`, which uses `HostName(b.ID)`, period 100000, quota `CPUsMilli*100` and memory `MemoryMB<<20`
   - `func HostName(id int64) string`, which returns `relist-builder-<id>`
   - `type ContainerState string`, with the constants `StateMissing = "missing"`, `StateRunning = "running"` and `StateStopped = "stopped"`
+  - `type Inspection struct { State ContainerState; Image string }`, where `Image` is the container's `Config.Image` and is empty when the container is missing
   - the `Engine` interface:
     - `Ensure(ctx, HostSpec) error`
     - `Recreate(ctx, HostSpec) error`
     - `Remove(ctx, name string) error`
-    - `State(ctx, name string) (ContainerState, error)`
+    - `Inspect(ctx, name string) (Inspection, error)`
+    - `Pull(ctx, ref string) error`
     - `DiskUsage(ctx, name string) (int64, error)`
     - `Prune(ctx, name string) error`
     - `Capacity(ctx) (cpus int, memoryBytes int64, err error)`
@@ -173,8 +190,8 @@
 - [ ] **Step 1: Write the failing argv tests**
 
   Use the package's `command` stand-in, as in `dockerexec_test.go:63`, to record argv.
-  - `TestEnsureCreateArgs`: for `HostSpec{Name:"relist-builder-3", CPUQuota:150000, CPUPeriod:100000, MemoryBytes:2<<30, MaxParallelism:4}`, Ensure runs:
-    1. `buildx create --name relist-builder-3 --driver docker-container --driver-opt image=<BuildKitImage>,memory=2147483648,memory-swap=2147483648,cpu-quota=150000,cpu-period=100000 --buildkitd-config <tmp>`;
+  - `TestEnsureCreateArgs`: for `HostSpec{Name:"relist-builder-3", Image:DefaultBuildKitImage, CPUQuota:150000, CPUPeriod:100000, MemoryBytes:2<<30, MaxParallelism:4}`, Ensure runs:
+    1. `buildx create --name relist-builder-3 --driver docker-container --driver-opt image=<spec.Image>,memory=2147483648,memory-swap=2147483648,cpu-quota=150000,cpu-period=100000 --buildkitd-config <tmp>`;
     2. then `buildx inspect --bootstrap relist-builder-3`.
 
     The temp toml contains `max-parallelism = 4`, and it is removed afterwards.
@@ -183,11 +200,12 @@
   - `TestRecreateKeepsState`: runs `buildx rm --keep-state relist-builder-3` before the create.
   - `TestRemoveDropsState`: runs `buildx create …` (to attach), then `buildx rm relist-builder-3` without `--keep-state`. If the container and the instance are both absent, it returns nil.
   - `TestDiskUsageReadsStateVolume`: `/system/df?type=volume` returns volume `buildx_buildkit_relist-builder-30_state` with `UsageData.Size` 4172000000, and `DiskUsage` returns 4172000000. A missing volume returns 0.
-  - `TestStateFromInspect`: 404 → `StateMissing`, `Running:true` → `StateRunning`, otherwise `StateStopped`.
+  - `TestInspect`: 404 → `StateMissing` with an empty Image. `Running:true` → `StateRunning`, otherwise `StateStopped`. Image is `Config.Image`.
+  - `TestPullArgs`: runs `pull <ref>`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-  Run: `go test ./internal/dockerexec/ -run 'Ensure|Recreate|Remove|DiskUsage|StateFrom' -v`
+  Run: `go test ./internal/dockerexec/ -run 'Ensure|Recreate|Remove|DiskUsage|Inspect|Pull' -v`
   Expected: FAIL
 
 - [ ] **Step 3: Implement `buildx.go`**
@@ -201,7 +219,7 @@
 - [ ] **Step 5: Manual probe against the dev Docker**
 
   1. Write a throwaway `main` under the session scratchpad, not the repo, that calls `NewBuildx(DefaultSocketPath)`. Run Ensure on `relist-builder-999` with 1 CPU and 1 GB.
-  2. Check `docker inspect buildx_buildkit_relist-builder-9990 --format '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.Config.Image}}'`. Expected: `1073741824 1073741824 moby/buildkit:v0.34.2@sha256:c5f8…`.
+  2. Check `docker inspect buildx_buildkit_relist-builder-9990 --format '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.Config.Image}}'`. Expected: `1073741824 1073741824 moby/buildkit:v0.34.2@sha256:c5f8…`. Then call `Recreate` with another valid digest of `moby/buildkit` (for example `v0.34.1`) and check that the image changed and a cached step still hits.
   3. `docker rm -f` the container, run Ensure again, and confirm that it is running again.
   4. Run `Remove` and confirm that the container and the volume are gone.
 
@@ -220,19 +238,29 @@
   - `New(Deps{Store *Store; Engine Engine; Deployments Deployments; Now func() time.Time}) *Service`
   - `(*Service).Acquire(ctx context.Context, id int64, out io.Writer) (hostName string, release func(), err error)`:
     - id 0 writes the Docker default log line and returns `""` with a no-op release;
-    - otherwise it waits while a re-create of that Builder is in progress (ctx-aware), increments busy, runs `Engine.Ensure`, writes the log line, and records or clears `last_error`;
+    - otherwise it waits while a re-create of that Builder is in progress (ctx-aware), notes whether busy was 0, and increments busy;
+    - it calls `Inspect`. If the container exists with an image other than `EffectiveImage(setting)`: with busy 0 before, it writes the switch line and calls `Recreate`; otherwise it writes the deferred line and calls `Ensure` with the container's current image. In every other case it calls `Ensure`;
+    - it writes the log line, and records or clears `last_error`;
     - on an Ensure error it decrements busy and returns `Could not start Builder <name>: <err>`.
+  - `(*Service).SetBuildKitImage(ctx, ref string) error`:
+    - `''` stores the default without pulling;
+    - an invalid ref returns `ErrInvalidImage`;
+    - otherwise it calls `Pull` with a 2-minute timeout and stores the ref only if the pull succeeds. A failure returns `*PullError`.
   - `(*Service).FailureHint(ctx context.Context, id int64, buildErr error) string`, which returns `""` for id 0 or when no hint applies
   - `(*Service).RegisterRoutes(mux *http.ServeMux)`
 
 - [ ] **Step 1: Write the failing service tests**
 
-  - `TestAcquireEnsuresEveryTime`: two Acquires call `Ensure` twice with `SpecFor(b)`. Both write `Builder: large (2 CPU, 4 GB, 4 parallel steps)`.
+  - `TestAcquireEnsuresEveryTime`: two Acquires call `Ensure` twice with `SpecFor(b, DefaultBuildKitImage)`. Both write `Builder: large (2 CPU, 4 GB, 4 parallel steps)`.
+  - `TestAcquireSwitchesImageWhenIdle`: `Inspect` reports an old image. Acquire calls `Recreate` with the new image and logs `Builder large: switching BuildKit image to <ref>`.
+  - `TestAcquireDefersImageSwitchWhenBusy`: a second Acquire while the first is held sees the old image. It calls `Ensure` with the old image, not `Recreate`, and logs the deferred line.
+  - `TestAcquireMissingContainerCreatesWithSetting`: `StateMissing` → `Ensure` with the effective image.
+  - `TestSetBuildKitImage`: an invalid ref → `ErrInvalidImage` and no pull. A failed pull → `PullError`, and the setting is unchanged. `''` → stored with no pull.
   - `TestAcquireDockerDefault`: no engine calls, and the line is `Builder: Docker default (no limits)`.
   - `TestLogLineMemoryUnits`: 1536 MB → `1536 MB`, 2048 → `2 GB`, 0.5 CPU → `0.5 CPU`. MaxParallelism 0 leaves out the parallel part.
   - `TestAcquireFailureRecordsLastError`: Ensure fails with `boom`. The error is `Could not start Builder large: boom`, `last_error` is `boom`, and busy is back to 0. A later successful Acquire clears `last_error`.
-  - `TestUpdateKeepsRowWhenDockerRefuses`: the container exists, the edit changes memory, `Ensure` returns an error, and the row in the store is unchanged. Update applies limits before it saves the row, and only when `State` is not `missing`.
-  - `TestUpdateOfUncreatedBuilderOnlySaves`: when `State` is `missing`, the Update calls neither Ensure nor Recreate.
+  - `TestUpdateKeepsRowWhenDockerRefuses`: `Inspect` says the container exists, the edit changes memory, `Ensure` returns an error, and the row in the store is unchanged. Update applies limits before it saves the row, and only when `State` is not `missing`.
+  - `TestUpdateOfUncreatedBuilderOnlySaves`: when `Inspect` reports `StateMissing`, the Update calls neither Ensure nor Recreate.
   - `TestParallelismEditRefusedWhileBusy`: during an Acquire, an Update that changes MaxParallelism returns `ErrBusy`. After release, it calls `Recreate`.
   - `TestCPUMemoryEditAllowedWhileBusy`: calls Ensure, not Recreate.
   - `TestDeleteGuards`: in order, the default, used-by (with the names) and `Deployments.UsesBuilder` each refuse. Otherwise it calls `Engine.Remove(HostName(id))` and then `Store.Delete`.
@@ -261,11 +289,12 @@
 - [ ] **Step 5: Write the failing HTTP tests (`http_test.go`)**
 
   The routes:
-  - `GET /api/builders` returns `{"defaultBuilderId":0,"capacity":{"cpus":16,"memoryMb":31900},"builders":[{"id":1,"name":"large","cpus":2,"memoryMb":4096,"maxParallelism":4,"state":"running","lastError":"","usedBy":["web"]}]}`.
+  - `GET /api/builders` returns `{"defaultBuilderId":0,"buildkitImage":"","defaultBuildkitImage":"moby/buildkit:v0.34.2@sha256:…","capacity":{"cpus":16,"memoryMb":31900},"builders":[{"id":1,"name":"large","cpus":2,"memoryMb":4096,"maxParallelism":4,"state":"running","lastError":"","usedBy":["web"]}]}`.
   - `POST /api/builders` → 201 with the builder.
   - `PUT /api/builders/{id}` → 200.
   - `DELETE /api/builders/{id}` → 204.
   - `PUT /api/builders/default` with `{"builderId":0|n}` → 204. An unknown id is 422.
+  - `PUT /api/builders/settings` with `{"buildkitImage":"…"}` → 204. `ErrInvalidImage` → 422, and `PullError` → 502, both with the Global Constraints copy.
   - `POST /api/builders/{id}/start` → 200 with the builder, or 502 with `Could not start Builder …`.
   - `GET /api/builders/{id}/disk-usage` → `{"bytes":n}`.
   - `POST /api/builders/{id}/prune` → 204.
@@ -411,7 +440,7 @@
 - Produces:
   - the type `Builder`, as in Task 3's GET (`state: 'running' | 'stopped' | 'missing'`);
   - `BuildersResponse`;
-  - `api.listBuilders`, `createBuilder`, `updateBuilder`, `deleteBuilder`, `setDefaultBuilder(builderId)`, `startBuilder`, `builderDiskUsage`, `pruneBuilder`;
+  - `api.listBuilders`, `setBuildKitImage(ref)`, `createBuilder`, `updateBuilder`, `deleteBuilder`, `setDefaultBuilder(builderId)`, `startBuilder`, `builderDiskUsage`, `pruneBuilder`;
   - in `builders-view.ts`, `formatLimits(b): string` (the same text as the log line, without `Builder: `) and `builderStatus(b): { label: string; color: string }`. A non-empty `lastError` → `Error`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -424,7 +453,8 @@
     - a 409 from delete shows the server message in an Alert;
     - disk usage loads after the table renders (the table is visible while `builderDiskUsage` is pending);
     - the CPU field shows the CPU help copy;
-    - the form rejects a CPU of 0.05 before submit.
+    - the form rejects a CPU of 0.05 before submit;
+    - the BuildKit image field shows `Default` when the field is empty. **Use default** clears it, and **Save** PUTs `buildkitImage`. A 502 shows the server message.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -433,6 +463,7 @@
 
 - [ ] **Step 3: Implement the page**
 
+  - Above the table, the **BuildKit image** Input has a placeholder of the default ref, plus **Use default** and **Save** buttons.
   - A Table with the columns Name, Limits, Status, Cache, Used by and actions (Start, Prune cache in a Popconfirm, Edit, Delete in a Popconfirm, Set as default).
   - Add and Edit open a Modal Form: Name Input, CPU `InputNumber step=0.1`, Memory `InputNumber` in MB with an addon, and Max parallel steps `InputNumber` with an "Empty = BuildKit default" placeholder.
   - Bounds come from `capacity`.
@@ -491,7 +522,7 @@
   - the `docker-container` driver;
   - the database as the source of truth, with ensure-on-use;
   - no per-build `docker update`, because of concurrency;
-  - the pinned BuildKit image as a pull exception;
+  - the pinned BuildKit image as a pull exception, with the panel-wide override and the switch on next use;
   - the privileged container, and why it adds nothing beyond the socket;
   - the local-image limitation.
 
@@ -511,6 +542,8 @@
      - the OOM hint appears.
   4. Switch the Compose to Docker default and deploy again. Expected: success.
   5. Delete `small`. Expected: the 409 used-by copy names the Compose.
-  6. Set the Compose back to the panel default, delete `small` again, and confirm that `docker ps -a` and `docker volume ls` show no `relist-builder-` leftovers.
+  6. Set the BuildKit image to `moby/buildkit:v0.34.1@sha256:<digest from docker buildx imagetools inspect moby/buildkit:v0.34.1>`. Expected: the save succeeds after a pull.
+  7. Deploy on a second Builder. Expected: the log shows `switching BuildKit image to …`, and an unchanged step is still `CACHED`. Then press **Use default** and save.
+  8. Set the Compose back to the panel default, delete `small` again, and confirm that `docker ps -a` and `docker volume ls` show no `relist-builder-` leftovers.
 
 - [ ] **Step 4: Commit** `docs: record Builders in the ADRs and glossary`

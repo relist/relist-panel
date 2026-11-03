@@ -48,6 +48,11 @@ BuildKit ignores them.
 - Remote Builders on other hosts, or the `kubernetes` and `remote` buildx drivers.
 - Cache export or import (`cache_from`/`cache_to`) between Builders.
 - Moving Builder caches during a Migration (see Migration below).
+- A per-Builder BuildKit image. The image is one panel-wide setting.
+- A Docker Hub tag picker for the BuildKit image, like the Scanner's. The operator
+  pastes a reference.
+- Removing old BuildKit images after a switch. Other Builders may still use them until
+  their next build.
 
 ## Decisions and evidence
 
@@ -108,6 +113,20 @@ the panel's own versions during implementation.
   `sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe`
   (BuildKit v0.34.2, the current `buildx-stable-1`). Record the digest again at
   implementation time. This is a third exception to "the panel never pulls an image".
+- **The BuildKit image is one panel-wide setting** (decided 2026-11-04), modelled on
+  the Scanner image (`internal/vulnscan/settings.go`):
+  - Empty means the default pinned in the release, so a panel update moves every
+    Builder to the new BuildKit.
+  - A custom value must be `repo[:tag]@sha256:<64 hex>`.
+  - Saving pulls it first. A failed pull rejects the save and keeps the old value.
+- **A Builder switches image when it is next used.** An image cannot be changed with
+  `docker update`. So when Ensure finds that the container's image differs from the
+  setting (after a setting change or a panel update), it re-creates the Builder with
+  `--keep-state`, which keeps the cache (probed).
+  - This happens only when no other build is using that Builder. If one is, the
+    build runs on the old image and the log says so.
+  - Moving to a newer BuildKit keeps the cache. Moving to an older one may not be able
+    to read the state. This was not probed. **Prune cache** is the remedy.
 - **The Builder container is `privileged` with `restart=unless-stopped`.** These are
   buildx defaults. Privileged is what BuildKit needs to run steps. The panel already
   holds the read-write Docker socket, so this grants nothing new. The restart policy
@@ -141,6 +160,8 @@ the panel's own versions during implementation.
 
 ### Builders page
 
+- A **BuildKit image** field above the list shows the effective image and a
+  **Use default** button. It shows "Default" when the field is empty.
 - Fields:
   - Name: unique, 1–40 characters.
   - CPU: cores, 0.1 up to the host's CPU count, one decimal place.
@@ -186,7 +207,8 @@ the panel's own versions during implementation.
 ### During a Deployment
 
 - Before the first build of the Deployment, the panel ensures the Builder exists,
-  runs and matches the stored limits. It logs the Builder line. A failure here fails
+  runs, and matches the stored limits and the BuildKit image setting. On an image
+  mismatch it re-creates the Builder first (see Decisions). It logs the Builder line. A failure here fails
   the step, for example "Could not start Builder large: <docker error>".
 - `BUILDX_BUILDER` is set on every `docker compose` call that can build: `build`,
   `up --build`, and `scale --build`. It is never set on calls that cannot build.
