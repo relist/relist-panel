@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -324,26 +323,10 @@ func (d *MigrationDocker) MaintenanceRunning(ctx context.Context) (bool, error) 
 	return strings.TrimSpace(out) != "", err
 }
 
-// traefik finds the install stack's Traefik: the container of service
-// "traefik" in the panel container's own Compose project.
 func (d *MigrationDocker) traefik(ctx context.Context) (string, error) {
-	out, err := d.docker(ctx, nil, nil, "inspect", "--format", `{{index .Config.Labels "com.docker.compose.project"}}`, d.hostname())
-	if err != nil {
-		return "", fmt.Errorf("find the install's Compose project: %w", err)
-	}
-	project := strings.TrimSpace(out)
-	if project == "" {
-		return "", errors.New("the panel container has no Compose project label, so the install's Traefik cannot be found")
-	}
-	out, err = d.docker(ctx, nil, nil, "ps", "-aq", "--filter", "label=com.docker.compose.project="+project, "--filter", "label=com.docker.compose.service=traefik")
-	if err != nil {
-		return "", err
-	}
-	ids := strings.Fields(out)
-	if len(ids) == 0 {
-		return "", fmt.Errorf("no traefik service in the install project %q", project)
-	}
-	return ids[0], nil
+	return installTraefik(ctx, func(ctx context.Context, args ...string) (string, error) {
+		return d.docker(ctx, nil, nil, args...)
+	}, d.hostname())
 }
 
 func (d *MigrationDocker) StopTraefik(ctx context.Context) error {
