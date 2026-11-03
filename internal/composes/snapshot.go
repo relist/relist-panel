@@ -25,6 +25,9 @@ type ExecutionSnapshot struct {
 	// ZeroDowntime is the Services this deploy rolls out (ADR-0023), in YAML
 	// order; empty in snapshots taken before the feature.
 	ZeroDowntime []string
+	// BuilderID is the Builder this deploy builds on, resolved when queued;
+	// 0 (Docker default) in snapshots taken before the feature.
+	BuilderID int64
 }
 
 func (x *ExecutionSnapshot) files() deployFiles {
@@ -45,7 +48,13 @@ func (s *Service) Capture(ctx context.Context, t DeployTarget) (DeployTarget, er
 	if err != nil {
 		return DeployTarget{}, err
 	}
-	t.Snapshot = &ExecutionSnapshot{YAML: files.composeYAML, Environment: files.envFile, Sets: files.setFiles, Warnings: files.warnings, Services: services, Secrets: files.secrets, PathVariables: files.pathVariables, ZeroDowntime: files.zeroDowntime}
+	var builderID int64
+	if s.builders != nil {
+		if builderID, err = s.builders.Resolve(ctx, t.Compose.ID); err != nil {
+			return DeployTarget{}, err
+		}
+	}
+	t.Snapshot = &ExecutionSnapshot{YAML: files.composeYAML, Environment: files.envFile, Sets: files.setFiles, Warnings: files.warnings, Services: services, Secrets: files.secrets, PathVariables: files.pathVariables, ZeroDowntime: files.zeroDowntime, BuilderID: builderID}
 	return t, nil
 }
 
@@ -64,7 +73,7 @@ func prepareSnapshotBuild(t DeployTarget) (BuildPlan, error) {
 // given paths, the YAML pointing at the staged env and set files, and returns
 // the request that reads them. cleanup removes all of them.
 func stageSnapshot(t DeployTarget, composePath, envPath, setsPath string) (RunRequest, func(), error) {
-	req := RunRequest{ProjectName: t.Request.ProjectName, ComposeFilePath: composePath, EnvFilePath: envPath}
+	req := RunRequest{ProjectName: t.Request.ProjectName, ComposeFilePath: composePath, EnvFilePath: envPath, Builder: t.Request.Builder}
 	cleanup := func() {
 		_ = os.Remove(composePath)
 		_ = os.Remove(envPath)

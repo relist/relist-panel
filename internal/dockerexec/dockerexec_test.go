@@ -122,3 +122,49 @@ func TestRunReturnsWhenAGrandchildHoldsThePipes(t *testing.T) {
 		t.Fatal("run hung on the grandchild's pipes")
 	}
 }
+
+// BUILDX_BUILDER picks the Builder only for calls that can build; nothing
+// else may ever run against a Builder by accident.
+func TestBuilderEnvOnlyOnBuildCapableCalls(t *testing.T) {
+	var cmds []*exec.Cmd
+	old := command
+	command = func(ctx context.Context, _ ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, "true")
+		cmds = append(cmds, cmd)
+		return cmd
+	}
+	t.Cleanup(func() { command = old })
+	hasBuilder := func() bool {
+		for _, kv := range cmds[len(cmds)-1].Env {
+			if kv == "BUILDX_BUILDER=relist-builder-7" {
+				return true
+			}
+		}
+		return false
+	}
+	ctx, r := context.Background(), Runner{}
+	req := composes.RunRequest{Builder: "relist-builder-7"}
+	for name, tc := range map[string]struct {
+		call func() error
+		want bool
+	}{
+		"build":      {func() error { return r.Build(ctx, req, composes.BuildOptions{Service: "web"}) }, true},
+		"up --build": {func() error { return r.Up(ctx, req, composes.UpOptions{Build: true}) }, true},
+		"scale --build": {func() error {
+			return r.Scale(ctx, req, composes.ScaleOptions{Service: "web", Replicas: 2, Build: true})
+		}, true},
+		"up --no-build":    {func() error { return r.Up(ctx, req, composes.UpOptions{}) }, false},
+		"scale --no-build": {func() error { return r.Scale(ctx, req, composes.ScaleOptions{Service: "web", Replicas: 2}) }, false},
+		"status":           {func() error { _, err := r.Status(ctx, req); return err }, false},
+		"docker default": {func() error {
+			return r.Build(ctx, composes.RunRequest{}, composes.BuildOptions{Service: "web"})
+		}, false},
+	} {
+		if err := tc.call(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := hasBuilder(); got != tc.want {
+			t.Errorf("%s: BUILDX_BUILDER set = %v, want %v", name, got, tc.want)
+		}
+	}
+}
