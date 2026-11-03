@@ -8,7 +8,7 @@ import { formatBytes } from '../components/MetricChart';
 import { PageHeader } from '../components/primitives';
 import { ApiError, accessLogDownloadUrl, api } from '../data/api';
 import type { AccessLogFile } from '../data/types';
-import { filterLogLines, showRetentionWarning } from './traefik-view';
+import { canSaveRetention, filterLogLines, showRetentionWarning } from './traefik-view';
 import type { LogLevel } from './traefik-view';
 
 const { Text } = Typography;
@@ -17,7 +17,7 @@ const DESCRIPTION =
   "Traefik's own log, where Let's Encrypt errors show up, and the Access log of every request, rotated daily and kept for the period set below.";
 const NOT_ON =
   "Access log is not on. This install's Traefik was started without the access-log flags; run a Panel update.";
-const NOT_FOUND = 'Traefik container `relist-traefik` not found';
+const NOT_FOUND = 'No Traefik container found in this install.';
 const RETENTION_WARNING = 'Thai law requires service providers to keep traffic data for at least 90 days.';
 
 const LEVELS: { label: string; value: LogLevel }[] = [
@@ -70,12 +70,25 @@ export function TraefikPage() {
       <PageHeader
         description={DESCRIPTION}
         extra={
-          <Button icon={<ReloadOutlined />} loading={logs.isLoading} onClick={refresh}>
+          <Button
+            icon={<ReloadOutlined />}
+            loading={status.isValidating || logs.isValidating || files.isValidating || settings.isValidating}
+            onClick={refresh}
+          >
             Refresh
           </Button>
         }
         title="Traefik"
       />
+
+      {status.error && (
+        <Alert
+          showIcon
+          style={{ marginBottom: 16 }}
+          title={errorMessage(status.error, 'Could not check how Traefik was started')}
+          type="error"
+        />
+      )}
 
       {status.data?.found && !status.data.accessLogEnabled && (
         <Alert showIcon style={{ marginBottom: 16 }} title={NOT_ON} type="warning" />
@@ -162,7 +175,7 @@ function RetentionCard({
   retentionDays: number;
 }) {
   const { message } = App.useApp();
-  const [days, setDays] = useState(savedDays);
+  const [days, setDays] = useState<number | null>(savedDays);
   const [forever, setForever] = useState(savedForever);
   const [saving, setSaving] = useState(false);
 
@@ -172,6 +185,7 @@ function RetentionCard({
   }, [savedDays, savedForever]);
 
   const save = async () => {
+    if (days === null) return;
     setSaving(true);
     try {
       await api.saveAccessLogSettings({ keepForever: forever, retentionDays: days });
@@ -184,26 +198,28 @@ function RetentionCard({
     }
   };
 
-  const dirty = days !== savedDays || forever !== savedForever;
   return (
     <Card title="Retention" variant="outlined">
       <Flex align="center" gap={16} wrap>
-        <Flex align="center" gap={8}>
-          <InputNumber
-            aria-label="Days to keep"
-            disabled={forever}
-            min={1}
-            onChange={(value) => setDays(typeof value === 'number' ? value : 1)}
-            precision={0}
-            suffix="days"
-            value={days}
-          />
-        </Flex>
+        <InputNumber
+          aria-label="Days to keep"
+          disabled={forever}
+          min={1}
+          onChange={(value) => setDays(typeof value === 'number' ? value : null)}
+          precision={0}
+          suffix="days"
+          value={days}
+        />
         <Flex align="center" gap={8}>
           <Switch aria-label="Keep forever" checked={forever} onChange={setForever} />
           <Text>Keep forever</Text>
         </Flex>
-        <Button disabled={!dirty} loading={saving} onClick={() => void save()} type="primary">
+        <Button
+          disabled={!canSaveRetention(days, forever, { keepForever: savedForever, retentionDays: savedDays })}
+          loading={saving}
+          onClick={() => void save()}
+          type="primary"
+        >
           Save
         </Button>
       </Flex>

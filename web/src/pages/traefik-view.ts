@@ -22,6 +22,20 @@ export function filterLogLines(text: string, level: LogLevel): string[] {
 }
 
 /** Thai law asks service providers to keep traffic data for 90 days. */
-export function showRetentionWarning(days: number, keepForever: boolean): boolean {
-  return days < 90 && !keepForever;
+export function showRetentionWarning(days: number | null, keepForever: boolean): boolean {
+  return days !== null && days < 90 && !keepForever;
+}
+
+/**
+ * Whether the retention form can be saved: the days must be a whole number of
+ * at least 1 even when kept forever (the API stores both), and something must
+ * have changed.
+ */
+export function canSaveRetention(
+  days: number | null,
+  keepForever: boolean,
+  saved: { retentionDays: number; keepForever: boolean },
+): boolean {
+  if (days === null || !Number.isInteger(days) || days < 1) return false;
+  return days !== saved.retentionDays || keepForever !== saved.keepForever;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { filterLogLines, showRetentionWarning } from './traefik-view';
+import { canSaveRetention, filterLogLines, showRetentionWarning } from './traefik-view';
 
 // Lines as `docker logs --timestamps` shows Traefik v3.7's own log (probe, 2026-11-03).
 const ERR = '2026-11-03T07:32:27.041645720Z 2026-11-03T07:32:27Z ERR Unable to obtain ACME certificate domains=["a.test"]';
@@ -37,5 +37,27 @@ describe('showRetentionWarning', () => {
     expect(showRetentionWarning(89, false)).toBe(true);
     expect(showRetentionWarning(90, false)).toBe(false);
     expect(showRetentionWarning(1, true)).toBe(false);
+  });
+});
+
+describe('canSaveRetention', () => {
+  const saved = { keepForever: false, retentionDays: 90 };
+
+  it('needs a change', () => {
+    expect(canSaveRetention(90, false, saved)).toBe(false);
+    expect(canSaveRetention(30, false, saved)).toBe(true);
+    expect(canSaveRetention(90, true, saved)).toBe(true);
+  });
+
+  it('refuses an empty or invalid number of days, even with keep forever', () => {
+    expect(canSaveRetention(null, false, saved)).toBe(false);
+    expect(canSaveRetention(null, true, saved)).toBe(false);
+    expect(canSaveRetention(0, false, saved)).toBe(false);
+  });
+});
+
+describe('showRetentionWarning with no days yet', () => {
+  it('does not warn while the field is empty', () => {
+    expect(showRetentionWarning(null, false)).toBe(false);
   });
 });

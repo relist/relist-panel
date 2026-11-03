@@ -25,7 +25,7 @@
 - UI copy fixed by the spec, verbatim:
   - Banner: "Access log is not on. This install's Traefik was started without the access-log flags; run a Panel update."
   - Retention warning: "Thai law requires service providers to keep traffic data for at least 90 days."
-  - Missing container: "Traefik container `relist-traefik` not found"
+  - Missing container: "No Traefik container found in this install."
 
 ## Review Focus
 

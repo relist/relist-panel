@@ -213,7 +213,7 @@ the components against the installed `antd` version.
   on. This install's Traefik was started without the access-log flags; run a Panel update."
 - **Traefik log card.** Monospace log text from `/api/traefik/logs`, a level filter
   (All / Error / Warn / Info) matched on the level token in each line, and a Refresh button.
-  When `found` is false it shows "Traefik container `relist-traefik` not found".
+  When `found` is false it shows "No Traefik container found in this install.".
 - **Access logs card.** A table of files (date, name, size) with a Download action per row,
   and the total size on disk. The last rotation time and error are shown when present.
 - **Settings card.** Retention days (`InputNumber`, min 1) and a "Keep forever" switch that
