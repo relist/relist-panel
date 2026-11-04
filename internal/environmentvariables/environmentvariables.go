@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"relist-panel/internal/audit"
 	"relist-panel/internal/authz"
 )
 
@@ -93,6 +94,14 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 				variables[i].Value = ""
 			}
 		}
+	} else {
+		var keys []string
+		for _, variable := range variables {
+			if variable.Secret && variable.Value != "" {
+				keys = append(keys, variable.Key)
+			}
+		}
+		audit.SecretRead(r.Context(), keys)
 	}
 	writeJSON(w, http.StatusOK, variables)
 }
@@ -124,6 +133,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	audit.Detail(r.Context(), "key", key)
 	variable, err := s.repository.create(r.Context(), environmentID, key, value, input.Secret)
 	if err != nil {
 		if isUniqueConstraint(err) {
@@ -175,6 +185,7 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not load environment variable")
 		return
 	}
+	audit.Detail(r.Context(), "key", key)
 	if err := s.repository.update(r.Context(), environmentID, variableID, key, value, input.Secret); err != nil {
 		if isUniqueConstraint(err) {
 			writeError(w, http.StatusConflict, "an environment variable with that key already exists")
@@ -213,6 +224,9 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if existing, err := s.repository.findByID(r.Context(), environmentID, variableID); err == nil {
+		audit.Detail(r.Context(), "key", existing.Key)
+	}
 	deleted, err := s.repository.delete(r.Context(), environmentID, variableID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete environment variable")

@@ -86,3 +86,11 @@ func Emit(ctx context.Context, action string, detail map[string]any) {
 		log.Printf("audit: %s: %v", action, err)
 	}
 }
+
+// SecretRead records that a response carried these secret keys' values.
+// No keys, no event.
+func SecretRead(ctx context.Context, keys []string) {
+	if len(keys) > 0 {
+		Emit(ctx, "secret.read", map[string]any{"keys": keys})
+	}
+}

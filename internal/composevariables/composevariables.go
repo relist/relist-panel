@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"relist-panel/internal/audit"
 	"relist-panel/internal/authz"
 	"relist-panel/internal/environmentvariables"
 )
@@ -94,6 +95,14 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 				variables[i].Value = ""
 			}
 		}
+	} else {
+		var keys []string
+		for _, variable := range variables {
+			if variable.Secret && variable.Value != "" {
+				keys = append(keys, variable.Key)
+			}
+		}
+		audit.SecretRead(r.Context(), keys)
 	}
 	writeJSON(w, http.StatusOK, variables)
 }
@@ -107,6 +116,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	audit.Detail(r.Context(), "key", key)
 	var id int64
 	err := s.inTx(r.Context(), composeID, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(r.Context(), `
@@ -140,6 +150,7 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	audit.Detail(r.Context(), "key", key)
 	err = s.inTx(r.Context(), composeID, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(r.Context(), `
 			UPDATE compose_variables
@@ -167,6 +178,10 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "compose variable id must be a positive integer")
 		return
+	}
+	var key string
+	if err := s.db.QueryRowContext(r.Context(), "SELECT key FROM compose_variables WHERE compose_id = ? AND id = ?", composeID, variableID).Scan(&key); err == nil {
+		audit.Detail(r.Context(), "key", key)
 	}
 	err = s.inTx(r.Context(), composeID, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(r.Context(), `

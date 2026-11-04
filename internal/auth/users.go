@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"relist-panel/internal/audit"
 	"strconv"
 	"time"
 )
@@ -127,6 +128,8 @@ func (s *Service) createUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	audit.Target(r.Context(), email)
+	audit.Detail(r.Context(), "isAdmin", input.IsAdmin)
 	now := s.now().UTC()
 	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -176,12 +179,19 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.auditTarget(r, id)
 	var input struct {
 		IsAdmin  *bool `json:"isAdmin"`
 		Disabled *bool `json:"disabled"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
+	}
+	if input.IsAdmin != nil {
+		audit.Detail(r.Context(), "isAdmin", *input.IsAdmin)
+	}
+	if input.Disabled != nil {
+		audit.Detail(r.Context(), "disabled", *input.Disabled)
 	}
 	if id == OwnerID && ((input.IsAdmin != nil && !*input.IsAdmin) || (input.Disabled != nil && *input.Disabled)) {
 		writeError(w, http.StatusForbidden, "The owner cannot be disabled or demoted")
@@ -247,6 +257,7 @@ func (s *Service) deleteUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.auditTarget(r, id)
 	if id == OwnerID {
 		writeError(w, http.StatusForbidden, "The owner cannot be deleted")
 		return
@@ -271,6 +282,7 @@ func (s *Service) resetUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.auditTarget(r, id)
 	if id == OwnerID && actor.ID != OwnerID {
 		writeError(w, http.StatusForbidden, "Only the owner can reset the owner")
 		return
@@ -338,4 +350,13 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
+}
+
+// auditTarget names the User a request changes by their email, read before
+// any transaction opens (the database has one connection).
+func (s *Service) auditTarget(r *http.Request, id int64) {
+	var email string
+	if err := s.db.QueryRowContext(r.Context(), "SELECT email FROM users WHERE id = ?", id).Scan(&email); err == nil {
+		audit.Target(r.Context(), email)
+	}
 }

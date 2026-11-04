@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"relist-panel/internal/audit"
 	"strconv"
 	"strings"
 	"time"
@@ -107,6 +108,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := strings.TrimSpace(input.Name)
+	audit.Target(r.Context(), name)
 	siblings, err := s.repository.list(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create project")

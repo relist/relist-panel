@@ -3,6 +3,7 @@ package variablesets
 import (
 	"database/sql"
 	"net/http"
+	"relist-panel/internal/audit"
 
 	"relist-panel/internal/environmentvariables"
 )
@@ -22,6 +23,7 @@ func (s *Service) createEntry(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	audit.Detail(r.Context(), "key", key)
 	var id int64
 	err := s.inTx(r.Context(), setID, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(r.Context(), `
@@ -53,6 +55,7 @@ func (s *Service) updateEntry(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	audit.Detail(r.Context(), "key", key)
 	err := s.inTx(r.Context(), setID, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(r.Context(), `
 			UPDATE variable_set_entries SET key = ?, value = ?, secret = ? WHERE set_id = ? AND id = ?
@@ -77,6 +80,10 @@ func (s *Service) deleteEntry(w http.ResponseWriter, r *http.Request) {
 	entryID, ok := entryID(w, r)
 	if !ok {
 		return
+	}
+	var key string
+	if err := s.db.QueryRowContext(r.Context(), "SELECT key FROM variable_set_entries WHERE set_id = ? AND id = ?", setID, entryID).Scan(&key); err == nil {
+		audit.Detail(r.Context(), "key", key)
 	}
 	err := s.inTx(r.Context(), setID, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(r.Context(), `DELETE FROM variable_set_entries WHERE set_id = ? AND id = ?`, setID, entryID)

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"relist-panel/internal/audit"
 	"relist-panel/internal/authz"
 )
 
@@ -96,6 +97,16 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	} else {
+		var keys []string
+		for _, set := range sets {
+			for _, entry := range set.Entries {
+				if entry.Secret && entry.Value != "" {
+					keys = append(keys, entry.Key)
+				}
+			}
+		}
+		audit.SecretRead(r.Context(), keys)
 	}
 	writeJSON(w, http.StatusOK, sets)
 }
@@ -109,6 +120,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	audit.Detail(r.Context(), "name", name)
 	now := s.now().Unix()
 	result, err := s.db.ExecContext(r.Context(), `
 		INSERT INTO variable_sets (compose_id, name, created_at, updated_at)
@@ -135,6 +147,7 @@ func (s *Service) rename(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	audit.Detail(r.Context(), "name", name)
 	// A rename does not stamp variables_changed_at: set files are named by ID,
 	// so nothing deployed changes.
 	err := func() error {
@@ -157,6 +170,10 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	composeID, setID, ok := s.requireSet(w, r)
 	if !ok {
 		return
+	}
+	var name string
+	if err := s.db.QueryRowContext(r.Context(), "SELECT name FROM variable_sets WHERE compose_id = ? AND id = ?", composeID, setID).Scan(&name); err == nil {
+		audit.Detail(r.Context(), "name", name)
 	}
 	// Deleting cascades the set's entries and bindings. When it had bindings the
 	// next deploy changes, so the Compose is stamped in the same transaction.
