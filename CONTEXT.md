@@ -32,6 +32,14 @@ _Avoid_: SSL, Cert (as the entity name), Certificate resolver (that is how Traef
 The record of every HTTP request Traefik receives, kept as JSON lines in `<data dir>/.traefik/access/`, one gzipped file per day, and deleted by the panel after the retention period. It is host-wide, not per Compose (ADR-0027).
 _Avoid_: Request log, Traffic log (as the entity name). "Traefik log" means Traefik's own log on stdout, not this.
 
+**Traefik override**:
+The operator's part of Traefik's static config, `<data dir>/.traefik/static/traefik.override.yml`, edited on the Traefik page. The panel merges it over the base into the generated `traefik.yml` that Traefik reads (ADR-0030).
+_Avoid_: Traefik config (ambiguous between base, override and generated file), traefik.yml (that is the generated file).
+
+**Traefik apply**:
+Writing a new Traefik override and restarting Traefik with self-heal: validate, dry-run, back up, write, restart, watch for 60 s, and roll back on failure (ADR-0030).
+_Avoid_: Reload (Traefik cannot reload static config; this is a restart).
+
 **Internal hostname**:
 A `.internal` alias a Service answers to on `relist-network`, injected on deploy (ADR-0014): the stable `<service>.<docker compose project>.internal` and the readable `<service>.<compose>.<environment>.<project>.internal`. Only Services with a Domain, Traefik labels or an explicit `relist-network` get them.
 _Avoid_: Service name (the bare name is ambiguous across Composes), DNS name
@@ -140,7 +148,7 @@ The Install's `docker-compose.yml`, owned by the panel: each version ships one, 
 _Avoid_: Base file, Main compose
 
 **Install override**:
-The Install's `docker-compose.override.yml`, owned by the operator, where the Install is customised. A Panel update never writes it.
+The Install's `docker-compose.override.yml`, owned by the operator, where the Install is customised. A Panel update never writes it. The **Traefik override** is the equivalent for Traefik's static config.
 _Avoid_: Custom compose, Local file
 
 **Panel update**:
