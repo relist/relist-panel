@@ -18,6 +18,8 @@ import (
 
 const userPassword = "correct horse battery staple"
 
+var bcryptMismatch = bcrypt.ErrMismatchedHashAndPassword
+
 // userFixture is a migrated panel with the Owner (id 1, admin@example.com)
 // and a clock the test controls.
 type userFixture struct {
@@ -198,5 +200,29 @@ func TestLoginRecordsLastLogin(t *testing.T) {
 	var last sql.NullInt64
 	if err := f.db.QueryRow("SELECT last_login_at FROM users WHERE id = 1").Scan(&last); err != nil || !last.Valid || last.Int64 != f.now.Unix() {
 		t.Fatalf("last_login_at = %v, %v, want %d", last, err, f.now.Unix())
+	}
+}
+
+func TestLoginComparesAPasswordForEveryEmail(t *testing.T) {
+	f := newUserFixture(t)
+	f.addUser(t, 2, "invited@example.com", false, true)
+	f.addUser(t, 3, "disabled@example.com", false, false)
+	if _, err := f.db.Exec("UPDATE users SET disabled_at = 5 WHERE id = 3"); err != nil {
+		t.Fatal(err)
+	}
+	compared := 0
+	f.service.comparePassword = func(hash, password []byte) error {
+		compared++
+		return bcryptMismatch
+	}
+	for _, email := range []string{"nobody@example.com", "invited@example.com", "disabled@example.com"} {
+		before := compared
+		response := f.login(email, userPassword)
+		if response.Code != http.StatusUnauthorized || decodeBody(t, response)["error"] != "invalid email or password" {
+			t.Fatalf("login %s = %d %s", email, response.Code, response.Body.String())
+		}
+		if compared != before+1 {
+			t.Errorf("login %s compared %d passwords, want 1 so its timing matches an active account", email, compared-before)
+		}
 	}
 }

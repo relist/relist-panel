@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
@@ -192,6 +194,10 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 
 	account, remaining, err := s.readLoginAccount(r.Context(), email)
 	if errors.Is(err, sql.ErrNoRows) {
+		// No User who can sign in has this email. Spend a bcrypt comparison
+		// anyway, so the answer takes as long as a wrong password and its
+		// timing does not tell which emails belong to active Users.
+		_ = s.comparePassword(dummyHash(), []byte(input.Password))
 		writeError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
@@ -471,6 +477,23 @@ func scanAdmin(row *sql.Row) (userRow, error) {
 		&account.lockedUntil,
 	)
 	return account, err
+}
+
+var (
+	dummyHashOnce  sync.Once
+	dummyHashValue []byte
+)
+
+// dummyHash is a bcrypt hash at the cost real passwords use, made once, for
+// a sign-in whose email matches no User that can sign in.
+func dummyHash() []byte {
+	dummyHashOnce.Do(func() {
+		hash, err := bcrypt.GenerateFromPassword([]byte("relist-panel dummy password"), bcrypt.DefaultCost)
+		if err == nil {
+			dummyHashValue = hash
+		}
+	})
+	return dummyHashValue
 }
 
 func (s *Service) requireDatabase() error {
