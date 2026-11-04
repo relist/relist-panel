@@ -8,6 +8,7 @@ import useSWR from 'swr';
 import { paths } from '../app/paths';
 import { EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { VulnBadges } from '../components/VulnBadges';
+import { VulnReportButton } from '../components/VulnReportButton';
 import { api } from '../data/api';
 import { usePanel } from '../data/store';
 import type { VulnCve, VulnFinding, VulnImage, VulnSeverity, VulnStatus } from '../data/types';
@@ -22,6 +23,7 @@ import {
   scanRowState,
   usedByLabel,
 } from './vulnerabilities-view';
+import { buildImageReport, reportFilename } from './vuln-report';
 import { VulnerabilitySettingsDrawer } from './VulnerabilitySettingsDrawer';
 
 const { Text } = Typography;
@@ -310,9 +312,19 @@ function ImagesTab({
     {
       key: 'action',
       render: (_, image) => (
-        <Button disabled={!enabled} onClick={() => onScan(image.imageId)} size="small">
-          Scan
-        </Button>
+        <Flex gap={8}>
+          <Button disabled={!enabled} onClick={() => onScan(image.imageId)} size="small">
+            Scan
+          </Button>
+          <VulnReportButton
+            disabled={image.counts === null}
+            load={async () => ({
+              markdown: buildImageReport(image, await api.vulnFindings(image.imageId)),
+              filename: reportFilename(image.refs[0] ?? shortId(image.imageId)),
+            })}
+            size="small"
+          />
+        </Flex>
       ),
       title: '',
     },

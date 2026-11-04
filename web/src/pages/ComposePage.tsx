@@ -84,8 +84,10 @@ import { activeComposeTab, composeDeployIdentity, internalHostnamePattern, compo
 import { useComposeSource } from './useComposeSource';
 import { useDeploymentHistory } from './useDeploymentHistory';
 import { VulnBadges } from '../components/VulnBadges';
+import { VulnReportButton } from '../components/VulnReportButton';
 import { useVulnSummary } from '../data/useVulnSummary';
 import { summaryBadge, vulnLink } from './vulnerabilities-view';
+import { buildComposeReport, composeBuilds, reportFilename } from './vuln-report';
 
 const { Text, Paragraph, Title } = Typography;
 
@@ -466,6 +468,32 @@ export function ComposePage() {
   const sourcePath = { composeId: compose.id, environmentId: environment.id, projectId: project.id };
   const lastBuilt = deploymentHistory?.find((d) => d.status === 'succeeded' && d.sourceRef !== '');
 
+  // The report names the commit the running images were built from, falling
+  // back to the Source's checked-out head before any build.
+  const loadVulnReport = async () => {
+    const images = (await api.vulnImages())
+      .map((image) => ({
+        image,
+        services: [...new Set(image.users.filter((u) => u.kind === 'service' && u.composeId === compose.id).map((u) => u.service ?? ''))],
+      }))
+      .filter((i) => i.services.length > 0);
+    const withFindings = await Promise.all(
+      images.map(async (i) => ({ ...i, findings: i.image.counts ? await api.vulnFindings(i.image.imageId) : [] })),
+    );
+    let source: string | undefined;
+    if (currentSource?.kind === 'git') {
+      const commit = lastBuilt?.sourceRef || currentSource.headSha;
+      source = commit ? `${currentSource.repoUrl} @ ${commit}` : currentSource.repoUrl;
+    } else if (currentSource?.kind === 'zip' && currentSource.zip) {
+      source = `uploaded zip ${currentSource.zip.name}`;
+    }
+    const title = `${project.name} / ${environment.name} / ${compose.name}`;
+    return {
+      markdown: buildComposeReport({ title, source, builds: composeBuilds(compose.yamlContent), images: withFindings, generatedAt: new Date() }),
+      filename: reportFilename(title),
+    };
+  };
+
   const openDetect = () => {
     api
       .detectDockerfiles(sourcePath)
@@ -723,6 +751,7 @@ export function ComposePage() {
           <>
             <ComposeStatusTag lastDeployedAt={compose.lastDeployedAt} status={compose.status} />
             <VulnBadges badge={summaryBadge(vulnSummary)} to={vulnLink({ composeId: compose.id })} />
+            {vulnSummary?.enabled && <VulnReportButton load={loadVulnReport} size="small" />}
             {dirty && (
               <Tag color="processing" variant="filled">
                 Unsaved changes
