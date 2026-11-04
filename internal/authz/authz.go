@@ -84,7 +84,9 @@ func (a *Authorizer) Middleware(mux *http.ServeMux, next http.Handler) http.Hand
 			next.ServeHTTP(w, r)
 			return
 		}
-		path := r.URL.Path
+		// The escaped path, split as the mux splits it: an encoded slash stays
+		// inside its segment, so authz reads the same ids the handler will.
+		path := r.URL.EscapedPath()
 		status, access, scope, err := a.decide(r.Context(), user, pattern, path)
 		if err != nil {
 			log.Printf("authz: %s %s: %v", r.Method, path, err)

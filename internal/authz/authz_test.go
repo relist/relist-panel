@@ -209,6 +209,17 @@ func TestForgedParentIsNotFound(t *testing.T) {
 	}
 }
 
+// An encoded slash makes the mux and a decoded split disagree: the mux
+// keeps "1%2Fx%2F11%2Fy%2F101" as one segment (the handler reads Compose
+// 102 in Environment 12), while splitting r.URL.Path would read Project 1,
+// Environment 11, Compose 101 — the one the member may edit.
+func TestEncodedSlashCannotBorrowAnotherScope(t *testing.T) {
+	f := newFixture(t)
+	grant(t, f.db, pA, eA1, "editor")
+	expect(t, f, member, http.MethodGet, "/api/projects/1%2Fx%2F11%2Fy%2F101/environments/12/composes/102", http.StatusNotFound)
+	expect(t, f, member, http.MethodGet, "/api/projects/%31/environments/11/composes/101", http.StatusNoContent)
+}
+
 func TestProjectEditorLevel(t *testing.T) {
 	f := newFixture(t)
 	grant(t, f.db, pA, 0, "viewer")

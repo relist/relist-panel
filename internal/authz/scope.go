@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -12,7 +13,8 @@ type Scope struct {
 }
 
 // scopeOf aligns path with the ServeMux pattern it matched and reads the
-// ids. It never calls r.PathValue: the mux fills path values only inside
+// ids. path is the escaped path (r.URL.EscapedPath), split on literal
+// slashes as the mux does, each segment then unescaped. It never calls r.PathValue: the mux fills path values only inside
 // its own ServeHTTP, after this middleware. `{projectID}`, or `{id}` right
 // after `projects`, is the Project; `{environmentID}`, or `{id}` right after
 // `environments`, the Environment; `{composeID}` the Compose. Any other
@@ -48,7 +50,11 @@ func scopeOf(pattern, path string) (Scope, bool) {
 		if i >= len(pathSegs) {
 			return Scope{}, false
 		}
-		id, err := strconv.ParseInt(pathSegs[i], 10, 64)
+		value, err := url.PathUnescape(pathSegs[i])
+		if err != nil {
+			return Scope{}, false
+		}
+		id, err := strconv.ParseInt(value, 10, 64)
 		if err != nil || id <= 0 {
 			return Scope{}, false
 		}
