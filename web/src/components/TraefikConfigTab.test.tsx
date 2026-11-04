@@ -1,0 +1,145 @@
+// @vitest-environment jsdom
+import '../test/dom-setup';
+
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { SWRConfig } from 'swr';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { ConfigPreview, TraefikConfig } from '../data/types';
+import { TraefikConfigTab } from './TraefikConfigTab';
+
+const api = vi.hoisted(() => ({
+  previewTraefikConfig: vi.fn(),
+  restoreTraefikConfig: vi.fn(),
+  traefikConfigHistory: vi.fn(),
+}));
+
+vi.mock('../data/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../data/api')>()),
+  api,
+}));
+
+// The editor is Monaco; a textarea stands in for it.
+vi.mock('./YamlEditor', () => ({
+  YamlEditor: ({ onChange, path, readOnly, value }: { onChange?: (v: string) => void; path: string; readOnly?: boolean; value: string }) => (
+    <textarea aria-label={path} onChange={(e) => onChange?.(e.target.value)} readOnly={readOnly} value={value} />
+  ),
+}));
+
+const form = { accessLog: false, acmeEmail: 'ops@example.com', logLevel: 'INFO' as const, trustCloudflare: false, trustedIps: [] };
+
+function config(overrides: Partial<TraefikConfig> = {}): TraefikConfig {
+  return {
+    base: 'log:\n  level: INFO\n',
+    effective: '# Generated\n',
+    form,
+    lastApply: null,
+    override: '# mine\n',
+    pendingRestart: false,
+    revision: 'rev1',
+    warnings: [],
+    ...overrides,
+  };
+}
+
+function preview(overrides: Partial<ConfigPreview> = {}): ConfigPreview {
+  return { effective: '# Generated\n', errors: [], form, override: '# mine\n', warnings: [], ...overrides };
+}
+
+const onReviewApply = vi.fn();
+const onStarted = vi.fn();
+
+function show(c = config()) {
+  return render(
+    <SWRConfig value={{ provider: () => new Map(), revalidateOnFocus: false, shouldRetryOnError: false }}>
+      <TraefikConfigTab config={c} onReviewApply={onReviewApply} onStarted={onStarted} />
+    </SWRConfig>,
+  );
+}
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  api.traefikConfigHistory.mockResolvedValue([]);
+});
+
+describe('TraefikConfigTab', () => {
+  it('sends a form edit through preview and marks the draft unsaved', async () => {
+    api.previewTraefikConfig.mockResolvedValue(
+      preview({ form: { ...form, acmeEmail: 'new@example.com' }, override: '# mine\nemail: new@example.com\n' }),
+    );
+    show();
+    const email = screen.getByRole('textbox', { name: 'ACME email' });
+    fireEvent.change(email, { target: { value: 'new@example.com' } });
+    await waitFor(() =>
+      expect(api.previewTraefikConfig).toHaveBeenCalledWith({
+        form: { ...form, acmeEmail: 'new@example.com' },
+        override: '# mine\n',
+      }),
+    );
+    expect(await screen.findByText('Unsaved changes')).toBeTruthy();
+  });
+
+  it('disables Settings while the YAML does not parse', async () => {
+    const user = userEvent.setup();
+    api.previewTraefikConfig.mockResolvedValue(
+      preview({ effective: '', errors: [{ key: '', line: 1, message: 'yaml: line 1: oops' }], form: null, override: 'a: [oops\n' }),
+    );
+    show();
+    await user.click(screen.getByText('Advanced'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'traefik.override.yml' }), { target: { value: 'a: [oops\n' } });
+    expect(await screen.findByText(/Line 1: yaml: line 1: oops/)).toBeTruthy();
+    await user.click(screen.getByText('Settings'));
+    expect(await screen.findByText('Fix the YAML in Advanced first')).toBeTruthy();
+    expect((screen.getByRole('textbox', { name: 'ACME email' }) as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it('discards the draft back to the saved override', async () => {
+    const user = userEvent.setup();
+    api.previewTraefikConfig.mockResolvedValue(preview({ override: 'log: {level: DEBUG}\n' }));
+    show();
+    await user.click(screen.getByText('Advanced'));
+    const editor = screen.getByRole('textbox', { name: 'traefik.override.yml' }) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: 'log: {level: DEBUG}\n' } });
+    await user.click(await screen.findByRole('button', { name: 'Discard' }));
+    expect((screen.getByRole('textbox', { name: 'traefik.override.yml' }) as HTMLTextAreaElement).value).toBe('# mine\n');
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+  });
+
+  it('shows Trust Cloudflare as the form says', () => {
+    show(config({ form: { ...form, trustCloudflare: true } }));
+    expect(screen.getByRole('switch', { name: 'Trust Cloudflare' }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('lists history and restores an entry', async () => {
+    const user = userEvent.setup();
+    api.traefikConfigHistory.mockResolvedValue([
+      { at: '2026-11-04T10:00:00Z', kind: 'apply', name: '20261104T100000Z-abcdefgh', result: 'ok' },
+    ]);
+    api.restoreTraefikConfig.mockResolvedValue({ id: 'run1' });
+    show();
+    await user.click(screen.getByText('History'));
+    await user.click(await screen.findByRole('button', { name: 'Restore 20261104T100000Z-abcdefgh' }));
+    await user.click(await screen.findByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(api.restoreTraefikConfig).toHaveBeenCalledWith('20261104T100000Z-abcdefgh'));
+    expect(onStarted).toHaveBeenCalledWith('run1');
+  });
+
+  it('warns when web and websecure trust different proxies', () => {
+    show(config({ warnings: [{ key: 'entryPoints.web.forwardedHeaders.trustedIPs', line: 0, message: 'web and websecure differ; saving here makes them the same' }] }));
+    expect(screen.getByText('web and websecure differ; saving here makes them the same')).toBeTruthy();
+  });
+
+  it('hands the draft and its generated file to Review & Apply', async () => {
+    const user = userEvent.setup();
+    api.previewTraefikConfig.mockResolvedValue(preview({ effective: '# new\n', override: 'log: {level: DEBUG}\n' }));
+    show();
+    await user.click(screen.getByText('Advanced'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'traefik.override.yml' }), { target: { value: 'log: {level: DEBUG}\n' } });
+    await waitFor(() => expect(api.previewTraefikConfig).toHaveBeenCalled());
+    const review = screen.getByRole('button', { name: 'Review & Apply' }) as HTMLButtonElement;
+    await waitFor(() => expect(review.disabled).toBe(false));
+    await user.click(review);
+    expect(onReviewApply).toHaveBeenCalledWith('log: {level: DEBUG}\n', '# new\n');
+  });
+});

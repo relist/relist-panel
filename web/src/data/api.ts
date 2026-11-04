@@ -33,6 +33,12 @@ import type {
   AccessLogSettingsInput,
   Certificate,
   CertificateInput,
+  ConfigPreview,
+  ConfigTestResult,
+  TraefikApplyRun,
+  TraefikConfig,
+  TraefikForm,
+  TraefikHistoryEntry,
   TraefikLogs,
   TraefikStatus,
   ScannerTag,
@@ -428,6 +434,20 @@ export const api = {
   accessLogSettings: () => request<AccessLogSettings>('/api/traefik/access-log-settings'),
   saveAccessLogSettings: (input: AccessLogSettingsInput) =>
     request<AccessLogSettings>('/api/traefik/access-log-settings', jsonInit('PUT', input)),
+  // Traefik's static config and the Traefik apply (ADR-0030).
+  traefikConfig: () => request<TraefikConfig>('/api/traefik/config'),
+  previewTraefikConfig: (body: { override: string; form?: TraefikForm }) =>
+    request<ConfigPreview>('/api/traefik/config/preview', jsonInit('POST', body)),
+  testTraefikConfig: (override: string) =>
+    request<ConfigTestResult>('/api/traefik/config/test', jsonInit('POST', { override })),
+  applyTraefikConfig: (override: string, revision: string) =>
+    request<{ id: string }>('/api/traefik/config/apply', jsonInit('POST', { override, revision })),
+  traefikApplyStatus: () => request<TraefikApplyRun | null>('/api/traefik/config/apply'),
+  ackTraefikApply: (id: string) => request<void>('/api/traefik/config/apply/ack', jsonInit('POST', { id })),
+  restartTraefik: () => request<{ id: string }>('/api/traefik/restart', { method: 'POST' }),
+  traefikConfigHistory: () => request<TraefikHistoryEntry[]>('/api/traefik/config/history'),
+  restoreTraefikConfig: (name: string) =>
+    request<{ id: string }>(`/api/traefik/config/history/${encodeURIComponent(name)}/restore`, { method: 'POST' }),
   // Vulnerability scanning (ADR-0021).
   vulnSettings: () => request<VulnSettingsResponse>(`${VULN_URL}/settings`),
   saveVulnSettings: (settings: VulnSettings) => request<VulnSettingsResponse>(`${VULN_URL}/settings`, jsonInit('PUT', settings)),
