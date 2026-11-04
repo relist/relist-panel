@@ -34,7 +34,8 @@ Settled in brainstorming on 2026-11-04:
   all of it, Editors see the events of what they edit.
 - **Compose policy.** A Compose whose resolved config could take the host deploys only after an
   approver approves that exact config. The approver is every admin by default, or only the Owner
-  when `RELIST_POLICY_APPROVER=owner`.
+  when `RELIST_POLICY_APPROVER=owner`. Host paths outside the Compose directory that may be bound
+  without approval are listed in `RELIST_POLICY_BIND_ROOTS`.
 - **Phased delivery.** One spec, four phases that merge separately: Users, Roles, Audit log,
   Compose policy. Implementation starts after the open PRs (#38–#41) merge, on top of the newest
   `main`, so the migration number and the route table are final from the start.
@@ -49,7 +50,9 @@ Settled in brainstorming on 2026-11-04:
 - The existing admin keeps signing in with the same email, password, two-factor and session.
 - Every change made through the panel shows in the Audit log with who made it.
 - A non-approver cannot deploy a Compose that mounts the Docker socket, any path outside its
-  Compose directory, or runs privileged, however the file spells it.
+  allowed roots, another Compose's volume, or runs privileged, however the file spells it, and
+  cannot open such a path in the Volume Explorer. The race listed under "What it does not stop"
+  remains.
 
 ## Out of scope / follow-up
 
@@ -193,6 +196,7 @@ Each level includes the ones above it.
 
 | Level | May |
 |---|---|
+| **Signed-in** | any User with a session: `GET /api/auth/status`, the Account routes (`/api/auth/account`, password, email, two-factor), logout |
 | **Viewer** | read Projects, Environments, Composes, the Compose file, Services, logs, metrics, Deployments and their logs, Domains, Source settings, Zero-downtime settings, Builder settings, variable keys and non-secret values, Variable Set keys and non-secret values, Bindings |
 | **Operator** | create and cancel Deployments, restart, stop |
 | **Editor** | update the Compose, its Variables, Variable Sets, Bindings, Domains, Source (including upload, test, known-hosts reset, cache delete), Zero-downtime and Builder settings; Preview; Terminal; Volume Explorer (read, write, archive, orphans); removal plans; read secret values; create and delete Composes |
@@ -201,6 +205,11 @@ Each level includes the ones above it.
 
 Preview is Editor because its output has variables interpolated, secrets included. The Volume
 Explorer is Editor because a Volume may hold a database.
+
+**`docker compose` stops inheriting the panel's environment** (phase 2). Today
+`dockerexec` runs it with `os.Environ()`, so `${RELIST_ADMIN_PASSWORD}` in a Compose file would
+interpolate the panel's own variable into Preview and into containers. The CLI gets only `PATH`,
+`HOME` and the `DOCKER_*` variables it needs, plus the variables the panel passes on purpose.
 
 Lists filter instead of refusing:
 
@@ -301,27 +310,47 @@ tamper-proof against an admin or an approver, who can reach `panel.db` from a co
 ### What is checked
 
 The check runs on the **resolved** config, the output of `docker compose config` with every
-profile enabled, so interpolation, `include` and `extends` cannot hide a value. The rules are an
-allowlist: a key the checker does not know is a violation.
+profile enabled, so interpolation, `include` and `extends` cannot hide a value. It checks the
+config as the user wrote it, before the panel injects its own keys (Domain labels,
+`relist-network`, Internal hostnames, logging, the Builder); injected keys are the panel's and are
+trusted. The rules are an allowlist: a key the checker does not know is a violation.
 
 Violations:
 
-- A bind mount (in `volumes:` long or short form, or `configs`/`secrets` with `file:`) whose
-  source is not inside the Compose's own directory, after resolving symlinks. Any path component
-  that is a symlink pointing outside is a violation, including symlinks inside a Source.
-- A named volume with `driver_opts` (a `local` volume can bind any host path) or a non-default
-  `driver`.
+- A bind mount (in `volumes:` long or short form, or `configs`/`secrets`/`build.secrets` with
+  `file:`) whose source is not inside an **allowed root**, after resolving symlinks. Any path
+  component that is a symlink pointing outside is a violation, including symlinks inside a Source.
+- A bind source inside or equal to another bind source of the same Compose (a container that can
+  write the outer one could swap the inner one for a symlink before the next `up`).
+- `env_file` or `label_file` outside an allowed root. To verify before implementing: whether
+  `docker compose config` keeps these paths or inlines their contents. If it inlines them, the
+  checker reads them from the Compose file before resolving.
+- A secret or config with an `environment:` source, and `build.ssh`.
+- A named volume with `driver_opts` (a `local` volume can bind any host path), a non-default
+  `driver`, `external: true`, or a `name:` other than this Compose's `<project>_<logical>`. Any of
+  these lets one Compose open another Compose's volume, another Project's database included.
+- `volumes_from` naming anything outside this Compose.
 - `privileged`, `cap_add`, `devices`, `device_cgroup_rules`, `security_opt`, `sysctls`,
-  `cgroup_parent`, `pid: host`, `ipc: host`, `network_mode: host` or `container:…`,
-  `userns_mode: host`, `uts: host`, `runtime`.
+  `cgroup_parent`, `runtime`, `userns_mode: host`, and `pid`, `ipc`, `uts` or `network_mode` set to
+  `host` or to `container:`/`service:` naming anything outside this Compose.
 - `build.context` or `build.dockerfile` outside the Compose directory, `build.network: host`,
   `build.privileged`, `build.entitlements`, `build.additional_contexts` outside the directory.
 - `include` or `extends` of a file outside the Compose directory.
 - A `traefik.*` label whose value names the panel's own domain.
 
 The **Compose directory** is `<data dir>/<compose dir>`, which holds the Compose file and its
-Source. Mount sources are compared as the panel sees them and as the host sees them (ADR-0002);
-both must be inside.
+Source. The **allowed roots** are the Compose directory plus the host paths listed in
+`RELIST_POLICY_BIND_ROOTS` (comma-separated, empty by default), for installs that keep data in
+places like `/srv`. Like the approver, the list is read from the environment only. Mount sources
+are compared as the panel sees them and as the host sees them (ADR-0002); both must be inside.
+
+### Volume Explorer
+
+The Volume Explorer resolves Volumes from the saved file, not from the last Deployment, so saving
+`/:/host` would otherwise open the host root in it without any deploy. It opens a Volume only when
+that Volume's source passes the policy, or when the user is an approver and the Compose's current
+config is approved. Orphan removal is unaffected: it only ever touches this Compose's named
+volumes.
 
 ### Approval
 
@@ -330,8 +359,11 @@ both must be inside.
   `POST …/deployments` answers 409 `{policy: {violations: […], approvalRequired: true}}`.
 - The check runs again in the Deployment, on the inputs frozen when it was queued (ADR-0017),
   before `up`, so a change between queueing and running cannot slip through.
-- An approver queueing a Deployment approves the config as a side effect (and the Audit event says
-  so). `POST …/composes/{composeID}/approval {configHash}` approves without deploying.
+- An approver queueing a Deployment of a violating config approves it as a side effect (and the
+  Audit event says so), but only with the `configHash` the approver was shown:
+  `POST …/deployments {configHash}`. `POST …/composes/{composeID}/approval {configHash}` approves
+  without deploying. Either answers 409 when the hash no longer matches, so an edit saved between
+  looking and clicking is never approved unseen.
 - Saving a Compose that violates is allowed and returns the violations, so the editor sees them.
 - `GET …/composes/{composeID}/policy` (Viewer) returns `{violations, configHash, approved}` for the
   Compose page.
@@ -346,9 +378,13 @@ widen it.
 
 ### What it does not stop
 
-A kernel exploit from an ordinary container. An admin who is not the Owner still uses the
-host-wide pages, among them Docker host and Migration serve, which hands out `panel.db`: admins
-remain fully trusted.
+- A kernel exploit from an ordinary container.
+- A symlink race across Deployments: a container still running from the previous Deployment that
+  can write a directory the new config binds could swap a path between the check and `up`. The
+  nesting rule closes it within one config; the check runs as late as possible before `up` to
+  shrink the window, but does not close it.
+- An admin who is not the Owner still uses the host-wide pages, among them Docker host and
+  Migration serve, which hands out `panel.db`: admins remain fully trusted.
 
 ## UI
 
@@ -375,10 +411,11 @@ installed `antd`.
 ## Phases
 
 1. **Users**: migration, `users`/`sessions`/`user_tokens`, invites, reset, Users page, Account
-   per User, CLI, and `internal/authz` with an empty route table. Default deny makes every
-   classified-later route admin-only, so a non-admin invited in this phase can sign in and use
-   the Account page and nothing else.
-2. **Roles**: `grants`, the route table, list filtering, secret stripping, Members tab, `useCan`.
+   per User, CLI, and `internal/authz` with a route table that holds only the Signed-in routes.
+   Default deny makes every other route admin-only, so a non-admin invited in this phase can sign
+   in and use the Account page and nothing else.
+2. **Roles**: `grants`, the rest of the route table, list filtering, secret stripping, the
+   `docker compose` environment, Members tab, `useCan`.
 3. **Audit log**: `audit_events`, recording, detail hooks, pages, retention.
 4. **Compose policy**: checker, approvals, Deployment hook, UI, `RELIST_POLICY_APPROVER`.
 
@@ -397,8 +434,11 @@ installed `antd`.
 - Owner rules: disable, delete and demote of id 1 all answer 403.
 - Invite: expired, used and unknown tokens answer alike; a used token cannot be reused; reset
   ends sessions and two-factor.
+- `${RELIST_ADMIN_PASSWORD}` in a Compose file does not interpolate to the panel's value.
+- The Volume Explorer refuses a saved-but-violating bind for a non-approver.
+- An approval or approving deploy with a stale `configHash` answers 409.
 - Policy: one fixture per violation above, each also hidden behind a variable, plus a symlink in a
-  Source, must fail; ordinary Composes (named volumes, relative bind mounts, Domains) must pass. An
+  Source and a nested bind, must fail; ordinary Composes (named volumes, relative bind mounts, Domains) must pass. An
   approval stops matching after any change to the resolved config, including a variable value.
 - Frontend tests in the existing `web/` style for `useCan`, the Grant tree and the invite page.
 - A live check on the install after each phase.
