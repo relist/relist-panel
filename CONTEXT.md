@@ -143,6 +143,10 @@ _Avoid_: Permission (a Role is the unit; there are no separate permissions).
 A Role given to one User on one Project, or on one Environment, which may also be **No access** to hide it. The Environment Grant wins over the Project Grant. Admins need none.
 _Avoid_: Membership, ACL.
 
+**Audit event**:
+One recorded action: who, when, what, where, and whether it was done or refused. Changes, refusals, sensitive reads (secret values, Volume downloads, a Terminal session) and sign-ins are recorded; a variable's value never is. Admins read all of them, a Project's Editors that Project's.
+_Avoid_: Log entry (the Access log and container logs are other things), History (Deployment history is another thing).
+
 **Invite link**:
 A single-use link with which a User sets their password: an invite for a new User (7 days) or a reset for an existing one (24 hours). The panel stores only its hash and shows it once; an Admin hands it over, the panel sends no email.
 _Avoid_: Magic link, Token (the token is part of the link), Invitation email.

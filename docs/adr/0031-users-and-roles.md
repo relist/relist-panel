@@ -49,3 +49,26 @@ Rulings where the spec was silent:
 9. A Project's `environmentCount` counts only the Environments the User can see.
 
 **Until the Compose policy ships, an Editor can take the host**: a Compose that mounts the Docker socket or runs privileged, then the Terminal. Grant Editor only to people you would give root.
+
+## Audit log (phase 3, 2026-11-05)
+
+The panel records who did what, when and where in `audit_events` (migration `00033`). `internal/authz` names each change in one table, `authz.Actions` (pattern → `<resource>.<verb>`); a registered change without an action fails a test. After the handler, the middleware records an actioned request that ended 2xx as `ok`; a request it refuses on an actioned route is recorded as `denied`. The names of the Project, Environment and Compose are read **before** the handler, so a delete still names what it deleted. Handlers add detail (a variable's key, a Domain's host, the roles granted, a User's email) and emit what the middleware cannot see: `secret.read` when a list response carried secret values, and `terminal.open`/`terminal.close` with the session's length. Sign-ins (`auth.login`, `auth.login_failed` with the email typed, `auth.invite_accepted`) are recorded by `internal/auth`, and the host commands (`create-admin`, `reset-password`, `change-email`, `reset-2fa`) with actor `cli`. **No variable value is ever recorded**, secret or not. An audit write that fails is logged and never changes the response.
+
+Admins read everything on the Audit log page (`GET /api/audit`); an Editor of at least one Environment reads, on the Project's Activity tab, the events of the Environments they edit and the Project's own. Events are kept 90 days by default (`audit_settings`, 0 = forever), pruned once a day.
+
+Rulings where the spec was silent:
+
+1. Actions are a separate `authz.Actions` map, since admin-only routes are not in `Routes`; GETs have an action only for the spec's sensitive reads (Volume file and archive downloads, Access log downloads).
+2. `denied` is recorded only for actioned routes; a refused plain GET is not an event.
+3. Target names are read before the handler, for admins too; an unscoped route's target is what its handler sets, else the path.
+4. A secret read is one `secret.read` per list response that carried a secret value, with the keys.
+5. The Terminal records itself: its upgrade answers 101 on a hijacked connection.
+6. `auth.login_failed` is `denied`, with the email typed; a locked account or a wrong code also counts, with a reason.
+7. CLI events are `cli.create_admin`, `cli.reset_password`, `cli.change_email`, `cli.reset_2fa`.
+8. The settings API mirrors the Access log's `{retentionDays, keepForever}`.
+9. Filters: actor matches the stored email (any case) or `cli`; action is a prefix; from/to are inclusive milliseconds.
+10. `GET /api/projects/{id}/audit` is Viewer in the route table; the handler answers 403 unless the User edits one of its Environments.
+11. The HTTP side lives in `internal/auditapi`, since `authz` imports `audit`.
+
+**The Audit log is not tamper-proof against an Admin**, who can reach `panel.db` from a container; it records a trusted team's work, it does not police Admins.
+
