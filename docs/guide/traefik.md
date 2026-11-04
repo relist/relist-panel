@@ -66,7 +66,8 @@ On the Traefik page, **Configuration** edits a draft of the override:
 - **History** lists the last 10 backups, each with **Restore**.
 
 **Review & Apply** shows the diff of the generated file, then starts a run
-(`internal/traefikconfig/apply.go`). **Restore** and **Restart** run the same steps:
+(`internal/traefikconfig/apply.go`). **Restore** runs the same steps. **Restart** dry-runs
+the `traefik.yml` on disk, then skips to step 6:
 
 | # | Step | If it fails |
 |---|---|---|
@@ -165,8 +166,10 @@ same reason.
 **Pending restart.** The page says "Config changed since Traefik started — Restart to
 apply". The generated file changed, usually because a Panel update brought a new base,
 and Traefik is still running the old one. **Restart** runs a Traefik apply with the same
-files, so a bad result rolls back too. A restart with nothing to roll back to (the current
-files are the ones failing) ends as `rollback-failed`.
+files. It dry-runs `traefik.yml` first, so a file Traefik would fail on is refused and the
+running Traefik is left alone. Fix it in **Advanced** and apply, which writes a new file.
+A restart has no backup of its own, so one that passes the dry-run and is still not
+healthy ends as `rollback-failed`.
 
 **Restoring by hand from `history/`.** On the host:
 

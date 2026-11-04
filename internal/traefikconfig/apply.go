@@ -294,7 +294,21 @@ func (r *Runner) finish(run *Run, state, reason string) {
 }
 
 func (r *Runner) run(ctx context.Context, run Run, override, effective []byte) {
-	if run.Kind != KindRestart {
+	if run.Kind == KindRestart {
+		// A restart writes nothing, but the file on disk may not be the one
+		// Traefik runs (a new base, a hand edit): try it before stopping Traefik.
+		r.step(&run, StateDryRun)
+		current, err := os.ReadFile(r.Paths.Effective())
+		if err != nil {
+			r.finish(&run, StateRefused, "could not read traefik.yml: "+err.Error())
+			return
+		}
+		if reason, logText := r.dryRun(ctx, run.ID, current); reason != "" {
+			run.Log = logText
+			r.finish(&run, StateRefused, reason)
+			return
+		}
+	} else {
 		r.step(&run, StateDryRun)
 		if reason, logText := r.dryRun(ctx, run.ID, effective); reason != "" {
 			run.Log = logText

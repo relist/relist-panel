@@ -147,3 +147,16 @@ func TestCloudflareRangesValid(t *testing.T) {
 		t.Errorf("v4 = %v, v6 = %v", v4, v6)
 	}
 }
+
+// A comment-only override whose last line has no newline (the editor allows
+// it) must not swallow the new keys into that comment.
+func TestWriteFormCommentOnlyWithoutTrailingNewline(t *testing.T) {
+	out := writeForm(t, "# mine", Form{LogLevel: "DEBUG"})
+	f, problems := readForm(t, out)
+	if len(problems) != 0 || f.LogLevel != "DEBUG" {
+		t.Fatalf("read back %q: form %+v, problems %+v", out, f, problems)
+	}
+	if !strings.HasPrefix(out, "# mine\n") {
+		t.Fatalf("comment not kept on its own line: %q", out)
+	}
+}

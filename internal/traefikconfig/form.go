@@ -91,6 +91,9 @@ func WriteForm(override []byte, f Form) ([]byte, []Problem, error) {
 	var prefix []byte // a comment-only override keeps its text above the new map
 	if len(doc.Content) == 0 || isNull(doc.Content[0]) {
 		prefix = override
+		if len(prefix) > 0 && prefix[len(prefix)-1] != '\n' {
+			prefix = append(slices.Clip(prefix), '\n')
+		}
 		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
 	}
 	m := doc.Content[0]

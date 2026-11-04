@@ -366,11 +366,25 @@ func TestRestartKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := tr.wait(t)
-	if run.State != StateOK || run.Kind != KindRestart || tr.fake.restartCount() != 1 || tr.fake.dryRuns != 0 {
+	if run.State != StateOK || run.Kind != KindRestart || tr.fake.restartCount() != 1 || tr.fake.dryRuns != 1 {
 		t.Fatalf("run = %+v, restarts %d, dry-runs %d", run, tr.fake.restartCount(), tr.fake.dryRuns)
 	}
 	if len(historyNames(t, tr.p)) != 0 || tr.override(t) != "log: {level: WARN}\n" {
 		t.Fatalf("history %v, override %q", historyNames(t, tr.p), tr.override(t))
+	}
+}
+
+// A Restart dry-runs the files on disk first: when they fail (a new base from
+// a Panel update, or a hand edit), the running Traefik is left alone.
+func TestRestartRefusedWhenFilesFailDryRun(t *testing.T) {
+	tr := newTestRunner(t, "log: {level: WARN}\n")
+	tr.fake.dry = DryRunResult{Running: false, Log: `{"level":"error","message":"Command error"}`}
+	if _, err := tr.Start(context.Background(), KindRestart, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	run := tr.wait(t)
+	if run.State != StateRefused || tr.fake.restartCount() != 0 || run.Log == "" {
+		t.Fatalf("run = %+v, restarts %d", run, tr.fake.restartCount())
 	}
 }
 
