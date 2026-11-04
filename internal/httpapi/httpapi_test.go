@@ -2472,11 +2472,12 @@ func newTestServer(t *testing.T) *testServer {
 	terminalExec := &terminalfake.Exec{}
 	imagesStore := &imagesfake.Images{}
 	options := &terminal.Options{
-		Exec:         terminalExec,
-		MaxSessions:  10,
-		PingInterval: 50 * time.Millisecond,
-		PingTimeout:  50 * time.Millisecond,
-		KillGrace:    50 * time.Millisecond,
+		Exec:           terminalExec,
+		MaxSessions:    10,
+		PingInterval:   50 * time.Millisecond,
+		PingTimeout:    50 * time.Millisecond,
+		KillGrace:      50 * time.Millisecond,
+		AccessInterval: 50 * time.Millisecond,
 	}
 	handler, stop := startHandler(t, db, runner, dataDir, history, facts, volumeRunner, volumes.NewResolver(volumeCLI, dataDir), options, imagesStore)
 	return &testServer{

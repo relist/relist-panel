@@ -97,6 +97,9 @@ type Options struct {
 	PingInterval time.Duration // 0 → 30s
 	PingTimeout  time.Duration // 0 → 10s
 	KillGrace    time.Duration // 0 → 2s
+	// AccessInterval is how often an open session re-checks that its User
+	// may still use the Terminal (ADR-0031). 0 → 5s.
+	AccessInterval time.Duration
 }
 
 const (
@@ -104,6 +107,7 @@ const (
 	defaultPingInterval = 30 * time.Second
 	defaultPingTimeout  = 10 * time.Second
 	defaultKillGrace    = 2 * time.Second
+	defaultAccessCheck  = 5 * time.Second
 )
 
 // Service is the terminal's HTTP surface over one Compose.
@@ -114,6 +118,8 @@ type Service struct {
 	pingInterval time.Duration
 	pingTimeout  time.Duration
 	killGrace    time.Duration
+	// accessInterval paces accessLoop.
+	accessInterval time.Duration
 	// sessions is the server-wide cap: a slot is held for the life of one
 	// session, and the send on it is non-blocking, so the (maxSessions+1)th
 	// is refused rather than queued.
@@ -160,15 +166,19 @@ func New(composeService *composes.Service, opts Options) *Service {
 	if opts.KillGrace == 0 {
 		opts.KillGrace = defaultKillGrace
 	}
+	if opts.AccessInterval == 0 {
+		opts.AccessInterval = defaultAccessCheck
+	}
 	return &Service{
-		composes:     composeService,
-		exec:         opts.Exec,
-		maxSessions:  opts.MaxSessions,
-		pingInterval: opts.PingInterval,
-		pingTimeout:  opts.PingTimeout,
-		killGrace:    opts.KillGrace,
-		sessions:     make(chan struct{}, opts.MaxSessions),
-		open:         map[*websocket.Conn]struct{}{},
+		composes:       composeService,
+		exec:           opts.Exec,
+		maxSessions:    opts.MaxSessions,
+		pingInterval:   opts.PingInterval,
+		pingTimeout:    opts.PingTimeout,
+		killGrace:      opts.KillGrace,
+		accessInterval: opts.AccessInterval,
+		sessions:       make(chan struct{}, opts.MaxSessions),
+		open:           map[*websocket.Conn]struct{}{},
 	}
 }
 

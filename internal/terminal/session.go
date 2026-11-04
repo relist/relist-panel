@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -21,6 +22,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"relist-panel/internal/authz"
 )
 
 // readLimit is the most a single frame may carry: a large paste fits.
@@ -177,7 +180,7 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.run(conn, session, reader)
+	s.run(conn, session, reader, authz.StillAllowed(r.Context()))
 }
 
 // wrapperCmd is the marked shell the session starts: a /bin/sh prints its own
@@ -246,7 +249,7 @@ func hangUp(ctx context.Context, exec Exec, containerID string, pid int, grace t
 // Docker resize call off the input pump. The first pump to end cancels the
 // rest; the handler returns once the output pump has stopped, which is when the
 // shell's stream has ended.
-func (s *Service) run(conn *websocket.Conn, session Session, reader io.Reader) {
+func (s *Service) run(conn *websocket.Conn, session Session, reader io.Reader, still func(context.Context) (bool, error)) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -270,6 +273,9 @@ func (s *Service) run(conn *websocket.Conn, session Session, reader io.Reader) {
 	}()
 
 	go s.pingLoop(ctx, conn, cancel)
+	if still != nil {
+		go s.accessLoop(ctx, conn, cancel, still)
+	}
 
 	outputDone := make(chan struct{})
 	go func() {
@@ -391,6 +397,31 @@ func (s *Service) pingLoop(ctx context.Context, conn *websocket.Conn, cancel con
 			err := conn.Ping(pingCtx)
 			pingCancel()
 			if err != nil {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+// accessLoop ends the session once its User may no longer use this Terminal:
+// signed out, disabled, demoted or lost the Grant. A failed check (the
+// database busy, say) keeps the session and tries again on the next tick.
+func (s *Service) accessLoop(ctx context.Context, conn *websocket.Conn, cancel context.CancelFunc, still func(context.Context) (bool, error)) {
+	ticker := time.NewTicker(s.accessInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			ok, err := still(ctx)
+			if err != nil {
+				log.Printf("terminal: re-check access: %v", err)
+				continue
+			}
+			if !ok {
+				_ = conn.Close(websocket.StatusPolicyViolation, "Your access to this Terminal was removed")
 				cancel()
 				return
 			}
