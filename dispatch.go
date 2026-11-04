@@ -27,13 +27,13 @@ type subcommand struct {
 }
 
 var subcommands = []subcommand{
-	{"reset-2fa", "turn off two-factor sign-in for the admin",
+	{"reset-2fa", "turn off two-factor sign-in for a user",
 		func(a []string) int { return runResetTwoFactor(a, os.Stdout, os.Stderr) }},
-	{"reset-password", "set a new admin password and sign every session out",
+	{"reset-password", "set a new password for a user and sign their sessions out",
 		func(a []string) int { return runResetPassword(a, os.Stdin, os.Stdout, os.Stderr, stdinConsole()) }},
-	{"change-email", "change the admin's sign-in email",
+	{"change-email", "change a user's sign-in email",
 		func(a []string) int { return runChangeEmail(a, os.Stdout, os.Stderr) }},
-	{"create-admin", "create the first admin account",
+	{"create-admin", "create the first user, the owner",
 		func(a []string) int { return runCreateAdmin(a, os.Stdin, os.Stdout, os.Stderr, stdinConsole()) }},
 	{"migration", "drive a server Migration through the running panel", runMigration},
 	{"maintenance-page", "answer 503 with the maintenance page (used by a Migration)", runMaintenancePage},

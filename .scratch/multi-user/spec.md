@@ -457,3 +457,11 @@ installed `antd`.
 - CONTEXT.md changes listed above. Public docs: Users, roles and the approver variable.
 
 ## Comments
+
+### 2026-11-04 — Phase 1 deviations
+
+- Recovery for id 1 is the existing `reset-password` and `change-email` (both take `--email`); `create-admin` stays create-only, rather than resetting id 1.
+- An Admin cannot send the Owner a reset link; only the Owner can (`403 Only the owner can reset the owner`). Otherwise any Admin could take over id 1.
+- The invite routes have no rate limit: a 256-bit token cannot be guessed.
+- `POST /api/users/{id}/reset` on an invited User issues a fresh invite (7 days), and on a disabled User answers `409 Enable this user before sending a link`.
+- Accepting an invite or reset link signs the User in and sets their last sign-in.
