@@ -40,6 +40,7 @@ var subcommands = []subcommand{
 	{"setup", "write the Install file and .env for a new install",
 		func(a []string) int { return runSetup(a, os.Stdout, os.Stderr) }},
 	{"update", "check or apply a Panel update (runs in its own Container)", runUpdate},
+	{"traefik-config", "write Traefik's static config before Traefik starts (runs in its own Container)", runTraefikConfig},
 }
 
 // findSubcommand is the subcommand named name, nil when there is none.
