@@ -98,6 +98,8 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/users/{id}", s.updateUser)
 	mux.HandleFunc("DELETE /api/users/{id}", s.deleteUser)
 	mux.HandleFunc("POST /api/users/{id}/reset", s.resetUser)
+	mux.HandleFunc("GET /api/invites/{token}", s.showInvite)
+	mux.HandleFunc("POST /api/invites/{token}", s.acceptInvite)
 }
 
 // Middleware protects every route except the health endpoint, auth endpoints,
@@ -327,17 +329,8 @@ func (s *Service) completeLogin(w http.ResponseWriter, r *http.Request, tx *sql.
 		}
 	}
 
-	now := s.now().UTC()
-	expiresAt := now.Add(sessionLifetime)
-	token, err := newSessionToken()
+	token, expiresAt, err := s.startSession(r.Context(), tx, account.id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create a session")
-		return
-	}
-	if _, err := tx.ExecContext(r.Context(), `
-		INSERT INTO sessions (token, user_id, expires_at, created_at)
-		VALUES (?, ?, ?, ?)
-	`, token, account.id, expiresAt.Unix(), now.Unix()); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create a session")
 		return
 	}
@@ -351,6 +344,24 @@ func (s *Service) completeLogin(w http.ResponseWriter, r *http.Request, tx *sql.
 		"authenticated": true,
 		"email":         account.email,
 	})
+}
+
+// startSession creates a session for userID in the caller's transaction. The
+// caller sets the cookie once the transaction commits.
+func (s *Service) startSession(ctx context.Context, tx *sql.Tx, userID int64) (string, time.Time, error) {
+	now := s.now().UTC()
+	expiresAt := now.Add(sessionLifetime)
+	token, err := newSessionToken()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO sessions (token, user_id, expires_at, created_at)
+		VALUES (?, ?, ?, ?)
+	`, token, userID, expiresAt.Unix(), now.Unix()); err != nil {
+		return "", time.Time{}, err
+	}
+	return token, expiresAt, nil
 }
 
 func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
@@ -532,6 +543,10 @@ func newSessionToken() (string, error) {
 func publicPath(path string) bool {
 	switch path {
 	case "/healthz", "/api/auth/status", "/api/auth/login", "/api/auth/logout":
+		return true
+	}
+	// An invite or reset link is how a User without a password gets one.
+	if strings.HasPrefix(path, "/api/invites/") {
 		return true
 	}
 
