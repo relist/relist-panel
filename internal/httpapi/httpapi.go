@@ -357,7 +357,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	// browser headers, like the migration pull, pass.
 	// authz sits inside auth, which puts the User in the context, and outside
 	// every lock: a request without the right is refused before a lock sees it.
-	return http.NewCrossOriginProtection().Handler(authService.Middleware(authz.Middleware(mux, inner))), worker.Wait
+	return http.NewCrossOriginProtection().Handler(authService.Middleware(authz.New(db, authService.CurrentUser).Middleware(mux, inner))), worker.Wait
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {

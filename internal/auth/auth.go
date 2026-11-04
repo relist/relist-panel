@@ -390,6 +390,12 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 // authenticated resolves the request's session cookie to its User. A
 // disabled User's sessions count as signed out, so a disable takes effect on
 // the next request even before its sessions are deleted.
+// CurrentUser is the User whose live session r carries, if any: the check
+// Middleware makes, for authz to repeat on a long-lived connection.
+func (s *Service) CurrentUser(r *http.Request) (User, bool, error) {
+	return s.authenticated(r)
+}
+
 func (s *Service) authenticated(r *http.Request) (User, bool, error) {
 	if err := s.requireDatabase(); err != nil {
 		return User{}, false, err
