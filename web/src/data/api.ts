@@ -78,9 +78,27 @@ import type { MetricWindow } from './types';
 import type { MigrationStatus } from './migration';
 import type { PanelUpdateStatus, PreviewResponse } from './panel-update';
 
+/** The signed-in User as `/api/auth/status` reports it. */
+export type SignedInUser = { id: number; email: string; isAdmin: boolean; isOwner: boolean };
+
 export type AuthStatus = {
   authenticated: boolean;
+  /** Present when authenticated. */
+  user?: SignedInUser;
 };
+
+export type UserStatus = 'invited' | 'active' | 'disabled';
+
+/** One User on the Users page. */
+export type PanelUser = SignedInUser & {
+  status: UserStatus;
+  twoFactorEnabled: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+};
+
+/** An invite or reset link's token, shown once. */
+export type IssuedLink = { token: string; expiresAt: string; kind: 'invite' | 'reset' };
 
 /** The signed-in admin account: its email and whether two-factor is on. */
 export type Account = {
@@ -291,6 +309,17 @@ export const api = {
   pruneDocker: (kind: DockerPruneKind, confirm: string, includePanel = false) =>
     request<DockerPruneResult>('/api/docker/prune', jsonInit('POST', includePanel ? { kind, confirm, includePanel } : { kind, confirm })),
   authStatus: () => request<AuthStatus>('/api/auth/status'),
+  listUsers: () => request<PanelUser[]>('/api/users'),
+  createUser: (email: string, isAdmin: boolean) =>
+    request<{ user: PanelUser } & IssuedLink>('/api/users', jsonInit('POST', { email, isAdmin })),
+  updateUser: (id: number, patch: { isAdmin?: boolean; disabled?: boolean }) =>
+    request<PanelUser>(`/api/users/${id}`, jsonInit('PATCH', patch)),
+  deleteUser: (id: number) => request<void>(`/api/users/${id}`, { method: 'DELETE' }),
+  resetUser: (id: number) => request<IssuedLink>(`/api/users/${id}/reset`, { method: 'POST' }),
+  getInvite: (token: string) =>
+    request<{ email: string; kind: IssuedLink['kind'] }>(`/api/invites/${encodeURIComponent(token)}`),
+  acceptInvite: (token: string, password: string) =>
+    request<void>(`/api/invites/${encodeURIComponent(token)}`, jsonInit('POST', { password })),
   /**
    * Sign-in, with its own `fetch` rather than `request`: a `401` asking for the
    * two-factor code and a `429` announcing the lock are results, not failures.
