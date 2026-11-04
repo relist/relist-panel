@@ -113,3 +113,61 @@ describe('Panel version footer', () => {
     expect(link.getAttribute('href')).toBe('/panel-update');
   });
 });
+
+describe('Users and non-admins', () => {
+  const member = { id: 3, email: 'bob@example.com', isAdmin: false, isOwner: false };
+
+  function renderShell(path: string) {
+    const router = createMemoryRouter(
+      [{ element: <AppShell />, children: [
+        { path: '/', element: <h1>Home</h1> },
+        { path: '/account', element: <h1>Account screen</h1> },
+        { path: '/projects', element: <h1>Projects screen</h1> },
+      ] }],
+      { initialEntries: [path] },
+    );
+    render(<SWRConfig value={{ provider: () => new Map() }}><App><PanelProvider><RouterProvider router={router} /></PanelProvider></App></SWRConfig>);
+    return router;
+  }
+
+  beforeEach(() => {
+    vi.spyOn(api, 'account').mockResolvedValue({ email: 'bob@example.com', passwordFromEnv: false, twoFactorEnabled: false });
+    vi.spyOn(api, 'listProjects').mockResolvedValue([]);
+    vi.spyOn(api, 'globalDeploymentQueue').mockResolvedValue([]);
+    vi.spyOn(api, 'vulnSummary').mockResolvedValue({ enabled: false } as never);
+    vi.spyOn(api, 'panelUpdateStatus').mockResolvedValue({} as never);
+  });
+
+  it('shows a non-admin no menu items and the no-access page', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member });
+    renderShell('/projects');
+    expect(await screen.findByText('No access yet')).toBeTruthy();
+    expect(screen.getByText('An admin has not given you access to any Project.')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Projects screen' })).toBeNull();
+    expect(screen.queryAllByRole('menuitem')).toHaveLength(0);
+  });
+
+  it('still opens the Account screen for a non-admin', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member });
+    renderShell('/account');
+    expect(await screen.findByRole('heading', { name: 'Account screen' })).toBeTruthy();
+  });
+
+  it('makes no admin-only request for a non-admin', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member });
+    renderShell('/');
+    await screen.findByText('No access yet');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(api.listProjects).not.toHaveBeenCalled();
+    expect(api.globalDeploymentQueue).not.toHaveBeenCalled();
+    expect(api.hostMetrics).not.toHaveBeenCalled();
+    expect(api.vulnSummary).not.toHaveBeenCalled();
+    expect(api.panelUpdateStatus).not.toHaveBeenCalled();
+  });
+
+  it('shows an admin the Users menu item', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: { ...member, isAdmin: true } });
+    renderShell('/');
+    expect(await screen.findByRole('menuitem', { name: /Users/ })).toBeTruthy();
+  });
+});

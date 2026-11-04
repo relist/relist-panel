@@ -28,6 +28,7 @@ import { useDiskPressure } from '../data/useDiskPressure';
 import { useGlobalDeploymentQueue } from '../data/useGlobalDeploymentQueue';
 import { usePanelUpdateStatus } from '../data/usePanelUpdate';
 import { useVulnSummary } from '../data/useVulnSummary';
+import { NoAccessPage } from '../pages/NoAccessPage';
 import { summaryBadge } from '../pages/vulnerabilities-view';
 import { usePanel } from '../data/store';
 import { composeState, projectComposes, summarize } from '../data/types';
@@ -51,11 +52,15 @@ export function AppShell() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { auth, loadProjects, projects, refreshStatus, signOut } = usePanel();
-  const { data: deploymentQueue } = useGlobalDeploymentQueue(auth.authenticated);
-  const diskPressure = useDiskPressure(auth.authenticated);
+  // A non-admin may reach only their Account until roles exist, so the shell
+  // offers nothing else and asks the API for nothing else. A status without a
+  // User (an older panel) is read as an admin; the API decides either way.
+  const adminView = auth.authenticated && (auth.user?.isAdmin ?? true);
+  const { data: deploymentQueue } = useGlobalDeploymentQueue(adminView);
+  const diskPressure = useDiskPressure(adminView);
   const queuedCount = deploymentQueue?.filter((d) => d.status === 'queued').length ?? 0;
-  const { data: vulnSummary } = useVulnSummary({}, auth.authenticated);
-  const updateStatus = usePanelUpdateStatus(auth.authenticated);
+  const { data: vulnSummary } = useVulnSummary({}, adminView);
+  const updateStatus = usePanelUpdateStatus(adminView);
   const updateAvailable = !!updateStatus?.available && !updateStatus.development;
   const criticalCount = summaryBadge(vulnSummary)?.critical ?? 0;
   const [loadError, setLoadError] = useState<string>();
@@ -75,10 +80,10 @@ export function AppShell() {
   }, [loadProjects]);
 
   useEffect(() => {
-    if (auth.authenticated) {
+    if (adminView) {
       void loadTree();
     }
-  }, [auth.authenticated, loadTree]);
+  }, [adminView, loadTree]);
 
   const resolved = useMemo(() => resolvePath(pathname), [pathname]);
 
@@ -132,7 +137,7 @@ export function AppShell() {
     [projects],
   );
 
-  const menuItems: MenuProps['items'] = [
+  const menuItems: MenuProps['items'] = !adminView ? [] : [
     { key: 'overview', icon: <AppstoreOutlined />, label: 'Overview' },
     { key: 'projects', icon: <FolderOutlined />, label: 'Projects' },
     {
@@ -393,7 +398,7 @@ export function AppShell() {
               />
             )}
             <PasswordFromEnvBanner />
-            <Outlet />
+            {adminView || resolved?.pattern === 'account' ? <Outlet /> : <NoAccessPage />}
           </div>
         </Layout.Content>
       </Layout>
