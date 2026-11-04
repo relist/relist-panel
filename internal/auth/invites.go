@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -16,11 +17,31 @@ import (
 
 const invalidLink = "This link is no longer valid"
 
+// errLinkGone means the link was used between its lookup and its use.
+var errLinkGone = errors.New("link already used")
+
+// markLinkUsed spends link id. It changes nothing and returns errLinkGone when
+// the link is already spent, so a link stays single-use however many
+// connections the pool holds.
+func markLinkUsed(ctx context.Context, tx *sql.Tx, id int64, now time.Time) error {
+	result, err := tx.ExecContext(ctx, "UPDATE user_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL", now.UTC().Unix(), id)
+	if err != nil {
+		return err
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return errLinkGone
+	}
+	return nil
+}
+
 type openLink struct {
-	id     int64
-	userID int64
-	kind   string
-	email  string
+	id      int64
+	userID  int64
+	kind    string
+	email   string
+	isAdmin bool
 }
 
 // findOpenLink returns the usable link of token, or sql.ErrNoRows.
@@ -29,14 +50,14 @@ func (s *Service) findOpenLink(ctx context.Context, q interface {
 }, token string) (openLink, error) {
 	var link openLink
 	err := q.QueryRowContext(ctx, `
-		SELECT user_tokens.id, user_tokens.user_id, user_tokens.kind, users.email
+		SELECT user_tokens.id, user_tokens.user_id, user_tokens.kind, users.email, users.is_admin OR users.id = ?
 		FROM user_tokens
 		JOIN users ON users.id = user_tokens.user_id
 		WHERE user_tokens.token_hash = ?
 		  AND user_tokens.used_at IS NULL
 		  AND user_tokens.expires_at > ?
 		  AND users.disabled_at IS NULL
-	`, hashToken(token), s.now().UTC().Unix()).Scan(&link.id, &link.userID, &link.kind, &link.email)
+	`, OwnerID, hashToken(token), s.now().UTC().Unix()).Scan(&link.id, &link.userID, &link.kind, &link.email, &link.isAdmin)
 	return link, err
 }
 
@@ -89,6 +110,13 @@ func (s *Service) acceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := markLinkUsed(r.Context(), tx, link.id, s.now()); errors.Is(err, errLinkGone) {
+		writeError(w, http.StatusNotFound, invalidLink)
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
+		return
+	}
 	now := s.now().UTC().Unix()
 	type statement struct {
 		query string
@@ -97,7 +125,6 @@ func (s *Service) acceptInvite(w http.ResponseWriter, r *http.Request) {
 	statements := []statement{
 		{`UPDATE users SET password_hash = ?, password_from_env = 0, failed_attempts = 0, locked_until = NULL, last_login_at = ?
 		  WHERE id = ?`, []any{string(hash), now, link.userID}},
-		{"UPDATE user_tokens SET used_at = ? WHERE id = ?", []any{now, link.id}},
 	}
 	if link.kind == tokenReset {
 		statements = append(statements,
@@ -121,5 +148,7 @@ func (s *Service) acceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setSessionCookie(w, r, token, expiresAt)
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "email": link.email})
+	// isAdmin tells the page where to land: a User who is not an Admin has
+	// only their Account to open.
+	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "email": link.email, "isAdmin": link.isAdmin})
 }

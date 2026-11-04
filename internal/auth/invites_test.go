@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"testing"
 	"time"
@@ -151,4 +152,41 @@ func TestDisableKillsOpenLinkEvenAfterReEnable(t *testing.T) {
 	f.serveAs(t, owner, http.MethodPatch, "/api/users/2", map[string]any{"disabled": false})
 	expectInvalidLink(t, f, http.MethodGet, token)
 	expectInvalidLink(t, f, http.MethodPost, token)
+}
+
+func TestMarkLinkUsedIsSingleUse(t *testing.T) {
+	f := newUserFixture(t)
+	f.invite(t)
+	var id int64
+	if err := f.db.QueryRow("SELECT id FROM user_tokens").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []error{nil, errLinkGone} {
+		tx, err := f.db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := markLinkUsed(context.Background(), tx, id, f.now); err != want {
+			t.Fatalf("mark #%d = %v, want %v", i+1, err, want)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestAcceptInviteSaysWhetherTheUserIsAnAdmin(t *testing.T) {
+	f := newUserFixture(t)
+	for _, isAdmin := range []bool{false, true} {
+		email := "member@example.com"
+		if isAdmin {
+			email = "admin2@example.com"
+		}
+		created := f.serveAs(t, owner, http.MethodPost, "/api/users", map[string]any{"email": email, "isAdmin": isAdmin})
+		token := decodeBody(t, created)["token"].(string)
+		body := decodeBody(t, f.do(http.MethodPost, "/api/invites/"+token, "", map[string]string{"password": newPassword}))
+		if body["isAdmin"] != isAdmin {
+			t.Fatalf("accept %s isAdmin = %v, want %v", email, body["isAdmin"], isAdmin)
+		}
+	}
 }
