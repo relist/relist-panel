@@ -92,12 +92,17 @@ func Validate(ov *yaml.Node) []Problem {
 				Message: fmt.Sprintf("%q is not a Traefik static config section", k.Value)})
 		}
 	}
+	problems = append(problems, duplicateKeys(ov, "")...)
 	for _, lk := range locked {
+		if p, ok := scalarAncestor(ov, lk.Path); ok {
+			problems = append(problems, p)
+			continue
+		}
 		k, v := lookup(ov, lk.Path...)
 		if v == nil {
 			continue
 		}
-		if v.Kind != yaml.ScalarNode || !strings.EqualFold(v.Value, lk.Value) {
+		if v.Kind != yaml.ScalarNode || !lockedValueEqual(v.Value, lk.Value) {
 			problems = append(problems, Problem{Key: strings.Join(lk.Path, "."), Line: k.Line,
 				Message: fmt.Sprintf("the panel needs %s to be %s", strings.Join(lk.Path, "."), lk.Value)})
 		}
@@ -114,6 +119,73 @@ func Validate(ov *yaml.Node) []Problem {
 		}
 	}
 	return problems
+}
+
+// duplicateKeys finds keys in one map that differ only in case. Traefik reads
+// them as one key and the merge keeps the last, so every check that looks at
+// the first would be checking the wrong value.
+func duplicateKeys(n *yaml.Node, at string) []Problem {
+	var problems []Problem
+	switch n.Kind {
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k := n.Content[i]
+			for j := 0; j < i; j += 2 {
+				if prev := n.Content[j]; strings.EqualFold(prev.Value, k.Value) {
+					problems = append(problems, Problem{Key: at + k.Value, Line: k.Line,
+						Message: fmt.Sprintf("%q and %q (line %d) are the same key to Traefik; keep one", k.Value, prev.Value, prev.Line)})
+					break
+				}
+			}
+			problems = append(problems, duplicateKeys(n.Content[i+1], at+k.Value+".")...)
+		}
+	case yaml.SequenceNode:
+		for _, c := range n.Content {
+			problems = append(problems, duplicateKeys(c, at)...)
+		}
+	}
+	return problems
+}
+
+// noDuplicateKeys is the first of duplicateKeys as an error, for the form,
+// which reads and writes one spelling of each key.
+func noDuplicateKeys(m *yaml.Node) error {
+	if problems := duplicateKeys(m, ""); len(problems) > 0 {
+		return fmt.Errorf("line %d: %s", problems[0].Line, problems[0].Message)
+	}
+	return nil
+}
+
+// scalarAncestor reports a value on the way to a locked key that is neither a
+// map nor null: the merge would put it in place of the base's map and drop the
+// locked key with it.
+func scalarAncestor(ov *yaml.Node, path []string) (Problem, bool) {
+	cur := ov
+	for i, p := range path[:len(path)-1] {
+		j := indexOf(cur, p)
+		if j < 0 {
+			return Problem{}, false
+		}
+		k, v := cur.Content[j], cur.Content[j+1]
+		if isNull(v) {
+			return Problem{}, false
+		}
+		if v.Kind != yaml.MappingNode {
+			key := strings.Join(path[:i+1], ".")
+			return Problem{Key: key, Line: k.Line, Message: fmt.Sprintf("the panel needs %s to be a map: it holds %s", key, strings.Join(path, "."))}, true
+		}
+		cur = v
+	}
+	return Problem{}, false
+}
+
+// lockedValueEqual compares an override's value with a locked one. Paths are
+// case-sensitive on Linux; Traefik reads booleans and words in any case.
+func lockedValueEqual(got, want string) bool {
+	if strings.HasPrefix(want, "/") {
+		return got == want
+	}
+	return strings.EqualFold(got, want)
 }
 
 func checkIPs(key string, k, v *yaml.Node) []Problem {

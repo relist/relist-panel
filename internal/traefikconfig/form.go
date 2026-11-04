@@ -38,6 +38,9 @@ func ReadForm(override []byte) (Form, []Problem, error) {
 	if err != nil {
 		return Form{}, nil, err
 	}
+	if err := noDuplicateKeys(m); err != nil {
+		return Form{}, nil, err
+	}
 	f := Form{TrustedIPs: []string{}, LogLevel: "INFO"}
 	if _, v := lookup(m, emailPath...); v != nil && v.Kind == yaml.ScalarNode {
 		f.ACMEEmail = v.Value
@@ -99,6 +102,9 @@ func WriteForm(override []byte, f Form) ([]byte, []Problem, error) {
 	m := doc.Content[0]
 	if m.Kind != yaml.MappingNode {
 		return nil, nil, errNotMap
+	}
+	if err := noDuplicateKeys(m); err != nil {
+		return nil, nil, err
 	}
 
 	if email := strings.TrimSpace(f.ACMEEmail); email != "" {

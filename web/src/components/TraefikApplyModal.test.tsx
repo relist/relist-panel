@@ -123,6 +123,16 @@ describe('TraefikApplyModal', () => {
     expect(onFinished).toHaveBeenCalled();
   });
 
+  it('stays open on Escape while the run is still going', async () => {
+    api.traefikApplyStatus.mockResolvedValue(run('checking'));
+    render(<TraefikApplyModal onClose={onClose} onFinished={onFinished} review={null} runId="run1" />);
+    await poll();
+    fireEvent.keyDown(document.querySelector('.ant-modal-wrap') ?? document.body, { key: 'Escape', keyCode: 27 });
+    await flush();
+    expect(api.ackTraefikApply).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('says the configuration changed when Apply gets a 409', async () => {
     api.applyTraefikConfig.mockRejectedValue(new ApiError(409, 'revision changed'));
     render(<TraefikApplyModal onClose={onClose} onFinished={onFinished} review={review} runId={null} />);

@@ -507,3 +507,18 @@ func TestAck(t *testing.T) {
 		t.Fatal("not acked")
 	}
 }
+
+// A run still going has no result to acknowledge; Ack must not rewrite its
+// state from a stale read either.
+func TestAckIgnoresRunningRun(t *testing.T) {
+	tr := newTestRunner(t, "")
+	if err := tr.save(Run{ID: "running1", Kind: KindApply, State: StateChecking}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Ack("running1"); err != nil {
+		t.Fatal(err)
+	}
+	if run, _ := tr.Status(); run.Acked || run.State != StateChecking {
+		t.Fatalf("run = %+v", run)
+	}
+}

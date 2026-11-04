@@ -148,6 +148,17 @@ func TestCloudflareRangesValid(t *testing.T) {
 	}
 }
 
+// With two case variants of one key the form would show one and Traefik read
+// the other, so the form is not offered until the YAML is fixed.
+func TestReadFormRefusesDuplicateKeys(t *testing.T) {
+	if _, _, err := ReadForm([]byte("log: {level: DEBUG}\nLog: {level: ERROR}\n")); err == nil {
+		t.Fatal("ReadForm accepted duplicate case-variant keys")
+	}
+	if _, _, err := WriteForm([]byte("log: {level: DEBUG}\nLog: {level: ERROR}\n"), Form{LogLevel: "WARN"}); err == nil {
+		t.Fatal("WriteForm accepted duplicate case-variant keys")
+	}
+}
+
 // A comment-only override whose last line has no newline (the editor allows
 // it) must not swallow the new keys into that comment.
 func TestWriteFormCommentOnlyWithoutTrailingNewline(t *testing.T) {

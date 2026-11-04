@@ -136,8 +136,13 @@ export function TraefikApplyModal({
           </Button>
         ) : null
       }
+      // Escape closes a dialog even when it is not closable; mid-run that would
+      // hide the result and acknowledge it before it exists.
+      keyboard={reviewing || done}
       mask={{ closable: false }}
-      onCancel={() => void close()}
+      onCancel={() => {
+        if (reviewing || done) void close();
+      }}
       open
       title={reviewing ? 'Review & Apply' : TITLES[run?.kind ?? 'apply']}
       width={reviewing ? 1000 : 640}

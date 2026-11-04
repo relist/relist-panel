@@ -50,7 +50,9 @@ var (
 // ProblemsError is a Traefik override refused before anything ran.
 type ProblemsError struct{ Problems []Problem }
 
-func (e *ProblemsError) Error() string { return "the Traefik override cannot be used: " + describe(e.Problems) }
+func (e *ProblemsError) Error() string {
+	return "the Traefik override cannot be used: " + describe(e.Problems)
+}
 
 // Run is the last Traefik apply, kept in apply.json. Healthy* carry over from
 // run to run: the generated file Traefik last started from, healthy.
@@ -97,6 +99,7 @@ type Runner struct {
 	Keep                        int           // history entries; 10 when zero
 
 	mu      sync.Mutex
+	fileMu  sync.Mutex // save's read-modify-write of apply.json
 	busy    bool
 	done    chan struct{}
 	onState func(string) // tests watch the states
@@ -162,6 +165,8 @@ func (r *Runner) Status() (Run, error) {
 // save writes run to apply.json, keeping the bootstrap warning traefik-config
 // wrote there.
 func (r *Runner) save(run Run) error {
+	r.fileMu.Lock()
+	defer r.fileMu.Unlock()
 	if old, err := r.Status(); err == nil && run.BootstrapWarning == "" {
 		run.BootstrapWarning = old.BootstrapWarning
 	}
@@ -202,7 +207,9 @@ func (r *Runner) Ack(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	run, err := r.Status()
-	if err != nil || run.ID != id {
+	// A run still going is saved by its goroutine, not under r.mu: writing
+	// back this read could undo a step it saved meanwhile.
+	if err != nil || run.ID != id || !Terminal(run.State) {
 		return err
 	}
 	run.Acked = true

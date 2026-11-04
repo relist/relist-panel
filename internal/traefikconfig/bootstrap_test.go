@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 var errNoTraefikTest = errors.New("no traefik")
@@ -137,6 +138,26 @@ func TestBootstrapKeepsExistingOverride(t *testing.T) {
 	m, _ := parseMap(eff)
 	if _, v := lookup(m, "log", "level"); v == nil || v.Value != "WARN" {
 		t.Errorf("level = %v", v)
+	}
+}
+
+// Every `up` runs traefik-config. When the file comes out the same, its mtime
+// must not move: with no healthy apply recorded, pending restart compares the
+// mtime with Traefik's start, and a touch alone would ask for a restart.
+func TestBootstrapLeavesSameFileAlone(t *testing.T) {
+	p := PathsFor(t.TempDir())
+	os.MkdirAll(p.Dir, 0o755)
+	os.WriteFile(p.Override(), []byte("log: {level: WARN}\n"), 0o644)
+	if err := bootstrap(t, p, fakeArgs{err: errNoTraefikTest}, noEnv); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour).Truncate(time.Second)
+	os.Chtimes(p.Effective(), old, old)
+	if err := bootstrap(t, p, fakeArgs{err: errNoTraefikTest}, noEnv); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := os.Stat(p.Effective()); !st.ModTime().Equal(old) {
+		t.Errorf("traefik.yml rewritten: mtime %v, want %v", st.ModTime(), old)
 	}
 }
 

@@ -1,6 +1,7 @@
 package traefikconfig
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -45,10 +46,16 @@ func Bootstrap(ctx context.Context, p Paths, t ArgsReader, noTraefik func(error)
 	if len(problems) > 0 {
 		return keepOrFail(p, logw, "the Traefik override cannot be used, so traefik.yml was not changed: "+describe(problems))
 	}
-	if err := WriteAtomic(p.Effective(), effective); err != nil {
-		return err
+	// The same bytes keep the old mtime, which pending restart compares with
+	// Traefik's start when no healthy apply is recorded.
+	if old, err := os.ReadFile(p.Effective()); err == nil && bytes.Equal(old, effective) {
+		fmt.Fprintf(logw, "traefik-config: %s is up to date\n", p.Effective())
+	} else {
+		if err := WriteAtomic(p.Effective(), effective); err != nil {
+			return err
+		}
+		fmt.Fprintf(logw, "traefik-config: wrote %s\n", p.Effective())
 	}
-	fmt.Fprintf(logw, "traefik-config: wrote %s\n", p.Effective())
 	return RecordBootstrapWarning(p, strings.Join(warnings, "; "))
 }
 

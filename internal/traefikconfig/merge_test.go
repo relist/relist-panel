@@ -150,6 +150,47 @@ func TestMergeCaseVariantLockedKeyRefused(t *testing.T) {
 	}
 }
 
+// refused fails unless Generate refuses override with a problem whose message
+// contains want.
+func refused(t *testing.T, override, want string) {
+	t.Helper()
+	out, problems, err := Generate([]byte(override))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != nil {
+		t.Errorf("%q: file returned despite a problem:\n%s", override, out)
+	}
+	for _, p := range problems {
+		if strings.Contains(p.Message, want) {
+			return
+		}
+	}
+	t.Fatalf("%q: problems = %+v, want one containing %q", override, problems, want)
+}
+
+// Two keys Traefik reads as one: the last wins in the merge, so a locked check
+// on the first would pass while the second changes the value.
+func TestDuplicateCaseVariantKeysRefused(t *testing.T) {
+	refused(t, "providers:\n  docker: {exposedByDefault: false, exposedbydefault: true}\n", "same key")
+	refused(t, "entryPoints: {web: {}}\nentrypoints: {web: {address: \":81\"}}\n", "same key")
+	refused(t, "entryPoints: {web: {address: \":80\", Address: \":81\"}}\n", "same key")
+	refused(t, "log: {level: DEBUG}\nLog: {level: ERROR}\n", "same key")
+}
+
+// A scalar where the base has a map replaces the whole map, locked keys included.
+func TestScalarOverLockedMapRefused(t *testing.T) {
+	refused(t, "providers: {docker: true}\n", "providers.docker")
+	refused(t, "providers: true\n", "providers")
+	refused(t, "certificatesResolvers: {letsencrypt: {acme: x}}\n", "certificatesResolvers.letsencrypt.acme")
+}
+
+// Paths are case-sensitive on Linux: /LETSENCRYPT is off the mounted volume.
+func TestLockedPathComparedExactly(t *testing.T) {
+	refused(t, "certificatesResolvers: {letsencrypt: {acme: {storage: /LETSENCRYPT/acme.json}}}\n", "the panel needs")
+	generated(t, "providers: {docker: {exposedByDefault: FALSE}}\n")
+}
+
 func TestLockedKeySameValueAllowed(t *testing.T) {
 	generated(t, "log: {noColor: true}\n")
 }
