@@ -575,3 +575,70 @@ describe('vulnerability URLs', () => {
     expect(vulnFindingsUrl('sha256:abc')).toBe('/api/vulnerabilities/images/sha256%3Aabc/findings');
   });
 });
+
+describe('users and invites', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function stub(body: unknown, status = 200) {
+    const fetch = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(status === 204 ? null : JSON.stringify(body), { status }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    return fetch;
+  }
+
+  const call = (fetch: ReturnType<typeof stub>) => {
+    const [url, init] = fetch.mock.calls[0];
+    return { url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined };
+  };
+
+  it('lists users', async () => {
+    const fetch = stub([]);
+    await api.listUsers();
+    expect(call(fetch)).toEqual({ url: '/api/users', method: 'GET', body: undefined });
+  });
+
+  it('creates a user with the email and admin flag', async () => {
+    const fetch = stub({ user: { id: 2 }, token: 't', expiresAt: 'x', kind: 'invite' }, 201);
+    await expect(api.createUser('bob@example.com', true)).resolves.toMatchObject({ token: 't', kind: 'invite' });
+    expect(call(fetch)).toEqual({ url: '/api/users', method: 'POST', body: { email: 'bob@example.com', isAdmin: true } });
+  });
+
+  it('PATCHes a user', async () => {
+    const fetch = stub({ id: 2 });
+    await api.updateUser(2, { disabled: true });
+    expect(call(fetch)).toEqual({ url: '/api/users/2', method: 'PATCH', body: { disabled: true } });
+  });
+
+  it('DELETEs a user', async () => {
+    const fetch = stub(null, 204);
+    await api.deleteUser(2);
+    expect(call(fetch)).toEqual({ url: '/api/users/2', method: 'DELETE', body: undefined });
+  });
+
+  it('POSTs a reset', async () => {
+    const fetch = stub({ token: 't', expiresAt: 'x', kind: 'reset' });
+    await expect(api.resetUser(2)).resolves.toEqual({ token: 't', expiresAt: 'x', kind: 'reset' });
+    expect(call(fetch)).toEqual({ url: '/api/users/2/reset', method: 'POST', body: undefined });
+  });
+
+  it('reads an invite with the token encoded', async () => {
+    const fetch = stub({ email: 'bob@example.com', kind: 'invite' });
+    await api.getInvite('a/b');
+    expect(call(fetch).url).toBe('/api/invites/a%2Fb');
+  });
+
+  it('accepts an invite with the password', async () => {
+    const fetch = stub({ authenticated: true, email: 'bob@example.com' });
+    await api.acceptInvite('tok', 'a brand new password');
+    expect(call(fetch)).toEqual({ url: '/api/invites/tok', method: 'POST', body: { password: 'a brand new password' } });
+  });
+
+  it('throws the server message on 409', async () => {
+    stub({ error: 'A user with this email already exists' }, 409);
+    await expect(api.createUser('bob@example.com', false)).rejects.toEqual(
+      new ApiError(409, 'A user with this email already exists'),
+    );
+  });
+});

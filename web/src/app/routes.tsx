@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 import { createBrowserRouter } from 'react-router';
 
 import { SignInPage } from '../pages/AuthPages';
+import { InvitePage } from '../pages/InvitePage';
 import { AccountPage } from '../pages/AccountPage';
 import { ComposePage } from '../pages/ComposePage';
 import { DeploymentsPage } from '../pages/DeploymentsPage';
@@ -17,6 +18,7 @@ import { ProjectsPage } from '../pages/ProjectsPage';
 import { SshKeysPage } from '../pages/SshKeysPage';
 import { CertificatesPage } from '../pages/CertificatesPage';
 import { TraefikPage } from '../pages/TraefikPage';
+import { UsersPage } from '../pages/UsersPage';
 import { VolumeExplorerPage } from '../pages/VolumeExplorerPage';
 import { VulnerabilitiesPage } from '../pages/VulnerabilitiesPage';
 import { AppShell } from './AppShell';
@@ -41,6 +43,7 @@ const elements: Record<string, ReactElement> = {
   'ssh-keys': <SshKeysPage />,
   'certificates': <CertificatesPage />,
   'traefik': <TraefikPage />,
+  'users': <UsersPage />,
   'vulnerabilities': <VulnerabilitiesPage />,
   'docker': <DockerPage />,
   'panel-update': <PanelUpdatePage />,
@@ -77,6 +80,7 @@ export const router = createBrowserRouter(
       ],
     },
     { path: 'signin', element: <SignInPage /> },
+    { path: 'invite/:token', element: <InvitePage /> },
   ],
   { basename },
 );

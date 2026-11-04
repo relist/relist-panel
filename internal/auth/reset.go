@@ -12,7 +12,7 @@ import (
 var (
 	// ErrAccountNotFound reports that no admin row matches the requested
 	// email, or that there is no account to pick when none was given.
-	ErrAccountNotFound = errors.New("admin account not found")
+	ErrAccountNotFound = errors.New("user not found")
 	// ErrEmailRequired reports that no email was given and more than one
 	// account exists, so the caller must choose one explicitly.
 	ErrEmailRequired = errors.New("email is required")
@@ -44,7 +44,7 @@ func ResetTwoFactor(ctx context.Context, db *sql.DB, email string) (ResetResult,
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE admin_credentials
+		UPDATE users
 		SET totp_secret = NULL,
 		    totp_pending_secret = NULL,
 		    totp_last_step = NULL,
@@ -55,7 +55,7 @@ func ResetTwoFactor(ctx context.Context, db *sql.DB, email string) (ResetResult,
 		return ResetResult{}, err
 	}
 
-	deleted, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE admin_id = ?", account.id)
+	deleted, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", account.id)
 	if err != nil {
 		return ResetResult{}, err
 	}
@@ -100,7 +100,7 @@ func ResetPassword(ctx context.Context, db *sql.DB, email, password string) (Res
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE admin_credentials
+		UPDATE users
 		SET password_hash = ?,
 		    password_from_env = 0,
 		    failed_attempts = 0,
@@ -110,7 +110,13 @@ func ResetPassword(ctx context.Context, db *sql.DB, email, password string) (Res
 		return ResetResult{}, err
 	}
 
-	deleted, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE admin_id = ?", account.id)
+	// A User still holding an invite or reset link could otherwise overwrite
+	// the password set here from the host.
+	if _, err := tx.ExecContext(ctx, "DELETE FROM user_tokens WHERE user_id = ? AND used_at IS NULL", account.id); err != nil {
+		return ResetResult{}, err
+	}
+
+	deleted, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", account.id)
 	if err != nil {
 		return ResetResult{}, err
 	}
@@ -137,7 +143,7 @@ type resetTarget struct {
 }
 
 // findResetTarget resolves the account to reset. An email matches at most one
-// row because admin_credentials.email is UNIQUE. Without an email the query
+// row because users.email is UNIQUE. Without an email the query
 // must find exactly one account.
 func findResetTarget(ctx context.Context, tx *sql.Tx, email string) (resetTarget, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
@@ -145,7 +151,7 @@ func findResetTarget(ctx context.Context, tx *sql.Tx, email string) (resetTarget
 		var account resetTarget
 		err := tx.QueryRowContext(ctx, `
 			SELECT id, email, totp_secret
-			FROM admin_credentials
+			FROM users
 			WHERE email = ?
 		`, email).Scan(&account.id, &account.email, &account.totpSecret)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -157,7 +163,7 @@ func findResetTarget(ctx context.Context, tx *sql.Tx, email string) (resetTarget
 		return account, nil
 	}
 
-	rows, err := tx.QueryContext(ctx, "SELECT id, email, totp_secret FROM admin_credentials")
+	rows, err := tx.QueryContext(ctx, "SELECT id, email, totp_secret FROM users")
 	if err != nil {
 		return resetTarget{}, err
 	}
@@ -192,7 +198,7 @@ type ChangeEmailResult struct {
 	NewEmail string
 }
 
-// ChangeEmail replaces the sign-in email of one admin account. Sessions,
+// ChangeEmail replaces the sign-in email of one User. Sessions,
 // password and two-factor are untouched. Account selection is as in
 // ResetTwoFactor; newEmail is validated and normalized like create-admin's.
 func ChangeEmail(ctx context.Context, db *sql.DB, email, newEmail string) (ChangeEmailResult, error) {
@@ -212,7 +218,7 @@ func ChangeEmail(ctx context.Context, db *sql.DB, email, newEmail string) (Chang
 		return ChangeEmailResult{}, err
 	}
 
-	if _, err := tx.ExecContext(ctx, "UPDATE admin_credentials SET email = ? WHERE id = ?", normalized, account.id); err != nil {
+	if _, err := tx.ExecContext(ctx, "UPDATE users SET email = ? WHERE id = ?", normalized, account.id); err != nil {
 		return ChangeEmailResult{}, err
 	}
 	if err := tx.Commit(); err != nil {

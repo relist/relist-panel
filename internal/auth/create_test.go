@@ -21,7 +21,7 @@ func TestCreateAdminStoresTheFirstAdmin(t *testing.T) {
 	}
 	var hash string
 	var fromEnv bool
-	if err := db.QueryRow("SELECT password_hash, password_from_env FROM admin_credentials").Scan(&hash, &fromEnv); err != nil {
+	if err := db.QueryRow("SELECT password_hash, password_from_env FROM users").Scan(&hash, &fromEnv); err != nil {
 		t.Fatal(err)
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte("correct horse battery staple")) != nil || fromEnv {

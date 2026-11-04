@@ -28,14 +28,14 @@ func seedCLIAdmin(t *testing.T) {
 	defer db.Close()
 
 	if _, err := db.Exec(`
-		INSERT INTO admin_credentials
+		INSERT INTO users
 			(id, email, password_hash, created_at, totp_secret, totp_pending_secret, totp_last_step, failed_attempts, locked_until)
 		VALUES (1, 'admin@example.com', 'hash', 1, 'SECRET', 'PENDING', 42, 3, 9999999999)
 	`); err != nil {
 		t.Fatalf("seed admin: %v", err)
 	}
 	if _, err := db.Exec(`
-		INSERT INTO sessions (token, admin_id, expires_at, created_at)
+		INSERT INTO sessions (token, user_id, expires_at, created_at)
 		VALUES ('session-one', 1, 9999999999, 1), ('session-two', 1, 9999999999, 1)
 	`); err != nil {
 		t.Fatalf("seed sessions: %v", err)
@@ -113,7 +113,7 @@ func storedAdmin(t *testing.T) (email, hash string, fromEnv bool) {
 		t.Fatalf("OpenAndMigrate() error = %v", err)
 	}
 	defer db.Close()
-	if err := db.QueryRow("SELECT email, password_hash, password_from_env FROM admin_credentials").Scan(&email, &hash, &fromEnv); err != nil {
+	if err := db.QueryRow("SELECT email, password_hash, password_from_env FROM users").Scan(&email, &hash, &fromEnv); err != nil {
 		t.Fatalf("read admin: %v", err)
 	}
 	return email, hash, fromEnv

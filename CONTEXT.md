@@ -104,7 +104,7 @@ A named Docker volume that Compose created for a Compose's project but whose YAM
 _Avoid_: Dangling volume — that is Docker's term for any unreferenced volume, whichever project made it.
 
 **Environment Variable**:
-A key-value pair scoped to an Environment, interpolated into all of that Environment's Composes at deploy time, unless a Compose Variable of the same key overrides it. A variable may be flagged **secret**, which masks its value on screen — a display tier owned by the user, not a security boundary: the value is stored and served as any other, and the panel's single admin can always reveal it.
+A key-value pair scoped to an Environment, interpolated into all of that Environment's Composes at deploy time, unless a Compose Variable of the same key overrides it. A variable may be flagged **secret**, which masks its value on screen — a display tier owned by the user, not a security boundary: the value is stored and served as any other, and an Admin can always reveal it.
 _Avoid_: treating the secret flag as an encryption or access tier; "plain" is not a domain word, just the tag for the flag's absence.
 
 **Compose Variable**:
@@ -120,8 +120,24 @@ The link between one Service in a Compose and one Variable Set. Ordered per Serv
 _Avoid_: Attachment, Mount.
 
 **Two-factor**:
-A time-based one-time code (TOTP) the admin account may require at sign-in, on top of its password. Opt-in from the Account page. Recovery is deliberately the host: `relist-panel reset-2fa`, run inside the panel container, clears it — anyone who can run that already owns the Docker host.
+A time-based one-time code (TOTP) a User may require at sign-in, on top of their password. Opt-in from the Account page, per User. An admin's reset link also turns it off. Recovery is deliberately the host: `relist-panel reset-2fa`, run inside the panel container, clears it — anyone who can run that already owns the Docker host.
 _Avoid_: MFA, OTP (as the feature name), 2FA in code identifiers — use `twoFactor` / `totp`.
+
+**User**:
+One person who signs in to the panel, with their own email, password and Two-factor. A User is **invited** (no password yet), **active** or **disabled** (signed out and refused at sign-in). A User who is not an Admin reaches only their own Account until roles arrive (ADR-0031).
+_Avoid_: Account (the Account page is where a User edits their own sign-in), Member, Operator (as the name for a person).
+
+**Owner**:
+The User with id 1, made by `relist-panel create-admin`. Always an Admin: the web can never disable, delete or demote it, and only the Owner can send the Owner a reset link. There is no transfer; a new owner takes over the id 1 account.
+_Avoid_: Root, Superuser.
+
+**Admin**:
+A User who may use every screen of the panel, the host-wide pages and the Users page included.
+_Avoid_: Administrator (spell it Admin), Staff.
+
+**Invite link**:
+A single-use link with which a User sets their password: an invite for a new User (7 days) or a reset for an existing one (24 hours). The panel stores only its hash and shows it once; an Admin hands it over, the panel sends no email.
+_Avoid_: Magic link, Token (the token is part of the link), Invitation email.
 
 **Migration**:
 Moving everything one panel manages to an empty panel on another host, which pulls it from the old one over HTTPS (ADR-0018). Everything moves; the operator chooses only which host paths outside the data directory to include.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,8 +27,8 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 30 {
-		t.Fatalf("migration version = %d, want 30", version)
+	if version != 31 {
+		t.Fatalf("migration version = %d, want 31", version)
 	}
 
 	var one int
@@ -119,7 +120,7 @@ func TestOpenAndMigrateWaitsForABusyWriter(t *testing.T) {
 			return
 		}
 		if _, err := writer.Exec(`
-			INSERT INTO admin_credentials (id, email, password_hash, created_at)
+			INSERT INTO users (id, email, password_hash, created_at)
 			VALUES (1, 'admin@example.com', 'hash', 1)
 		`); err != nil {
 			writer.Exec("ROLLBACK")
@@ -134,7 +135,7 @@ func TestOpenAndMigrateWaitsForABusyWriter(t *testing.T) {
 
 	<-locked
 
-	if _, err := reader.Exec("UPDATE admin_credentials SET failed_attempts = 1 WHERE id = 1"); err != nil {
+	if _, err := reader.Exec("UPDATE users SET failed_attempts = 1 WHERE id = 1"); err != nil {
 		t.Fatalf("update while a writer holds the lock: %v", err)
 	}
 	if err := <-writerDone; err != nil {
@@ -573,5 +574,74 @@ func TestVulnerabilityScansMigrationSeedsSettings(t *testing.T) {
 	}
 	if enabled != 0 || minute != 180 || image != "" || active != "" {
 		t.Fatalf("scan_settings = %d %d %q %q", enabled, minute, image, active)
+	}
+}
+
+func TestUsersMigrationKeepsAdminAndSessions(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "panel.db")+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	goose.SetBaseFS(migrations.FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(db, ".", 30); err != nil {
+		t.Fatalf("migrate to 30: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO admin_credentials (id, email, password_hash, created_at, totp_secret, totp_last_step, failed_attempts, password_from_env)
+		VALUES (1, 'admin@example.com', 'hash', 100, 'JBSWY3DPEHPK3PXP', 7, 2, 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO sessions (token, admin_id, expires_at, created_at) VALUES ('tok', 1, 9999999999, 100)"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate 30 -> latest: %v", err)
+	}
+
+	var (
+		id                                 int64
+		email, hash, secret                string
+		isAdmin, lastStep, failed, fromEnv int64
+	)
+	if err := db.QueryRow(`
+		SELECT id, email, password_hash, is_admin, totp_secret, totp_last_step, failed_attempts, password_from_env FROM users
+	`).Scan(&id, &email, &hash, &isAdmin, &secret, &lastStep, &failed, &fromEnv); err != nil {
+		t.Fatalf("read users: %v", err)
+	}
+	if id != 1 || email != "admin@example.com" || hash != "hash" || isAdmin != 1 || secret != "JBSWY3DPEHPK3PXP" || lastStep != 7 || failed != 2 || fromEnv != 1 {
+		t.Fatalf("users row = %d %q %q admin=%d %q step=%d failed=%d env=%d", id, email, hash, isAdmin, secret, lastStep, failed, fromEnv)
+	}
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("users count = %d, %v", count, err)
+	}
+	var userID int64
+	if err := db.QueryRow("SELECT user_id FROM sessions WHERE token = 'tok'").Scan(&userID); err != nil || userID != 1 {
+		t.Fatalf("session user_id = %d, %v", userID, err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name = 'admin_credentials'").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("admin_credentials still present: %d, %v", count, err)
+	}
+	if violations, err := ForeignKeyViolations(context.Background(), db); err != nil || violations != 0 {
+		t.Fatalf("foreign key violations = %d, %v", violations, err)
+	}
+
+	insertToken := func(hash string) error {
+		_, err := db.Exec("INSERT INTO user_tokens (user_id, kind, token_hash, expires_at) VALUES (1, 'invite', ?, 200)", hash)
+		return err
+	}
+	if err := insertToken("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertToken("b"); err == nil || !strings.Contains(strings.ToLower(err.Error()), "unique") {
+		t.Fatalf("second open token error = %v, want a unique constraint error", err)
 	}
 }

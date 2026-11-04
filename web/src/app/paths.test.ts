@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { paths, resolvePath } from './paths';
+import { inviteUrl, paths, resolvePath } from './paths';
 
 describe('paths', () => {
   // The design's route table (GUIDELINES §3), with the prototype's `#` prefix
@@ -104,5 +104,16 @@ describe('global Deployments path', () => {
   it('resolves the host page outside Project/Compose context', () => {
     expect(paths.deployments).toBe('/deployments');
     expect(resolvePath(paths.deployments)).toEqual({ params: {}, pattern: 'deployments' });
+  });
+});
+
+describe('invite links', () => {
+  it('builds the users and invite paths', () => {
+    expect(paths.users).toBe('/users');
+    expect(paths.invite('a b')).toBe('/invite/a%20b');
+  });
+
+  it('builds an absolute invite URL on the given origin', () => {
+    expect(inviteUrl('a b', 'https://panel.example')).toBe('https://panel.example/invite/a%20b');
   });
 });

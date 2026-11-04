@@ -120,7 +120,7 @@ func TestParallelWrongLoginsNeverRecordMoreFailuresThanSerialOnes(t *testing.T) 
 	}
 	var failed int
 	var lockedUntil *int64
-	if err := service.db.QueryRow("SELECT failed_attempts, locked_until FROM admin_credentials").Scan(&failed, &lockedUntil); err != nil {
+	if err := service.db.QueryRow("SELECT failed_attempts, locked_until FROM users").Scan(&failed, &lockedUntil); err != nil {
 		t.Fatalf("read account: %v", err)
 	}
 	if failed != 0 || lockedUntil == nil {
@@ -131,7 +131,7 @@ func TestParallelWrongLoginsNeverRecordMoreFailuresThanSerialOnes(t *testing.T) 
 func TestLoginFailsWhenThePasswordChangesDuringTheCheck(t *testing.T) {
 	service, handler, sessions := newSplitService(t)
 	service.comparePassword = func(hash, password []byte) error {
-		if _, err := service.db.Exec("UPDATE admin_credentials SET password_hash = 'changed'"); err != nil {
+		if _, err := service.db.Exec("UPDATE users SET password_hash = 'changed'"); err != nil {
 			t.Errorf("change password: %v", err)
 		}
 		return nil
@@ -145,7 +145,7 @@ func TestLoginFailsWhenThePasswordChangesDuringTheCheck(t *testing.T) {
 		t.Fatalf("sessions = %d, want 0", n)
 	}
 	var failed int
-	if err := service.db.QueryRow("SELECT failed_attempts FROM admin_credentials").Scan(&failed); err != nil || failed != 0 {
+	if err := service.db.QueryRow("SELECT failed_attempts FROM users").Scan(&failed); err != nil || failed != 0 {
 		t.Fatalf("failed_attempts = %d (err %v), want 0", failed, err)
 	}
 }

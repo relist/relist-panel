@@ -13,6 +13,7 @@ vi.mock('./api', async (importOriginal) => {
     ...original,
     api: {
       authStatus: vi.fn(),
+      login: vi.fn(),
       createComposeVariable: vi.fn(),
       deleteComposeVariable: vi.fn(),
       listComposeVariables: vi.fn(),
@@ -162,5 +163,43 @@ describe('.env replace', () => {
     expect(mocked.deleteSetEntry).toHaveBeenCalledWith(location, 5, 2);
     expect(mocked.updateSetEntry).toHaveBeenCalledWith(location, 5, 1, rows[0]);
     expect(mocked.createSetEntry).toHaveBeenCalledWith(location, 5, rows[1]);
+  });
+});
+
+describe('signed-in User', () => {
+  const bob = { id: 2, email: 'bob@example.com', isAdmin: false, isOwner: false };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('keeps the User the status reports', async () => {
+    mocked.authStatus.mockResolvedValue({ authenticated: true, user: bob } as never);
+    const hook = renderHook(() => usePanel(), { wrapper });
+    await waitFor(() => expect(hook.result.current.auth.user).toEqual(bob));
+  });
+
+  it('learns who signed in before opening the app', async () => {
+    mocked.authStatus.mockResolvedValueOnce({ authenticated: false } as never);
+    const hook = renderHook(() => usePanel(), { wrapper });
+    await waitFor(() => expect(hook.result.current.auth.checked).toBe(true));
+    mocked.login.mockResolvedValue({ kind: 'signedIn' } as never);
+    mocked.authStatus.mockResolvedValue({ authenticated: true, user: bob } as never);
+    await act(async () => {
+      await hook.result.current.signIn('bob@example.com', 'pw');
+    });
+    expect(hook.result.current.auth).toEqual({ checked: true, authenticated: true, user: bob });
+  });
+
+  it('stays signed in when the status read after sign-in fails', async () => {
+    mocked.authStatus.mockResolvedValueOnce({ authenticated: false } as never);
+    const hook = renderHook(() => usePanel(), { wrapper });
+    await waitFor(() => expect(hook.result.current.auth.checked).toBe(true));
+    mocked.login.mockResolvedValue({ kind: 'signedIn' } as never);
+    mocked.authStatus.mockRejectedValue(new Error('network'));
+    await act(async () => {
+      await expect(hook.result.current.signIn('bob@example.com', 'pw')).resolves.toEqual({ kind: 'signedIn' });
+    });
+    expect(hook.result.current.auth).toEqual({ checked: true, authenticated: true });
   });
 });

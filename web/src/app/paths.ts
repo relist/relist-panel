@@ -11,6 +11,8 @@ import { matchRoutes } from 'react-router';
 
 export const paths = {
   account: '/account',
+  /** An invite or reset link's page, outside the sign-in gate. */
+  invite: (token: string) => `/invite/${encodeURIComponent(token)}`,
   compose: (projectId: number | string, environmentId: number | string, composeId: number | string, tab?: string) =>
     `/projects/${projectId}/env/${environmentId}/compose/${composeId}${tab ? `/${tab}` : ''}`,
   deployments: '/deployments',
@@ -29,6 +31,7 @@ export const paths = {
   project: (projectId: number | string) => `/projects/${projectId}`,
   projects: '/projects',
   signIn: '/signin',
+  users: '/users',
   /**
    * The Volume Explorer's URL: the Compose's route plus a `volumes/explorer`
    * leaf, with the Volume's resolved source and the relative path in the
@@ -50,6 +53,16 @@ export const paths = {
 } as const;
 
 /**
+ * The absolute URL an admin hands over for an invite or reset token: this
+ * panel's origin and Vite base (`/` in the shipped panel), then the invite
+ * path.
+ */
+export function inviteUrl(token: string, origin = window.location.origin): string {
+  const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
+  return `${origin}${base}${paths.invite(token)}`;
+}
+
+/**
  * The route grammar of the shell's screens, as react-router matcher patterns
  * (no elements). The auth screen (`/signin`) sits outside the shell —
  * the signed-out visitor must not see the sider — so it is routed in
@@ -63,6 +76,7 @@ export const routePaths = [
   { path: 'ssh-keys' },
   { path: 'certificates' },
   { path: 'traefik' },
+  { path: 'users' },
   { path: 'vulnerabilities' },
   { path: 'docker' },
   { path: 'panel-update' },

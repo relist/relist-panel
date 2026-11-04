@@ -32,7 +32,7 @@ func newServiceWithClock(db *sql.DB, now func() time.Time) *Service {
 func (s *Service) lockedFor(ctx context.Context, tx *sql.Tx, adminID int64) (time.Duration, error) {
 	var lockedUntil sql.NullInt64
 	if err := tx.QueryRowContext(ctx,
-		"SELECT locked_until FROM admin_credentials WHERE id = ?",
+		"SELECT locked_until FROM users WHERE id = ?",
 		adminID,
 	).Scan(&lockedUntil); err != nil {
 		return 0, err
@@ -53,7 +53,7 @@ func (s *Service) lockedFor(ctx context.Context, tx *sql.Tx, adminID int64) (tim
 func (s *Service) recordFailure(ctx context.Context, tx *sql.Tx, adminID int64) error {
 	var failed int64
 	if err := tx.QueryRowContext(ctx,
-		"SELECT failed_attempts FROM admin_credentials WHERE id = ?",
+		"SELECT failed_attempts FROM users WHERE id = ?",
 		adminID,
 	).Scan(&failed); err != nil {
 		return err
@@ -63,14 +63,14 @@ func (s *Service) recordFailure(ctx context.Context, tx *sql.Tx, adminID int64) 
 	if failed >= maxFailedAttempts {
 		lockedUntil := s.now().UTC().Add(lockDuration).Unix()
 		_, err := tx.ExecContext(ctx,
-			"UPDATE admin_credentials SET failed_attempts = 0, locked_until = ? WHERE id = ?",
+			"UPDATE users SET failed_attempts = 0, locked_until = ? WHERE id = ?",
 			lockedUntil, adminID,
 		)
 		return err
 	}
 
 	_, err := tx.ExecContext(ctx,
-		"UPDATE admin_credentials SET failed_attempts = ? WHERE id = ?",
+		"UPDATE users SET failed_attempts = ? WHERE id = ?",
 		failed, adminID,
 	)
 	return err
@@ -80,7 +80,7 @@ func (s *Service) recordFailure(ctx context.Context, tx *sql.Tx, adminID int64) 
 // lock: a locked request is refused before this is reached.
 func (s *Service) recordSuccess(ctx context.Context, tx *sql.Tx, adminID int64) error {
 	_, err := tx.ExecContext(ctx,
-		"UPDATE admin_credentials SET failed_attempts = 0 WHERE id = ?",
+		"UPDATE users SET failed_attempts = 0 WHERE id = ?",
 		adminID,
 	)
 	return err

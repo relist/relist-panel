@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react';
 
 import { api } from './api';
-import type { LoginResult, ProjectInput } from './api';
+import type { LoginResult, ProjectInput, SignedInUser } from './api';
 import type { Compose, ComposeDomains, DeploymentRequest, ComposeVariable, ComposePreview, EffectiveVariable, ServiceBindings, VariableSet, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeListing, VolumeAccess, ZeroDowntimeService } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
@@ -42,6 +42,8 @@ export type AuthState = {
   /** False until the first `/api/auth/status` read settles. */
   checked: boolean;
   authenticated: boolean;
+  /** The signed-in User, once the status has said who it is. */
+  user?: SignedInUser;
 };
 
 const signedOut: AuthState = { checked: true, authenticated: false };
@@ -208,7 +210,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   const loadAuthStatus = useCallback(async () => {
     await track('auth-status', async () => {
       const status = await api.authStatus();
-      setAuth({ checked: true, authenticated: status.authenticated });
+      setAuth({ checked: true, authenticated: status.authenticated, user: status.user });
     });
   }, [track]);
 
@@ -219,7 +221,16 @@ export function PanelProvider({ children }: { children: ReactNode }) {
         // Only a completed sign-in opens the app; a code prompt or the lock
         // leaves the auth state untouched so the page stays on its step.
         if (result.kind === 'signedIn') {
-          setAuth({ checked: true, authenticated: true });
+          // The status says who signed in, which the shell needs before it
+          // renders: a non-admin sees only their Account. The session cookie
+          // is already set, so a failed read still signs in, without the
+          // User; the next status read fills it in.
+          try {
+            const status = await api.authStatus();
+            setAuth({ checked: true, authenticated: status.authenticated, user: status.user });
+          } catch {
+            setAuth({ checked: true, authenticated: true });
+          }
         }
         return result;
       });

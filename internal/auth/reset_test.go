@@ -28,7 +28,7 @@ func openResetDatabase(t *testing.T) *sql.DB {
 func seedResetAdmin(t *testing.T, db *sql.DB, totpSecret sql.NullString) {
 	t.Helper()
 	if _, err := db.Exec(`
-		INSERT INTO admin_credentials
+		INSERT INTO users
 			(id, email, password_hash, created_at, totp_secret, totp_pending_secret, totp_last_step, failed_attempts, locked_until)
 		VALUES (1, 'admin@example.com', 'hash', 1, ?, 'PENDING', 42, 3, ?)
 	`, totpSecret, time.Now().Add(time.Minute).Unix()); err != nil {
@@ -39,7 +39,7 @@ func seedResetAdmin(t *testing.T, db *sql.DB, totpSecret sql.NullString) {
 func seedResetSession(t *testing.T, db *sql.DB, token string) {
 	t.Helper()
 	if _, err := db.Exec(`
-		INSERT INTO sessions (token, admin_id, expires_at, created_at)
+		INSERT INTO sessions (token, user_id, expires_at, created_at)
 		VALUES (?, 1, ?, 1)
 	`, token, time.Now().Add(24*time.Hour).Unix()); err != nil {
 		t.Fatalf("seed session %q: %v", token, err)
@@ -71,7 +71,7 @@ func TestResetTwoFactorClearsStateAndSessions(t *testing.T) {
 	)
 	if err := db.QueryRow(`
 		SELECT totp_secret, totp_pending_secret, totp_last_step, failed_attempts, locked_until
-		FROM admin_credentials WHERE id = 1
+		FROM users WHERE id = 1
 	`).Scan(&secret, &pending, &lastStep, &failed, &lockedUntil); err != nil {
 		t.Fatalf("read admin after reset: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestResetTwoFactorWhenNotEnabledStillUnlocks(t *testing.T) {
 	}
 
 	var lockedUntil sql.NullInt64
-	if err := db.QueryRow("SELECT locked_until FROM admin_credentials WHERE id = 1").Scan(&lockedUntil); err != nil {
+	if err := db.QueryRow("SELECT locked_until FROM users WHERE id = 1").Scan(&lockedUntil); err != nil {
 		t.Fatalf("read lock after reset: %v", err)
 	}
 	if lockedUntil.Valid {
@@ -173,7 +173,7 @@ func TestResetPasswordReplacesHashAndRevokesSessions(t *testing.T) {
 	var failed int
 	var locked sql.NullInt64
 	var fromEnv bool
-	if err := db.QueryRow("SELECT password_hash, totp_secret, failed_attempts, locked_until, password_from_env FROM admin_credentials WHERE id = 1").
+	if err := db.QueryRow("SELECT password_hash, totp_secret, failed_attempts, locked_until, password_from_env FROM users WHERE id = 1").
 		Scan(&hash, &secret, &failed, &locked, &fromEnv); err != nil {
 		t.Fatalf("read admin: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestResetPasswordRejectsShortPassword(t *testing.T) {
 		t.Fatal("ResetPassword() accepted a short password")
 	}
 	var hash string
-	if err := db.QueryRow("SELECT password_hash FROM admin_credentials").Scan(&hash); err != nil || hash != "hash" {
+	if err := db.QueryRow("SELECT password_hash FROM users").Scan(&hash); err != nil || hash != "hash" {
 		t.Fatalf("hash = %q, err = %v; want it untouched", hash, err)
 	}
 }
@@ -230,7 +230,7 @@ func TestChangeEmailReplacesTheAddressAndKeepsTheRest(t *testing.T) {
 
 	var email, hash string
 	var secret sql.NullString
-	if err := db.QueryRow("SELECT email, password_hash, totp_secret FROM admin_credentials WHERE id = 1").Scan(&email, &hash, &secret); err != nil {
+	if err := db.QueryRow("SELECT email, password_hash, totp_secret FROM users WHERE id = 1").Scan(&email, &hash, &secret); err != nil {
 		t.Fatalf("read admin: %v", err)
 	}
 	if email != "new@example.com" || hash != "hash" || !secret.Valid {
@@ -253,7 +253,24 @@ func TestChangeEmailRejectsInvalidAndUnknown(t *testing.T) {
 		t.Fatalf("ChangeEmail() error = %v, want ErrAccountNotFound", err)
 	}
 	var email string
-	if err := db.QueryRow("SELECT email FROM admin_credentials").Scan(&email); err != nil || email != "admin@example.com" {
+	if err := db.QueryRow("SELECT email FROM users").Scan(&email); err != nil || email != "admin@example.com" {
 		t.Fatalf("email = %q, err = %v; want it untouched", email, err)
+	}
+}
+
+func TestResetPasswordKillsAnOpenInvite(t *testing.T) {
+	db := openResetDatabase(t)
+	if _, err := db.Exec(`INSERT INTO users (id, email, created_at) VALUES (2, 'new@example.com', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO user_tokens (user_id, kind, token_hash, expires_at) VALUES (2, 'invite', 'h', 9999999999)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResetPassword(context.Background(), db, "new@example.com", "long enough pw"); err != nil {
+		t.Fatalf("ResetPassword() error = %v", err)
+	}
+	var open int
+	if err := db.QueryRow("SELECT COUNT(*) FROM user_tokens WHERE user_id = 2 AND used_at IS NULL").Scan(&open); err != nil || open != 0 {
+		t.Fatalf("open links = %d, %v, want 0", open, err)
 	}
 }
