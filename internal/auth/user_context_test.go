@@ -23,6 +23,7 @@ const userPassword = "correct horse battery staple"
 type userFixture struct {
 	db      *sql.DB
 	service *Service
+	mux     *http.ServeMux
 	handler http.Handler
 	now     time.Time
 }
@@ -49,6 +50,7 @@ func newUserFixture(t *testing.T) *userFixture {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": user.ID, "email": user.Email, "isAdmin": user.IsAdmin, "isOwner": user.IsOwner()})
 	})
+	f.mux = mux
 	f.handler = f.service.Middleware(mux)
 	return f
 }

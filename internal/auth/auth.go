@@ -82,6 +82,7 @@ func (s *Service) WithVersion(version string) *Service {
 
 // RegisterRoutes adds the public authentication endpoints to mux. The account
 // and two-factor routes are not public: Middleware keeps them behind a session.
+// The Users routes are admin-only, which authz enforces.
 func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/auth/status", s.status)
 	mux.HandleFunc("POST /api/auth/login", s.login)
@@ -91,6 +92,12 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/2fa/setup", s.twoFactorSetup)
 	mux.HandleFunc("POST /api/auth/2fa/enable", s.twoFactorEnable)
 	mux.HandleFunc("POST /api/auth/2fa/disable", s.twoFactorDisable)
+	mux.HandleFunc("GET /api/users", s.listUsers)
+	mux.HandleFunc("POST /api/users", s.createUser)
+	mux.HandleFunc("GET /api/users/{id}", s.getUser)
+	mux.HandleFunc("PATCH /api/users/{id}", s.updateUser)
+	mux.HandleFunc("DELETE /api/users/{id}", s.deleteUser)
+	mux.HandleFunc("POST /api/users/{id}/reset", s.resetUser)
 }
 
 // Middleware protects every route except the health endpoint, auth endpoints,

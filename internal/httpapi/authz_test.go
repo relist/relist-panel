@@ -64,3 +64,24 @@ func TestDemotionTakesEffectOnNextRequest(t *testing.T) {
 		t.Fatalf("demoted GET /api/auth/account = %d, want 200", response.StatusCode)
 	}
 }
+
+func TestUsersRoutesAreAdminOnly(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	signInAsUser(t, server, 2, "member@example.com", false)
+	routes := []struct{ method, path string }{
+		{http.MethodGet, "/api/users"},
+		{http.MethodPost, "/api/users"},
+		{http.MethodGet, "/api/users/1"},
+		{http.MethodPatch, "/api/users/1"},
+		{http.MethodDelete, "/api/users/1"},
+		{http.MethodPost, "/api/users/1/reset"},
+	}
+	for _, route := range routes {
+		response := server.request(t, route.method, route.path, map[string]any{})
+		response.Body.Close()
+		if response.StatusCode != http.StatusForbidden {
+			t.Errorf("%s %s as a member = %d, want 403", route.method, route.path, response.StatusCode)
+		}
+	}
+}
