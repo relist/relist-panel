@@ -203,6 +203,7 @@ func main() {
 		PanelDomain:  cfg.Install.Domain,
 		Traefik:      traefikDocker,
 		TraefikApply: traefikDocker,
+		Buildx:       dockerexec.NewBuildx(dockerexec.DefaultSocketPath),
 	})
 	server := newServer(cfg.Address(), handler)
 	controlServer, err := serveControl(cfg.ControlSocket, control)

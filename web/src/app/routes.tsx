@@ -6,6 +6,7 @@ import { AccountPage } from '../pages/AccountPage';
 import { ComposePage } from '../pages/ComposePage';
 import { DeploymentsPage } from '../pages/DeploymentsPage';
 import { DockerPage } from '../pages/DockerPage';
+import { BuildersPage } from '../pages/BuildersPage';
 import { ImagesPage } from '../pages/ImagesPage';
 import { MonitoringPage } from '../pages/MonitoringPage';
 import { NotFoundPage } from '../pages/NotFoundPage';
@@ -36,6 +37,7 @@ const elements: Record<string, ReactElement> = {
   '/': <OverviewPage />,
   'account': <AccountPage />,
   'images': <ImagesPage />,
+  'builders': <BuildersPage />,
   'ssh-keys': <SshKeysPage />,
   'certificates': <CertificatesPage />,
   'traefik': <TraefikPage />,

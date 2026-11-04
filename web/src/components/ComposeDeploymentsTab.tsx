@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ComposePath } from '../data/api';
 import type { ActiveDeployment } from '../data/deployments-view';
 import type { Compose, Deployment, DeploymentStatus } from '../data/types';
+import { ComposeBuilderSelect } from './ComposeBuilderSelect';
 import { RelativeTime } from './primitives';
 import { DeploymentLogDrawer } from './DeploymentLogDrawer';
 
@@ -48,7 +49,12 @@ type DeploymentsProps = {
 /** History stays on the page; logs are fetched only while its Drawer is open. */
 export function ComposeDeploymentsTab(props: DeploymentsProps) {
   const { location, compose } = props;
-  return <DeploymentHistory key={`${location.projectId}/${location.environmentId}/${compose.id}`} {...props} />;
+  return (
+    <>
+      <ComposeBuilderSelect location={location} yaml={compose.yamlContent} />
+      <DeploymentHistory key={`${location.projectId}/${location.environmentId}/${compose.id}`} {...props} />
+    </>
+  );
 }
 
 const STATUS_COLOR: Record<DeploymentStatus, string> = {

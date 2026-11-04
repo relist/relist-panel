@@ -945,3 +945,42 @@ export interface ScannerTag {
   ageDays: number;
   young: boolean;
 }
+
+/** A Builder: a resource-limited buildx builder Composes can build on. */
+export interface Builder {
+  id: number;
+  name: string;
+  /** CPU cores, in steps of 0.1. */
+  cpus: number;
+  memoryMb: number;
+  /** null is BuildKit's default. */
+  maxParallelism: number | null;
+  /** Absent on a create/update response. */
+  state?: 'running' | 'stopped' | 'missing' | 'unknown';
+  lastError: string;
+  /** Compose names that chose this Builder; absent when none. */
+  usedBy?: string[];
+}
+
+export interface BuilderInput {
+  name: string;
+  cpus: number;
+  memoryMb: number;
+  maxParallelism: number | null;
+}
+
+export interface BuildersResponse {
+  /** 0 is Docker default. */
+  defaultBuilderId: number;
+  /** Empty means the release's default image. */
+  buildkitImage: string;
+  defaultBuildkitImage: string;
+  capacity: { cpus: number; memoryMb: number };
+  builders: Builder[];
+}
+
+/** A Compose's Builder: the panel default, Docker default, or one Builder. */
+export interface ComposeBuilderChoice {
+  mode: 'default' | 'docker' | 'builder';
+  builderId: number;
+}

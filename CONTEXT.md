@@ -49,8 +49,12 @@ One running instance of a Service, created by a deploy. Its identity is not stab
 _Avoid_: Instance
 
 **Image**:
-A Docker image present on the host, listed and loaded from the Images page. A Compose references one by name in its file, or builds one from its Source; the panel builds images only from a Source and never pulls one itself — except the Scanner's own image (ADR-0021) and the panel's own image for a Panel update (ADR-0024).
+A Docker image present on the host, listed and loaded from the Images page. A Compose references one by name in its file, or builds one from its Source; the panel builds images only from a Source and never pulls one itself — except the Scanner's own image (ADR-0021), the panel's own image for a Panel update (ADR-0024) and the BuildKit image Builders run (ADR-0028).
 _Avoid_: Build, Artifact
+
+**Builder**:
+A named, resource-limited place where the panel builds Images: one BuildKit container and its cache, with fixed CPU, memory and max parallel steps. **Docker default** is the built-in, unlimited Builder (dockerd's own). Each Compose uses the panel default Builder unless it picks one (ADR-0028).
+_Avoid_: Runner, Worker, Build agent
 
 **Scanner**:
 The vulnerability scanner the panel runs (Trivy), as a short-lived, locked-down container from the Scanner image, which is named by digest. It never holds the Docker socket (ADR-0021).
@@ -73,7 +77,7 @@ An SSH key pair the panel generates and keeps in the host-wide SSH keys library.
 _Avoid_: Credential, Deploy key (the per-Compose key of ADR-0016)
 
 **Deployment**:
-One queued run that brings a Compose's Containers up to date: fetch the Source, build each Service that has `build:` one at a time, then `up`. A newly queued Deployment keeps the configuration selected when it was queued, independently of later edits. Numbered per Compose, with status, steps and a log. All Deployments on the host share one queue and run one at a time.
+One queued run that brings a Compose's Containers up to date: fetch the Source, build each Service that has `build:` one at a time on the Compose's Builder, then `up`. A newly queued Deployment keeps the configuration selected when it was queued, independently of later edits. Numbered per Compose, with status, steps and a log. All Deployments on the host share one queue and run one at a time.
 _Avoid_: Build (the build is one step of a Deployment), Job, Release
 
 **Zero-downtime deploy**:

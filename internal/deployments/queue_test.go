@@ -72,6 +72,9 @@ type fakeComposes struct {
 	rolledOut    []string
 	onRollout    func(ctx context.Context, service string) ([]string, error)
 	marked       int
+	// builderID is what Capture records as the snapshot's Builder.
+	builderID int64
+	targets   []composes.DeployTarget // what RunDeploy saw
 }
 
 func (f *fakeComposes) ZeroDowntimeProblems(context.Context, composes.DeployTarget) ([]zerodowntime.Problem, error) {
@@ -125,7 +128,7 @@ func (f *fakeComposes) CheckDeployable(context.Context, composes.DeployTarget) e
 func (f *fakeComposes) Capture(_ context.Context, t composes.DeployTarget) (composes.DeployTarget, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	t.Snapshot = &composes.ExecutionSnapshot{Services: f.services, Secrets: f.snapshotSecrets, ZeroDowntime: f.zeroDowntime}
+	t.Snapshot = &composes.ExecutionSnapshot{Services: f.services, Secrets: f.snapshotSecrets, ZeroDowntime: f.zeroDowntime, BuilderID: f.builderID}
 	return t, nil
 }
 
@@ -135,7 +138,7 @@ func (f *fakeComposes) PrepareBuild(_ context.Context, t composes.DeployTarget) 
 	f.prepared = append(f.prepared, t.Compose.YAMLContent)
 	dir := composes.ComposeDir(t.Request)
 	return composes.BuildPlan{
-		Request:  composes.RunRequest{ProjectName: t.Request.ProjectName, ComposeFilePath: filepath.Join(dir, ".build-compose.yml")},
+		Request:  composes.RunRequest{ProjectName: t.Request.ProjectName, ComposeFilePath: filepath.Join(dir, ".build-compose.yml"), Builder: t.Request.Builder},
 		Services: f.services,
 		Cleanup: func() {
 			f.mu.Lock()
@@ -148,6 +151,7 @@ func (f *fakeComposes) PrepareBuild(_ context.Context, t composes.DeployTarget) 
 func (f *fakeComposes) RunDeploy(ctx context.Context, t composes.DeployTarget, opts composes.DeployOptions) ([]string, error) {
 	f.mu.Lock()
 	f.deployed = append(f.deployed, opts)
+	f.targets = append(f.targets, t)
 	hook := f.onDeploy
 	f.mu.Unlock()
 	f.rec.add("deploy:%d", t.Compose.ID)
@@ -243,6 +247,7 @@ type harness struct {
 	fetch   *fakeFetcher
 	build   *fakeBuilder
 	gate    *fakeGate
+	pool    *fakePool // nil leaves Deps.Builders unset
 	q       *Queue
 	a, b    int64
 	timeout time.Duration
@@ -270,10 +275,14 @@ func newHarness(t *testing.T) *harness {
 }
 
 func (h *harness) newQueue() {
-	h.q = NewQueue(Deps{
+	d := Deps{
 		Store: h.store, Sources: h.srcs, Composes: h.comp, Fetcher: h.fetch, Builder: h.build, Gate: h.gate,
 		Timeout: h.timeout, Keep: h.keep,
-	})
+	}
+	if h.pool != nil {
+		d.Builders = h.pool
+	}
+	h.q = NewQueue(d)
 }
 
 // start runs the worker; it is stopped and awaited at test cleanup.
