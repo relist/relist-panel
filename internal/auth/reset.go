@@ -110,6 +110,12 @@ func ResetPassword(ctx context.Context, db *sql.DB, email, password string) (Res
 		return ResetResult{}, err
 	}
 
+	// A User still holding an invite or reset link could otherwise overwrite
+	// the password set here from the host.
+	if _, err := tx.ExecContext(ctx, "DELETE FROM user_tokens WHERE user_id = ? AND used_at IS NULL", account.id); err != nil {
+		return ResetResult{}, err
+	}
+
 	deleted, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", account.id)
 	if err != nil {
 		return ResetResult{}, err

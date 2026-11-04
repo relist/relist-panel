@@ -257,3 +257,20 @@ func TestChangeEmailRejectsInvalidAndUnknown(t *testing.T) {
 		t.Fatalf("email = %q, err = %v; want it untouched", email, err)
 	}
 }
+
+func TestResetPasswordKillsAnOpenInvite(t *testing.T) {
+	db := openResetDatabase(t)
+	if _, err := db.Exec(`INSERT INTO users (id, email, created_at) VALUES (2, 'new@example.com', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO user_tokens (user_id, kind, token_hash, expires_at) VALUES (2, 'invite', 'h', 9999999999)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResetPassword(context.Background(), db, "new@example.com", "long enough pw"); err != nil {
+		t.Fatalf("ResetPassword() error = %v", err)
+	}
+	var open int
+	if err := db.QueryRow("SELECT COUNT(*) FROM user_tokens WHERE user_id = 2 AND used_at IS NULL").Scan(&open); err != nil || open != 0 {
+		t.Fatalf("open links = %d, %v, want 0", open, err)
+	}
+}
