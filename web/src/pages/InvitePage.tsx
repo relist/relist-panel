@@ -15,7 +15,8 @@ type Values = { password: string; confirm: string };
 /**
  * An invite or reset link's page (`/invite/:token`), outside the sign-in
  * gate: the visitor has no password yet, or has lost it. Setting one signs
- * them in. A dead link says only that it is dead, as the API does.
+ * them in and opens the Overview, or a member's Account. A dead link says
+ * only that it is dead, as the API does.
  */
 export function InvitePage() {
   const { token = '' } = useParams();
@@ -66,9 +67,10 @@ export function InvitePage() {
     setError(undefined);
     setSubmitting(true);
     try {
-      await api.acceptInvite(token, password);
+      const { isAdmin } = await api.acceptInvite(token, password);
       await loadAuthStatus();
-      navigate(paths.overview, { replace: true });
+      // A User who is not an Admin has only their Account to open yet.
+      navigate(isAdmin ? paths.overview : paths.account, { replace: true });
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 404) {
         setInvalid(true);

@@ -319,7 +319,10 @@ export const api = {
   getInvite: (token: string) =>
     request<{ email: string; kind: IssuedLink['kind'] }>(`/api/invites/${encodeURIComponent(token)}`),
   acceptInvite: (token: string, password: string) =>
-    request<void>(`/api/invites/${encodeURIComponent(token)}`, jsonInit('POST', { password })),
+    request<{ authenticated: boolean; email: string; isAdmin: boolean }>(
+      `/api/invites/${encodeURIComponent(token)}`,
+      jsonInit('POST', { password }),
+    ),
   /**
    * Sign-in, with its own `fetch` rather than `request`: a `401` asking for the
    * two-factor code and a `429` announcing the lock are results, not failures.

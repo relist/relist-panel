@@ -27,6 +27,7 @@ function renderInvite() {
           <Route element={<InvitePage />} path="/invite/:token" />
           <Route element={<div>Overview screen</div>} path="/" />
           <Route element={<div>Sign-in screen</div>} path="/signin" />
+          <Route element={<div>Account screen</div>} path="/account" />
         </Routes>
       </MemoryRouter>
     </App>,
@@ -75,13 +76,20 @@ describe('InvitePage', () => {
     expect(await screen.findByText('password must be at least 8 characters')).toBeTruthy();
   });
 
-  it('signs in and opens the Overview on success', async () => {
-    api.acceptInvite.mockResolvedValue(undefined);
+  it('signs an admin in and opens the Overview', async () => {
+    api.acceptInvite.mockResolvedValue({ authenticated: true, email: 'bob@example.com', isAdmin: true });
     renderInvite();
     await fillPasswords('a brand new password', 'a brand new password');
     await waitFor(() => expect(screen.getByText('Overview screen')).toBeTruthy());
     expect(api.acceptInvite).toHaveBeenCalledWith('tok', 'a brand new password');
     expect(loadAuthStatus).toHaveBeenCalled();
+  });
+
+  it('signs a member in and opens their Account', async () => {
+    api.acceptInvite.mockResolvedValue({ authenticated: true, email: 'bob@example.com', isAdmin: false });
+    renderInvite();
+    await fillPasswords('a brand new password', 'a brand new password');
+    await waitFor(() => expect(screen.getByText('Account screen')).toBeTruthy());
   });
 
   it('shows the invalid link result on 404', async () => {
