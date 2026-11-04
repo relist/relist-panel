@@ -122,6 +122,14 @@ describe('UsersPage', () => {
     expect(within(await row('new@example.com')).getByRole('button', { name: 'New invite link' })).toBeTruthy();
   });
 
+  it('offers no disable or reset link on your own row', async () => {
+    show();
+    const mine = await row('second@example.com');
+    expect(within(mine).queryByRole('button', { name: 'Disable' })).toBeNull();
+    expect(within(mine).queryByRole('button', { name: 'Send reset link' })).toBeNull();
+    expect(within(mine).getByRole('button', { name: 'Delete' })).toBeTruthy();
+  });
+
   it('rechecks the sign-in after removing its own admin', async () => {
     api.updateUser.mockResolvedValue({ ...secondRow, isAdmin: false });
     show();

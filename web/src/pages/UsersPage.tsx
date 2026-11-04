@@ -71,7 +71,10 @@ export function UsersPage() {
       key: 'actions',
       render: (_, user) => {
         const self = me?.id === user.id;
-        const canLink = !user.isOwner || !!me?.isOwner;
+        // Disabling or resetting yourself would sign you out mid-click; your
+        // own password changes on the Account page. An Admin never resets the
+        // Owner (the API refuses it too).
+        const canLink = !self && !user.isOwner;
         return (
           <Flex gap={4} justify="flex-end" wrap>
             {!user.isOwner && (
@@ -88,7 +91,7 @@ export function UsersPage() {
                 {user.isAdmin ? 'Remove admin' : 'Make admin'}
               </Button>
             )}
-            {!user.isOwner && (
+            {!user.isOwner && !self && (
               <Button
                 onClick={() => void run(() => api.updateUser(user.id, { disabled: user.status !== 'disabled' }))}
                 size="small"
