@@ -34,7 +34,18 @@ function SourceCell({ row }: { row: GlobalDeployment }) {
   </Text>;
 }
 
+/** A queue row of a Compose the User cannot see arrives with every id 0 and every name empty. */
+function isHidden(row: DeploymentContext): boolean {
+  return row.composeId === 0;
+}
+
 function ContextCell({ row }: { row: DeploymentContext & { number: number } }) {
+  if (isHidden(row)) {
+    return <Flex align="baseline" gap={8} style={{ minWidth: 0 }}>
+      <Text strong style={{ flexShrink: 0 }}>#{row.number}</Text>
+      <Text type="secondary">Another Compose</Text>
+    </Flex>;
+  }
   return <Flex gap={2} vertical style={{ minWidth: 0 }}>
     <Flex align="baseline" gap={8} style={{ minWidth: 0 }}>
       <Text strong style={{ flexShrink: 0 }}>#{row.number}</Text>
@@ -145,8 +156,14 @@ export function DeploymentsPage() {
         </Text>
       </Flex>,
     },
-    { title: '', key: 'logs', width: screens.sm ? 104 : 72, render: (_, row) => logButton(row) },
+    { title: '', key: 'logs', width: screens.sm ? 104 : 72, render: (_, row) => (isHidden(row) ? null : logButton(row)) },
   ];
+  // Hidden rows share ids 0/0/0 and their per-Compose numbers repeat, so
+  // they are keyed by their place in the queue.
+  const queueRows = (queue.error ? [] : queue.data ?? []).map((row, index) => ({
+    ...row,
+    key: isHidden(row) ? `hidden/${index}` : `${row.projectId}/${row.environmentId}/${row.composeId}/${row.number}`,
+  }));
   const historyColumns: TableColumnsType<GlobalDeployment> = [
     {
       title: 'Deployment', key: 'deployment', ellipsis: { showTitle: false },
@@ -188,8 +205,8 @@ export function DeploymentsPage() {
         showIcon title="Could not load the deployment queue" type="error" style={{ marginBottom: 16 }}
       />}
       <Table<GlobalQueuedDeployment>
-        columns={queueColumns} dataSource={queue.error ? [] : queue.data ?? []} loading={queue.isLoading}
-        pagination={false} rowKey={(row) => `${row.projectId}/${row.environmentId}/${row.composeId}/${row.number}`} size="small" tableLayout="fixed"
+        columns={queueColumns} dataSource={queueRows} loading={queue.isLoading}
+        pagination={false} rowKey="key" size="small" tableLayout="fixed"
         locale={{ emptyText: queue.isLoading || queue.error ? ' ' : <EmptyState title="No deployments in the queue" description="Deploy a Compose to add work to the host queue." /> }}
       />
     </Card>
