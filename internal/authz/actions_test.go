@@ -55,6 +55,7 @@ func TestKeyActions(t *testing.T) {
 		"PUT /api/projects/{id}/grants":                    "grant.set",
 		"POST /api/users":                                  "user.create",
 		"POST /api/users/{id}/reset":                       "user.reset",
+		"PUT /api/audit/settings":                          "audit_settings.update",
 	} {
 		if got := Actions[pattern]; got != want {
 			t.Errorf("Actions[%q] = %q, want %q", pattern, got, want)

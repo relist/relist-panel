@@ -192,3 +192,53 @@ func TestTerminalOpenAndCloseAreRecorded(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+func TestProjectAuditShowsOnlyEditedEnvironments(t *testing.T) {
+	f := newRoleFixture(t)
+	insert := func(action string, projectID, environmentID any) {
+		if _, err := f.server.db.Exec("INSERT INTO audit_events (at, actor, action, outcome, project_id, environment_id, target) VALUES (1, 'x', ?, 'ok', ?, ?, 't')",
+			action, projectID, environmentID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Start from the events below only, not the fixture's own setup.
+	if _, err := f.server.db.Exec("DELETE FROM audit_events"); err != nil {
+		t.Fatal(err)
+	}
+	insert("prod.change", f.alpha.ID, f.alphaProd.ID)
+	insert("staging.change", f.alpha.ID, f.alphaStaging.ID)
+	insert("project.update", f.alpha.ID, nil)
+	insert("beta.change", f.beta.ID, f.betaE.ID)
+	path := fmt.Sprintf("/api/projects/%d/audit", f.alpha.ID)
+	actionsOf := func(body string) []string {
+		var page struct {
+			Items []struct{ Action string } `json:"items"`
+		}
+		_ = json.Unmarshal([]byte(body), &page)
+		var out []string
+		for _, item := range page.Items {
+			out = append(out, item.Action)
+		}
+		return out
+	}
+
+	f.grant(t, f.alpha.ID, f.alphaProd.ID, "viewer")
+	if code, body := f.get(t, path); code != http.StatusForbidden {
+		t.Fatalf("viewer only = %d %s", code, body)
+	}
+	f.grant(t, f.alpha.ID, f.alphaStaging.ID, "editor")
+	code, body := f.get(t, path)
+	if got := strings.Join(actionsOf(body), ","); code != http.StatusOK || got != "project.update,staging.change" {
+		t.Fatalf("editor of staging = %d %s", code, got)
+	}
+	if code, _ := f.get(t, fmt.Sprintf("/api/projects/%d/audit", f.beta.ID)); code != http.StatusNotFound {
+		t.Fatalf("hidden project = %d", code)
+	}
+	if code, _ := f.get(t, "/api/audit"); code != http.StatusForbidden {
+		t.Fatalf("member GET /api/audit = %d", code)
+	}
+	signInAsUser(t, f.server, 3, "admin2@example.com", true)
+	if _, body := f.get(t, path); strings.Join(actionsOf(body), ",") != "project.update,staging.change,prod.change" {
+		t.Fatalf("admin = %s", body)
+	}
+}

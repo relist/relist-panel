@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"relist-panel/internal/accesslog"
+	"relist-panel/internal/auditapi"
 	"relist-panel/internal/auth"
 	"relist-panel/internal/authz"
 	"relist-panel/internal/builders"
@@ -248,6 +249,13 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	certificates.New(db, dataDir).RegisterRoutes(mux)
 	accessLogs := accesslog.New(db, dataDir, d.Traefik)
 	accessLogs.RegisterRoutes(mux)
+	auditLog := auditapi.New(db)
+	auditLog.RegisterRoutes(mux)
+	worker.Add(1)
+	go func() {
+		defer worker.Done()
+		auditLog.RunRetention(ctx)
+	}()
 	if traefikApply != nil {
 		traefikconfig.NewService(traefikApply).RegisterRoutes(mux)
 		if err := traefikApply.Resume(ctx); err != nil {
