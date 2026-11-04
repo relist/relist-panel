@@ -506,7 +506,12 @@ The badge is hidden while scanning is off, because hidden is not 0.
     - Used by: Services link to their Compose; Panel / Traefik / Scanner (Trivy) are plain text;
     - Critical / High / fixable tags;
     - Scanned;
-    - a small **Scan** button.
+    - a small **Scan** button and **Export report** (below).
+  - **Export report:** a split button, disabled until the image has been scanned. Clicking copies a
+    Markdown report for an AI agent to the clipboard (over plain HTTP, where there is no clipboard,
+    it downloads instead and says so); its menu has **Download .md**. The report heads
+    with the image ref and ID, then Fixable and No fix yet tables grouped by package, path and
+    installed version, with the CVE IDs of each group. It states facts only, no instructions.
   - **Expanding a row** lists its findings: ID linked to the advisory, a `New` tag, severity,
     package and path, and `installed → fixed` or `(no fix yet)`.
   - **Failed scan:** the row shows `Last scan failed: <reason>` beside the last good counts,
@@ -534,6 +539,10 @@ The badge is hidden while scanning is off, because hidden is not 0.
     page also adds a column to its Services table.
   - **Links:** each links to this page with `?tab=cves&projectId=` or `&composeId=`.
   - **When off:** badges render nothing while scanning is off.
+  - **Compose export:** the Compose header also carries **Export report** while scanning is on. Its
+    report covers every image the Compose's Services run, and adds the Source (repo URL @ the commit
+    of the last successful build, or the checked-out head before any build) and each Service's
+    `build:` context and Dockerfile.
 
 ### 4.15 Panel update (`/panel-update`)
 
