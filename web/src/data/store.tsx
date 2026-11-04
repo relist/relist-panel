@@ -344,8 +344,11 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           ),
         );
       });
+      // A Project Editor's role on the new Environment comes from their
+      // Project Grant, which the access view does not list until re-read.
+      void loadAuthStatus().catch(() => undefined);
     },
-    [patchProjects, track],
+    [loadAuthStatus, patchProjects, track],
   );
 
   const deleteEnvironment = useCallback(
@@ -364,8 +367,9 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           ),
         );
       });
+      void loadAuthStatus().catch(() => undefined);
     },
-    [patchProjects, track],
+    [loadAuthStatus, patchProjects, track],
   );
 
   // ---- Environment Variables ---------------------------------------------------
