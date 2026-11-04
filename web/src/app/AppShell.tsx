@@ -1,4 +1,4 @@
-import { AppstoreOutlined, BuildOutlined, CloudDownloadOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, GlobalOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined, TeamOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, AuditOutlined, BuildOutlined, CloudDownloadOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, GlobalOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined, TeamOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -127,6 +127,8 @@ export function AppShell() {
             ? 'traefik'
           : resolved.pattern === 'users' || resolved.pattern === 'users/:userId'
             ? 'users'
+          : resolved.pattern === 'audit'
+            ? 'audit'
           : resolved.pattern === 'vulnerabilities'
             ? 'vulnerabilities'
           : resolved.pattern === '/'
@@ -189,6 +191,7 @@ export function AppShell() {
     { key: 'certificates', icon: <SafetyCertificateOutlined />, label: 'Certificates' },
     { key: 'traefik', icon: <GlobalOutlined />, label: 'Traefik' },
     { key: 'users', icon: <TeamOutlined />, label: 'Users' },
+    { key: 'audit', icon: <AuditOutlined />, label: 'Audit log' },
     recentProjects,
   ];
 
@@ -206,6 +209,7 @@ export function AppShell() {
     if (key === 'certificates') return navigate(paths.certificates);
     if (key === 'traefik') return navigate(paths.traefik);
     if (key === 'users') return navigate(paths.users);
+    if (key === 'audit') return navigate(paths.audit);
     if (key === 'vulnerabilities') return navigate(paths.vulnerabilities);
     const projectId = Number(String(key).replace('project-', ''));
     if (Number.isFinite(projectId)) void navigate(paths.project(projectId));

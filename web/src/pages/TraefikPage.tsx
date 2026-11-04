@@ -1,5 +1,5 @@
 import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Empty, Flex, InputNumber, Segmented, Spin, Switch, Table, Tabs, Typography, theme } from 'antd';
+import { Alert, Button, Card, Empty, Flex, Segmented, Spin, Table, Tabs, Typography, theme } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import useSWR from 'swr';
@@ -9,9 +9,10 @@ import { TraefikApplyModal } from '../components/TraefikApplyModal';
 import type { TraefikReview } from '../components/TraefikApplyModal';
 import { TraefikConfigTab } from '../components/TraefikConfigTab';
 import { PageHeader } from '../components/primitives';
+import { RetentionCard } from '../components/RetentionCard';
 import { ApiError, accessLogDownloadUrl, api } from '../data/api';
 import type { AccessLogFile } from '../data/types';
-import { canSaveRetention, filterLogLines } from './traefik-view';
+import { filterLogLines } from './traefik-view';
 import type { LogLevel } from './traefik-view';
 
 const { Text } = Typography;
@@ -197,6 +198,7 @@ export function TraefikPage() {
                 {settings.data && (
                   <RetentionCard
                     keepForever={settings.data.keepForever}
+                    onSave={(input) => api.saveAccessLogSettings(input)}
                     onSaved={() => void settings.mutate()}
                     retentionDays={settings.data.retentionDays}
                   />
@@ -246,64 +248,3 @@ export function TraefikPage() {
   );
 }
 
-function RetentionCard({
-  keepForever: savedForever,
-  onSaved,
-  retentionDays: savedDays,
-}: {
-  keepForever: boolean;
-  onSaved: () => void;
-  retentionDays: number;
-}) {
-  const { message } = App.useApp();
-  const [days, setDays] = useState<number | null>(savedDays);
-  const [forever, setForever] = useState(savedForever);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setDays(savedDays);
-    setForever(savedForever);
-  }, [savedDays, savedForever]);
-
-  const save = async () => {
-    if (days === null) return;
-    setSaving(true);
-    try {
-      await api.saveAccessLogSettings({ keepForever: forever, retentionDays: days });
-      onSaved();
-      void message.success('Retention saved');
-    } catch (reason: unknown) {
-      void message.error(reason instanceof ApiError ? reason.message : 'Could not save retention');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Card title="Retention" variant="outlined">
-      <Flex align="center" gap={16} wrap>
-        <InputNumber
-          aria-label="Days to keep"
-          disabled={forever}
-          min={1}
-          onChange={(value) => setDays(typeof value === 'number' ? value : null)}
-          precision={0}
-          suffix="days"
-          value={days}
-        />
-        <Flex align="center" gap={8}>
-          <Switch aria-label="Keep forever" checked={forever} onChange={setForever} />
-          <Text>Keep forever</Text>
-        </Flex>
-        <Button
-          disabled={!canSaveRetention(days, forever, { keepForever: savedForever, retentionDays: savedDays })}
-          loading={saving}
-          onClick={() => void save()}
-          type="primary"
-        >
-          Save
-        </Button>
-      </Flex>
-    </Card>
-  );
-}
