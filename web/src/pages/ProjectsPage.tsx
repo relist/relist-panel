@@ -40,6 +40,8 @@ import { removalPlanPath } from '../data/api';
 import { usePanel } from '../data/store';
 import { useRemovalPlan } from '../data/useRemovalPlan';
 import type { Project } from '../data/types';
+import { useAccess } from '../data/useCan';
+import { RoleHint } from '../components/RoleHint';
 import { projectComposes, summarize } from '../data/types';
 import { projectDeleteFacts, visibleProjects } from './project-view';
 import type { ProjectSortKey } from './project-view';
@@ -56,6 +58,7 @@ const { Text, Paragraph } = Typography;
  */
 export function ProjectsPage() {
   const { createProject, deleteProject, isPending, projects, updateProject } = usePanel();
+  const access = useAccess();
   const { message } = App.useApp();
   const navigate = useNavigate();
   const [form] = Form.useForm<{ name: string; description: string }>();
@@ -120,9 +123,22 @@ export function ProjectsPage() {
       label: 'Open',
       onClick: () => navigate(paths.project(project.id)),
     },
-    { icon: <EditOutlined />, key: 'edit', label: 'Edit details', onClick: () => openEdit(project) },
+    {
+      disabled: !access.isProjectEditor(project.id),
+      icon: <EditOutlined />,
+      key: 'edit',
+      label: <RoleHint allowed={access.isProjectEditor(project.id)} level="project editor">Edit details</RoleHint>,
+      onClick: () => openEdit(project),
+    },
     { type: 'divider' },
-    { danger: true, icon: <DeleteOutlined />, key: 'delete', label: 'Delete', onClick: () => setDeleting(project) },
+    {
+      danger: true,
+      disabled: !access.isAdmin,
+      icon: <DeleteOutlined />,
+      key: 'delete',
+      label: <RoleHint allowed={access.isAdmin} level="admin">Delete</RoleHint>,
+      onClick: () => setDeleting(project),
+    },
   ];
 
   return (
@@ -130,9 +146,11 @@ export function ProjectsPage() {
       <PageHeader
         description="A Project groups the Environments of one application — production, staging, preview."
         extra={
-          <Button icon={<PlusOutlined />} onClick={openCreate} type="primary">
-            New Project
-          </Button>
+          <RoleHint allowed={access.isAdmin} level="admin">
+            <Button disabled={!access.isAdmin} icon={<PlusOutlined />} onClick={openCreate} type="primary">
+              New Project
+            </Button>
+          </RoleHint>
         }
         title="Projects"
       />
@@ -182,9 +200,11 @@ export function ProjectsPage() {
         <Card variant="outlined">
           <EmptyState
             action={
-              <Button icon={<PlusOutlined />} onClick={openCreate} type="primary">
-                Create a Project
-              </Button>
+              <RoleHint allowed={access.isAdmin} level="admin">
+                <Button disabled={!access.isAdmin} icon={<PlusOutlined />} onClick={openCreate} type="primary">
+                  Create a Project
+                </Button>
+              </RoleHint>
             }
             description={
               query

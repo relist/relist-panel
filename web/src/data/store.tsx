@@ -1203,6 +1203,15 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   return <PanelContext.Provider value={value}>{children}</PanelContext.Provider>;
 }
 
+/**
+ * The signed-in User's auth state, or undefined outside a PanelProvider (a
+ * component rendered on its own in a test). The role hooks read it, so a
+ * component can ask about roles without requiring the whole store.
+ */
+export function useAuthState(): AuthState | undefined {
+  return useContext(PanelContext)?.auth;
+}
+
 export function usePanel(): PanelValue {
   const value = useContext(PanelContext);
   if (!value) {

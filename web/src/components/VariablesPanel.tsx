@@ -3,6 +3,7 @@ import { Alert, App, Button, Card, Flex, Form, Input, Modal, Popconfirm, Space, 
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { CODE_FONT_STACK } from '../app/theme';
+import { needsRole } from './RoleHint';
 import { usePanel, type NewVariable } from '../data/store';
 import type { Environment } from '../data/types';
 import { EmptyState, RelativeTime } from './primitives';
@@ -35,6 +36,18 @@ export type VariableRow = {
 export function ValueCell({ variable }: { variable: Pick<VariableRow, 'secret' | 'value'> }) {
   const [revealed, setRevealed] = useState(false);
   const secret = isSecret(variable);
+
+  // The API sends a secret's value only to an Editor or an admin; anyone else
+  // gets it empty, so there is nothing to reveal or copy (ADR-0031).
+  if (variable.secret && variable.value === '') {
+    return (
+      <Tooltip title={needsRole('editor')}>
+        <Text aria-label="Hidden: needs the Editor role" style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }} type="secondary">
+          ••••
+        </Text>
+      </Tooltip>
+    );
+  }
 
   return (
     <Flex align="center" gap={6}>

@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { App } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Environment } from '../data/types';
-import { VariablesEditor, VariablesPanel } from './VariablesPanel';
+import { ValueCell, VariablesEditor, VariablesPanel } from './VariablesPanel';
 
 const panel = vi.hoisted(() => ({
   deleteVariable: vi.fn(),
@@ -112,5 +112,20 @@ describe('VariablesEditor, bare', () => {
     unmount();
     renderBare(11);
     expect(screen.getByPlaceholderText('Filter by key')).toBeTruthy();
+  });
+});
+
+describe('ValueCell, withheld secret', () => {
+  it('shows a secret the API withheld as dots, with nothing to reveal or copy', () => {
+    render(<App><ValueCell variable={{ secret: true, value: '' }} /></App>);
+    expect(screen.getByText('••••')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reveal value' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Copy/ })).toBeNull();
+    expect(screen.getByLabelText('Hidden: needs the Editor role')).toBeTruthy();
+  });
+
+  it('still reveals a secret whose value came through', async () => {
+    render(<App><ValueCell variable={{ secret: true, value: 's3cret' }} /></App>);
+    expect(screen.getByRole('button', { name: 'Reveal value' })).toBeTruthy();
   });
 });
