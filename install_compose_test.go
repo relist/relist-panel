@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"maps"
 	"os"
 	"slices"
@@ -29,12 +30,9 @@ func TestInstallComposeMountsTraefikDynamicDir(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
+	// The file provider's flags live in the static config base now
+	// (internal/traefikconfig/base.yml, ADR-0030).
 	traefik := doc.Services["traefik"]
-	for _, flag := range []string{"--providers.file.directory=/letsencrypt/dynamic", "--providers.file.watch=true"} {
-		if !slices.Contains(traefik.Command, flag) {
-			t.Errorf("traefik command lacks %s", flag)
-		}
-	}
 	if !slices.Contains(traefik.Volumes, "${RELIST_DATA_DIR:-/var/lib/relist-panel}/.traefik/dynamic:/letsencrypt/dynamic") {
 		t.Errorf("traefik volumes = %v, want the dynamic directory mounted on its own", traefik.Volumes)
 	}
@@ -128,31 +126,101 @@ func TestGitignoreKeepsInstallLocalFiles(t *testing.T) {
 	}
 }
 
-// Traefik's own log and the Access log (ADR-0027): the Access log goes to a
-// file in the data directory that the panel rotates, and Docker's json-file
-// logs of both containers are capped so stdout can never fill the disk.
-func TestInstallComposeTraefikLogging(t *testing.T) {
-	doc := readComposeDoc(t, "docker-compose.yml")
-	traefik := doc.Services["traefik"]
-	for _, flag := range []string{
-		"--log.level=INFO",
-		"--log.nocolor=true",
-		"--accesslog=true",
-		"--accesslog.filepath=/letsencrypt/access/access.log",
-		"--accesslog.format=json",
-		"--accesslog.fields.headers.defaultmode=drop",
-		"--accesslog.fields.headers.names.User-Agent=keep",
-		"--entrypoints.web.forwardedheaders.trustedips=${TRAEFIK_TRUSTED_IPS:-}",
-		"--entrypoints.websecure.forwardedheaders.trustedips=${TRAEFIK_TRUSTED_IPS:-}",
-	} {
-		if !slices.Contains(traefik.Command, flag) {
-			t.Errorf("traefik command lacks %s", flag)
-		}
+// Traefik reads one generated file, which the one-shot traefik-config service
+// writes before Traefik starts on every `up` (ADR-0030). Docker's json-file
+// logs of the long-running containers are capped so stdout can never fill the
+// disk (ADR-0027).
+func TestInstallComposeTraefikStaticConfig(t *testing.T) {
+	raw, err := os.ReadFile("docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
 	}
+	var doc struct {
+		Services map[string]struct {
+			Image       string   `yaml:"image"`
+			Command     []string `yaml:"command"`
+			Restart     string   `yaml:"restart"`
+			NetworkMode string   `yaml:"network_mode"`
+			Volumes     []string `yaml:"volumes"`
+			DependsOn   map[string]struct {
+				Condition string `yaml:"condition"`
+			} `yaml:"depends_on"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	traefik, cfg := doc.Services["traefik"], doc.Services["traefik-config"]
+	if !slices.Equal(traefik.Command, []string{"--configfile=/etc/traefik/traefik.yml"}) {
+		t.Errorf("traefik command = %q", traefik.Command)
+	}
+	if got := traefik.DependsOn["traefik-config"].Condition; got != "service_completed_successfully" {
+		t.Errorf("traefik depends_on traefik-config condition = %q", got)
+	}
+	if !slices.Contains(traefik.Volumes, "${RELIST_DATA_DIR:-/var/lib/relist-panel}/.traefik/static:/etc/traefik:ro") {
+		t.Errorf("traefik volumes = %v, want .traefik/static at /etc/traefik read-only", traefik.Volumes)
+	}
+	if !slices.Equal(cfg.Command, []string{"traefik-config"}) || cfg.Restart != "no" || cfg.NetworkMode != "none" {
+		t.Errorf("traefik-config = command %q restart %q network_mode %q", cfg.Command, cfg.Restart, cfg.NetworkMode)
+	}
+	if cfg.Image != doc.Services["panel"].Image {
+		t.Errorf("traefik-config image = %q, panel image = %q", cfg.Image, doc.Services["panel"].Image)
+	}
+	if !slices.Contains(cfg.Volumes, "/var/run/docker.sock:/var/run/docker.sock:ro") {
+		t.Errorf("traefik-config volumes = %v, want the docker socket read-only", cfg.Volumes)
+	}
+
+	compose := readComposeDoc(t, "docker-compose.yml")
 	for _, name := range []string{"traefik", "panel"} {
-		logging := doc.Services[name].Logging
+		logging := compose.Services[name].Logging
 		if logging.Driver != "json-file" || !maps.Equal(logging.Options, map[string]string{"max-size": "10m", "max-file": "5"}) {
 			t.Errorf("%s logging = %+v, want json-file max-size 10m max-file 5", name, logging)
+		}
+	}
+}
+
+// Every command and mount invariant a release states must hold for its own
+// Install file, or a Panel update to it fails its own preflight.
+func TestInvariantsHoldAgainstInstallFile(t *testing.T) {
+	raw, err := os.ReadFile("release/invariants.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var invariants []struct {
+		Kind, Service, Arg, Source, Target string
+		ReadOnly                           bool `json:"read_only"`
+	}
+	if err := json.Unmarshal(raw, &invariants); err != nil {
+		t.Fatal(err)
+	}
+	compose, err := os.ReadFile("docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Services map[string]struct {
+			Command []string `yaml:"command"`
+			Volumes []string `yaml:"volumes"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(compose, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, inv := range invariants {
+		svc := doc.Services[inv.Service]
+		switch inv.Kind {
+		case "service-command-has":
+			if !slices.Contains(svc.Command, inv.Arg) {
+				t.Errorf("%s command lacks %s", inv.Service, inv.Arg)
+			}
+		case "service-mount":
+			want := inv.Source + ":" + inv.Target
+			if inv.ReadOnly {
+				want += ":ro"
+			}
+			if !slices.Contains(svc.Volumes, want) {
+				t.Errorf("%s volumes lack %s", inv.Service, want)
+			}
 		}
 	}
 }

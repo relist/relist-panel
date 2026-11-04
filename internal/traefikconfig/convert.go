@@ -85,11 +85,15 @@ func FromArgs(args []string) ([]byte, []Problem) {
 	return render(out, comments), warnings
 }
 
-// Seed is the first Traefik override of a fresh install: the ACME email and
-// the trusted IPs from .env (RELIST_ACME_EMAIL, TRAEFIK_TRUSTED_IPS), and no
-// Access log.
-func Seed(acmeEmail, trustedIPs string) []byte {
+// Seed is a first Traefik override from .env: the ACME email and the trusted
+// IPs (RELIST_ACME_EMAIL, TRAEFIK_TRUSTED_IPS), and the Access log only when
+// accessLog is set.
+func Seed(acmeEmail, trustedIPs string, accessLog bool) []byte {
 	out := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	if accessLog {
+		out.Content = append(out.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "accessLog"},
+			&yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Style: yaml.FlowStyle})
+	}
 	if acmeEmail = strings.TrimSpace(acmeEmail); acmeEmail != "" {
 		setPath(out, []string{"certificatesResolvers", "letsencrypt", "acme", "email"}, &yaml.Node{Kind: yaml.ScalarNode, Value: acmeEmail})
 	}

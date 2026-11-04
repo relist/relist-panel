@@ -224,14 +224,21 @@ traefik:
 This runs on every `up`, before Traefik starts.
 
 1. If `static/traefik.override.yml` is missing, create it:
-   - **If the Install has a Traefik Container** (an update), read its args with the
-     existing `TraefikDocker.Args`. Convert each `--a.b.c=v` to a nested key, matching
-     case-insensitively. Comma lists of known list fields (`trustedIPs` and the other
-     `[]string` fields of the static config) become YAML lists. Skip flags whose value
-     equals the base's, and `--configfile`. Write any flag that cannot be converted as a
-     comment line `# not converted: --flag=value`. Keep `accessLog: {}` if `--accesslog=true`.
-   - **Otherwise** (a fresh install): write the ACME email from `RELIST_ACME_EMAIL` and the
-     trusted IPs from `TRAEFIK_TRUSTED_IPS` if either is set, and no `accessLog`.
+   - **From `.env`** (a fresh install, and an update from 0.0.2): write the ACME email
+     from `RELIST_ACME_EMAIL` and the trusted IPs from `TRAEFIK_TRUSTED_IPS` if either
+     is set. Add `accessLog: {}` only when `<data dir>/.traefik/access/` already holds a
+     file, which means an older Traefik was writing the Access log.
+
+     Compose recreates Traefik *before* it runs `traefik-config` (probe 2026-11-04), so
+     on an update the only Traefik left already has `--configfile`, and the old flags
+     cannot be read. 0.0.2's flags took their values from those same two `.env` keys,
+     and 0.0.2 always had the Access log on, so the result is the same.
+   - **From the Traefik's flags**, only when the Install's Traefik still runs on flags
+     (no `--configfile` among its args): read them with the existing `TraefikDocker.Args`.
+     Convert each `--a.b.c=v` to a nested key, matching case-insensitively. Comma lists of
+     known list fields become YAML lists. Skip flags whose value equals the base's, and
+     `--configfile`. Write any flag that cannot be converted as a comment line
+     `# not converted: --flag=value`. Keep `accessLog: {}` if `--accesslog=true`.
 2. Generate `traefik.yml` from the base and the override.
 3. If the override cannot be parsed or merged, keep the existing `traefik.yml` and log
    why. Write the reason to `apply.json` as a `traefik-config` warning, which the Traefik

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -88,6 +89,36 @@ func TestBootstrapFresh(t *testing.T) {
 	eff, _ := os.ReadFile(p.Effective())
 	if AccessLogOn(eff) {
 		t.Errorf("fresh install has the Access log on")
+	}
+}
+
+// Compose recreates Traefik before it runs traefik-config (probe 2026-11-04),
+// so an update from 0.0.2 sees only the new Traefik's --configfile. Its old
+// flags came from .env, and its Access log was always on: files in access/
+// say so.
+func TestBootstrapUpdateKeepsAccessLogFromFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	p := PathsFor(dataDir)
+	os.MkdirAll(filepath.Join(dataDir, ".traefik", "access"), 0o755)
+	os.WriteFile(filepath.Join(dataDir, ".traefik", "access", "access.log"), []byte("{}\n"), 0o644)
+	env := func(k string) string {
+		switch k {
+		case "RELIST_ACME_EMAIL":
+			return "ops@example.com"
+		case "TRAEFIK_TRUSTED_IPS":
+			return "10.0.0.0/8"
+		}
+		return ""
+	}
+	if err := bootstrap(t, p, fakeArgs{args: []string{"--configfile=/etc/traefik/traefik.yml"}}, env); err != nil {
+		t.Fatal(err)
+	}
+	eff, _ := os.ReadFile(p.Effective())
+	if !AccessLogOn(eff) {
+		t.Errorf("Access log off although access/ has files")
+	}
+	if got := TrustedIPs(eff); len(got) != 1 || got[0] != "10.0.0.0/8" {
+		t.Errorf("trustedIPs = %v", got)
 	}
 }
 

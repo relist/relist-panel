@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"relist-panel/internal/database"
+	"relist-panel/internal/traefikconfig"
 )
 
 type testService struct {
@@ -110,6 +111,28 @@ func TestStatusParsesArgs(t *testing.T) {
 	ts.traefik.err = ErrNoTraefik
 	got = decode(t, ts.do("GET", "/api/traefik/status", ""))
 	if got["found"] != false || got["accessLogEnabled"] != false {
+		t.Fatalf("body = %v", got)
+	}
+}
+
+// Once Traefik reads the generated static config (ADR-0030) its args are only
+// --configfile, so the status comes from the file.
+func TestStatusFromGeneratedFile(t *testing.T) {
+	ts := newService(t)
+	p := traefikconfig.PathsFor(ts.dataDir)
+	eff, problems, err := traefikconfig.Generate([]byte("accessLog: {}\nentryPoints: {websecure: {forwardedHeaders: {trustedIPs: [10.0.0.0/8]}}}\n"))
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("Generate: %v %+v", err, problems)
+	}
+	if err := os.MkdirAll(p.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.Effective(), eff, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ts.traefik.args = []string{"--configfile=/etc/traefik/traefik.yml"}
+	got := decode(t, ts.do("GET", "/api/traefik/status", ""))
+	if got["found"] != true || got["accessLogEnabled"] != true || got["trustedIps"] != "10.0.0.0/8" {
 		t.Fatalf("body = %v", got)
 	}
 }

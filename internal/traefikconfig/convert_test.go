@@ -108,7 +108,7 @@ func TestFromArgsSectionFlag(t *testing.T) {
 }
 
 func TestSeed(t *testing.T) {
-	eff := effectiveOf(t, Seed("a@b.c", "1.2.3.4, 10.0.0.0/8"))
+	eff := effectiveOf(t, Seed("a@b.c", "1.2.3.4, 10.0.0.0/8", false))
 	m, _ := parseMap(eff)
 	if _, v := lookup(m, "certificatesResolvers", "letsencrypt", "acme", "email"); v == nil || v.Value != "a@b.c" {
 		t.Errorf("email = %v", v)
@@ -122,7 +122,7 @@ func TestSeed(t *testing.T) {
 	if AccessLogOn(eff) {
 		t.Errorf("Seed turned the Access log on")
 	}
-	empty := Seed("", "")
+	empty := Seed("", "", false)
 	for _, line := range strings.Split(strings.TrimSpace(string(empty)), "\n") {
 		if !strings.HasPrefix(line, "#") {
 			t.Fatalf("Seed(\"\", \"\") has a non-comment line %q", line)

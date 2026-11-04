@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -28,7 +29,7 @@ func Bootstrap(ctx context.Context, p Paths, t ArgsReader, noTraefik func(error)
 	var warnings []string
 	override, err := os.ReadFile(p.Override())
 	if errors.Is(err, os.ErrNotExist) {
-		override, warnings = firstOverride(ctx, t, noTraefik, getenv)
+		override, warnings = firstOverride(ctx, p, t, noTraefik, getenv)
 		if err := WriteAtomic(p.Override(), override); err != nil {
 			return err
 		}
@@ -51,10 +52,15 @@ func Bootstrap(ctx context.Context, p Paths, t ArgsReader, noTraefik func(error)
 	return RecordBootstrapWarning(p, strings.Join(warnings, "; "))
 }
 
-// firstOverride converts the running Traefik's flags, or seeds from .env when
-// there is no Traefik, it already reads the file, or its args cannot be read.
-func firstOverride(ctx context.Context, t ArgsReader, noTraefik func(error) bool, getenv func(string) string) ([]byte, []string) {
-	seed := func() []byte { return Seed(getenv("RELIST_ACME_EMAIL"), getenv("TRAEFIK_TRUSTED_IPS")) }
+// firstOverride seeds from .env, or converts the Traefik's flags when it still
+// runs on flags. On an update from 0.0.2 it seeds: Compose recreates Traefik
+// before it runs traefik-config (probe 2026-11-04), so the only Traefik left
+// has --configfile. 0.0.2's flags took their values from the same two .env
+// keys, and its Access log was always on, which files in access/ show.
+func firstOverride(ctx context.Context, p Paths, t ArgsReader, noTraefik func(error) bool, getenv func(string) string) ([]byte, []string) {
+	seed := func() []byte {
+		return Seed(getenv("RELIST_ACME_EMAIL"), getenv("TRAEFIK_TRUSTED_IPS"), accessLogInUse(p))
+	}
 	if t == nil {
 		return seed(), nil
 	}
@@ -76,6 +82,21 @@ func firstOverride(ctx context.Context, t ArgsReader, noTraefik func(error) bool
 		warnings = append(warnings, pr.Key+": "+pr.Message)
 	}
 	return override, warnings
+}
+
+// accessLogInUse reports whether <data dir>/.traefik/access holds any file: a
+// Traefik before ADR-0030 wrote the Access log there.
+func accessLogInUse(p Paths) bool {
+	entries, err := os.ReadDir(filepath.Join(filepath.Dir(p.Dir), "access"))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Type().IsRegular() {
+			return true
+		}
+	}
+	return false
 }
 
 // keepOrFail keeps an existing traefik.yml and records why, or fails when

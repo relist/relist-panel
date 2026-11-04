@@ -58,6 +58,32 @@ services:
         max-file: "5"
     restart: unless-stopped
 
+  # Writes Traefik's static config, <data dir>/.traefik/static/traefik.yml,
+  # before Traefik starts on every `up` (ADR-0030): the panel's base merged
+  # with the Traefik override you edit on the Traefik page. On the first run
+  # it creates the override from the running Traefik's flags, or from
+  # RELIST_ACME_EMAIL and TRAEFIK_TRUSTED_IPS in .env; after that those two
+  # keys are not read. It exits 0 unless there is no usable traefik.yml.
+  traefik-config:
+    container_name: relist-traefik-config
+    image: ${RELIST_PANEL_IMAGE:-ghcr.io/relist/relist-panel:latest}
+    command: ["traefik-config"]
+    restart: "no"
+    environment:
+      RELIST_DATA_DIR: ${RELIST_DATA_DIR:-/var/lib/relist-panel}
+      RELIST_ACME_EMAIL: ${RELIST_ACME_EMAIL:-}
+      TRAEFIK_TRUSTED_IPS: ${TRAEFIK_TRUSTED_IPS:-}
+    volumes:
+      - ${RELIST_DATA_DIR:-/var/lib/relist-panel}:${RELIST_DATA_DIR:-/var/lib/relist-panel}
+      # Read-only: it only reads the running Traefik's flags.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    network_mode: none
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "2"
+
   traefik:
     container_name: relist-traefik
     image: traefik:v3.7
@@ -66,43 +92,12 @@ services:
       # until the kernel OOM-kills the container instead of the GC stepping in.
       # Keep it under mem_limit; 400MiB ≈ 80% of the 512M limit.
       GOMEMLIMIT: 400MiB
-    command:
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-      - --entrypoints.web.address=:80
-      # Traefik v3 defaults readTimeout to 60s for the whole request body. The
-      # Images upload streams up to 10 GiB, so the limit is one hour for every
-      # app on the `web` entrypoint.
-      - --entrypoints.web.transport.respondingTimeouts.readTimeout=3600s
-      - --entrypoints.websecure.address=:443
-      # Same one-hour limit as `web`, so uploads work over HTTPS too.
-      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=3600s
-      # The email is optional (a probe on 2026-10-08 registered an account
-      # without one) but recommended; see ADR-0013.
-      - --certificatesresolvers.letsencrypt.acme.email=${RELIST_ACME_EMAIL:-}
-      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
-      # Uploaded Certificates (ADR-0022): the panel writes one file per
-      # certificate here from panel.db; Traefik serves them by SNI.
-      - --providers.file.directory=/letsencrypt/dynamic
-      - --providers.file.watch=true
-      # Traefik's own log, where ACME errors show up; the panel's Traefik page
-      # reads it. Without a TTY Traefik still colours it, so turn that off.
-      - --log.level=INFO
-      - --log.nocolor=true
-      # The Access log (ADR-0027): JSON lines in <data dir>/.traefik/access,
-      # rotated daily by the panel with USR1. Request headers are dropped so
-      # Authorization and Cookie never reach the file.
-      - --accesslog=true
-      - --accesslog.filepath=/letsencrypt/access/access.log
-      - --accesslog.format=json
-      - --accesslog.fields.headers.defaultmode=drop
-      - --accesslog.fields.headers.names.User-Agent=keep
-      # Proxies in front of Traefik (e.g. Cloudflare) whose X-Forwarded-For is
-      # trusted for the client address; set TRAEFIK_TRUSTED_IPS in .env. Empty
-      # trusts no one.
-      - --entrypoints.web.forwardedheaders.trustedips=${TRAEFIK_TRUSTED_IPS:-}
-      - --entrypoints.websecure.forwardedheaders.trustedips=${TRAEFIK_TRUSTED_IPS:-}
+    # All static config is in the generated file; change it on the Traefik
+    # page, not here (ADR-0030).
+    command: ["--configfile=/etc/traefik/traefik.yml"]
+    depends_on:
+      traefik-config:
+        condition: service_completed_successfully
     ports:
       - "${TRAEFIK_HTTP_PORT:-80}:80"
       - "${TRAEFIK_HTTPS_PORT:-443}:443"
@@ -111,6 +106,8 @@ services:
       # Mounted on its own so Docker creates it before Traefik starts: the
       # file provider never retries a directory missing at start (ADR-0022).
       - ${RELIST_DATA_DIR:-/var/lib/relist-panel}/.traefik/dynamic:/letsencrypt/dynamic
+      # A directory, not the file: a rename over traefik.yml stays visible.
+      - ${RELIST_DATA_DIR:-/var/lib/relist-panel}/.traefik/static:/etc/traefik:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - relist-network
