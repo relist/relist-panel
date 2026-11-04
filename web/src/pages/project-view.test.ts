@@ -40,6 +40,7 @@ describe('activeTab', () => {
     expect(activeTab('variables')).toBe('variables');
     expect(activeTab('settings')).toBe('settings');
     expect(activeTab('members')).toBe('members');
+    expect(activeTab('activity')).toBe('activity');
   });
 
   it('falls back to Composes for anything else, including an absent segment', () => {
