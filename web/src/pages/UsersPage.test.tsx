@@ -52,6 +52,17 @@ async function row(email: string) {
   return (await screen.findByText(email)).closest('tr') as HTMLElement;
 }
 
+/** Opens a row's ⋯ menu and returns the names of its items. */
+async function openActions(email: string) {
+  await userEvent.click(await screen.findByRole('button', { name: `Actions for ${email}` }));
+  const items = await screen.findAllByRole('menuitem');
+  return items.map((item) => item.textContent);
+}
+
+async function choose(name: string) {
+  await userEvent.click(await screen.findByRole('menuitem', { name }));
+}
+
 afterEach(cleanup);
 
 beforeEach(() => {
@@ -99,18 +110,18 @@ describe('UsersPage', () => {
     expect(await screen.findByText('A user with this email already exists')).toBeTruthy();
   });
 
-  it('gives the Owner row no disable, delete, admin or reset action for another admin', async () => {
+  it('gives the Owner row no actions menu', async () => {
     show();
-    const owner = await row('owner@example.com');
-    for (const name of ['Disable', 'Delete', 'Remove admin', 'Send reset link']) {
-      expect(within(owner).queryByRole('button', { name })).toBeNull();
-    }
+    await row('owner@example.com');
+    expect(screen.queryByRole('button', { name: 'Actions for owner@example.com' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Actions for bob@example.com' })).toBeTruthy();
   });
 
   it('disables a user and reloads', async () => {
     api.updateUser.mockResolvedValue({ ...bobRow, status: 'disabled' });
     show();
-    await userEvent.click(within(await row('bob@example.com')).getByRole('button', { name: 'Disable' }));
+    await openActions('bob@example.com');
+    await choose('Disable');
     expect(api.updateUser).toHaveBeenCalledWith(3, { disabled: true });
     await waitFor(() => expect(api.listUsers).toHaveBeenCalledTimes(2));
   });
@@ -118,28 +129,39 @@ describe('UsersPage', () => {
   it('shows a reset link for an active user', async () => {
     api.resetUser.mockResolvedValue({ token: 'reset1', expiresAt: '2026-11-05T00:00:00Z', kind: 'reset' });
     show();
-    await userEvent.click(within(await row('bob@example.com')).getByRole('button', { name: 'Send reset link' }));
+    await openActions('bob@example.com');
+    await choose('Send reset link');
     expect(api.resetUser).toHaveBeenCalledWith(3);
     expect(await screen.findByText(`${window.location.origin}/invite/reset1`)).toBeTruthy();
   });
 
   it('labels the link action of an invited user as a new invite', async () => {
     show();
-    expect(within(await row('new@example.com')).getByRole('button', { name: 'New invite link' })).toBeTruthy();
+    expect(await openActions('new@example.com')).toContain('New invite link');
   });
 
   it('offers no disable or reset link on your own row', async () => {
     show();
-    const mine = await row('second@example.com');
-    expect(within(mine).queryByRole('button', { name: 'Disable' })).toBeNull();
-    expect(within(mine).queryByRole('button', { name: 'Send reset link' })).toBeNull();
-    expect(within(mine).getByRole('button', { name: 'Delete' })).toBeTruthy();
+    expect(await openActions('second@example.com')).toEqual(['Remove admin', 'Delete']);
+  });
+
+  it('asks before deleting a user', async () => {
+    api.deleteUser.mockResolvedValue(undefined);
+    show();
+    await openActions('bob@example.com');
+    await choose('Delete');
+    expect(api.deleteUser).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getAllByText('Delete bob@example.com?').length).toBeGreaterThan(0);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(api.deleteUser).toHaveBeenCalledWith(3));
   });
 
   it('rechecks the sign-in after removing its own admin', async () => {
     api.updateUser.mockResolvedValue({ ...secondRow, isAdmin: false });
     show();
-    await userEvent.click(within(await row('second@example.com')).getByRole('button', { name: 'Remove admin' }));
+    await openActions('second@example.com');
+    await choose('Remove admin');
     await waitFor(() => expect(panel.loadAuthStatus).toHaveBeenCalled());
   });
 });

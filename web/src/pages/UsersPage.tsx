@@ -1,6 +1,6 @@
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Flex, Form, Input, Modal, Popconfirm, Switch, Table, Tag, Typography } from 'antd';
-import type { TableColumnsType } from 'antd';
+import { MoreOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Alert, App, Button, Card, Dropdown, Flex, Form, Input, Modal, Switch, Table, Tag, Typography } from 'antd';
+import type { MenuProps, TableColumnsType } from 'antd';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import useSWR from 'swr';
@@ -23,7 +23,7 @@ const statusColor: Record<UserStatus, string | undefined> = { active: 'success',
  * an admin, so its row offers nothing that would take that away.
  */
 export function UsersPage() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const { auth, loadAuthStatus } = usePanel();
   const { data, error, isLoading, mutate } = useSWR(USERS_KEY, () => api.listUsers());
   const [inviting, setInviting] = useState(false);
@@ -79,53 +79,59 @@ export function UsersPage() {
       render: (_, user) => {
         const self = me?.id === user.id;
         // Disabling or resetting yourself would sign you out mid-click; your
-        // own password changes on the Account page. An Admin never resets the
-        // Owner (the API refuses it too).
-        const canLink = !self && !user.isOwner;
+        // own password changes on the Account page. The Owner is never
+        // demoted, disabled, deleted or reset from here (the API refuses it
+        // too), so its row has no menu.
+        if (user.isOwner) {
+          return null;
+        }
+        const items: MenuProps['items'] = [
+          {
+            key: 'admin',
+            label: user.isAdmin ? 'Remove admin' : 'Make admin',
+            onClick: () =>
+              void run(
+                () => api.updateUser(user.id, { isAdmin: !user.isAdmin }),
+                self && user.isAdmin ? loadAuthStatus : undefined,
+              ),
+          },
+          ...(self
+            ? []
+            : [
+                {
+                  key: 'disabled',
+                  label: user.status === 'disabled' ? 'Enable' : 'Disable',
+                  onClick: () => void run(() => api.updateUser(user.id, { disabled: user.status !== 'disabled' })),
+                },
+              ]),
+          ...(self || user.status === 'disabled'
+            ? []
+            : [
+                {
+                  key: 'link',
+                  label: user.status === 'invited' ? 'New invite link' : 'Send reset link',
+                  onClick: () => void run(async () => setLink(await api.resetUser(user.id))),
+                },
+              ]),
+          { type: 'divider' as const },
+          {
+            danger: true,
+            key: 'delete',
+            label: 'Delete',
+            onClick: () =>
+              void modal.confirm({
+                content: 'They lose access at once. This cannot be undone.',
+                okButtonProps: { danger: true },
+                okText: 'Delete',
+                onOk: () => run(() => api.deleteUser(user.id), self ? loadAuthStatus : undefined),
+                title: `Delete ${user.email}?`,
+              }),
+          },
+        ];
         return (
-          <Flex gap={4} justify="flex-end" wrap>
-            {!user.isOwner && (
-              <Button
-                onClick={() =>
-                  void run(
-                    () => api.updateUser(user.id, { isAdmin: !user.isAdmin }),
-                    self && user.isAdmin ? loadAuthStatus : undefined,
-                  )
-                }
-                size="small"
-                type="link"
-              >
-                {user.isAdmin ? 'Remove admin' : 'Make admin'}
-              </Button>
-            )}
-            {!user.isOwner && !self && (
-              <Button
-                onClick={() => void run(() => api.updateUser(user.id, { disabled: user.status !== 'disabled' }))}
-                size="small"
-                type="link"
-              >
-                {user.status === 'disabled' ? 'Enable' : 'Disable'}
-              </Button>
-            )}
-            {canLink && user.status !== 'disabled' && (
-              <Button onClick={() => void run(async () => setLink(await api.resetUser(user.id)))} size="small" type="link">
-                {user.status === 'invited' ? 'New invite link' : 'Send reset link'}
-              </Button>
-            )}
-            {!user.isOwner && (
-              <Popconfirm
-                description="They lose access at once. This cannot be undone."
-                okButtonProps={{ danger: true }}
-                okText="Delete"
-                onConfirm={() => run(() => api.deleteUser(user.id), self ? loadAuthStatus : undefined)}
-                title={`Delete ${user.email}?`}
-              >
-                <Button danger size="small" type="link">
-                  Delete
-                </Button>
-              </Popconfirm>
-            )}
-          </Flex>
+          <Dropdown menu={{ items }} placement="bottomRight" trigger={['click']}>
+            <Button aria-label={`Actions for ${user.email}`} icon={<MoreOutlined />} type="text" />
+          </Dropdown>
         );
       },
       title: '',
