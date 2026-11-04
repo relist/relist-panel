@@ -128,6 +128,45 @@ describe('VulnerabilitiesPage', () => {
     expect(api.vulnFindings).toHaveBeenCalledWith(appImage.imageId);
   });
 
+  it('copies an image report for an AI agent', async () => {
+    api.vulnFindings.mockResolvedValue([
+      {
+        vulnId: 'CVE-2026-1001', pkgName: 'busybox', pkgPath: '', installedVersion: '1.37.0-r18', fixedVersion: '1.37.0-r19',
+        severity: 'HIGH', title: 'busybox: overflow', url: '', firstSeenAt: '2026-10-27T18:00:00Z', new: true,
+      },
+    ]);
+    const user = userEvent.setup();
+    show();
+    await screen.findByText('shop-web:latest');
+    await user.click(screen.getByRole('button', { name: /Export report/ }));
+    expect(await screen.findByText('Copied the vulnerability report')).toBeTruthy();
+    const copied = await navigator.clipboard.readText();
+    expect(copied).toMatch(/^# Vulnerability report — shop-web:latest\n/);
+    expect(copied).toContain('| busybox | (os) | 1.37.0-r18 | 1.37.0-r19 | HIGH | CVE-2026-1001 |');
+  });
+
+  it('downloads the report instead when the clipboard is missing', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+    const createObjectURL = vi.fn(() => 'blob:report');
+    Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    show();
+    await screen.findByText('shop-web:latest');
+    await user.click(screen.getByRole('button', { name: /Export report/ }));
+    expect(await screen.findByText('Copying needs HTTPS, so the report was downloaded instead')).toBeTruthy();
+    expect(createObjectURL).toHaveBeenCalled();
+    expect((click.mock.contexts[0] as HTMLAnchorElement).download).toBe('vuln-report-shop-web-latest.md');
+    click.mockRestore();
+  });
+
+  it('cannot export an image that was never scanned', async () => {
+    api.vulnImages.mockResolvedValue([{ ...appImage, counts: null, scannedAt: null }]);
+    show();
+    await screen.findByText('shop-web:latest');
+    expect(screen.getByRole('button', { name: /Export report/ }).hasAttribute('disabled')).toBe(true);
+  });
+
   it('filters CVEs from the URL', async () => {
     show('/vulnerabilities?tab=cves&composeId=3&severity=CRITICAL&fixable=1');
     await waitFor(() => expect(api.vulnCves).toHaveBeenCalled());
