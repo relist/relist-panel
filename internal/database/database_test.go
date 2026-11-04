@@ -27,8 +27,8 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 31 {
-		t.Fatalf("migration version = %d, want 31", version)
+	if version != 32 {
+		t.Fatalf("migration version = %d, want 32", version)
 	}
 
 	var one int
@@ -643,5 +643,57 @@ func TestUsersMigrationKeepsAdminAndSessions(t *testing.T) {
 	}
 	if err := insertToken("b"); err == nil || !strings.Contains(strings.ToLower(err.Error()), "unique") {
 		t.Fatalf("second open token error = %v, want a unique constraint error", err)
+	}
+}
+
+func TestGrantsMigration(t *testing.T) {
+	db, err := OpenAndMigrate(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		INSERT INTO users (id, email, created_at) VALUES (2, 'member@example.com', 1);
+		INSERT INTO projects (id, name, description, created_at, updated_at) VALUES (1, 'p', '', 1, 1);
+		INSERT INTO environments (id, project_id, name, created_at) VALUES (1, 1, 'production', 1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO grants (user_id, project_id, environment_id, role) VALUES (2, 1, NULL, 'viewer')"); err != nil {
+		t.Fatalf("project grant: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO grants (user_id, project_id, environment_id, role) VALUES (2, 1, 1, 'none')"); err != nil {
+		t.Fatalf("environment no access: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO grants (user_id, project_id, environment_id, role) VALUES (2, 1, NULL, 'none')"); err == nil {
+		t.Fatal("a Project Grant of none was accepted")
+	}
+	if _, err := db.Exec("INSERT INTO grants (user_id, project_id, environment_id, role) VALUES (2, 1, NULL, 'editor')"); err == nil {
+		t.Fatal("a second Project Grant for the same user and project was accepted")
+	}
+	if _, err := db.Exec("INSERT INTO grants (user_id, project_id, environment_id, role) VALUES (2, 1, 1, 'editor')"); err == nil {
+		t.Fatal("a second Environment Grant for the same user and environment was accepted")
+	}
+	if _, err := db.Exec("INSERT INTO grants (user_id, project_id, environment_id, role) VALUES (2, 1, NULL, 'owner')"); err == nil {
+		t.Fatal("an unknown role was accepted")
+	}
+	count := func() int {
+		var n int
+		if err := db.QueryRow("SELECT COUNT(*) FROM grants").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if _, err := db.Exec("DELETE FROM environments WHERE id = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("after deleting the environment, grants = %d, want 1", n)
+	}
+	if _, err := db.Exec("DELETE FROM users WHERE id = 2"); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 0 {
+		t.Fatalf("after deleting the user, grants = %d, want 0", n)
 	}
 }
