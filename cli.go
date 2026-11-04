@@ -3,11 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"relist-panel/internal/audit"
 	"strings"
 	"time"
 
@@ -64,6 +67,7 @@ func runResetTwoFactor(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	recordCLI(db, "cli.reset_2fa", map[string]any{"email": result.Email})
 	state := "two-factor was off"
 	if result.WasEnabled {
 		state = "two-factor was on"
@@ -122,6 +126,7 @@ func runChangeEmail(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "Email is already %s; nothing changed.\n", result.NewEmail)
 		return 0
 	}
+	recordCLI(db, "cli.change_email", map[string]any{"email": result.NewEmail, "oldEmail": result.OldEmail})
 	fmt.Fprintf(stdout, "Changed email from %s to %s.\n", result.OldEmail, result.NewEmail)
 	return 0
 }
@@ -250,6 +255,7 @@ func runCreateAdmin(args []string, stdin io.Reader, stdout, stderr io.Writer, tt
 		}
 		return 1
 	}
+	recordCLI(db, "cli.create_admin", map[string]any{"email": created})
 	fmt.Fprintf(stdout, "Created admin %s.\n", created)
 	if generated {
 		fmt.Fprintf(stdout, "Password: %s\n", password)
@@ -348,6 +354,7 @@ func runResetPassword(args []string, stdin io.Reader, stdout, stderr io.Writer, 
 		}
 		return 1
 	}
+	recordCLI(db, "cli.reset_password", map[string]any{"email": result.Email})
 	fmt.Fprintf(stdout, "Reset password for %s; revoked %d sessions.\n", result.Email, result.SessionsRevoked)
 	if generated {
 		fmt.Fprintf(stdout, "Password: %s\n", password)
@@ -364,4 +371,12 @@ func readLine(r *bufio.Reader) (string, error) {
 		return "", err
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// recordCLI writes a host command's Audit event, actor cli. A failure is
+// logged and never fails the command: the change itself is already done.
+func recordCLI(db *sql.DB, action string, detail map[string]any) {
+	if err := audit.Record(context.Background(), db, audit.Event{Actor: audit.ActorCLI, Action: action, Outcome: audit.OutcomeOK, Detail: detail}); err != nil {
+		log.Printf("audit: %s: %v", action, err)
+	}
 }

@@ -391,3 +391,50 @@ func TestChangeEmailCommandSameAddressChangesNothing(t *testing.T) {
 		t.Fatalf("stored email = %q", email)
 	}
 }
+
+func TestCLICommandsAreRecorded(t *testing.T) {
+	t.Setenv("RELIST_DATA_DIR", t.TempDir())
+	if code, _, stderr := runCreate(t, []string{"--email", "a@example.com", "--password-stdin"}, "long enough pw\n", noTerminal); code != 0 {
+		t.Fatalf("create-admin = %d %s", code, stderr)
+	}
+	if code, _, stderr := runChangeEmailCmd(t, []string{"--new-email", "b@example.com"}); code != 0 {
+		t.Fatalf("change-email = %d %s", code, stderr)
+	}
+	if code, _, stderr := runResetPw(t, []string{"--password-stdin"}, "another long pw\n", noTerminal); code != 0 {
+		t.Fatalf("reset-password = %d %s", code, stderr)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runResetTwoFactor(nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("reset-2fa = %d %s", code, stderr.String())
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := database.OpenAndMigrate(cfg.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Query("SELECT action, actor, outcome, COALESCE(detail, '') FROM audit_events ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var action, actor, outcome, detail string
+		if err := rows.Scan(&action, &actor, &outcome, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if actor != "cli" || outcome != "ok" || !strings.Contains(detail, "@example.com") || strings.Contains(detail, "long") {
+			t.Errorf("%s: actor %q outcome %q detail %s", action, actor, outcome, detail)
+		}
+		got = append(got, action)
+	}
+	want := []string{"cli.create_admin", "cli.change_email", "cli.reset_password", "cli.reset_2fa"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("actions = %v, want %v", got, want)
+	}
+}

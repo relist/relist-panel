@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"relist-panel/internal/audit"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -147,6 +148,10 @@ func (s *Service) acceptInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create a session")
 		return
 	}
+	s.recordAudit(r.Context(), audit.Event{
+		Action: "auth.invite_accepted", Outcome: audit.OutcomeOK, ActorUserID: link.userID, Actor: link.email,
+		Detail: map[string]any{"kind": string(link.kind)}, IP: peerIP(r),
+	})
 	setSessionCookie(w, r, token, expiresAt)
 	// isAdmin tells the page where to land: a User who is not an Admin has
 	// only their Account to open.
