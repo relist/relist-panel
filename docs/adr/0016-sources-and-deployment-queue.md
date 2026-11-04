@@ -14,7 +14,7 @@ ADR-0001 kept git-based builds out of scope: a Compose ran only images that alre
 
 - `POST /deploy` becomes `POST /deployments` returning `202`. Deploy warnings move from the response into the Deployment's log and record.
 - A panel restart fails the Deployment that was running and resumes the queued ones.
-- The Deploy key's private half is stored in the database. Like the secret flag, this is not a security boundary: the single admin owns the host.
+- The Deploy key's private half is stored in the database. Like the secret flag, this is not a security boundary: an Admin owns the host.
 - Build args and build secrets use Compose's `build.args` and `build.secrets` (`environment:` source), interpolated from the Compose's `--env-file`. A probe on 2026-10-11 confirmed both with `docker:27-cli`, which already ships `git` and `ssh`.
 - Spec: `.scratch/source-builds/spec.md`.
 - Superseded in part by ADR-0020 (SSH key library).

@@ -21,6 +21,6 @@ The install `docker-compose.yml` gains `--providers.file.directory=/letsencrypt/
 - **Certificate changes apply immediately**, unlike Domains (ADR-0013), because the file provider watches the directory.
 - **The panel cannot see Traefik's static config.** An install upgraded without the file-provider flags ignores every Certificate, and nothing says so. The README's "Upgrading an existing install" section is the guard, as for ADR-0013.
 - **A new HTTPS Domain with no covering Certificate serves Traefik's self-signed certificate** until the operator uploads one or chooses Let's Encrypt. Existing Domains keep their provider.
-- **The private key sits in `panel.db` and on disk at `0600`**, and is never returned by the API. Like SSH keys (ADR-0020), this is not a security boundary: the single admin owns the host.
+- **The private key sits in `panel.db` and on disk at `0600`**, and is never returned by the API. Like SSH keys (ADR-0020), this is not a security boundary: an Admin owns the host.
 - **A Migration (ADR-0018) needs no change.** `panel.db` travels whole, and startup reconciliation rewrites the directory on the new host.
 - Spec: `.scratch/certificates/spec.md`.

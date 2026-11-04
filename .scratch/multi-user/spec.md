@@ -465,3 +465,15 @@ installed `antd`.
 - The invite routes have no rate limit: a 256-bit token cannot be guessed.
 - `POST /api/users/{id}/reset` on an invited User issues a fresh invite (7 days), and on a disabled User answers `409 Enable this user before sending a link`.
 - Accepting an invite or reset link signs the User in and sets their last sign-in.
+
+### 2026-11-04 — Phase 2 rulings
+
+1. An Editor of an Environment writes its Environment Variables; reading keys is Viewer.
+2. `freshVolumes: true` on a Deployment needs Editor; a plain Deployment is Operator.
+3. Hidden wins for a Project Editor: an Environment set to No access answers 404 on its delete and removal plan too.
+4. `GET /api/deployments` shows only visible rows, filtered in SQL; `GET /api/deployments/queue` keeps the others with their names and ids zeroed.
+5. The Members tab writes with `PUT /api/projects/{id}/grants`, replacing that Project's Grants in one transaction.
+6. `POST /api/users` takes no `grants`; an Admin invites, then sets Grants on the User page.
+7. A member's `/` redirects to `/projects`; Overview, Monitoring and every host-wide page stay admin-only.
+8. Roles are recorded by amending ADR-0031; ADR-0032 stays for the Compose policy.
+9. A Project's `environmentCount` is the visible count for a non-admin.

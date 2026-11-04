@@ -27,6 +27,19 @@ the host. Turn on two-factor sign-in, and if you can, reach the panel over a VPN
 or an SSH tunnel rather than the public internet. Report vulnerabilities
 privately: see [SECURITY.md](SECURITY.md).
 
+### Users and roles
+
+An Admin invites people from **Users** and gives each a Role per Project or
+per Environment, on the User's page or on a Project's **Members** tab:
+Viewer (read, without secret values), Operator (also deploy, restart and
+stop) or Editor (also change the Compose, its variables and settings, open
+the Terminal and the Volume Explorer). An Environment can be set to No
+access to hide it. Admins see everything; a User with no Role sees nothing.
+
+**Until the Compose policy ships, an Editor can take the host** (a Compose
+that mounts the Docker socket or runs privileged, then the Terminal), **so
+grant Editor only to people you would give root.**
+
 Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Development
