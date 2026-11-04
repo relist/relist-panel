@@ -185,7 +185,12 @@ func (h *PanelUpdaterHost) Containers(ctx context.Context, project, service stri
 // network, with the domain as Host and SNI. The certificate is not verified:
 // Traefik serves its default one until Let's Encrypt has issued.
 func (h *PanelUpdaterHost) Healthz(ctx context.Context, ip, domain string) error {
-	client := h.client
+	return healthzThroughTraefik(ctx, h.client, ip, domain)
+}
+
+// healthzThroughTraefik is GET https://<ip>/healthz with domain as Host and
+// SNI; a nil client means a 5 s one that skips verification and redirects.
+func healthzThroughTraefik(ctx context.Context, client *http.Client, ip, domain string) error {
 	if client == nil {
 		client = &http.Client{
 			Timeout: 5 * time.Second,
