@@ -122,7 +122,7 @@ var (
 	admin  = &auth.User{ID: 1, Email: "owner@example.com", IsAdmin: true}
 )
 
-func compose(project, env, composeID int64, rest string) string {
+func composePath(project, env, composeID int64, rest string) string {
 	return fmt.Sprintf("/api/projects/%d/environments/%d/composes/%d%s", project, env, composeID, rest)
 }
 
@@ -164,8 +164,8 @@ func TestNoGrantIsNotFound(t *testing.T) {
 func TestViewerCannotRestart(t *testing.T) {
 	f := newFixture(t)
 	grant(t, f.db, pA, 0, "viewer")
-	expect(t, f, member, http.MethodGet, compose(pA, eA1, cC, ""), http.StatusNoContent)
-	response := f.serve(member, http.MethodPost, compose(pA, eA1, cC, "/restart"))
+	expect(t, f, member, http.MethodGet, composePath(pA, eA1, cC, ""), http.StatusNoContent)
+	response := f.serve(member, http.MethodPost, composePath(pA, eA1, cC, "/restart"))
 	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "You don't have permission to do this") {
 		t.Fatalf("restart = %d %s", response.Code, response.Body.String())
 	}
@@ -177,16 +177,16 @@ func TestEnvironmentGrantOverridesProject(t *testing.T) {
 	f := newFixture(t)
 	grant(t, f.db, pA, 0, "editor")
 	grant(t, f.db, pA, eA2, "viewer")
-	expect(t, f, member, http.MethodPut, compose(pA, eA1, cC, ""), http.StatusNoContent)
-	expect(t, f, member, http.MethodPut, compose(pA, eA2, cD, ""), http.StatusForbidden)
-	expect(t, f, member, http.MethodGet, compose(pA, eA2, cD, ""), http.StatusNoContent)
+	expect(t, f, member, http.MethodPut, composePath(pA, eA1, cC, ""), http.StatusNoContent)
+	expect(t, f, member, http.MethodPut, composePath(pA, eA2, cD, ""), http.StatusForbidden)
+	expect(t, f, member, http.MethodGet, composePath(pA, eA2, cD, ""), http.StatusNoContent)
 }
 
 func TestNoAccessEnvironmentIsNotFound(t *testing.T) {
 	f := newFixture(t)
 	grant(t, f.db, pA, 0, "editor")
 	grant(t, f.db, pA, eA2, "none")
-	expect(t, f, member, http.MethodGet, compose(pA, eA2, cD, ""), http.StatusNotFound)
+	expect(t, f, member, http.MethodGet, composePath(pA, eA2, cD, ""), http.StatusNotFound)
 	expect(t, f, member, http.MethodGet, "/api/projects/1/environments/12/variables", http.StatusNotFound)
 	expect(t, f, member, http.MethodDelete, "/api/projects/1/environments/12", http.StatusNotFound)
 	expect(t, f, member, http.MethodDelete, "/api/projects/1/environments/11", http.StatusNoContent)
@@ -197,13 +197,13 @@ func TestForgedParentIsNotFound(t *testing.T) {
 	grant(t, f.db, pA, 0, "editor")
 	grant(t, f.db, pB, 0, "editor")
 	expect(t, f, member, http.MethodGet, "/api/projects/2/environments/11/variables", http.StatusNotFound)
-	expect(t, f, member, http.MethodGet, compose(pA, eA2, cC, ""), http.StatusNotFound)
-	expect(t, f, member, http.MethodGet, compose(pB, eB1, cC, ""), http.StatusNotFound)
+	expect(t, f, member, http.MethodGet, composePath(pA, eA2, cC, ""), http.StatusNotFound)
+	expect(t, f, member, http.MethodGet, composePath(pB, eB1, cC, ""), http.StatusNotFound)
 	expect(t, f, member, http.MethodGet, "/api/projects/1/environments/abc/variables", http.StatusNotFound)
-	expect(t, f, member, http.MethodGet, compose(pA, eA1, 999, ""), http.StatusNotFound)
+	expect(t, f, member, http.MethodGet, composePath(pA, eA1, 999, ""), http.StatusNotFound)
 	expect(t, f, member, http.MethodGet, "/api/projects/77", http.StatusNotFound)
 	// The real ones pass and carry their scope.
-	response := f.serve(member, http.MethodGet, compose(pA, eA1, cC, ""))
+	response := f.serve(member, http.MethodGet, composePath(pA, eA1, cC, ""))
 	if response.Code != http.StatusNoContent || response.Header().Get("X-Scope") != "1/11/101" {
 		t.Fatalf("real path = %d scope %q", response.Code, response.Header().Get("X-Scope"))
 	}
@@ -245,7 +245,7 @@ func TestStillAllowedSeesRevokedGrant(t *testing.T) {
 	testRoutes["GET "+composeBase+"/terminal"] = Rule{Level: LevelEditor}
 	t.Cleanup(func() { delete(testRoutes, "GET "+composeBase+"/terminal") })
 
-	expect(t, f, member, http.MethodGet, compose(pA, eA1, cC, "/terminal"), http.StatusNoContent)
+	expect(t, f, member, http.MethodGet, composePath(pA, eA1, cC, "/terminal"), http.StatusNoContent)
 	if still == nil {
 		t.Fatal("no StillAllowed in the context")
 	}
