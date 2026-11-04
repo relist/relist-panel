@@ -37,8 +37,8 @@ Settled in brainstorming on 2026-11-04:
   when `RELIST_POLICY_APPROVER=owner`. Host paths outside the Compose directory that may be bound
   without approval are listed in `RELIST_POLICY_BIND_ROOTS`.
 - **Phased delivery.** One spec, four phases that merge separately: Users, Roles, Audit log,
-  Compose policy. Implementation starts after the open PRs (#38–#41) merge, on top of the newest
-  `main`, so the migration number and the route table are final from the start.
+  Compose policy. Implementation starts on `main` after #38–#42 merged (`ed460c6`), so the
+  migration numbers and the route table are final from the start.
 
 ## Goal and success criteria
 
@@ -90,8 +90,9 @@ Change:
 
 ## Data model
 
-One new migration (number fixed when implementing; `00030` is taken by PR #40). Never edit a
-committed migration.
+Each phase adds its own migration, from `00031` on: `00031_users.sql` (phase 1), then
+`grants`, `audit_events`/`audit_settings` and `compose_approvals` in the phases that use them.
+Never edit a committed migration.
 
 ### `users` (replaces `admin_credentials`)
 
@@ -201,7 +202,7 @@ Each level includes the ones above it.
 | **Operator** | create and cancel Deployments, restart, stop |
 | **Editor** | update the Compose, its Variables, Variable Sets, Bindings, Domains, Source (including upload, test, known-hosts reset, cache delete), Zero-downtime and Builder settings; Preview; Terminal; Volume Explorer (read, write, archive, orphans); removal plans; read secret values; create and delete Composes |
 | **Project Editor** | create and delete Environments, update the Project's name and description |
-| **Admin** | create and delete Projects; Users and Grants; Audit log page; every host-wide route: `/api/images`, `/api/docker/*`, `/api/certificates*`, `/api/ssh-keys*` writes, `/api/traefik/*`, `/api/vulnerabilities/*`, `/api/panel-update/*`, `/api/host/metrics`, `/api/migration/*` |
+| **Admin** | create and delete Projects; Users and Grants; Audit log page; every host-wide route: `/api/images`, `/api/docker/*`, `/api/certificates*`, `/api/ssh-keys*` writes, `/api/builders*` writes, `/api/traefik/*` (static config included), `/api/vulnerabilities/*`, `/api/panel-update/*`, `/api/host/metrics`, `/api/migration/*` |
 
 Preview is Editor because its output has variables interpolated, secrets included. The Volume
 Explorer is Editor because a Volume may hold a database.
@@ -218,6 +219,8 @@ Lists filter instead of refusing:
   keep their status and position but have no Project, Environment or Compose name or id, so a
   user can see why their Deployment waits.
 - `GET /api/ssh-keys`: a non-admin gets only `id` and `name`, to choose a key for a Source.
+- `GET /api/builders`: a non-admin gets only `id`, `name` and which is the default, to choose a
+  Builder on the Compose's Builder setting.
 - `GET /api/auth/status`: returns the User (`id`, `email`, `isAdmin`, `isOwner`) and the effective
   role per visible Environment.
 
@@ -445,10 +448,10 @@ installed `antd`.
 
 ## Docs
 
-- A new ADR (number fixed when implementing; PR #39 takes 0028) superseding ADR-0001's
+- ADR-0031 superseding ADR-0001's
   single-admin non-goal: users and roles, the Owner as id 1, the central middleware with default
   deny, what the secret flag now protects, and the Audit log's limits.
-- A second ADR for the Compose policy: allowlist on the resolved config, approval keyed by hash,
+- ADR-0032 for the Compose policy: allowlist on the resolved config, approval keyed by hash,
   `RELIST_POLICY_APPROVER`, and why admins remain fully trusted.
 - Update ADR-0016, ADR-0020 and ADR-0022, which say "the single admin owns the host".
 - CONTEXT.md changes listed above. Public docs: Users, roles and the approver variable.
