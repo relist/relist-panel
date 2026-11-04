@@ -19,7 +19,7 @@ const { Text, Title, Paragraph } = Typography;
  * it is not — the old screen was a bare card on grey, which read as an error
  * page rather than a product.
  */
-function AuthLayout({
+export function AuthLayout({
   children,
   subtitle,
   title,
@@ -80,7 +80,7 @@ function AuthLayout({
               </Flex>
               <Flex align="center" gap={8}>
                 <SafetyCertificateOutlined style={{ color: token.colorPrimary }} />
-                <Text>Single admin account — no teams, no roles</Text>
+                <Text>Each person signs in as themselves</Text>
               </Flex>
               <Flex align="center" gap={8}>
                 <ThunderboltOutlined style={{ color: token.colorPrimary }} />

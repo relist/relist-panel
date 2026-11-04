@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 import { createBrowserRouter } from 'react-router';
 
 import { SignInPage } from '../pages/AuthPages';
+import { InvitePage } from '../pages/InvitePage';
 import { AccountPage } from '../pages/AccountPage';
 import { ComposePage } from '../pages/ComposePage';
 import { DeploymentsPage } from '../pages/DeploymentsPage';
@@ -77,6 +78,7 @@ export const router = createBrowserRouter(
       ],
     },
     { path: 'signin', element: <SignInPage /> },
+    { path: 'invite/:token', element: <InvitePage /> },
   ],
   { basename },
 );
