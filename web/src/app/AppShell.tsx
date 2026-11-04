@@ -328,7 +328,7 @@ export function AppShell() {
             style={{ borderInlineEnd: 0, paddingTop: 8 }}
           />
         </nav>
-        <DiskPressureFooter onNavigate={closeMobileSidebar} pressure={diskPressure} />
+        {adminView && <DiskPressureFooter onNavigate={closeMobileSidebar} pressure={diskPressure} />}
         <PanelVersionFooter onNavigate={closeMobileSidebar} version={updateStatus?.version} />
       </Layout.Sider>
 
@@ -376,7 +376,7 @@ export function AppShell() {
                   aria-label="Account"
                   icon={
                     <Avatar size={22} style={{ background: token.colorPrimary }}>
-                      A
+                      {auth.user?.email.charAt(0).toUpperCase() || 'A'}
                     </Avatar>
                   }
                   style={{ paddingInline: 8 }}

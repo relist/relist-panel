@@ -200,7 +200,7 @@ export function SignInPage() {
 
   return (
     <AuthLayout
-      subtitle={onCodeStep ? 'Enter the six-digit code from your authenticator app.' : 'Use the admin account for this host.'}
+      subtitle={onCodeStep ? 'Enter the six-digit code from your authenticator app.' : 'Use your account for this panel.'}
       title={onCodeStep ? 'Two-factor code' : 'Sign in'}
     >
       {error && <AuthError message={error} />}

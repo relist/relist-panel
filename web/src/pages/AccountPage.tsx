@@ -130,7 +130,7 @@ export function AccountPage() {
 
   return (
     <>
-      <PageHeader description="The admin account for this host." title="Account" />
+      <PageHeader description="How you sign in to this panel." title="Account" />
 
       {loadError && (
         <Alert

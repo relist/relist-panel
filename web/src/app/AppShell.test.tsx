@@ -165,6 +165,14 @@ describe('Users and non-admins', () => {
     expect(api.panelUpdateStatus).not.toHaveBeenCalled();
   });
 
+  it('shows a non-admin no host disk card, and their own initial', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member });
+    renderShell('/');
+    await screen.findByText('No access yet');
+    expect(screen.queryByText('Docker host')).toBeNull();
+    expect(within(screen.getByRole('button', { name: 'Account' })).getByText('B')).toBeTruthy();
+  });
+
   it('shows an admin the Users menu item', async () => {
     vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: { ...member, isAdmin: true } });
     renderShell('/');
