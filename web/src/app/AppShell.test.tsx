@@ -123,6 +123,7 @@ describe('Users and non-admins', () => {
         { path: '/', element: <h1>Home</h1> },
         { path: '/account', element: <h1>Account screen</h1> },
         { path: '/projects', element: <h1>Projects screen</h1> },
+        { path: '/docker', element: <h1>Docker screen</h1> },
       ] }],
       { initialEntries: [path] },
     );
@@ -138,37 +139,44 @@ describe('Users and non-admins', () => {
     vi.spyOn(api, 'panelUpdateStatus').mockResolvedValue({} as never);
   });
 
-  it('shows a non-admin no menu items and the no-access page', async () => {
-    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member });
-    renderShell('/projects');
-    expect(await screen.findByText('No access yet')).toBeTruthy();
-    expect(screen.getByText('An admin has not given you access to any Project.')).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: 'Projects screen' })).toBeNull();
-    expect(screen.queryAllByRole('menuitem')).toHaveLength(0);
+  it('shows a member Projects and Deployments only, and lands them on Projects', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member, access: { projects: [] } });
+    const router = renderShell('/');
+    expect(await screen.findByRole('heading', { name: 'Projects screen' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/projects');
+    const items = screen.getAllByRole('menuitem').map((item) => item.textContent);
+    expect(items).toEqual(['Projects', 'Deployments']);
   });
 
-  it('still opens the Account screen for a non-admin', async () => {
-    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member });
+  it('still opens the Account screen for a member', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member, access: { projects: [] } });
     renderShell('/account');
     expect(await screen.findByRole('heading', { name: 'Account screen' })).toBeTruthy();
   });
 
-  it('makes no admin-only request for a non-admin', async () => {
-    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member });
-    renderShell('/');
-    await screen.findByText('No access yet');
+  it('shows a member the 403 result on a host-wide page', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member, access: { projects: [] } });
+    renderShell('/docker');
+    expect(await screen.findByText("You don't have permission")).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Docker screen' })).toBeNull();
+  });
+
+  it('loads the tree and the queue for a member, and makes no admin-only request', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member, access: { projects: [] } });
+    renderShell('/projects');
+    await screen.findByRole('heading', { name: 'Projects screen' });
+    await waitFor(() => expect(api.listProjects).toHaveBeenCalled());
+    await waitFor(() => expect(api.globalDeploymentQueue).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(api.listProjects).not.toHaveBeenCalled();
-    expect(api.globalDeploymentQueue).not.toHaveBeenCalled();
     expect(api.hostMetrics).not.toHaveBeenCalled();
     expect(api.vulnSummary).not.toHaveBeenCalled();
     expect(api.panelUpdateStatus).not.toHaveBeenCalled();
   });
 
-  it('shows a non-admin no host disk card, and their own initial', async () => {
-    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member });
-    renderShell('/');
-    await screen.findByText('No access yet');
+  it('shows a member no host disk card, and their own initial', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member, access: { projects: [] } });
+    renderShell('/projects');
+    await screen.findByRole('heading', { name: 'Projects screen' });
     expect(screen.queryByText('Docker host')).toBeNull();
     expect(within(screen.getByRole('button', { name: 'Account' })).getByText('B')).toBeTruthy();
   });
