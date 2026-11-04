@@ -222,9 +222,15 @@ export function PanelProvider({ children }: { children: ReactNode }) {
         // leaves the auth state untouched so the page stays on its step.
         if (result.kind === 'signedIn') {
           // The status says who signed in, which the shell needs before it
-          // renders: a non-admin sees only their Account.
-          const status = await api.authStatus();
-          setAuth({ checked: true, authenticated: status.authenticated, user: status.user });
+          // renders: a non-admin sees only their Account. The session cookie
+          // is already set, so a failed read still signs in, without the
+          // User; the next status read fills it in.
+          try {
+            const status = await api.authStatus();
+            setAuth({ checked: true, authenticated: status.authenticated, user: status.user });
+          } catch {
+            setAuth({ checked: true, authenticated: true });
+          }
         }
         return result;
       });
