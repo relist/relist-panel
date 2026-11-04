@@ -82,7 +82,7 @@ func Emit(ctx context.Context, action string, detail map[string]any) {
 		e.Target = p.resolveTarget(ctx)
 	}
 	e.Action, e.Outcome, e.Detail, e.At = action, OutcomeOK, detail, time.Now()
-	if err := p.record(ctx, e); err != nil {
+	if err := p.record(context.WithoutCancel(ctx), e); err != nil {
 		log.Printf("audit: %s: %v", action, err)
 	}
 }
