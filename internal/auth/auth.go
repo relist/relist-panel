@@ -44,6 +44,9 @@ type Service struct {
 	selfAuthenticated func(path string) bool
 	// version is the build's version, shown by the public status route.
 	version string
+	// access reports a signed-in User's roles for the status route; nil
+	// leaves "access" null.
+	access func(context.Context, User) (any, error)
 }
 
 // AllowSelfAuthenticated lets requests to the paths allow reports true for
@@ -77,6 +80,13 @@ func New(db *sql.DB) *Service {
 }
 
 // WithVersion sets the build version that GET /api/auth/status reports.
+// WithAccess makes the status route report fn's answer as "access": the
+// User's effective roles, which package auth cannot work out itself.
+func (s *Service) WithAccess(fn func(context.Context, User) (any, error)) *Service {
+	s.access = fn
+	return s
+}
+
 func (s *Service) WithVersion(version string) *Service {
 	s.version = version
 	return s
@@ -156,6 +166,14 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 	body := map[string]any{"authenticated": authenticated, "version": s.version}
 	if authenticated {
 		body["user"] = map[string]any{"id": user.ID, "email": user.Email, "isAdmin": user.IsAdmin, "isOwner": user.IsOwner()}
+		var access any
+		if s.access != nil {
+			if access, err = s.access(r.Context(), user); err != nil {
+				writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
+				return
+			}
+		}
+		body["access"] = access
 	}
 	writeJSON(w, http.StatusOK, body)
 }

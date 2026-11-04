@@ -111,7 +111,13 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	migrationOptions := d.Migration
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
-	authService := auth.New(db).WithVersion(d.Version)
+	authService := auth.New(db).WithVersion(d.Version).WithAccess(func(ctx context.Context, u auth.User) (any, error) {
+		access, err := grants.Load(ctx, db, u.ID, u.IsAdmin)
+		if err != nil {
+			return nil, err
+		}
+		return access.View(), nil
+	})
 	authService.RegisterRoutes(mux)
 	composesService := composes.New(db, runner, dataDir).WithEngine(d.Engine)
 	projectsService := projects.New(db, composesService)

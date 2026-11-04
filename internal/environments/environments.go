@@ -13,7 +13,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"relist-panel/internal/authz"
 	"relist-panel/internal/composes"
+	"relist-panel/internal/grants"
 	"relist-panel/internal/slug"
 )
 
@@ -91,6 +93,15 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if access, member := authz.Member(r.Context()); member {
+		visible := make([]Environment, 0, len(environments))
+		for _, environment := range environments {
+			if access.EnvironmentRole(environment.ID) != grants.RoleNone {
+				visible = append(visible, environment)
+			}
+		}
+		environments = visible
+	}
 	writeJSON(w, http.StatusOK, environments)
 }
 

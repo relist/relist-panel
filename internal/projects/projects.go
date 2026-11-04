@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"relist-panel/internal/authz"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/environments"
 	"relist-panel/internal/slug"
@@ -76,6 +77,16 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if access, member := authz.Member(r.Context()); member {
+		visible := make([]Project, 0, len(projects))
+		for _, project := range projects {
+			if access.ProjectVisible(project.ID) {
+				project.EnvironmentCount = len(access.VisibleEnvironments(project.ID))
+				visible = append(visible, project)
+			}
+		}
+		projects = visible
+	}
 	writeJSON(w, http.StatusOK, projects)
 }
 
@@ -138,6 +149,9 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load project")
 		return
+	}
+	if access, member := authz.Member(r.Context()); member {
+		project.EnvironmentCount = len(access.VisibleEnvironments(project.ID))
 	}
 	writeJSON(w, http.StatusOK, project)
 }
@@ -202,6 +216,9 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load updated project")
 		return
+	}
+	if access, member := authz.Member(r.Context()); member {
+		project.EnvironmentCount = len(access.VisibleEnvironments(project.ID))
 	}
 	writeJSON(w, http.StatusOK, project)
 }

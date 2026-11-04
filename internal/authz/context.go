@@ -35,8 +35,7 @@ func ScopeFrom(ctx context.Context) (Scope, bool) {
 // values of the Environment: an Editor there, or an admin. Without an Access
 // in the context it is false.
 func CanReadSecrets(ctx context.Context, environmentID int64) bool {
-	access, ok := AccessFrom(ctx)
-	return ok && access.EnvironmentRole(environmentID) >= grants.RoleEditor
+	return RoleIn(ctx, environmentID) >= grants.RoleEditor
 }
 
 // StillAllowed returns a check that repeats this request's authorization
@@ -47,4 +46,26 @@ func CanReadSecrets(ctx context.Context, environmentID int64) bool {
 func StillAllowed(ctx context.Context) func(context.Context) (bool, error) {
 	still, _ := ctx.Value(stillKey{}).(func(context.Context) (bool, error))
 	return still
+}
+
+// Member returns the Access of a signed-in User who is not an admin, for a
+// list to filter by. ok is false for an admin and for a request without an
+// Access (a package test calling the handler directly), which see the full
+// list as before.
+func Member(ctx context.Context) (grants.Access, bool) {
+	access, ok := AccessFrom(ctx)
+	if !ok || access.Admin {
+		return grants.Access{}, false
+	}
+	return access, true
+}
+
+// RoleIn is the signed-in User's effective role in an Environment; an admin
+// is an Editor. Without an Access in the context it is RoleNone.
+func RoleIn(ctx context.Context, environmentID int64) grants.Role {
+	access, ok := AccessFrom(ctx)
+	if !ok {
+		return grants.RoleNone
+	}
+	return access.EnvironmentRole(environmentID)
 }

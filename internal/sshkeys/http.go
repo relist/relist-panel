@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"relist-panel/internal/authz"
 )
 
 type Service struct {
@@ -53,6 +55,19 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	keys, err := s.store.List(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list SSH keys")
+		return
+	}
+	if _, member := authz.Member(r.Context()); member {
+		// Enough to pick a key for a Source; the rest is the host's.
+		type named struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		}
+		names := make([]named, 0, len(keys))
+		for _, k := range keys {
+			names = append(names, named{ID: k.ID, Name: k.Name})
+		}
+		writeJSON(w, http.StatusOK, names)
 		return
 	}
 	out := make([]keyResponse, 0, len(keys))
