@@ -43,7 +43,14 @@ export function UsersPage() {
   };
 
   const columns: TableColumnsType<PanelUser> = [
-    { dataIndex: 'email', key: 'email', render: (email: string) => <Text strong>{email}</Text>, title: 'Email' },
+    {
+      dataIndex: 'email',
+      key: 'email',
+      // An address broken mid-word reads as two; the table scrolls instead.
+      onCell: () => ({ style: { whiteSpace: 'nowrap' } }),
+      render: (email: string) => <Text strong>{email}</Text>,
+      title: 'Email',
+    },
     {
       dataIndex: 'status',
       key: 'status',
@@ -153,7 +160,14 @@ export function UsersPage() {
       )}
 
       <Card variant="outlined">
-        <Table<PanelUser> columns={columns} dataSource={data ?? []} loading={isLoading} pagination={false} rowKey="id" />
+        <Table<PanelUser>
+          columns={columns}
+          dataSource={data ?? []}
+          loading={isLoading}
+          pagination={false}
+          rowKey="id"
+          scroll={{ x: 'max-content' }}
+        />
       </Card>
 
       <InviteModal

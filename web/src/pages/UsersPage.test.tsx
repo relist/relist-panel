@@ -71,6 +71,12 @@ describe('UsersPage', () => {
     expect(within(await row('bob@example.com')).getByText('Never')).toBeTruthy();
   });
 
+  it('keeps each email on one line', async () => {
+    show();
+    const email = await screen.findByText('owner@example.com');
+    expect(email.closest('td')?.style.whiteSpace).toBe('nowrap');
+  });
+
   it('invites and shows the copyable link once', async () => {
     api.createUser.mockResolvedValue({ user: invitedRow, token: 'tok123', expiresAt: '2026-11-11T00:00:00Z', kind: 'invite' });
     show();
