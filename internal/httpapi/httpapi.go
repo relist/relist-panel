@@ -14,6 +14,7 @@ import (
 
 	"relist-panel/internal/accesslog"
 	"relist-panel/internal/auth"
+	"relist-panel/internal/authz"
 	"relist-panel/internal/builders"
 	"relist-panel/internal/certificates"
 	"relist-panel/internal/composes"
@@ -352,7 +353,9 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	// panel deployed, say) is the same site, so its pages could write with the
 	// admin's cookie. Writes from another origin are refused; requests with no
 	// browser headers, like the migration pull, pass.
-	return http.NewCrossOriginProtection().Handler(authService.Middleware(inner)), worker.Wait
+	// authz sits inside auth, which puts the User in the context, and outside
+	// every lock: a request without the right is refused before a lock sees it.
+	return http.NewCrossOriginProtection().Handler(authService.Middleware(authz.Middleware(mux, inner))), worker.Wait
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {
