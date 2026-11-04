@@ -24,6 +24,7 @@ import (
 	"relist-panel/internal/domains"
 	"relist-panel/internal/environments"
 	"relist-panel/internal/environmentvariables"
+	"relist-panel/internal/grants"
 	"relist-panel/internal/images"
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/migration"
@@ -119,6 +120,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	environmentsService.RegisterRoutes(mux)
 	environmentVariablesService := environmentvariables.New(db)
 	environmentVariablesService.RegisterRoutes(mux)
+	grants.New(db).RegisterRoutes(mux)
 	deploymentStore := deployments.NewStore(db)
 	var builderPool deployments.BuilderPool
 	if d.Buildx != nil {
