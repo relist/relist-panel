@@ -67,6 +67,39 @@ func TestWatcherAcksWaitingWithDeployment(t *testing.T) {
 	}
 }
 
+// blockingWaiter is a Traefik apply that runs until released.
+type blockingWaiter struct{ release chan struct{} }
+
+func (b blockingWaiter) WaitIdle(ctx context.Context) error {
+	select {
+	case <-b.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// A Traefik apply restarts Traefik, which the update's health check goes
+// through, so the quiesce waits for it too (ADR-0030).
+func TestWatcherWaitsForTraefikApply(t *testing.T) {
+	r := newLockRig(t)
+	apply := blockingWaiter{release: make(chan struct{})}
+	r.s.d.TraefikApply = apply
+	r.writeRun(t, watchRun, StateQuiescing)
+	r.updater.state[UpdaterName(watchRun)] = UpdaterState{Exists: true, Running: true}
+	r.s.watchOnce(t.Context())
+	time.Sleep(20 * time.Millisecond)
+	r.s.watchOnce(t.Context())
+	if got := r.ack(t).State; got != AckWaiting {
+		t.Fatalf("ack = %s while a Traefik apply runs", got)
+	}
+	close(apply.release)
+	waitFor(t, func() bool {
+		r.s.watchOnce(t.Context())
+		return r.ack(t).State == AckReady
+	})
+}
+
 func TestWatcherRefusesUnderMigrationLock(t *testing.T) {
 	r := newLockRig(t)
 	r.migr = true

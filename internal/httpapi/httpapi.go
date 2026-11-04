@@ -31,6 +31,7 @@ import (
 	"relist-panel/internal/sources"
 	"relist-panel/internal/sshkeys"
 	"relist-panel/internal/terminal"
+	"relist-panel/internal/traefikconfig"
 	"relist-panel/internal/variablesets"
 	"relist-panel/internal/volumeapi"
 	"relist-panel/internal/volumes"
@@ -84,6 +85,9 @@ type Deps struct {
 	// install stack finds no container, so the page reports no Traefik while
 	// rotation still runs. Nil (tests) leaves rotation off.
 	Traefik accesslog.Traefik
+	// TraefikApply restarts and dry-runs the install's Traefik for a Traefik
+	// apply (ADR-0030). Nil (tests) leaves the Configuration routes out.
+	TraefikApply traefikconfig.Traefik
 	// PanelDomain is the install's RELIST_DOMAIN. A Domain cannot take this
 	// host, or Traefik could route the panel's own traffic to an app. Empty
 	// means unknown and refuses nothing.
@@ -164,7 +168,29 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	if vulnService != nil {
 		puDeps.Scans = vulnService
 	}
-	panelUpdates := panelupdate.New(puDeps)
+	// The Traefik apply and the Panel update hold each other off: the
+	// update's quiesce waits for an apply, and an apply is refused while the
+	// update or the Migration lock is on.
+	var panelUpdates *panelupdate.Service
+	var traefikApply *traefikconfig.Runner
+	if d.TraefikApply != nil {
+		traefikApply = &traefikconfig.Runner{
+			Paths: traefikconfig.PathsFor(dataDir), Traefik: d.TraefikApply, Domain: d.PanelDomain,
+			Gate: func(ctx context.Context) error {
+				if panelUpdates.Locked() {
+					return fmt.Errorf("%w: a Panel update is running", traefikconfig.ErrLocked)
+				}
+				if locked, err := puDeps.MigrationLocked(ctx); err != nil {
+					return err
+				} else if locked {
+					return fmt.Errorf("%w: a server Migration holds the lock", traefikconfig.ErrLocked)
+				}
+				return nil
+			},
+		}
+		puDeps.TraefikApply = traefikApply
+	}
+	panelUpdates = panelupdate.New(puDeps)
 	if err := panelUpdates.StartLocked(ctx); err != nil {
 		log.Printf("panelupdate: start locked: %v", err)
 	}
@@ -199,6 +225,12 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	certificates.New(db, dataDir).RegisterRoutes(mux)
 	accessLogs := accesslog.New(db, dataDir, d.Traefik)
 	accessLogs.RegisterRoutes(mux)
+	if traefikApply != nil {
+		traefikconfig.NewService(traefikApply).RegisterRoutes(mux)
+		if err := traefikApply.Resume(ctx); err != nil {
+			log.Printf("traefikconfig: resume the last apply: %v", err)
+		}
+	}
 	if d.Traefik != nil {
 		worker.Add(1)
 		go func() {
