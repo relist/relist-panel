@@ -108,6 +108,12 @@ func (s *Service) waitIdle(ctx context.Context, q *quiesceState) {
 			return
 		}
 	}
+	if s.d.TraefikApply != nil {
+		if err := s.d.TraefikApply.WaitIdle(ctx); err != nil {
+			log.Printf("panelupdate: wait for the running Traefik apply: %v", err)
+			return
+		}
+	}
 	q.idle.Store(true)
 }
 

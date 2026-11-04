@@ -1,0 +1,11 @@
+# The Access log (ADR-0027), merged only when the Traefik override has an
+# accessLog key: JSON lines the panel rotates daily. Request headers are dropped
+# so Authorization and Cookie never reach the file.
+accessLog:
+  filePath: /letsencrypt/access/access.log
+  format: json
+  fields:
+    headers:
+      defaultMode: drop
+      names:
+        User-Agent: keep

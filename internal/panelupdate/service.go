@@ -65,6 +65,9 @@ type Deps struct {
 	Queue   QueueControl
 	Scans   ScanWaiter
 	Updater UpdaterContainers
+	// TraefikApply is waited for like a scan: the update's health check goes
+	// through the Traefik it restarts (ADR-0030).
+	TraefikApply ScanWaiter
 	// WaitingOn says what the update lock waits for: "Deployment api #3", a
 	// vulnerability scan, or "" when nothing.
 	WaitingOn func() string

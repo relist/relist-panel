@@ -7,8 +7,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"relist-panel/internal/accesslog"
+	"relist-panel/internal/traefikconfig"
 )
 
 const (
@@ -84,6 +86,101 @@ func TestTraefikArgs(t *testing.T) {
 	}
 }
 
+func TestTraefikRestartArgv(t *testing.T) {
+	d, r := newTestTraefikDocker(foundAnswers())
+	if err := d.Restart(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"docker", "restart", "-t", "10", "abc123"}; !reflect.DeepEqual(r.calls[len(r.calls)-1], want) {
+		t.Fatalf("argv = %q, want %q", r.calls[len(r.calls)-1], want)
+	}
+}
+
+func TestTraefikLogsSinceArgv(t *testing.T) {
+	d, r := newTestTraefikDocker(foundAnswers())
+	since := time.Date(2026, 11, 4, 1, 2, 3, 4, time.UTC)
+	if _, err := d.LogsSince(context.Background(), since, 500); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"docker", "logs", "--since", "2026-11-04T01:02:03.000000004Z", "--tail", "500", "--timestamps", "abc123"}
+	if got := r.calls[len(r.calls)-1]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+}
+
+func TestTraefikState(t *testing.T) {
+	answers := foundAnswers()
+	answers["docker inspect --format {{json .}} abc123"] = `{"Image":"sha256:img","RestartCount":2,
+		"State":{"Running":true,"StartedAt":"2026-11-04T01:02:03.5Z"},
+		"NetworkSettings":{"Networks":{"bridge":{"IPAddress":"172.17.0.2"},"relist-network":{"IPAddress":"172.19.0.4"}}}}`
+	d, _ := newTestTraefikDocker(answers)
+	st, err := d.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := traefikconfig.State{Running: true, RestartCount: 2, StartedAt: time.Date(2026, 11, 4, 1, 2, 3, 5e8, time.UTC), Image: "sha256:img", IP: "172.19.0.4"}
+	if st != want {
+		t.Fatalf("state = %+v, want %+v", st, want)
+	}
+}
+
+func TestTraefikDryRunOrder(t *testing.T) {
+	answers := map[string]string{
+		"docker inspect --format {{.State.Running}} relist-traefik-dryrun-x1": "false\n",
+		"docker logs relist-traefik-dryrun-x1":                                "Command error\n",
+	}
+	d, r := newTestTraefikDocker(answers)
+	res, err := d.DryRun(context.Background(), "x1", "/d/.dryrun-x1", "sha256:img", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Running || !strings.Contains(res.Log, "Command error") {
+		t.Fatalf("result = %+v", res)
+	}
+	var verbs []string
+	for _, c := range r.calls {
+		verbs = append(verbs, c[1])
+	}
+	if want := []string{"run", "inspect", "logs", "rm"}; !reflect.DeepEqual(verbs, want) {
+		t.Fatalf("calls = %q", r.calls)
+	}
+	wantRun := []string{"docker", "run", "-d", "--name", "relist-traefik-dryrun-x1", "--network", "none", "--tmpfs", "/letsencrypt",
+		"-v", "/d/.dryrun-x1:/etc/traefik:ro", "sha256:img"}
+	if !reflect.DeepEqual(r.calls[0], wantRun) {
+		t.Fatalf("run argv = %q", r.calls[0])
+	}
+	if want := []string{"docker", "rm", "-f", "relist-traefik-dryrun-x1"}; !reflect.DeepEqual(r.calls[3], want) {
+		t.Fatalf("rm argv = %q", r.calls[3])
+	}
+}
+
+func TestTraefikDryRunRemovesAfterFailedRun(t *testing.T) {
+	d, r := newTestTraefikDocker(nil)
+	runKey := "docker run -d --name relist-traefik-dryrun-x2 --network none --tmpfs /letsencrypt -v /d:/etc/traefik:ro img"
+	r.fail = map[string]error{runKey: errors.New("exit status 125")}
+	if _, err := d.DryRun(context.Background(), "x2", "/d", "img", 0); err == nil {
+		t.Fatal("no error from a failed run")
+	}
+	if last := r.calls[len(r.calls)-1]; strings.Join(last, " ") != "docker rm -f relist-traefik-dryrun-x2" {
+		t.Fatalf("last call = %q", last)
+	}
+}
+
+func TestTraefikRemoveDryRuns(t *testing.T) {
+	answers := map[string]string{"docker ps -aq --filter name=relist-traefik-dryrun-": "a1\nb2\n"}
+	d, r := newTestTraefikDocker(answers)
+	if err := d.RemoveDryRuns(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if last := strings.Join(r.calls[len(r.calls)-1], " "); last != "docker rm -f a1 b2" {
+		t.Fatalf("last call = %q", last)
+	}
+	d, r = newTestTraefikDocker(nil)
+	if err := d.RemoveDryRuns(context.Background()); err != nil || len(r.calls) != 1 {
+		t.Fatalf("with none: err = %v, calls = %q", err, r.calls)
+	}
+}
+
 func TestTraefikNotFound(t *testing.T) {
 	cases := map[string]func() *TraefikDocker{
 		"no traefik service": func() *TraefikDocker {
@@ -105,7 +202,8 @@ func TestTraefikNotFound(t *testing.T) {
 		ctx := context.Background()
 		_, logsErr := d.Logs(ctx, 500)
 		_, argsErr := d.Args(ctx)
-		for _, err := range []error{d.Reopen(ctx), logsErr, argsErr} {
+		_, stateErr := d.State(ctx)
+		for _, err := range []error{d.Reopen(ctx), logsErr, argsErr, stateErr, d.Restart(ctx)} {
 			if !errors.Is(err, accesslog.ErrNoTraefik) {
 				t.Errorf("%s: error = %v, want ErrNoTraefik", name, err)
 			}

@@ -174,6 +174,7 @@ func main() {
 
 	control := http.NewServeMux()
 	panelDocker := dockerexec.NewPanelDocker(dockerexec.DefaultSocketPath)
+	traefikDocker := dockerexec.NewTraefikDocker()
 	handler, waitDeployments := httpapi.NewHandler(ctx, httpapi.Deps{
 		DB:             db,
 		Runner:         dockerexec.New(),
@@ -200,7 +201,8 @@ func main() {
 		PanelRunner:  dockerexec.NewPanelUpdateRunner(),
 		PanelUpdater: panelDocker,
 		PanelDomain:  cfg.Install.Domain,
-		Traefik:      dockerexec.NewTraefikDocker(),
+		Traefik:      traefikDocker,
+		TraefikApply: traefikDocker,
 		Buildx:       dockerexec.NewBuildx(dockerexec.DefaultSocketPath),
 	})
 	server := newServer(cfg.Address(), handler)

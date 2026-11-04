@@ -184,14 +184,14 @@ Override the defaults via environment variables (or the `.env` file next to
 - `TRAEFIK_HTTPS_PORT` (default `443`) — the host port Traefik's HTTPS
   entrypoint is published on
 - `TRAEFIK_TRUSTED_IPS` (empty by default) — comma-separated IPs or CIDRs of
-  proxies in front of Traefik, such as Cloudflare's ranges. Traefik takes the
-  client address from `X-Forwarded-For` only when the request comes from one
-  of them, and the Access log records it as `ClientHost`. Empty trusts no one
+  proxies in front of Traefik. Read once, to seed the first Traefik settings
+  (below); after that, change Trusted proxies on the **Traefik** page
 - `RELIST_ACME_EMAIL` (unset by default; optional but recommended) — the
-  contact address for your Let's Encrypt account. Traefik's reference marks it
-  as required, but an empty value registers an account anyway (ADR-0013). Set
-  it so Let's Encrypt can reach you about expiring certificates and so you can
-  recover the account, and in case a later Traefik enforces it
+  contact address for your Let's Encrypt account. Like `TRAEFIK_TRUSTED_IPS`,
+  it only seeds the first Traefik settings. Traefik's reference marks it as
+  required, but an empty value registers an account anyway (ADR-0013). Set it
+  so Let's Encrypt can reach you about expiring certificates and so you can
+  recover the account
 - `RELIST_IMAGE` (unset by default) — the panel image that Volume file
   operations run from; set it only when the panel cannot name its own image
   (`docker inspect $(hostname)` fails, e.g. a custom `hostname:` on the panel
@@ -206,8 +206,8 @@ and a Let's Encrypt certificate resolver named `letsencrypt` that answers the
 HTTP-01 challenge on `web`. HTTPS is always on: the panel's own router uses
 `websecure` with `letsencrypt`, and plain HTTP for the panel redirects to it.
 Certificates are stored in `RELIST_DATA_DIR/.traefik/acme.json`, so the same
-backup covers them. Other settings stay minimal (`--providers.docker`,
-`exposedbydefault=false`). To route a Compose's Services, add a **Domain** on
+backup covers them. The Docker provider only routes Services that ask for it
+(`exposedByDefault: false`). To route a Compose's Services, add a **Domain** on
 its Domains tab; the panel injects the Traefik labels at the next deploy, and
 labels you write by hand in the YAML keep working. Let's Encrypt can only issue
 when the host's DNS points at this machine and port 80 is reachable from the
@@ -221,6 +221,32 @@ Domains tab. One limit on Domains: a hand-written router in another Compose that
 uses the same host as a Domain is not detected, and Traefik picks one of the
 two routers by priority. A custom resolver name that
 Traefik does not know shows only in Traefik's log.
+
+### Traefik settings
+
+Traefik's static config is set on the **Traefik** page, under **Configuration**:
+the ACME email, trusted proxies (one IP or CIDR per line, with a switch for
+Cloudflare's ranges), the log level and the Access log, or any other Traefik
+static setting as YAML under **Advanced**. Traefik takes the client address from
+`X-Forwarded-For` only when the request comes from a trusted proxy, and the
+Access log records it as `ClientHost`. The Access log is off until you turn it on.
+
+The panel writes what you set to
+`RELIST_DATA_DIR/.traefik/static/traefik.override.yml` and generates the
+`traefik.yml` Traefik reads from it and the panel's own base. The keys the panel
+needs (the entrypoints, the providers, the `letsencrypt` resolver) are locked.
+Edit the override on the page, not the generated file, and not Traefik's
+`command:` in `docker-compose.override.yml`: a Panel update refuses an Install
+whose Traefik no longer reads the file.
+
+**Apply restarts Traefik, so every Domain and the panel drop for a few
+seconds.** Before the restart the panel tries the new config in a throwaway
+Traefik. It backs up the current files, and if Traefik is not healthy within
+60 s, it puts them back. **Test** runs only the throwaway check, and **History**
+restores one of the last 10 backups. If even the old files do not bring Traefik
+back, the panel is still on its loopback port:
+`ssh -L 8888:127.0.0.1:8888 <host>`, then `http://127.0.0.1:8888/`. The steps to
+restore a backup by hand are in [docs/guide/traefik.md](docs/guide/traefik.md).
 
 ### Certificates
 
@@ -371,9 +397,11 @@ and shows: `release/invariants.json` (what the Install file must keep doing) and
 Two notes outside those files:
 
 - Composes with hand-written Traefik labels keep routing as before.
-- The Access log and the caps on the Containers' Docker logs start only once a
-  Panel update brings the Install file that has them. Until then the
-  **Traefik** page says the Access log is not on.
+- The caps on the Containers' Docker logs start only once a Panel update
+  brings the Install file that has them. After 0.0.2, Traefik reads a file the
+  panel generates: an update from 0.0.2 carries over `RELIST_ACME_EMAIL`,
+  `TRAEFIK_TRUSTED_IPS` and the Access log it had, and needs no manual step. On
+  a fresh install the Access log is off until it is turned on.
 - `RELIST_ADMIN_EMAIL` and `RELIST_ADMIN_PASSWORD` are no longer read; the
   admin they created stays. Remove them from `.env`, and if **Account** still
   says the password is the one from the env, change it there.

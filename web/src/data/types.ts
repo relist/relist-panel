@@ -722,6 +722,74 @@ export interface AccessLogSettings {
 
 export type AccessLogSettingsInput = Pick<AccessLogSettings, 'retentionDays' | 'keepForever'>;
 
+/** Traefik's static config (ADR-0030): the Settings form's fields. */
+export type TraefikLogLevel = 'ERROR' | 'WARN' | 'INFO' | 'DEBUG';
+
+export interface TraefikForm {
+  acmeEmail: string;
+  trustedIps: string[];
+  trustCloudflare: boolean;
+  logLevel: TraefikLogLevel;
+  accessLog: boolean;
+}
+
+/** Why a Traefik override cannot be used; `line` is 0 when unknown. */
+export interface ConfigProblem {
+  key: string;
+  line: number;
+  message: string;
+}
+
+export type TraefikApplyKind = 'apply' | 'restore' | 'restart';
+
+/** A Traefik apply, as apply.json keeps the last one. */
+export interface TraefikApplyRun {
+  id: string;
+  kind: TraefikApplyKind;
+  state: string;
+  reason?: string;
+  backup?: string;
+  log?: string;
+  bootstrapWarning?: string;
+  startedAt: string;
+  endedAt?: string;
+  acked: boolean;
+}
+
+export interface TraefikConfig {
+  override: string;
+  base: string;
+  effective: string;
+  /** Null when the override does not parse. */
+  form: TraefikForm | null;
+  revision: string;
+  pendingRestart: boolean;
+  warnings: ConfigProblem[];
+  lastApply: TraefikApplyRun | null;
+}
+
+export interface ConfigPreview {
+  override: string;
+  /** Empty when there are errors. */
+  effective: string;
+  form: TraefikForm | null;
+  errors: ConfigProblem[];
+  warnings: ConfigProblem[];
+}
+
+export interface ConfigTestResult {
+  ok: boolean;
+  errors: ConfigProblem[];
+  log: string;
+}
+
+export interface TraefikHistoryEntry {
+  name: string;
+  kind: TraefikApplyKind;
+  result: string;
+  at: string;
+}
+
 export interface SourceTestResult {
   ok: boolean;
   branches: string[];

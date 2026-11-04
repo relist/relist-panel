@@ -23,6 +23,13 @@ there is no promise that either gets a reply or a review, or how soon.
 - Frontend changes follow [docs/GUIDELINES.md](docs/GUIDELINES.md) and Ant Design's
   components.
 
+## Documentation
+
+[docs/README.md](docs/README.md) indexes the docs by system, with one guide page per
+system under `docs/guide/` (the first is [Traefik](docs/guide/traefik.md)). A change to
+a system updates its guide page. If the system has no page yet, add one with the seven
+sections the index lists, and link it from the index.
+
 ## Build and test
 
 You need Go (see `go.mod`), Node.js with pnpm, and [go-task](https://taskfile.dev).

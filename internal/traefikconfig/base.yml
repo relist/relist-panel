@@ -1,0 +1,33 @@
+# The panel's part of Traefik's static config (ADR-0030). The Traefik override
+# is merged over it; keys in locked (merge.go) cannot be changed by it.
+log:
+  level: INFO
+  # The Traefik page parses this log: plain lines, no colour.
+  format: common
+  noColor: true
+entryPoints:
+  web:
+    address: ":80"
+    transport:
+      respondingTimeouts:
+        # Traefik v3 defaults readTimeout to 60s for the whole request body. The
+        # Images upload streams up to 10 GiB, so the limit is one hour.
+        readTimeout: 3600s
+  websecure:
+    address: ":443"
+    transport:
+      respondingTimeouts:
+        readTimeout: 3600s
+providers:
+  docker:
+    exposedByDefault: false
+  # Uploaded Certificates (ADR-0022): the panel writes one file per certificate.
+  file:
+    directory: /letsencrypt/dynamic
+    watch: true
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web

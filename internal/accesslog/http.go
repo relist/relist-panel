@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"relist-panel/internal/traefikconfig"
 )
 
 // logTail is how many lines of Traefik's own log the Traefik page shows.
@@ -27,12 +29,13 @@ const (
 type Service struct {
 	store   *Store
 	dir     string
+	static  traefikconfig.Paths
 	traefik Traefik
 }
 
 // New serves the Traefik page. A nil traefik reads as no Traefik container.
 func New(db *sql.DB, dataDir string, traefik Traefik) *Service {
-	return &Service{store: NewStore(db), dir: Dir(dataDir), traefik: traefik}
+	return &Service{store: NewStore(db), dir: Dir(dataDir), static: traefikconfig.PathsFor(dataDir), traefik: traefik}
 }
 
 // Rotator returns the Rotator over the same directory and settings.
@@ -88,6 +91,14 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not inspect Traefik", "")
 		return
 	}
+	// A Traefik started from the generated file (ADR-0030) says what it does
+	// there; one from before still says it in its flags.
+	if effective, err := os.ReadFile(s.static.Effective()); err == nil && startedFromFile(args) {
+		writeJSON(w, http.StatusOK, map[string]any{"found": true,
+			"accessLogEnabled": traefikconfig.AccessLogOn(effective),
+			"trustedIps":       strings.Join(traefikconfig.TrustedIPs(effective), ",")})
+		return
+	}
 	enabled, trusted := false, ""
 	for _, arg := range args {
 		if arg == accessLogFlag {
@@ -98,6 +109,15 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"found": true, "accessLogEnabled": enabled, "trustedIps": trusted})
+}
+
+func startedFromFile(args []string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(strings.ToLower(arg), "--configfile=") {
+			return true
+		}
+	}
+	return false
 }
 
 type fileResponse struct {
