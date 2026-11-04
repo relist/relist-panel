@@ -110,6 +110,12 @@ describe('UsersPage', () => {
     expect(await screen.findByText('A user with this email already exists')).toBeTruthy();
   });
 
+  it('links each email to the user page', async () => {
+    show();
+    await row('bob@example.com');
+    expect(screen.getByRole('link', { name: 'bob@example.com' }).getAttribute('href')).toBe('/users/3');
+  });
+
   it('gives the Owner row no actions menu', async () => {
     show();
     await row('owner@example.com');

@@ -18,6 +18,7 @@ import { ProjectsPage } from '../pages/ProjectsPage';
 import { SshKeysPage } from '../pages/SshKeysPage';
 import { CertificatesPage } from '../pages/CertificatesPage';
 import { TraefikPage } from '../pages/TraefikPage';
+import { UserPage } from '../pages/UserPage';
 import { UsersPage } from '../pages/UsersPage';
 import { VolumeExplorerPage } from '../pages/VolumeExplorerPage';
 import { VulnerabilitiesPage } from '../pages/VulnerabilitiesPage';
@@ -44,6 +45,7 @@ const elements: Record<string, ReactElement> = {
   'certificates': <CertificatesPage />,
   'traefik': <TraefikPage />,
   'users': <UsersPage />,
+  'users/:userId': <UserPage />,
   'vulnerabilities': <VulnerabilitiesPage />,
   'docker': <DockerPage />,
   'panel-update': <PanelUpdatePage />,

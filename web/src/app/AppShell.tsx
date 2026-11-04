@@ -125,7 +125,7 @@ export function AppShell() {
             ? 'certificates'
           : resolved.pattern === 'traefik'
             ? 'traefik'
-          : resolved.pattern === 'users'
+          : resolved.pattern === 'users' || resolved.pattern === 'users/:userId'
             ? 'users'
           : resolved.pattern === 'vulnerabilities'
             ? 'vulnerabilities'

@@ -50,6 +50,7 @@ import { composeState, projectComposes, summarize } from '../data/types';
 import { activeTab, selectEnvironment } from './project-view';
 import { composeDeployIdentity } from './compose-view';
 import { ProjectSettingsTab } from './ProjectSettingsTab';
+import { ProjectMembersTab } from '../components/ProjectMembersTab';
 import { deployFromList } from './project-deploy';
 
 const { Text, Paragraph } = Typography;
@@ -112,7 +113,8 @@ export function ProjectPage() {
   const projectEditor = access.isProjectEditor(project?.id);
   const canOperate = access.can(activeEnvironment?.id, 'operator');
   const canEdit = access.can(activeEnvironment?.id, 'editor');
-  const activeTabKey = activeTab(tab);
+  // Members is an admin's tab; anyone else landing on its URL gets Composes.
+  const activeTabKey = tab === 'members' && !isAdmin ? 'composes' : activeTab(tab);
 
   useEffect(() => {
     setActionError(undefined);
@@ -530,6 +532,23 @@ export function ProjectPage() {
                 key: 'settings',
                 label: 'Settings',
               },
+              ...(isAdmin
+                ? [
+                    {
+                      children: (
+                        <ProjectMembersTab
+                          project={{
+                            id: project.id,
+                            name: project.name,
+                            environments: project.environments.map(({ id, name }) => ({ id, name })),
+                          }}
+                        />
+                      ),
+                      key: 'members',
+                      label: 'Members',
+                    },
+                  ]
+                : []),
             ]}
             onChange={(key) => {
               if (!activeEnvironment) return;

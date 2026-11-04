@@ -130,6 +130,19 @@ describe('Roles on the Project page', () => {
     expect(disabled(/New Compose/)).toBe(false);
   });
 
+  it('shows the Members tab to admins only', async () => {
+    renderPage();
+    expect(await screen.findByRole('tab', { name: 'Members' })).toBeTruthy();
+  });
+
+  it('hides the Members tab from a Project Editor', async () => {
+    as('editor', 'editor');
+    renderPage();
+    await screen.findByText('Compose A');
+    await waitFor(() => expect(disabled(/New Environment/)).toBe(false));
+    expect(screen.queryByRole('tab', { name: 'Members' })).toBeNull();
+  });
+
   it('lets a Viewer open Composes only', async () => {
     as(null, 'viewer');
     renderPage();
