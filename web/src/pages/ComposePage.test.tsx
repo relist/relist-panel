@@ -308,10 +308,38 @@ describe('Compose vulnerability badges', () => {
     expect(api.vulnSummary).toHaveBeenCalledWith({ composeId: 7 });
   });
 
+  it('copies a report of the Compose images with its Source', async () => {
+    vi.spyOn(api, 'vulnSummary').mockResolvedValue({ enabled: true, counts: { critical: 0, high: 1, medium: 0, low: 0, unknown: 0, fixable: 1 }, services: [] });
+    vi.spyOn(api, 'getSource').mockResolvedValue({ ...source, headSha: 'abc1234' });
+    const image = (imageId: string, composeId: number) => ({
+      imageId, refs: [`img-${composeId}:latest`], os: 'alpine 3.22', error: '',
+      users: [{ kind: 'service' as const, projectId: 1, environmentId: 2, composeId, service: 'api' }],
+      counts: { critical: 0, high: 1, medium: 0, low: 0, unknown: 0, fixable: 1 },
+      scannedAt: '2026-11-04T10:00:00Z', attemptedAt: '2026-11-04T10:00:00Z',
+    });
+    vi.spyOn(api, 'vulnImages').mockResolvedValue([image('sha256:seven', 7), image('sha256:eight', 8)]);
+    const findings = vi.spyOn(api, 'vulnFindings').mockResolvedValue([{
+      vulnId: 'CVE-2026-1', pkgName: 'zlib', pkgPath: '', installedVersion: '1.3', fixedVersion: '1.3.1',
+      severity: 'HIGH', title: '', url: '', firstSeenAt: '2026-11-04T10:00:00Z', new: false,
+    }]);
+    const user = userEvent.setup();
+    renderPage(7);
+    await user.click(await screen.findByRole('button', { name: /Export report/ }));
+    expect(await screen.findByText('Copied the vulnerability report')).toBeTruthy();
+    const copied = await navigator.clipboard.readText();
+    expect(copied).toMatch(/^# Vulnerability report — Project \/ production \/ Compose 7\n/);
+    expect(copied).toContain('Source: git@github.com:acme/old.git @ abc1234');
+    expect(copied).toContain('## Image `img-7:latest`, used by service api');
+    expect(copied).toContain('| zlib | (os) | 1.3 | 1.3.1 | HIGH | CVE-2026-1 |');
+    expect(copied).not.toContain('img-8');
+    expect(findings).toHaveBeenCalledTimes(1);
+  });
+
   it('hides vulnerability badges when scanning is off', async () => {
     vi.spyOn(api, 'vulnSummary').mockResolvedValue({ enabled: false });
     renderPage(8);
     await waitFor(() => expect(api.vulnSummary).toHaveBeenCalledWith({ composeId: 8 }));
     expect(screen.queryByText(/ Critical$/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Export report/ })).toBeNull();
   });
 });

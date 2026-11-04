@@ -1216,6 +1216,7 @@ func resolveCompose(yamlContent, networkName, envFilePath string, composeID int6
 				usedSets = append(usedSets, set.ID)
 			}
 			service["env_file"] = addSetFiles(addToEnvFile(service["env_file"], envFilePath), setPaths)
+			withDefaultLogging(service)
 			services[name] = service
 		}
 	} else {
