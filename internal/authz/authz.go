@@ -29,8 +29,10 @@ type Rule struct {
 }
 
 // Middleware refuses a signed-in non-admin any route whose rule is not
-// LevelSignedIn. A request without a User passed auth as public, and one the
-// mux would not route keeps its 404 or 405.
+// LevelSignedIn. A request without a User passed auth as public. A request
+// the mux would not route, or only to the "/" catch-all (webassets, which
+// answers an unknown /api/ path 404), keeps its 404 or 405: refusing it with
+// 403 would tell a member which paths exist.
 func Middleware(mux *http.ServeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := auth.UserFrom(r.Context())
@@ -39,7 +41,7 @@ func Middleware(mux *http.ServeMux, next http.Handler) http.Handler {
 			return
 		}
 		_, pattern := mux.Handler(r)
-		if pattern == "" || Routes[pattern].Level == LevelSignedIn {
+		if pattern == "" || pattern == "/" || Routes[pattern].Level == LevelSignedIn {
 			next.ServeHTTP(w, r)
 			return
 		}

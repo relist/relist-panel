@@ -14,6 +14,9 @@ func testMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/auth/account", ok)
 	mux.HandleFunc("GET /api/projects", ok)
 	mux.HandleFunc("GET /api/projects/{id}", ok)
+	// As in the shipped panel: webassets catches every other path, and
+	// answers an unknown /api/ path with 404.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
 	return mux
 }
 
