@@ -143,3 +143,12 @@ func TestInviteRoutesArePublic(t *testing.T) {
 	// f.do goes through Middleware without a cookie.
 	expectInvalidLink(t, f, http.MethodGet, "unknown")
 }
+
+func TestDisableKillsOpenLinkEvenAfterReEnable(t *testing.T) {
+	f := newUserFixture(t)
+	token := f.invite(t)
+	f.serveAs(t, owner, http.MethodPatch, "/api/users/2", map[string]any{"disabled": true})
+	f.serveAs(t, owner, http.MethodPatch, "/api/users/2", map[string]any{"disabled": false})
+	expectInvalidLink(t, f, http.MethodGet, token)
+	expectInvalidLink(t, f, http.MethodPost, token)
+}

@@ -217,9 +217,16 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if *input.Disabled {
-			if _, err := tx.ExecContext(r.Context(), "DELETE FROM sessions WHERE user_id = ?", id); err != nil {
-				writeError(w, http.StatusInternalServerError, "could not update the user")
-				return
+			// A disable ends the sessions and kills any open link too, so
+			// enabling the User again does not revive a link that leaked.
+			for _, query := range []string{
+				"DELETE FROM sessions WHERE user_id = ?",
+				"DELETE FROM user_tokens WHERE user_id = ? AND used_at IS NULL",
+			} {
+				if _, err := tx.ExecContext(r.Context(), query, id); err != nil {
+					writeError(w, http.StatusInternalServerError, "could not update the user")
+					return
+				}
 			}
 		}
 	}
