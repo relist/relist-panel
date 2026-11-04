@@ -97,12 +97,20 @@ func scanName(imageHex string) string {
 	return "relist-vulnscan-" + imageHex[:min(12, len(imageHex))]
 }
 
+// javaArchives are skipped, so Java packages are not scanned: identifying
+// them needs Trivy's Java DB, about 1.5 GB, which the Scanner never
+// downloads. Without the skip, any image holding a jar fails to scan.
+var javaArchives = []string{"**/*.jar", "**/*.war", "**/*.ear", "**/*.par"}
+
 // scanArgv scans the exported image at tarPath with no network at all.
 func scanArgv(ref, imageHex, tarPath string) []string {
 	argv := lockedDown(scanName(imageHex))
 	argv = append(argv, "--network", "none", "-v", tarPath+":/work/image.tar:ro", ref,
 		"--cache-dir", "/cache", "image", "--input", "/work/image.tar", "--scanners", "vuln",
 		"--skip-db-update", "--skip-java-db-update", "--offline-scan", "-f", "json", "-q")
+	for _, glob := range javaArchives {
+		argv = append(argv, "--skip-files", glob)
+	}
 	return argv
 }
 

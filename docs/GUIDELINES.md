@@ -524,7 +524,8 @@ The badge is hidden while scanning is off, because hidden is not 0.
     images they affect.
 - **Settings drawer:**
   - **Switches:** the master switch, plus after-deploy and daily, which are disabled while
-    scanning is off. The daily time shows the panel's time zone.
+    scanning is off. The daily time shows the panel's time zone. The master switch's help text
+    gives the DB size and says that Java packages (jar files) are not scanned.
   - **Scanner image:** the field takes `repo[:tag]@sha256:…`. **Use default** fills in the
     built-in default. **Pick from recent tags** lists Docker Hub release tags from the last 14
     days plus the newest older one. Picking a tag younger than 14 days asks
