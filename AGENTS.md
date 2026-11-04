@@ -14,7 +14,7 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents
 
 ### Commit messages
 
-Conventional Commits, no scope (`feat: ...`, `fix: ...`, `chore: ...`); no `Co-Authored-By`/`Claude-Session` trailers. See `docs/agents/commit-conventions.md`.
+Conventional Commits, no scope (`feat: ...`, `fix: ...`, `chore: ...`). See `docs/agents/commit-conventions.md`.
 
 ### Frontend and Ant Design
 

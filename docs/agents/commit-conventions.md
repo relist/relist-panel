@@ -16,7 +16,3 @@ Common types used in this repo:
 | `test`     | Test-only changes                                   |
 
 Subject is imperative mood, lowercase after the colon, no trailing period. A body is optional and follows the same conventions as before (bullet points for multi-part changes, prose for narrative context).
-
-## No AI-attribution trailers
-
-Do not add `Co-Authored-By: Claude ...` or `Claude-Session: ...` trailers to commit messages in this repo.
