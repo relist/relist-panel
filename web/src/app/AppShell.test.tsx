@@ -179,3 +179,21 @@ describe('Users and non-admins', () => {
     expect(await screen.findByRole('menuitem', { name: /Users/ })).toBeTruthy();
   });
 });
+
+describe('Mobile navigation trigger', () => {
+  it('sits in the header bar, clear of the page title, and the header leaves room for it', async () => {
+    const originalMatchMedia = window.matchMedia;
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({ ...originalMatchMedia(query), matches: query.includes('max-width: 991.98px') }));
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true });
+    vi.spyOn(api, 'account').mockResolvedValue({ email: 'admin@example.com', passwordFromEnv: false, twoFactorEnabled: false });
+    vi.spyOn(api, 'listProjects').mockResolvedValue([]);
+    vi.spyOn(api, 'globalDeploymentQueue').mockResolvedValue([]);
+    const router = createMemoryRouter([{ element: <AppShell />, children: [{ path: '/', element: <h1>Home</h1> }] }]);
+    render(<SWRConfig value={{ provider: () => new Map() }}><App><PanelProvider><RouterProvider router={router} /></PanelProvider></App></SWRConfig>);
+    const trigger = (await screen.findByRole('button', { name: 'Open navigation' })).closest('.ant-layout-sider-zero-width-trigger') as HTMLElement;
+    // The header is 56px tall and the trigger 40px: centred in it, never below it.
+    expect(trigger.style.top).toBe('8px');
+    const header = document.querySelector('.ant-layout-header') as HTMLElement;
+    expect(header.style.paddingInlineStart).toBe('56px');
+  });
+});
