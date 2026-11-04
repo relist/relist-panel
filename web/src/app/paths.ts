@@ -76,6 +76,7 @@ export const routePaths = [
   { path: 'ssh-keys' },
   { path: 'certificates' },
   { path: 'traefik' },
+  { path: 'users' },
   { path: 'vulnerabilities' },
   { path: 'docker' },
   { path: 'panel-update' },
