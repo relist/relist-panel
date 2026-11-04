@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"relist-panel/internal/authz"
 )
 
 const setsDirName = "sets"
@@ -352,6 +354,13 @@ func (s *Service) effectiveVariables(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, key := range yamlKeys {
 		effective = append(effective, effectiveVariable{Key: key, Source: variableSource{Kind: "yaml"}, Overrides: []variableSource{}})
+	}
+	if !authz.CanReadSecrets(r.Context(), environmentID) {
+		for i := range effective {
+			if effective[i].Secret {
+				effective[i].Value = ""
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, effective)
 }

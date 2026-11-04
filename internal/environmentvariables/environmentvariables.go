@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"relist-panel/internal/authz"
 )
 
 const (
@@ -84,6 +86,13 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load environment variables")
 		return
+	}
+	if !authz.SecretsVisible(r) {
+		for i := range variables {
+			if variables[i].Secret {
+				variables[i].Value = ""
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, variables)
 }

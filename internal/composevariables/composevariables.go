@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"relist-panel/internal/authz"
 	"relist-panel/internal/environmentvariables"
 )
 
@@ -86,6 +87,13 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	if err := rows.Err(); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load compose variables")
 		return
+	}
+	if !authz.SecretsVisible(r) {
+		for i := range variables {
+			if variables[i].Secret {
+				variables[i].Value = ""
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, variables)
 }

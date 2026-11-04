@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"relist-panel/internal/authz"
 )
 
 // Entry is one key/value pair of a set. It has the Environment Variable wire
@@ -85,6 +87,15 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load variable sets")
 		return
+	}
+	if !authz.SecretsVisible(r) {
+		for i := range sets {
+			for j := range sets[i].Entries {
+				if sets[i].Entries[j].Secret {
+					sets[i].Entries[j].Value = ""
+				}
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, sets)
 }

@@ -2,6 +2,8 @@ package authz
 
 import (
 	"context"
+	"net/http"
+	"strconv"
 
 	"relist-panel/internal/grants"
 )
@@ -68,4 +70,12 @@ func RoleIn(ctx context.Context, environmentID int64) grants.Role {
 		return grants.RoleNone
 	}
 	return access.EnvironmentRole(environmentID)
+}
+
+// SecretsVisible reports whether r may receive secret variable values of the
+// Environment its path names ({environmentID}): CanReadSecrets for it. A path
+// without one reads nothing secret.
+func SecretsVisible(r *http.Request) bool {
+	id, err := strconv.ParseInt(r.PathValue("environmentID"), 10, 64)
+	return err == nil && id > 0 && CanReadSecrets(r.Context(), id)
 }
