@@ -11,7 +11,9 @@ import { TraefikConfigTab } from './TraefikConfigTab';
 
 const api = vi.hoisted(() => ({
   previewTraefikConfig: vi.fn(),
+  restartTraefik: vi.fn(),
   restoreTraefikConfig: vi.fn(),
+  testTraefikConfig: vi.fn(),
   traefikConfigHistory: vi.fn(),
 }));
 
@@ -141,5 +143,35 @@ describe('TraefikConfigTab', () => {
     await waitFor(() => expect(review.disabled).toBe(false));
     await user.click(review);
     expect(onReviewApply).toHaveBeenCalledWith('log: {level: DEBUG}\n', '# new\n');
+  });
+
+  it('offers a Restart when the file changed since Traefik started', async () => {
+    const user = userEvent.setup();
+    api.restartTraefik.mockResolvedValue({ id: 'run2' });
+    show(config({ pendingRestart: true }));
+    expect(screen.getByText('Config changed since Traefik started — Restart to apply')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Restart' }));
+    await screen.findByText('Restart Traefik?');
+    await user.click(screen.getAllByRole('button', { name: 'Restart' })[1]);
+    await waitFor(() => expect(api.restartTraefik).toHaveBeenCalled());
+    expect(onStarted).toHaveBeenCalledWith('run2');
+  });
+
+  it('tests the draft in a throwaway Traefik and shows what it said', async () => {
+    const user = userEvent.setup();
+    api.testTraefikConfig.mockResolvedValue({ errors: [], log: 'ERR field not found, node: bogus', ok: false });
+    show();
+    await user.click(screen.getByRole('button', { name: 'Test' }));
+    await waitFor(() => expect(api.testTraefikConfig).toHaveBeenCalledWith('# mine\n'));
+    expect(await screen.findByText('Traefik did not start with this config.')).toBeTruthy();
+    expect(screen.getByText(/field not found, node: bogus/)).toBeTruthy();
+  });
+
+  it('says when the test passed', async () => {
+    const user = userEvent.setup();
+    api.testTraefikConfig.mockResolvedValue({ errors: [], log: '', ok: true });
+    show();
+    await user.click(screen.getByRole('button', { name: 'Test' }));
+    expect(await screen.findByText('Traefik started with this config.')).toBeTruthy();
   });
 });

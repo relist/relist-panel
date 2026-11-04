@@ -1,18 +1,16 @@
 import { HistoryOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Flex, Form, Input, Popconfirm, Segmented, Select, Switch, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Flex, Form, Input, Popconfirm, Segmented, Select, Switch, Table, Tag, Typography, theme } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import useSWR from 'swr';
 
 import { ApiError, api } from '../data/api';
-import type { ConfigProblem, TraefikConfig, TraefikForm, TraefikHistoryEntry, TraefikLogLevel } from '../data/types';
+import type { ConfigProblem, ConfigTestResult, TraefikConfig, TraefikForm, TraefikHistoryEntry, TraefikLogLevel } from '../data/types';
+import { RESTART_DROP } from '../pages/traefik-apply-view';
 import { ipsFromText, isDirty } from '../pages/traefik-config-view';
 import { YamlEditor } from './YamlEditor';
 
 const { Text } = Typography;
-
-/** The sentence Review & Apply and Restore both show: Traefik restarts either way. */
-export const RESTART_DROP = 'Every Domain and this panel drop for a few seconds while Traefik restarts';
 
 const PREVIEW_DELAY_MS = 400;
 
@@ -41,7 +39,7 @@ export function TraefikConfigTab({
   config: TraefikConfig;
   /** Review & Apply: the draft and the file it generates. */
   onReviewApply: (draft: string, effective: string) => void;
-  /** A Restore started a Traefik apply with this id. */
+  /** A Restore or Restart started a Traefik apply with this id. */
   onStarted: (id: string) => void;
 }) {
   const { message } = App.useApp();
@@ -56,6 +54,9 @@ export function TraefikConfigTab({
   const [warnings, setWarnings] = useState<ConfigProblem[]>(config.warnings);
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState<string>();
+  const [testing, setTesting] = useState(false);
+  const [tested, setTested] = useState<ConfigTestResult | { error: string }>();
+  const [restarting, setRestarting] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Only the latest preview's answer is used; an older one landing late is dropped.
   const sequence = useRef(0);
@@ -72,6 +73,7 @@ export function TraefikConfigTab({
     setWarnings(c.warnings);
     setPreviewing(false);
     setPreviewError(undefined);
+    setTested(undefined);
   };
 
   // A new revision (an apply finished, or someone else changed the file) replaces the draft.
@@ -116,24 +118,67 @@ export function TraefikConfigTab({
   const editForm = (patch: Partial<TraefikForm>) => {
     const next = { ...form, ...patch };
     setForm(next);
+    setTested(undefined);
     schedulePreview(draft, next);
   };
 
   const editYaml = (text: string) => {
     setDraft(text);
+    setTested(undefined);
     schedulePreview(text);
   };
 
+  const test = async () => {
+    setTesting(true);
+    try {
+      setTested(await api.testTraefikConfig(draft));
+    } catch (reason: unknown) {
+      setTested({ error: reason instanceof ApiError ? reason.message : 'Could not test the draft' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const restart = async () => {
+    setRestarting(true);
+    try {
+      const { id } = await api.restartTraefik();
+      onStarted(id);
+    } catch (reason: unknown) {
+      void message.error(reason instanceof ApiError ? reason.message : 'Could not restart Traefik');
+    } finally {
+      setRestarting(false);
+    }
+  };
+
   const dirty = isDirty(draft, config.override);
-  const canReview = dirty && !previewing && errors.length === 0 && previewError === undefined;
+  const usable = !previewing && errors.length === 0 && previewError === undefined;
+  const canReview = dirty && usable;
+  // GET config carries the bootstrap warning among its warnings; a preview's do not.
   const bootstrapWarning = config.lastApply?.bootstrapWarning;
 
   return (
     <Flex gap={16} vertical>
+      {config.pendingRestart && (
+        <Alert
+          action={
+            <Popconfirm description={`${RESTART_DROP}.`} okText="Restart" onConfirm={() => restart()} title="Restart Traefik?">
+              <Button loading={restarting} size="small">
+                Restart
+              </Button>
+            </Popconfirm>
+          }
+          showIcon
+          title="Config changed since Traefik started — Restart to apply"
+          type="warning"
+        />
+      )}
       {bootstrapWarning && <Alert showIcon title={bootstrapWarning} type="warning" />}
-      {warnings.map((warning) => (
-        <Alert key={`${warning.key}-${warning.message}`} showIcon title={warning.message} type="warning" />
-      ))}
+      {warnings
+        .filter((warning) => warning.message !== bootstrapWarning)
+        .map((warning) => (
+          <Alert key={`${warning.key}-${warning.message}`} showIcon title={warning.message} type="warning" />
+        ))}
       {previewError && <Alert showIcon title={previewError} type="error" />}
 
       <Segmented<View>
@@ -201,16 +246,56 @@ export function TraefikConfigTab({
         />
       )}
 
+      {tested && <TestResult result={tested} />}
+
       <Flex align="center" gap={8} justify="flex-end" wrap>
         {dirty && <Tag color="warning">Unsaved changes</Tag>}
         <Button disabled={!dirty} onClick={() => reset(config)}>
           Discard
+        </Button>
+        <Button disabled={!usable} loading={testing} onClick={() => void test()}>
+          Test
         </Button>
         <Button disabled={!canReview} onClick={() => onReviewApply(draft, effective)} type="primary">
           Review &amp; Apply
         </Button>
       </Flex>
     </Flex>
+  );
+}
+
+function TestResult({ result }: { result: ConfigTestResult | { error: string } }) {
+  const { token } = theme.useToken();
+  if ('error' in result) return <Alert showIcon title={result.error} type="error" />;
+  if (result.ok) return <Alert showIcon title="Traefik started with this config." type="success" />;
+  return (
+    <Alert
+      description={
+        <Flex gap={8} vertical>
+          {result.errors.map((problem) => (
+            <Text key={`${problem.line}-${problem.key}-${problem.message}`}>{problemText(problem)}</Text>
+          ))}
+          {result.log && (
+            <pre
+              className="rp-logs"
+              style={{
+                background: token.colorFillQuaternary,
+                borderRadius: token.borderRadius,
+                margin: 0,
+                maxHeight: 240,
+                overflow: 'auto',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {result.log}
+            </pre>
+          )}
+        </Flex>
+      }
+      showIcon
+      title="Traefik did not start with this config."
+      type="error"
+    />
   );
 }
 

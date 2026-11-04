@@ -1,10 +1,12 @@
 import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
 import { Alert, App, Button, Card, Empty, Flex, InputNumber, Segmented, Spin, Switch, Table, Tabs, Typography, theme } from 'antd';
 import type { TableColumnsType } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import useSWR from 'swr';
 
 import { formatBytes } from '../components/MetricChart';
+import { TraefikApplyModal } from '../components/TraefikApplyModal';
+import type { TraefikReview } from '../components/TraefikApplyModal';
 import { TraefikConfigTab } from '../components/TraefikConfigTab';
 import { PageHeader } from '../components/primitives';
 import { ApiError, accessLogDownloadUrl, api } from '../data/api';
@@ -45,6 +47,23 @@ export function TraefikPage() {
   const config = useSWR('/api/traefik/config', () => api.traefikConfig());
   const [level, setLevel] = useState<LogLevel>('all');
   const [tab, setTab] = useState<TabKey>('logs');
+  const [review, setReview] = useState<TraefikReview | null>(null);
+  const [runId, setRunId] = useState<string | null>(null);
+  // Runs this page has already shown, so a revalidation does not reopen one.
+  const shown = useRef(new Set<string>());
+
+  const follow = (id: string) => {
+    shown.current.add(id);
+    setReview(null);
+    setRunId(id);
+  };
+
+  // An apply nobody has seen the end of (it ran while the page was away, or the
+  // page reloaded mid-run) opens its modal.
+  const lastApply = config.data?.lastApply;
+  useEffect(() => {
+    if (lastApply && !lastApply.acked && !shown.current.has(lastApply.id)) follow(lastApply.id);
+  }, [lastApply]);
 
   const refresh = () => {
     void status.mutate();
@@ -191,7 +210,14 @@ export function TraefikPage() {
             children: config.error ? (
               <Alert showIcon title={errorMessage(config.error, "Could not read Traefik's config")} type="error" />
             ) : config.data ? (
-              <TraefikConfigTab config={config.data} onReviewApply={() => {}} onStarted={() => void config.mutate()} />
+              <TraefikConfigTab
+                config={config.data}
+                onReviewApply={(draft, effective) =>
+                  config.data &&
+                  setReview({ current: config.data.effective, draft, effective, revision: config.data.revision })
+                }
+                onStarted={follow}
+              />
             ) : (
               <Spin />
             ),
@@ -201,6 +227,21 @@ export function TraefikPage() {
         ]}
         onChange={(key) => setTab(key as TabKey)}
       />
+
+      {(review !== null || runId !== null) && (
+        <TraefikApplyModal
+          onClose={() => {
+            setReview(null);
+            setRunId(null);
+          }}
+          onFinished={() => {
+            void config.mutate();
+            void status.mutate();
+          }}
+          review={review}
+          runId={runId}
+        />
+      )}
     </>
   );
 }

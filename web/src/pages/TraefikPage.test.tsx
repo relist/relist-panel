@@ -12,9 +12,11 @@ import { TraefikPage } from './TraefikPage';
 
 const api = vi.hoisted(() => ({
   accessLogSettings: vi.fn(),
+  ackTraefikApply: vi.fn(),
   listAccessLogs: vi.fn(),
   saveAccessLogSettings: vi.fn(),
   traefikConfig: vi.fn(),
+  traefikApplyStatus: vi.fn(),
   traefikConfigHistory: vi.fn(),
   traefikLogs: vi.fn(),
   traefikStatus: vi.fn(),
@@ -22,6 +24,7 @@ const api = vi.hoisted(() => ({
 
 // The editor is Monaco; nothing here edits YAML.
 vi.mock('../components/YamlEditor', () => ({ YamlEditor: () => null }));
+vi.mock('../components/DiffViewer', () => ({ DiffViewer: () => null }));
 
 vi.mock('../data/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../data/api')>()),
@@ -70,6 +73,14 @@ describe('TraefikPage', () => {
     api.traefikStatus.mockRejectedValue(new ApiError(500, 'could not inspect Traefik'));
     show();
     expect(await screen.findByText('could not inspect Traefik')).toBeTruthy();
+  });
+
+  it('opens the result of a Traefik apply nobody has seen yet', async () => {
+    const lastApply = { acked: false, id: 'run1', kind: 'apply', reason: 'no /healthz', startedAt: '2026-11-04T10:00:00Z', state: 'rolled-back' };
+    api.traefikConfig.mockResolvedValue({ ...(await api.traefikConfig()), lastApply });
+    api.traefikApplyStatus.mockResolvedValue(lastApply);
+    show();
+    expect(await screen.findByText('no /healthz', {}, { timeout: 4000 })).toBeTruthy();
   });
 
   it('splits the page into Logs, Access logs and Configuration', async () => {
