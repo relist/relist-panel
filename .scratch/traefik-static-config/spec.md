@@ -469,4 +469,24 @@ Probes on 2026-11-04 against `traefik:v3.7` (3.7.13) and the host's Docker Compo
   Traefik reads the new file.
 - A dry-run with `--network none`, `/letsencrypt` on tmpfs and no Docker socket stays running
   with a base-like config.
-- Not probed yet (plan task): the 0.0.2 Updater end-to-end with the new Install file.
+- The 0.0.2 Updater end-to-end with the new Install file: `task probe:traefik-config`
+  passed all three steps on 2026-11-04 (install v0.0.2, update to the branch with the
+  0.0.2 Updater, fresh install of the branch). It passed again on the final branch.
+
+End-to-end check, 2026-11-04, over the API on the probe's dind host (a fresh install of
+the branch, real `traefik:v3.7`). There is no browser in this session, so the page itself
+is still unchecked.
+
+1. Log level DEBUG through the form preview, then apply: `ok`. Traefik logged 67 `DBG`
+   lines within the minute, and `/healthz` answered 200 through Traefik.
+2. `entryPoints.web.address: ":81"`: 400, naming `entryPoints.web.address` on line 3.
+3. `bogusSection` hand-added under `entryPoints.web` in `traefik.yml`, then Restart: the
+   first run took Traefik down for good (Restart skipped the dry-run). After the fix, the
+   run is `refused` by the dry-run and Traefik keeps serving.
+4. An override with `providers.docker.endpoint: tcp://127.0.0.1:1` passes the dry-run but
+   routes nothing: `rolled-back` after 60 s ("/healthz answered 404"), then 200 again.
+5. Restore the oldest History entry: `ok`.
+6. Access log on: `ok`, `access.log` gets lines, and `/api/traefik/status` reports it on.
+
+The first run also found that a form edit on a comment-only override with no trailing
+newline was written onto the comment line and lost. Both problems are fixed with tests.
