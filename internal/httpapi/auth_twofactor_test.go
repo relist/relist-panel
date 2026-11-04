@@ -106,7 +106,7 @@ func TestSuccessfulLoginResetsTheFailureCount(t *testing.T) {
 func failedAttempts(t *testing.T, server *testServer) int {
 	t.Helper()
 	var count int
-	if err := server.db.QueryRow("SELECT failed_attempts FROM admin_credentials").Scan(&count); err != nil {
+	if err := server.db.QueryRow("SELECT failed_attempts FROM users").Scan(&count); err != nil {
 		t.Fatalf("read failed_attempts: %v", err)
 	}
 	return count
@@ -391,7 +391,7 @@ func TestTwoFactorEnableAndDisableRevokeOtherSessions(t *testing.T) {
 	otherToken := "other-session-token"
 	now := time.Now()
 	if _, err := server.db.Exec(
-		"INSERT INTO sessions (token, admin_id, expires_at, created_at) VALUES (?, 1, ?, ?)",
+		"INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, 1, ?, ?)",
 		otherToken, now.Add(time.Hour).Unix(), now.Unix(),
 	); err != nil {
 		t.Fatalf("insert other session: %v", err)

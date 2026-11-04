@@ -110,7 +110,7 @@ func TestEvaluate(t *testing.T) {
 	// The migrated database replaces whatever admin create-admin made here.
 	t.Run("an admin is not data", func(t *testing.T) {
 		db := openDB(t)
-		if _, err := db.Exec(`INSERT INTO admin_credentials (id, email, password_hash, created_at) VALUES (1, 'a@example.com', 'x', 1)`); err != nil {
+		if _, err := db.Exec(`INSERT INTO users (id, email, password_hash, created_at) VALUES (1, 'a@example.com', 'x', 1)`); err != nil {
 			t.Fatal(err)
 		}
 		local := LocalHost{DB: db, Docker: NewFakeDocker(), DataDir: "/var/lib/relist-panel",

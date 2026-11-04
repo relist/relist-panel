@@ -12,9 +12,9 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// CreateAdmin creates the first admin from email and password, as
+// CreateAdmin creates the Owner, the first User, from email and password, as
 // relist-panel create-admin does, and returns the stored (normalized) email.
-// With an admin already present it returns ErrAdminAlreadyExists.
+// With any User already present it returns ErrAdminAlreadyExists.
 func CreateAdmin(ctx context.Context, db *sql.DB, email, password string, now func() time.Time) (string, error) {
 	normalized, err := validateEmail(email)
 	if err != nil {
@@ -33,10 +33,11 @@ func CreateAdmin(ctx context.Context, db *sql.DB, email, password string, now fu
 	return normalized, nil
 }
 
-// AdminExists reports whether the panel has its admin account yet.
+// AdminExists reports whether the panel has any User yet: until then
+// create-admin may make the Owner.
 func AdminExists(ctx context.Context, db *sql.DB) (bool, error) {
 	var exists int
-	err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM admin_credentials)").Scan(&exists)
+	err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM users)").Scan(&exists)
 	return exists == 1, err
 }
 
@@ -123,13 +124,13 @@ func (s *Service) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not secure the password")
 		return
 	}
-	if _, err := tx.ExecContext(r.Context(), "UPDATE admin_credentials SET password_hash = ?, password_from_env = 0 WHERE id = ?", string(hash), adminID); err != nil {
+	if _, err := tx.ExecContext(r.Context(), "UPDATE users SET password_hash = ?, password_from_env = 0 WHERE id = ?", string(hash), adminID); err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
 	}
 	if step.Valid {
 		// The code is spent: it cannot be replayed.
-		if _, err := tx.ExecContext(r.Context(), "UPDATE admin_credentials SET totp_last_step = ? WHERE id = ?", step.Int64, adminID); err != nil {
+		if _, err := tx.ExecContext(r.Context(), "UPDATE users SET totp_last_step = ? WHERE id = ?", step.Int64, adminID); err != nil {
 			writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 			return
 		}

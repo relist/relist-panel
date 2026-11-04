@@ -79,7 +79,7 @@ func TestNoAdminRefusesSignInLikeAWrongPassword(t *testing.T) {
 		t.Fatal("POST /api/auth/setup still creates an admin")
 	}
 	var admins int
-	if err := server.db.QueryRow("SELECT COUNT(*) FROM admin_credentials").Scan(&admins); err != nil || admins != 0 {
+	if err := server.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&admins); err != nil || admins != 0 {
 		t.Fatalf("admins after the web attempts = %d, %v; want none", admins, err)
 	}
 }
@@ -94,7 +94,7 @@ func TestAuthLogin(t *testing.T) {
 	}
 
 	var passwordHash string
-	if err := server.db.QueryRow("SELECT password_hash FROM admin_credentials").Scan(&passwordHash); err != nil {
+	if err := server.db.QueryRow("SELECT password_hash FROM users").Scan(&passwordHash); err != nil {
 		t.Fatalf("read password hash: %v", err)
 	}
 	if passwordHash == "correct horse battery staple" {

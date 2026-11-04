@@ -55,9 +55,9 @@ func runResetTwoFactor(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrAccountNotFound):
-			fmt.Fprintf(stderr, "reset-2fa: no admin account matches %q\n", *email)
+			fmt.Fprintf(stderr, "reset-2fa: no user matches %q\n", *email)
 		case errors.Is(err, auth.ErrEmailRequired):
-			fmt.Fprintf(stderr, "reset-2fa: more than one admin account exists; pass --email\n")
+			fmt.Fprintf(stderr, "reset-2fa: more than one user exists; pass --email\n")
 		default:
 			fmt.Fprintf(stderr, "reset-2fa: %v\n", err)
 		}
@@ -110,9 +110,9 @@ func runChangeEmail(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrAccountNotFound):
-			fmt.Fprintf(stderr, "change-email: no admin account matches %q\n", *email)
+			fmt.Fprintf(stderr, "change-email: no user matches %q\n", *email)
 		case errors.Is(err, auth.ErrEmailRequired):
-			fmt.Fprintln(stderr, "change-email: more than one admin account exists; pass --email")
+			fmt.Fprintln(stderr, "change-email: more than one user exists; pass --email")
 		default:
 			fmt.Fprintf(stderr, "change-email: %v\n", err)
 		}
@@ -340,9 +340,9 @@ func runResetPassword(args []string, stdin io.Reader, stdout, stderr io.Writer, 
 	if err != nil {
 		switch {
 		case errors.Is(err, auth.ErrAccountNotFound):
-			fmt.Fprintf(stderr, "reset-password: no admin account matches %q\n", *email)
+			fmt.Fprintf(stderr, "reset-password: no user matches %q\n", *email)
 		case errors.Is(err, auth.ErrEmailRequired):
-			fmt.Fprintln(stderr, "reset-password: more than one admin account exists; pass --email")
+			fmt.Fprintln(stderr, "reset-password: more than one user exists; pass --email")
 		default:
 			fmt.Fprintf(stderr, "reset-password: %v\n", err)
 		}

@@ -63,7 +63,7 @@ func verifyCode(secret, code string, now time.Time, lastStep sql.NullInt64) (int
 	return 0, false
 }
 
-// currentSession resolves the request's session cookie to the admin it belongs
+// currentSession resolves the request's session cookie to the User it belongs
 // to and returns the token that must be kept when other sessions are revoked.
 func (s *Service) currentSession(r *http.Request) (int64, string, error) {
 	cookie, err := r.Cookie(SessionCookieName)
@@ -73,7 +73,7 @@ func (s *Service) currentSession(r *http.Request) (int64, string, error) {
 
 	var adminID int64
 	err = s.db.QueryRowContext(r.Context(), `
-		SELECT admin_id
+		SELECT user_id
 		FROM sessions
 		WHERE token = ? AND expires_at > ?
 	`, cookie.Value, s.now().UTC().Unix()).Scan(&adminID)
@@ -91,7 +91,7 @@ func (s *Service) currentSession(r *http.Request) (int64, string, error) {
 // two-factor change it accompanies.
 func revokeOtherSessions(ctx context.Context, tx *sql.Tx, adminID int64, keepToken string) error {
 	_, err := tx.ExecContext(ctx,
-		"DELETE FROM sessions WHERE admin_id = ? AND token <> ?",
+		"DELETE FROM sessions WHERE user_id = ? AND token <> ?",
 		adminID, keepToken,
 	)
 	return err
@@ -113,7 +113,7 @@ func (s *Service) account(w http.ResponseWriter, r *http.Request) {
 	var secret sql.NullString
 	var fromEnv bool
 	err = s.db.QueryRowContext(r.Context(),
-		"SELECT email, totp_secret, password_from_env FROM admin_credentials WHERE id = ?",
+		"SELECT email, totp_secret, password_from_env FROM users WHERE id = ?",
 		adminID,
 	).Scan(&email, &secret, &fromEnv)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -203,7 +203,7 @@ func (s *Service) twoFactorSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := tx.ExecContext(r.Context(),
-		"UPDATE admin_credentials SET totp_pending_secret = ? WHERE id = ?",
+		"UPDATE users SET totp_pending_secret = ? WHERE id = ?",
 		key.Secret(), adminID,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
@@ -289,7 +289,7 @@ func (s *Service) twoFactorEnable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := tx.ExecContext(r.Context(), `
-		UPDATE admin_credentials
+		UPDATE users
 		SET totp_secret = ?, totp_pending_secret = NULL, totp_last_step = ?
 		WHERE id = ?
 	`, account.totpPendingSecret.String, step, adminID); err != nil {
@@ -389,7 +389,7 @@ func (s *Service) twoFactorDisable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := tx.ExecContext(r.Context(), `
-		UPDATE admin_credentials
+		UPDATE users
 		SET totp_secret = NULL, totp_pending_secret = NULL, totp_last_step = NULL
 		WHERE id = ?
 	`, adminID); err != nil {

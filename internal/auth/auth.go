@@ -1,4 +1,4 @@
-// Package auth owns the single administrator credential and its sessions.
+// Package auth owns the panel's users, their credentials and sessions.
 package auth
 
 import (
@@ -57,7 +57,7 @@ type credentials struct {
 	Code     string `json:"code,omitempty"`
 }
 
-type admin struct {
+type userRow struct {
 	id                int64
 	email             string
 	passwordHash      string
@@ -102,13 +102,13 @@ func (s *Service) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		authenticated, err := s.authenticated(r)
+		user, authenticated, err := s.authenticated(r)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 			return
 		}
 		if authenticated {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
 			return
 		}
 
@@ -130,8 +130,9 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 	}
 
 	authenticated := false
+	var user User
 	if exists {
-		authenticated, err = s.authenticated(r)
+		user, authenticated, err = s.authenticated(r)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 			return
@@ -141,7 +142,11 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 		clearSessionCookieIfPresent(w, r)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": authenticated, "version": s.version})
+	body := map[string]any{"authenticated": authenticated, "version": s.version}
+	if authenticated {
+		body["user"] = map[string]any{"id": user.ID, "email": user.Email, "isAdmin": user.IsAdmin, "isOwner": user.IsOwner()}
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *Service) login(w http.ResponseWriter, r *http.Request) {
@@ -274,20 +279,20 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 
 // readLoginAccount is the login's short first phase: it finds the account and
 // reads how long it stays locked, then releases the connection.
-func (s *Service) readLoginAccount(ctx context.Context, email string) (admin, time.Duration, error) {
+func (s *Service) readLoginAccount(ctx context.Context, email string) (userRow, time.Duration, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return admin{}, 0, err
+		return userRow{}, 0, err
 	}
 	defer tx.Rollback()
 
 	account, err := s.findAdmin(ctx, tx, email)
 	if err != nil {
-		return admin{}, 0, err
+		return userRow{}, 0, err
 	}
 	remaining, err := s.lockedFor(ctx, tx, account.id)
 	if err != nil {
-		return admin{}, 0, err
+		return userRow{}, 0, err
 	}
 	return account, remaining, nil
 }
@@ -296,14 +301,18 @@ func (s *Service) readLoginAccount(ctx context.Context, email string) (admin, ti
 // step when a code was used, creates the session and writes the success
 // response. Every write shares the caller's transaction, so two requests
 // cannot both accept the same code.
-func (s *Service) completeLogin(w http.ResponseWriter, r *http.Request, tx *sql.Tx, account admin, lastStep sql.NullInt64) {
+func (s *Service) completeLogin(w http.ResponseWriter, r *http.Request, tx *sql.Tx, account userRow, lastStep sql.NullInt64) {
 	if err := s.recordSuccess(r.Context(), tx, account.id); err != nil {
+		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), "UPDATE users SET last_login_at = ? WHERE id = ?", s.now().UTC().Unix(), account.id); err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
 	}
 	if lastStep.Valid {
 		if _, err := tx.ExecContext(r.Context(),
-			"UPDATE admin_credentials SET totp_last_step = ? WHERE id = ?",
+			"UPDATE users SET totp_last_step = ? WHERE id = ?",
 			lastStep.Int64, account.id,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
@@ -319,7 +328,7 @@ func (s *Service) completeLogin(w http.ResponseWriter, r *http.Request, tx *sql.
 		return
 	}
 	if _, err := tx.ExecContext(r.Context(), `
-		INSERT INTO sessions (token, admin_id, expires_at, created_at)
+		INSERT INTO sessions (token, user_id, expires_at, created_at)
 		VALUES (?, ?, ?, ?)
 	`, token, account.id, expiresAt.Unix(), now.Unix()); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create a session")
@@ -354,38 +363,39 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Service) authenticated(r *http.Request) (bool, error) {
+// authenticated resolves the request's session cookie to its User. A
+// disabled User's sessions count as signed out, so a disable takes effect on
+// the next request even before its sessions are deleted.
+func (s *Service) authenticated(r *http.Request) (User, bool, error) {
 	if err := s.requireDatabase(); err != nil {
-		return false, err
+		return User{}, false, err
 	}
 
 	cookie, err := r.Cookie(SessionCookieName)
-	if errors.Is(err, http.ErrNoCookie) {
-		return false, nil
-	}
-	if err != nil {
-		return false, nil
-	}
-	if cookie.Value == "" {
-		return false, nil
+	if err != nil || cookie.Value == "" {
+		return User{}, false, nil
 	}
 
-	var one int
+	var user User
+	var isAdmin bool
 	err = s.db.QueryRowContext(r.Context(), `
-		SELECT 1
+		SELECT users.id, users.email, users.is_admin
 		FROM sessions
-		WHERE token = ? AND expires_at > ?
-	`, cookie.Value, s.now().UTC().Unix()).Scan(&one)
+		JOIN users ON users.id = sessions.user_id
+		WHERE sessions.token = ? AND sessions.expires_at > ? AND users.disabled_at IS NULL
+	`, cookie.Value, s.now().UTC().Unix()).Scan(&user.ID, &user.Email, &isAdmin)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return User{}, false, nil
 	}
 	if err != nil {
-		return false, err
+		return User{}, false, err
 	}
-	return true, nil
+	user.IsAdmin = isAdmin || user.ID == OwnerID
+	return user, true, nil
 }
 
-// insertAdmin adds the single admin row, or returns ErrAdminAlreadyExists.
+// insertAdmin adds the Owner (id 1) as the first User, or returns
+// ErrAdminAlreadyExists once any User exists.
 func insertAdmin(ctx context.Context, db *sql.DB, email, passwordHash string, now time.Time) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -394,7 +404,7 @@ func insertAdmin(ctx context.Context, db *sql.DB, email, passwordHash string, no
 	defer tx.Rollback()
 
 	var id int64
-	err = tx.QueryRowContext(ctx, "SELECT id FROM admin_credentials LIMIT 1").Scan(&id)
+	err = tx.QueryRowContext(ctx, "SELECT id FROM users LIMIT 1").Scan(&id)
 	if err == nil {
 		return ErrAdminAlreadyExists
 	}
@@ -403,8 +413,8 @@ func insertAdmin(ctx context.Context, db *sql.DB, email, passwordHash string, no
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO admin_credentials (id, email, password_hash, created_at)
-		VALUES (1, ?, ?, ?)
+		INSERT INTO users (id, email, password_hash, is_admin, created_at)
+		VALUES (1, ?, ?, 1, ?)
 	`, email, passwordHash, now.UTC().Unix()); err != nil {
 		if isUniqueConstraint(err) {
 			return ErrAdminAlreadyExists
@@ -414,24 +424,24 @@ func insertAdmin(ctx context.Context, db *sql.DB, email, passwordHash string, no
 	return tx.Commit()
 }
 
-func (s *Service) findAdmin(ctx context.Context, tx *sql.Tx, email string) (admin, error) {
+func (s *Service) findAdmin(ctx context.Context, tx *sql.Tx, email string) (userRow, error) {
 	return scanAdmin(tx.QueryRowContext(ctx, `
 		SELECT id, email, password_hash, totp_secret, totp_pending_secret, totp_last_step, failed_attempts, locked_until
-		FROM admin_credentials
-		WHERE email = ?
+		FROM users
+		WHERE email = ? AND password_hash IS NOT NULL AND disabled_at IS NULL
 	`, email))
 }
 
-func (s *Service) findAdminByID(ctx context.Context, tx *sql.Tx, id int64) (admin, error) {
+func (s *Service) findAdminByID(ctx context.Context, tx *sql.Tx, id int64) (userRow, error) {
 	return scanAdmin(tx.QueryRowContext(ctx, `
 		SELECT id, email, password_hash, totp_secret, totp_pending_secret, totp_last_step, failed_attempts, locked_until
-		FROM admin_credentials
-		WHERE id = ?
+		FROM users
+		WHERE id = ? AND password_hash IS NOT NULL AND disabled_at IS NULL
 	`, id))
 }
 
-func scanAdmin(row *sql.Row) (admin, error) {
-	var account admin
+func scanAdmin(row *sql.Row) (userRow, error) {
+	var account userRow
 	err := row.Scan(
 		&account.id,
 		&account.email,
