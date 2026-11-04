@@ -41,6 +41,9 @@ type RunRequest struct {
 	ProjectName     string
 	ComposeFilePath string
 	EnvFilePath     string
+	// Builder is the buildx builder name a build runs on; empty is Docker
+	// default. Only calls that can build use it.
+	Builder string
 }
 
 // ComposeStatus summarizes a Compose's live container state. Services are the
@@ -106,6 +109,7 @@ type Service struct {
 	dataDir    string
 	domains    *domains.Store
 	switches   zeroDowntimeSwitches
+	builders   builderChoices
 	engine     ContainerEngine
 	canceler   DeploymentCanceler
 	now        func() time.Time
@@ -173,6 +177,13 @@ func New(db *sql.DB, runner ComposeRunner, dataDir string) *Service {
 
 // WithEngine gives the Service the Container engine a Rollout and orphan
 // removal need (ADR-0023). Without one, both fail.
+// WithBuilders turns on per-Compose Builders: Capture records the Builder a
+// Deployment builds on, and the builder routes serve the choice.
+func (s *Service) WithBuilders(b builderChoices) *Service {
+	s.builders = b
+	return s
+}
+
 func (s *Service) WithEngine(e ContainerEngine) *Service {
 	s.engine = e
 	return s
@@ -193,6 +204,8 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/services/{service}/effective-variables", s.effectiveVariables)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/zero-downtime", s.listZeroDowntime)
 	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/zero-downtime/{service}", s.setZeroDowntime)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/builder", s.getBuilder)
+	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/builder", s.putBuilder)
 }
 
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {

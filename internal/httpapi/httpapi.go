@@ -14,6 +14,7 @@ import (
 
 	"relist-panel/internal/accesslog"
 	"relist-panel/internal/auth"
+	"relist-panel/internal/builders"
 	"relist-panel/internal/certificates"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/composevariables"
@@ -73,6 +74,9 @@ type Deps struct {
 	// nil leaves the feature out.
 	VulnScanner vulnscan.Scanner
 	VulnInUse   vulnscan.InUse
+	// Buildx adds Builders: resource-limited buildx builders each Compose can
+	// build on. Nil builds everything on Docker default.
+	Buildx builders.Engine
 	// PanelSelf lets Panel update find the Install, and PanelRunner starts the
 	// `update` Container.
 	PanelSelf   panelupdate.SelfInspector
@@ -110,6 +114,15 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	environmentsService.RegisterRoutes(mux)
 	environmentVariablesService := environmentvariables.New(db)
 	environmentVariablesService.RegisterRoutes(mux)
+	deploymentStore := deployments.NewStore(db)
+	var builderPool deployments.BuilderPool
+	if d.Buildx != nil {
+		builderStore := builders.NewStore(db)
+		builderService := builders.New(builders.Deps{Store: builderStore, Engine: d.Buildx, Deployments: deploymentStore})
+		builderService.RegisterRoutes(mux)
+		composesService.WithBuilders(builderStore)
+		builderPool = builderService
+	}
 	composesService.RegisterRoutes(mux)
 	gate := newCoordinator()
 	hostGuard := dockerhost.NewGuard()
@@ -120,11 +133,12 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	var vulnService *vulnscan.Service
 	queue := deployments.NewQueue(deployments.Deps{
 		Maintenance: hostGuard,
-		Store:       deployments.NewStore(db),
+		Store:       deploymentStore,
 		Sources:     sources.NewStore(db),
 		Composes:    composesService,
 		Fetcher:     sources.Git{},
 		Builder:     runner,
+		Builders:    builderPool,
 		Gate:        gate,
 		Mounts:      mounts,
 		Timeout:     60 * time.Minute,

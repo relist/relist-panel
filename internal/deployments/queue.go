@@ -50,6 +50,14 @@ type Builder interface {
 	Build(ctx context.Context, req composes.RunRequest, opts composes.BuildOptions) error
 }
 
+// BuilderPool brings a Deployment's Builder up and holds it for the build
+// phase; builders.Service implements it. Acquire logs which Builder builds,
+// and FailureHint explains a failed build in the operator's terms or is "".
+type BuilderPool interface {
+	Acquire(ctx context.Context, id int64, out io.Writer) (name string, release func(), err error)
+	FailureHint(ctx context.Context, id int64, err error) string
+}
+
 type MaintenanceGate interface {
 	Acquire(context.Context) (func(), error)
 }
@@ -61,6 +69,7 @@ type Deps struct {
 	Composes    Composes
 	Fetcher     Fetcher
 	Builder     Builder
+	Builders    BuilderPool // nil builds everything on Docker default, unlogged
 	Gate        Gate
 	Mounts      MountLister   // nil turns off snapshot collection
 	Timeout     time.Duration // 60 * time.Minute in production
@@ -663,7 +672,8 @@ type job struct {
 	rs       *activeRun
 	out      io.Writer
 	step     string
-	settled  bool // the final outcome is recorded
+	settled  bool  // the final outcome is recorded
+	builder  int64 // the Builder acquired for this run, 0 for Docker default
 }
 
 func (j *job) execute() error {
@@ -755,12 +765,52 @@ func (j *job) runSteps() outcome {
 	if p.fail != nil {
 		return *p.fail
 	}
+	if j.q.d.Builders != nil && builds(p, j.target.Snapshot) {
+		// The Builder is held from before the first build until up returns,
+		// since up --build builds too.
+		j.builder = j.target.Snapshot.BuilderID
+		name, release, err := j.q.d.Builders.Acquire(j.tctx, j.builder, j.out)
+		if err != nil {
+			return j.stepFailed(err)
+		}
+		defer release()
+		j.target.Request.Builder = name
+	}
 	if p.usesSource || len(p.prepare) > 0 {
 		if o, ok := j.runPrepare(p); !ok {
 			return o
 		}
 	}
 	return j.runApply(p.apply)
+}
+
+// builds reports whether the Deployment runs a build: a Service has build:
+// and a step builds it, by itself or through up --build.
+func builds(p plan, snapshot *composes.ExecutionSnapshot) bool {
+	if snapshot == nil || len(snapshot.Services) == 0 {
+		return false
+	}
+	for _, s := range p.prepare {
+		if s.kind == kindBuild {
+			return true
+		}
+	}
+	for _, s := range p.apply {
+		if s.build {
+			return true
+		}
+	}
+	return false
+}
+
+// hint logs the Builder's explanation of a failed build, if it has one.
+func (j *job) hint(err error) {
+	if j.q.d.Builders == nil {
+		return
+	}
+	if h := j.q.d.Builders.FailureHint(j.bg, j.builder, err); h != "" {
+		fmt.Fprintln(j.out, h)
+	}
 }
 
 func (j *job) setPhase(p phase) {
@@ -869,6 +919,7 @@ func (j *job) runPrepare(p plan) (outcome, bool) {
 			}
 			err := q.d.Builder.Build(j.tctx, build.Request, composes.BuildOptions{Service: s.service, NoCache: s.noCache, Out: j.out})
 			if err != nil {
+				j.hint(err)
 				return j.stepFailed(err), false
 			}
 		}
@@ -985,6 +1036,9 @@ func (j *job) runApply(steps []step) outcome {
 			stepWarnings, err = j.runRollout(dctx, s)
 		}
 		if err != nil {
+			if s.build {
+				j.hint(err)
+			}
 			for _, rest := range steps[i+1:] {
 				if rest.kind == kindRollout {
 					fmt.Fprintf(j.out, "not deployed: %s\n", rest.service)

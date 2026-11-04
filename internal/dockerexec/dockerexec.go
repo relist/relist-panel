@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -69,12 +70,12 @@ func buildArgs(service string, noCache bool) []string {
 }
 
 func (Runner) Up(ctx context.Context, req composes.RunRequest, opts composes.UpOptions) error {
-	_, err := run(ctx, req, opts.Out, upArgs(opts)...)
+	_, err := runOn(ctx, req, opts.Out, builderFor(req, opts.Build), upArgs(opts)...)
 	return err
 }
 
 func (Runner) Scale(ctx context.Context, req composes.RunRequest, opts composes.ScaleOptions) error {
-	_, err := run(ctx, req, opts.Out, scaleArgs(opts)...)
+	_, err := runOn(ctx, req, opts.Out, builderFor(req, opts.Build), scaleArgs(opts)...)
 	return err
 }
 
@@ -84,7 +85,7 @@ func (Runner) Config(ctx context.Context, req composes.RunRequest) ([]byte, erro
 }
 
 func (Runner) Build(ctx context.Context, req composes.RunRequest, opts composes.BuildOptions) error {
-	_, err := run(ctx, req, opts.Out, buildArgs(opts.Service, opts.NoCache)...)
+	_, err := runOn(ctx, req, opts.Out, req.Builder, buildArgs(opts.Service, opts.NoCache)...)
 	return err
 }
 
@@ -155,6 +156,21 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 // stream to it and the error carries the last 4 KiB of stderr; with out nil the
 // output is captured and stdout returned.
 func run(ctx context.Context, req composes.RunRequest, out io.Writer, args ...string) (string, error) {
+	return runOn(ctx, req, out, "", args...)
+}
+
+// builderFor is the Builder a call that may build runs on: req's when it
+// builds, none otherwise.
+func builderFor(req composes.RunRequest, build bool) string {
+	if build {
+		return req.Builder
+	}
+	return ""
+}
+
+// runOn is run on a buildx Builder: BUILDX_BUILDER picks it, and an empty
+// builder leaves Docker default.
+func runOn(ctx context.Context, req composes.RunRequest, out io.Writer, builder string, args ...string) (string, error) {
 	fullArgs := append([]string{
 		"compose",
 		"-p", req.ProjectName,
@@ -166,6 +182,9 @@ func run(ctx context.Context, req composes.RunRequest, out io.Writer, args ...st
 	// A killed docker CLI can leave a grandchild holding the output pipes;
 	// without a WaitDelay, Wait would block on them and hang Cancel and Delete.
 	cmd.WaitDelay = waitDelay
+	if builder != "" {
+		cmd.Env = append(os.Environ(), "BUILDX_BUILDER="+builder)
+	}
 	var stdout, stderr bytes.Buffer
 	tail := &tailWriter{}
 	if out != nil {
