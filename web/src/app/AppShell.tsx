@@ -37,6 +37,9 @@ import { paths, resolvePath } from './paths';
 
 const { Text } = Typography;
 
+/** antd's zero-width sider trigger is a 40px square. */
+const MOBILE_TRIGGER = 40;
+
 /**
  * The shell around every screen (GUIDELINES §6): a 248px sider with the
  * sections and the recent Projects, a 56px sticky header with the right-hand
@@ -295,6 +298,10 @@ export function AppShell() {
         theme="light"
         trigger={<Button aria-label={sidebarCollapsed ? 'Open navigation' : 'Close navigation'} icon={<MenuOutlined />} style={{ width: '100%', height: '100%' }} type="text" />}
         width={LAYOUT.siderWidth}
+        // antd hangs the collapsed sider's trigger at top: 64px, below the
+        // 56px header and on top of the page title. Centre it in the header
+        // bar instead; the header leaves it room (see its paddingInlineStart).
+        zeroWidthTriggerStyle={{ top: (LAYOUT.barHeight - MOBILE_TRIGGER) / 2 }}
       >
         <Flex
           align="center"
@@ -336,6 +343,7 @@ export function AppShell() {
         <Layout.Header
           style={{
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
+            paddingInlineStart: mobileSidebar ? MOBILE_TRIGGER + 16 : undefined,
             position: 'sticky',
             top: 0,
             zIndex: 10,
