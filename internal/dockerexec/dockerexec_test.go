@@ -168,3 +168,52 @@ func TestBuilderEnvOnlyOnBuildCapableCalls(t *testing.T) {
 		}
 	}
 }
+
+// A deploy whose images were checked never pulls again: a registry could
+// answer a second pull with another image.
+func TestUpAndScaleArgsWithoutPulling(t *testing.T) {
+	if got, want := upArgs(composes.UpOptions{NoPull: true}), []string{"up", "-d", "--no-build", "--pull", "never", "--remove-orphans"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("upArgs(no pull) = %v, want %v", got, want)
+	}
+	got := scaleArgs(composes.ScaleOptions{Service: "web", Replicas: 2, NoPull: true})
+	if want := []string{"up", "-d", "--no-build", "--pull", "never", "--no-deps", "--no-recreate", "--scale", "web=2", "web"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scaleArgs(no pull) = %v, want %v", got, want)
+	}
+}
+
+func TestBuildArgsForEveryService(t *testing.T) {
+	if got, want := buildArgs("", false), []string{"--progress", "plain", "build"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildArgs(all) = %v, want %v", got, want)
+	}
+}
+
+func TestComposePullArgs(t *testing.T) {
+	if got, want := composePullArgs(composes.PullOptions{Missing: true}), []string{"pull", "--ignore-buildable", "--policy", "missing"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("composePullArgs(missing) = %v, want %v", got, want)
+	}
+	if got, want := composePullArgs(composes.PullOptions{Services: []string{"web", "db"}}), []string{"pull", "--ignore-buildable", "web", "db"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("composePullArgs(services) = %v, want %v", got, want)
+	}
+}
+
+func TestImageLabels(t *testing.T) {
+	var argv []string
+	old := command
+	t.Cleanup(func() { command = old })
+	output := `{"traefik.enable":"true"}`
+	command = func(ctx context.Context, args ...string) *exec.Cmd {
+		argv = args
+		return exec.CommandContext(ctx, "echo", output)
+	}
+	labels, err := Runner{}.ImageLabels(context.Background(), "app:1")
+	if err != nil || labels["traefik.enable"] != "true" {
+		t.Fatalf("labels = %v, err = %v", labels, err)
+	}
+	if want := []string{"image", "inspect", "--format", "{{json .Config.Labels}}", "app:1"}; !reflect.DeepEqual(argv, want) {
+		t.Fatalf("argv = %v, want %v", argv, want)
+	}
+	output = "null"
+	if labels, err := (Runner{}).ImageLabels(context.Background(), "app:1"); err != nil || len(labels) != 0 {
+		t.Fatalf("no labels = %v, err = %v", labels, err)
+	}
+}

@@ -1142,7 +1142,6 @@ func (j *job) runDeploy(dctx context.Context, s step) ([]string, error) {
 func (j *job) runRollout(dctx context.Context, s step) ([]string, error) {
 	deadline, _ := dctx.Deadline()
 	return j.q.d.Composes.RunRollout(dctx, j.target, s.service, composes.RolloutOptions{
-		Build:    s.build,
 		Deadline: deadline,
 		Out:      j.out,
 	})

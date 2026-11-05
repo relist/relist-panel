@@ -320,6 +320,14 @@ func TestCopyRefusesSymlinksThatResolveOutside(t *testing.T) {
 }
 
 // PolicyConfig answers what Config does: the fake's config is the policy's.
+func (r *snapshotRunner) Pull(ctx context.Context, req composes.RunRequest, opts composes.PullOptions) error {
+	return nil
+}
+
+func (r *snapshotRunner) ImageLabels(ctx context.Context, image string) (map[string]string, error) {
+	return nil, nil
+}
+
 func (r *snapshotRunner) PolicyConfig(ctx context.Context, req composes.RunRequest) ([]byte, error) {
 	return r.Config(ctx, req)
 }

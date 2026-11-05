@@ -419,6 +419,14 @@ func TestResumeOnOldHostAfterMigrated(t *testing.T) {
 }
 
 // PolicyConfig answers what Config does: the fake's config is the policy's.
+func (r statusRunner) Pull(ctx context.Context, req composes.RunRequest, opts composes.PullOptions) error {
+	return nil
+}
+
+func (r statusRunner) ImageLabels(ctx context.Context, image string) (map[string]string, error) {
+	return nil, nil
+}
+
 func (r statusRunner) PolicyConfig(ctx context.Context, req composes.RunRequest) ([]byte, error) {
 	return r.Config(ctx, req)
 }

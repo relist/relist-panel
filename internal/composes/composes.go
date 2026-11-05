@@ -64,6 +64,9 @@ type ComposeStatus struct {
 // set, receives the command's stdout and stderr as they arrive.
 type UpOptions struct {
 	Build bool
+	// NoPull starts the images already on the host: `--pull never`. A
+	// deploy pulls and checks its images first (prepareImages).
+	NoPull bool
 	// Services, when set, limits up to them, with --no-deps (ADR-0023).
 	Services []string
 	Out      io.Writer
@@ -75,6 +78,15 @@ type ScaleOptions struct {
 	Service  string
 	Replicas int
 	Build    bool
+	NoPull   bool
+	Out      io.Writer
+}
+
+// PullOptions pulls the images of a Compose that are not built: every one
+// missing from the host with Missing, else the Services named.
+type PullOptions struct {
+	Services []string
+	Missing  bool
 	Out      io.Writer
 }
 
@@ -106,6 +118,9 @@ type ComposeRunner interface {
 	// on, env files left as paths (ADR-0032).
 	PolicyConfig(ctx context.Context, req RunRequest) ([]byte, error)
 	Scale(ctx context.Context, req RunRequest, opts ScaleOptions) error
+	Pull(ctx context.Context, req RunRequest, opts PullOptions) error
+	// ImageLabels is the labels an image on the host carries.
+	ImageLabels(ctx context.Context, image string) (map[string]string, error)
 }
 
 type Service struct {

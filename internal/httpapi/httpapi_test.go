@@ -3326,6 +3326,14 @@ func wantCaptureRejected(t *testing.T, server *testServer, path string, body any
 }
 
 // PolicyConfig answers setPolicyConfig's config, else what Config does.
+func (f *fakeComposeRunner) Pull(ctx context.Context, req composes.RunRequest, opts composes.PullOptions) error {
+	return nil
+}
+
+func (f *fakeComposeRunner) ImageLabels(ctx context.Context, image string) (map[string]string, error) {
+	return nil, nil
+}
+
 func (f *fakeComposeRunner) PolicyConfig(ctx context.Context, req composes.RunRequest) ([]byte, error) {
 	f.mu.Lock()
 	config := f.policyConfig

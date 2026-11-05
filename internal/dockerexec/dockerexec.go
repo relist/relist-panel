@@ -37,7 +37,7 @@ func New() Runner {
 // volumes. Services, when set, limits up to them with --no-deps, so a Service
 // being rolled out is left alone. The argv is tested through this helper.
 func upArgs(opts composes.UpOptions) []string {
-	args := []string{"up", "-d", buildFlag(opts.Build)}
+	args := append([]string{"up", "-d", buildFlag(opts.Build)}, pullFlag(opts.NoPull)...)
 	if len(opts.Services) > 0 {
 		args = append(args, "--no-deps")
 	}
@@ -48,8 +48,27 @@ func upArgs(opts composes.UpOptions) []string {
 // scaleArgs starts one more Container of a Service from the current file and
 // leaves the running ones as they are (ADR-0023).
 func scaleArgs(opts composes.ScaleOptions) []string {
-	return []string{"up", "-d", buildFlag(opts.Build), "--no-deps", "--no-recreate",
-		"--scale", fmt.Sprintf("%s=%d", opts.Service, opts.Replicas), opts.Service}
+	args := append([]string{"up", "-d", buildFlag(opts.Build)}, pullFlag(opts.NoPull)...)
+	return append(args, "--no-deps", "--no-recreate",
+		"--scale", fmt.Sprintf("%s=%d", opts.Service, opts.Replicas), opts.Service)
+}
+
+// pullFlag keeps up from pulling images a deploy already pulled and checked.
+func pullFlag(noPull bool) []string {
+	if noPull {
+		return []string{"--pull", "never"}
+	}
+	return nil
+}
+
+// composePullArgs pulls the images no Service builds: the missing ones, or
+// the Services named.
+func composePullArgs(opts composes.PullOptions) []string {
+	args := []string{"pull", "--ignore-buildable"}
+	if opts.Missing {
+		args = append(args, "--policy", "missing")
+	}
+	return append(args, opts.Services...)
 }
 
 func buildFlag(build bool) string {
@@ -65,6 +84,9 @@ func buildArgs(service string, noCache bool) []string {
 	args := []string{"--progress", "plain", "build"}
 	if noCache {
 		args = append(args, "--no-cache")
+	}
+	if service == "" {
+		return args
 	}
 	return append(args, service)
 }
@@ -93,6 +115,26 @@ func policyConfigArgs() []string {
 func (Runner) PolicyConfig(ctx context.Context, req composes.RunRequest) ([]byte, error) {
 	content, err := run(ctx, req, nil, policyConfigArgs()...)
 	return []byte(content), err
+}
+
+func (Runner) Pull(ctx context.Context, req composes.RunRequest, opts composes.PullOptions) error {
+	_, err := run(ctx, req, opts.Out, composePullArgs(opts)...)
+	return err
+}
+
+func (Runner) ImageLabels(ctx context.Context, image string) (map[string]string, error) {
+	cmd := command(ctx, "image", "inspect", "--format", "{{json .Config.Labels}}", image)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("docker image inspect %s: %w: %s", image, err, strings.TrimSpace(stderr.String()))
+	}
+	labels := map[string]string{}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &labels); err != nil {
+		return nil, fmt.Errorf("read labels of %s: %w", image, err)
+	}
+	return labels, nil
 }
 
 func (Runner) Build(ctx context.Context, req composes.RunRequest, opts composes.BuildOptions) error {
