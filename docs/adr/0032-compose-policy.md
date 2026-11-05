@@ -33,7 +33,7 @@ Three review rounds kept finding new ways a Compose file reaches past the rules:
 
 The policy and the image check stay, because an Editor still shapes what deploys in two ways: a Variable interpolated into the file (`image: ${IMAGE}`, a label value), and a Source whose Dockerfile builds the image. The image check now reads the labels of the platform each Service runs (`docker image inspect --platform`): one tag can hold a different image per platform, so reading the host's would check an image that never starts.
 
-Still open: a Domain is unique only on host and path, so an Editor can claim a longer path on a host another Project serves, and Traefik prefers the longer rule.
+A host belongs to one Project. A Domain was unique only on host and path, so an Editor could claim a longer path (`shop.com/login`) or a shorter one (`shop.com/`) on a host another Project serves, and Traefik, which prefers the longer rule, sent that Project's requests to them under a certificate for its host. Creating or moving a Domain onto a host a Compose of another Project serves now answers 409, for Admins too, without naming the other Project. Composes of one Project still share a host by path. Domains already shared across Projects before this rule are left as they are; only new or changed ones are refused.
 
 ## Considered options
 

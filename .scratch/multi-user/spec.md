@@ -517,3 +517,4 @@ installed `antd`.
 21. (Editors and the file) Only an Admin creates a Compose, saves its YAML or previews an unsaved file; the three routes leave `authz.Routes`. An Editor keeps Variables, Variable Sets, Domains, Source, Builder, zero-downtime, Terminal and Volumes. The web disables Save, Preview, the editor and New Compose for non-admins and says why.
 22. (Editors and the file) The policy and the deploy's image check stay: Variables interpolate into the file and a Source builds the image.
 23. (Security review 3) The image check reads the labels of each Service's `platform` (`docker image inspect --platform`).
+24. (Domains) A host belongs to one Project: creating or moving a Domain onto a host a Compose of another Project serves answers 409 for everyone, Admins included, without naming that Project. Composes of one Project share a host by path. Existing cross-Project sharing is left alone.

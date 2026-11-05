@@ -21,7 +21,7 @@ One service defined inside a Compose file — the unit the panel starts, stops a
 _Avoid_: Container (a Service is the definition; a Container is one running instance of it), Process
 
 **Domain**:
-A host and path that Traefik routes to one Service's port in a Compose, managed on the Compose's Domains tab and applied on deploy.
+A host and path that Traefik routes to one Service's port in a Compose, managed on the Compose's Domains tab and applied on deploy. A host belongs to one Project: Composes of that Project may split it by path, no other Project may use it.
 _Avoid_: Route, Hostname (as the entity name)
 
 **Certificate**:
