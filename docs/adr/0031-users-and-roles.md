@@ -48,7 +48,7 @@ Rulings where the spec was silent:
 8. This ADR is amended rather than a new one written; ADR-0032 is kept for the Compose policy.
 9. A Project's `environmentCount` counts only the Environments the User can see.
 
-**Until the Compose policy ships, an Editor can take the host**: a Compose that mounts the Docker socket or runs privileged, then the Terminal. Grant Editor only to people you would give root.
+**Until the Compose policy ships, an Editor can take the host**: a Compose that mounts the Docker socket or runs privileged, then the Terminal. Grant Editor only to people you would give root. *(Closed by ADR-0032, 2026-11-05: such a Compose now deploys only once an approver approves it.)*
 
 ## Audit log (phase 3, 2026-11-05)
 

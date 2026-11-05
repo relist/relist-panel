@@ -492,3 +492,14 @@ installed `antd`.
 10. `GET /api/projects/{id}/audit` is Viewer in the route table; the handler answers 403 unless the User edits one of its Environments.
 11. HTTP lives in `internal/auditapi`.
 
+### 2026-11-05 — Phase 4 rulings
+
+1. The check runs on the Deployment's snapshot (panel keys injected), the config `up` runs; injected keys pass the rules.
+2. Inside the Compose directory a path may not be the directory itself nor `.ssh` (a Source's git key).
+3. `include`/`extends` paths in the saved YAML must be relative, inside the directory, without variables or URLs.
+4. The same bind path used twice is not nested; only a bind strictly inside another is.
+5. `RELIST_POLICY_BIND_ROOTS` refuses `/`; roots the panel container cannot see are compared as text.
+6. `configHash` goes only to approvers (`GET …/policy`, the 409 body); everyone sees the violations.
+7. The Volume Explorer checks the deployed file it resolves from.
+8. A git Source in build mode that cannot be resolved before its fetch queues; the check after the fetch decides.
+9. The Compose list tag is left out; the Compose page shows the state.

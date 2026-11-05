@@ -42,9 +42,15 @@ the **Audit log**, kept 90 days by default. Admins read it all; a Project's
 Editors read its **Activity** tab. Variable values are never recorded. It
 is not tamper-proof against an Admin, who can reach the database.
 
-**Until the Compose policy ships, an Editor can take the host** (a Compose
-that mounts the Docker socket or runs privileged, then the Terminal), **so
-grant Editor only to people you would give root.**
+A Compose that could take the host (mounting the Docker socket or a path
+outside its directory, running privileged, opening another Compose's
+volume) deploys only after an **approver** approves that exact config on
+the Compose page; any later change to it needs approving again. Approvers
+are every Admin, or only the Owner with `RELIST_POLICY_APPROVER=owner`.
+Host paths a Compose may bind without approval go in
+`RELIST_POLICY_BIND_ROOTS` (comma-separated, absolute), for example
+`/srv/media`. Both are set in the install's `.env`. Admins remain fully
+trusted: the host-wide pages are theirs.
 
 Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 

@@ -147,6 +147,14 @@ _Avoid_: Membership, ACL.
 One recorded action: who, when, what, where, and whether it was done or refused. Changes, refusals, sensitive reads (secret values, Volume downloads, a Terminal session) and sign-ins are recorded; a variable's value never is. Admins read all of them, a Project's Editors that Project's.
 _Avoid_: Log entry (the Access log and container logs are other things), History (Deployment history is another thing).
 
+**Compose policy**:
+The rules a Compose's resolved config must meet to deploy without an Approval: nothing that reaches the host (binds outside its directory and the bind roots, the Docker socket, privileged, host namespaces) or another Compose's volumes.
+_Avoid_: Security policy, Sandbox.
+
+**Approval**:
+An approver's consent to deploy one resolved config of one Compose, kept as that config's hash; any change to the config, a variable value included, needs a new one. The approver is every Admin, or only the Owner.
+_Avoid_: Review, Sign-off.
+
 **Invite link**:
 A single-use link with which a User sets their password: an invite for a new User (7 days) or a reset for an existing one (24 hours). The panel stores only its hash and shows it once; an Admin hands it over, the panel sends no email.
 _Avoid_: Magic link, Token (the token is part of the link), Invitation email.
