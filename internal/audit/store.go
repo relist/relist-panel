@@ -12,8 +12,12 @@ import (
 // PageSize is how many events one List call returns.
 const PageSize = 100
 
-// ErrInvalidRetention is a negative retention.
-var ErrInvalidRetention = errors.New("retention must be at least 1 day, or 0 to keep events forever")
+// MaxRetentionDays is the longest retention: a hundred years. Longer is
+// "keep forever".
+const MaxRetentionDays = 36500
+
+// ErrInvalidRetention is a negative retention, or one past MaxRetentionDays.
+var ErrInvalidRetention = errors.New("retention must be between 1 and 36500 days, or 0 to keep events forever")
 
 // Execer writes; *sql.DB and *sql.Tx satisfy it.
 type Execer interface {
@@ -176,7 +180,7 @@ func Settings(ctx context.Context, q Querier) (int, error) {
 
 // SetSettings stores the retention in days; 0 keeps events forever.
 func SetSettings(ctx context.Context, db Execer, days int) error {
-	if days < 0 {
+	if days < 0 || days > MaxRetentionDays {
 		return ErrInvalidRetention
 	}
 	_, err := db.ExecContext(ctx, "UPDATE audit_settings SET retention_days = ? WHERE id = 1", days)
@@ -189,7 +193,9 @@ func Prune(ctx context.Context, db *sql.DB, now time.Time) (int64, error) {
 	if err != nil || days == 0 {
 		return 0, err
 	}
-	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour).UnixMilli()
+	// AddDate, not a Duration: days*24h overflows past ~106,751 days and
+	// would put the cutoff in the future, deleting everything.
+	cutoff := now.AddDate(0, 0, -days).UnixMilli()
 	result, err := db.ExecContext(ctx, "DELETE FROM audit_events WHERE at < ?", cutoff)
 	if err != nil {
 		return 0, err

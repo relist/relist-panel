@@ -149,8 +149,8 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	days := body.RetentionDays
 	if body.KeepForever {
 		days = 0
-	} else if days < 1 {
-		writeError(w, http.StatusBadRequest, "retention must be at least 1 day", "retentionDays")
+	} else if days < 1 || days > audit.MaxRetentionDays {
+		writeError(w, http.StatusBadRequest, "retention must be between 1 and 36500 days", "retentionDays")
 		return
 	}
 	audit.Detail(r.Context(), "retentionDays", days)

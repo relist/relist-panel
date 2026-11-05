@@ -125,3 +125,10 @@ func TestRetentionRunsOnStart(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestAuditSettingsRefuseAHugeRetention(t *testing.T) {
+	_, handler, _ := setup(t)
+	if status, body := call(t, handler, http.MethodPut, "/api/audit/settings", map[string]any{"retentionDays": 999999, "keepForever": false}); status != http.StatusBadRequest || body["field"] != "retentionDays" {
+		t.Fatalf("999999 days = %d %v", status, body)
+	}
+}

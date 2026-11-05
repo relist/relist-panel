@@ -164,3 +164,22 @@ func TestPruneKeepsRecentAndForever(t *testing.T) {
 		t.Fatalf("negative = %v", err)
 	}
 }
+
+func TestHugeRetentionNeverDeletesFreshEvents(t *testing.T) {
+	db := openDB(t)
+	now := time.Now()
+	record(t, db, Event{Action: "fresh", At: now.Add(-time.Minute)})
+	if err := SetSettings(context.Background(), db, MaxRetentionDays+1); err != ErrInvalidRetention {
+		t.Fatalf("SetSettings(%d) = %v, want ErrInvalidRetention", MaxRetentionDays+1, err)
+	}
+	if err := SetSettings(context.Background(), db, MaxRetentionDays); err != nil {
+		t.Fatal(err)
+	}
+	// A value stored before the cap (or by hand) must not overflow either.
+	if _, err := db.Exec("UPDATE audit_settings SET retention_days = 999999"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := Prune(context.Background(), db, now); err != nil || n != 0 {
+		t.Fatalf("pruned %d, %v; a 999999-day retention deleted a minute-old event", n, err)
+	}
+}
