@@ -50,6 +50,8 @@ type Service struct {
 	// access reports a signed-in User's roles for the status route; nil
 	// leaves "access" null.
 	access func(context.Context, User) (any, error)
+	// failedLogins caps the failed sign-ins one address records.
+	failedLogins *audit.Limiter
 }
 
 // AllowSelfAuthenticated lets requests to the paths allow reports true for
@@ -216,9 +218,10 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	// database has one connection): this defer runs after its Rollback.
 	var event *audit.Event
 	defer func() {
-		if event != nil {
-			s.recordAudit(r.Context(), *event)
+		if event == nil || (event.Outcome == audit.OutcomeDenied && !s.failedLogins.Allow(event.IP)) {
+			return
 		}
+		s.recordAudit(r.Context(), *event)
 	}()
 
 	account, remaining, err := s.readLoginAccount(r.Context(), email)
@@ -709,3 +712,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
+
+// failedLoginsPerMinute caps the failed sign-ins one address records a
+// minute.
+const failedLoginsPerMinute = 10

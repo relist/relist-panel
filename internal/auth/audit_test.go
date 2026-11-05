@@ -82,3 +82,21 @@ func TestInviteAcceptIsRecorded(t *testing.T) {
 		t.Fatalf("events = %+v", loginEvents(t, f))
 	}
 }
+
+// A script guessing passwords from one address records at most
+// failedLoginsPerMinute failed sign-ins a minute; a success still records.
+func TestFailedLoginsAreCappedPerAddress(t *testing.T) {
+	f := newUserFixture(t)
+	for range failedLoginsPerMinute + 3 {
+		if response := f.login("nobody@example.com", "guess"); response.Code != http.StatusUnauthorized {
+			t.Fatalf("unknown = %d", response.Code)
+		}
+	}
+	if response := f.login("admin@example.com", userPassword); response.Code != http.StatusOK {
+		t.Fatalf("login = %d", response.Code)
+	}
+	events := loginEvents(t, f)
+	if len(events) != failedLoginsPerMinute+1 || events[len(events)-1].action != "auth.login" {
+		t.Fatalf("events = %d, want %d failed and the login", len(events), failedLoginsPerMinute)
+	}
+}
