@@ -11,6 +11,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -94,11 +95,47 @@ func (s *Service) respond(w http.ResponseWriter, r *http.Request, filter audit.F
 		writeError(w, http.StatusInternalServerError, "could not read the audit log", "")
 		return
 	}
+	if filter.EnvironmentIDs != nil {
+		for i := range rows {
+			rows[i].Detail = onlyEditedGrants(rows[i].Detail, filter.EnvironmentIDs)
+		}
+	}
 	var nextCursor *int64
 	if next != 0 {
 		nextCursor = &next
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": rows, "nextCursor": nextCursor})
+}
+
+// onlyEditedGrants keeps, of a grant change's roles, the Project-wide ones
+// and those on the Environments the reader edits: the rest are another
+// Environment's members.
+func onlyEditedGrants(detail map[string]any, edited []int64) map[string]any {
+	list, ok := detail["grants"].([]any)
+	if !ok {
+		return detail
+	}
+	kept := []any{}
+	for _, item := range list {
+		grant, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch environment := grant["environmentId"].(type) {
+		case nil:
+			kept = append(kept, item)
+		case float64:
+			if slices.Contains(edited, int64(environment)) {
+				kept = append(kept, item)
+			}
+		}
+	}
+	out := make(map[string]any, len(detail))
+	for k, v := range detail {
+		out[k] = v
+	}
+	out["grants"] = kept
+	return out
 }
 
 // parseFilter reads cursor, actor, action, from and to; a malformed number
