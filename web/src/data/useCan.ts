@@ -59,3 +59,9 @@ export function useCan(environmentId: number | undefined, level: Level): boolean
 export function useIsProjectEditor(projectId: number | undefined): boolean {
   return useAccess().isProjectEditor(projectId);
 }
+
+/** Whether the signed-in User may approve a Compose the policy refuses; an older panel's status reads as an admin's. */
+export function useIsApprover(): boolean {
+  const auth = useAuthState();
+  return auth?.user?.isApprover ?? auth?.user?.isAdmin ?? true;
+}

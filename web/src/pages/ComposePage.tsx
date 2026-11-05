@@ -44,12 +44,14 @@ import type { MenuProps } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router';
+import useSWR from 'swr';
 
 import { paths } from '../app/paths';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { ComposeDeploymentsTab } from '../components/ComposeDeploymentsTab';
 import { ComposeDomainsTab } from '../components/ComposeDomainsTab';
 import { ComposeEditorGuide } from '../components/ComposeEditorGuide';
+import { ComposePolicyAlert, policyDeployState } from '../components/ComposePolicyAlert';
 import { ComposePreviewModal } from '../components/ComposePreviewModal';
 import { BuildSnippetsModal, snippetComment } from '../components/BuildSnippetsModal';
 import { ComposeTerminalTab } from '../components/ComposeTerminalTab';
@@ -88,7 +90,7 @@ import { useComposeSource } from './useComposeSource';
 import { useDeploymentHistory } from './useDeploymentHistory';
 import { VulnBadges } from '../components/VulnBadges';
 import { VulnReportButton } from '../components/VulnReportButton';
-import { useCan, useIsAdmin } from '../data/useCan';
+import { useCan, useIsAdmin, useIsApprover } from '../data/useCan';
 import { useVulnSummary } from '../data/useVulnSummary';
 import { summaryBadge, vulnLink } from './vulnerabilities-view';
 import { buildComposeReport, composeBuilds, reportFilename } from './vuln-report';
@@ -147,6 +149,13 @@ export function ComposePage() {
   const canOperate = useCan(environment?.id, 'operator');
   const canEdit = useCan(environment?.id, 'editor');
   const isAdmin = useIsAdmin();
+  const isApprover = useIsApprover();
+  const policyLocation = compose && environment && project ? { composeId: compose.id, environmentId: environment.id, projectId: project.id } : undefined;
+  // The saved config against the Compose policy (ADR-0032); refetched when
+  // the Compose is saved, approved or refused.
+  const policy = useSWR(policyLocation ? ['compose-policy', policyLocation.composeId, compose?.updatedAt] : null, () =>
+    api.getComposePolicy(policyLocation!),
+  );
 
   const [draft, setDraft] = useState(compose?.yamlContent ?? '');
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
@@ -547,8 +556,8 @@ export function ComposePage() {
   // Queues a Deployment, then shows it on the Deployments tab. `fresh` removes
   // the Compose's named volumes first; the save-first steps are identical, so
   // unsaved YAML is what gets deployed. With a Source the default is a build.
-  const runDeploy = async (options: { fresh?: boolean; mode?: DeploymentRequest['mode']; noCache?: boolean } = {}) => {
-    const { fresh = false, noCache } = options;
+  const runDeploy = async (options: { configHash?: string; fresh?: boolean; mode?: DeploymentRequest['mode']; noCache?: boolean } = {}) => {
+    const { configHash, fresh = false, noCache } = options;
     if (!sourceReady) {
       message.warning(
         sourceState === 'failed' ? 'The Source could not be loaded — retry loading it first' : 'Still loading the Source — try again in a moment',
@@ -568,11 +577,12 @@ export function ComposePage() {
         if (step === 'save') {
           await saveCompose(compose.id, draft);
         } else {
-          const request: DeploymentRequest = fresh
+          const base: DeploymentRequest = fresh
             ? { confirmName: compose.name, freshVolumes: true, mode }
             : noCache
               ? { mode, noCache: true }
               : { mode };
+          const request: DeploymentRequest = configHash ? { ...base, configHash } : base;
           const number = await deployCompose(compose.id, request);
           message.info(`Deployment #${number} queued`);
           setSelectedDeployment(number);
@@ -584,6 +594,10 @@ export function ComposePage() {
       if (reason instanceof ZeroDowntimeRefusedError) {
         setZeroDowntimeRefusal(reason.problems);
       } else {
+        if (reason instanceof ApiError && reason.status === 409) {
+          // Possibly the Compose policy: show what it says now.
+          void policy.mutate();
+        }
         fail(reason);
       }
     } finally {
@@ -594,7 +608,19 @@ export function ComposePage() {
       }
     }
   };
-  const deploy = () => runDeploy();
+  const policyState = policyDeployState(policy.data, isApprover, dirty);
+  const deploy = () => runDeploy(policyState === 'approve' && policy.data?.configHash ? { configHash: policy.data.configHash } : {});
+  const approveCompose = async () => {
+    if (!policyLocation || !policy.data?.configHash) return;
+    try {
+      await api.approveCompose(policyLocation, policy.data.configHash);
+      message.success('Approved');
+    } catch (reason: unknown) {
+      fail(reason);
+    } finally {
+      void policy.mutate();
+    }
+  };
 
   // The shown Deployment ended: the containers, the env file and the deploy
   // time may all have changed.
@@ -756,12 +782,20 @@ export function ComposePage() {
                 <RoleHint allowed={canOperate} level="operator">
                   <Button
                     icon={<RocketOutlined />}
-                    disabled={!sourceReady || !canOperate}
+                    disabled={!sourceReady || !canOperate || policyState === 'waiting'}
                     loading={isPending(`deploy:${compose.id}`)}
                     onClick={() => void deploy()}
                     type="primary"
                   >
-                    {hasSource ? 'Build & Deploy' : dirty ? 'Save & Deploy' : 'Deploy'}
+                    {policyState === 'waiting'
+                      ? 'Waiting for approval'
+                      : policyState === 'approve'
+                        ? 'Approve & Deploy'
+                        : hasSource
+                          ? 'Build & Deploy'
+                          : dirty
+                            ? 'Save & Deploy'
+                            : 'Deploy'}
                   </Button>
                 </RoleHint>
               )}
@@ -795,6 +829,10 @@ export function ComposePage() {
           type="error"
         />
       )}
+
+      <div style={{ marginBottom: policy.data && policy.data.violations.length > 0 ? LAYOUT.gutterSmall : 0 }}>
+        <ComposePolicyAlert approver={isApprover} onApprove={approveCompose} policy={policy.data} />
+      </div>
 
       {sourceState === 'failed' && (
         <Alert
