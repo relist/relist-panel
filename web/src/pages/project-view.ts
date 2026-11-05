@@ -81,3 +81,14 @@ export function projectDeleteFacts(project: Project): ProjectDeleteFacts {
     environments: project.environments.length,
   };
 }
+
+/**
+ * The New Compose example. It carries no Traefik labels: a domain comes from
+ * the Compose's Domains tab, and hand-written routing labels need an approver
+ * (ADR-0032), so an example with them would wait for approval at once.
+ */
+export const STARTER_YAML = `services:
+  app:
+    image: nginx:alpine
+    restart: unless-stopped
+`;

@@ -48,7 +48,7 @@ import type { AuditQuery } from '../data/api';
 import { usePanel } from '../data/store';
 import type { Compose } from '../data/types';
 import { composeState, projectComposes, summarize } from '../data/types';
-import { activeTab, selectEnvironment } from './project-view';
+import { activeTab, selectEnvironment, STARTER_YAML } from './project-view';
 import { composeDeployIdentity } from './compose-view';
 import { ProjectSettingsTab } from './ProjectSettingsTab';
 import { ProjectMembersTab } from '../components/ProjectMembersTab';
@@ -56,16 +56,6 @@ import { AuditTable } from '../components/AuditTable';
 import { deployFromList } from './project-deploy';
 
 const { Text, Paragraph } = Typography;
-
-const STARTER_YAML = `services:
-  app:
-    image: nginx:alpine
-    restart: unless-stopped
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.app.rule=Host(\`app.example.com\`)
-      - traefik.http.services.app.loadbalancer.server.port=80
-`;
 
 /**
  * Project page (GUIDELINES §4.4). One tab level instead of the monolith's two
@@ -415,7 +405,7 @@ export function ProjectPage() {
                               </Button>
                             </RoleHint>
                           }
-                          description="Paste an existing docker-compose.yml, or start from a small Traefik-ready example."
+                          description="Paste an existing docker-compose.yml, or start from a small example."
                           title={`No Composes in ${activeEnvironment?.name}`}
                         />
                       </Card>
@@ -639,7 +629,7 @@ export function ProjectPage() {
           <YamlEditor height={320} onChange={setComposeYAML} path="new-compose.yml" value={composeYAML} />
         </div>
         <Alert
-          title="The panel joins every service to the shared Traefik network on deploy. Routing is yours to declare with labels."
+          title="After you create it, give it a domain on its Domains tab: the panel writes the routing. Hand-written traefik labels need an approver."
           showIcon
           style={{ marginTop: 12 }}
           type="info"

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Compose, Environment, Project } from '../data/types';
-import { activeTab, environmentDeleteFacts, projectDeleteFacts, selectEnvironment, visibleProjects } from './project-view';
+import { activeTab, environmentDeleteFacts, projectDeleteFacts, selectEnvironment, STARTER_YAML, visibleProjects } from './project-view';
 
 const project = (overrides: Partial<Project> & { id: number }): Project => ({
   name: `project-${overrides.id}`,
@@ -139,5 +139,12 @@ describe('projectDeleteFacts', () => {
       directories: [],
       environments: 1,
     });
+  });
+});
+
+describe('STARTER_YAML', () => {
+  it('needs no approval: routing comes from the Domains tab, not hand-written Traefik labels', () => {
+    expect(STARTER_YAML).toContain('services:');
+    expect(STARTER_YAML).not.toMatch(/traefik/i);
   });
 });
