@@ -10,8 +10,10 @@ import (
 // image's labels into its containers' and Traefik reads them, so the policy
 // on the Compose's labels does not cover them (ADR-0032). They matter only
 // when Traefik reads the container at all: some spelling of traefik.enable
-// that is not false, since Traefik exposes nothing by default. image names
-// the image, for the messages.
+// that is not false, since Traefik exposes nothing by default
+// (providers.docker.exposedByDefault: false, a key the Traefik override
+// cannot change: traefikconfig.locked). image names the image, for the
+// messages.
 func ImageLabels(service, image string, imageLabels, container map[string]string) []Violation {
 	effective := map[string]string{}
 	for key, value := range imageLabels {
