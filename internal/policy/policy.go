@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -39,9 +40,10 @@ type Rules struct {
 	ProjectName string
 	// PanelDomain is the install's own domain, which no traefik label may name.
 	PanelDomain string
-	// Routes are the Traefik rules of the Compose's own Domains
-	// (domains.Rule): the only rules a router may match.
-	Routes []string
+	// Traefik is, per service, the Traefik labels the panel writes for the
+	// Compose's own Domains (domains.Generated): the only Traefik labels a
+	// service may carry with any effect.
+	Traefik map[string]map[string]string
 	// SourceCopy is this Deployment's private copy of its Source
 	// (<ComposeDir>/.deployment-sources/<copy>), where its paths point;
 	// empty when it has none.
@@ -245,42 +247,47 @@ func (c *checker) networkMode(name string, value any) {
 func (c *checker) labels(name string, value any) {
 	labels, _ := value.(map[string]any)
 	c.dockerLabels(name, "service", labels)
+	c.traefikLabels(name, "label", labels, c.rules.Traefik[name])
+}
+
+// traefikLabels allows only the Traefik labels the panel writes for the
+// Compose's own Domains, with the very value it writes, plus turning Traefik
+// off. Traefik merges routers, services, middlewares and transports of the
+// same name across every container it reads, so any other label could take
+// requests meant for the panel or another Project (ADR-0032).
+func (c *checker) traefikLabels(name, what string, labels map[string]any, generated map[string]string) {
 	keys := make([]string, 0, len(labels))
 	for key := range labels {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		text, _ := labels[key].(string)
-		if !strings.HasPrefix(strings.ToLower(key), "traefik.") {
+		lower := strings.ToLower(key)
+		if !strings.HasPrefix(lower, "traefik.") {
 			continue
 		}
-		if c.rules.PanelDomain != "" && namesHost(text, c.rules.PanelDomain) {
-			c.add(name, "label %s names the panel's own domain", key)
-			continue
+		text := fmt.Sprint(labels[key])
+		if labels[key] == nil {
+			text = ""
 		}
-		c.router(name, key, text)
+		want, ok := generated[key]
+		switch {
+		case c.rules.PanelDomain != "" && namesHost(text, c.rules.PanelDomain):
+			c.add(name, "%s %s names the panel's own domain", what, key)
+		case ok && want == text:
+		case lower == "traefik.enable" && isFalse(text):
+		case lower == "traefik.docker.network" && text == sharedNetwork:
+		default:
+			c.add(name, "%s %s is not one the panel writes for this Compose's Domains", what, key)
+		}
 	}
 }
 
-// router keeps a Traefik router to the Compose's own Domains: Traefik
-// routes by rule and priority across every Compose, so a wider rule or a
-// higher priority would take requests for the panel or another Project.
-// Traefik reads label keys in any case.
-func (c *checker) router(name, key, value string) {
-	parts := strings.Split(strings.ToLower(key), ".")
-	if len(parts) < 4 || parts[2] != "routers" {
-		return
-	}
-	switch protocol, option := parts[1], parts[len(parts)-1]; {
-	case protocol != "http":
-		c.add(name, "label %s is a %s router; only HTTP routers of Domains are allowed", key, protocol)
-	case len(parts) != 5:
-	case option == "priority":
-		c.add(name, "label %s sets a router priority", key)
-	case option == "rule" && !slices.Contains(c.rules.Routes, strings.TrimSpace(value)):
-		c.add(name, "label %s is not the rule of one of this Compose's Domains", key)
-	}
+// isFalse reports whether a traefik.enable value reads as false the way
+// Traefik parses it.
+func isFalse(value string) bool {
+	b, err := strconv.ParseBool(strings.TrimSpace(value))
+	return err == nil && !b
 }
 
 // builtImage keeps the names a built image is tagged with inside this
@@ -460,6 +467,10 @@ func (c *checker) build(name string, value any) {
 	if present(build["ssh"]) {
 		c.add(name, "build ssh is not allowed")
 	}
+	// Build labels end up on the image, and from it on the container.
+	buildLabels, _ := build["labels"].(map[string]any)
+	c.dockerLabels(name, "build", buildLabels)
+	c.traefikLabels(name, "build label", buildLabels, nil)
 	if secrets, ok := build["secrets"]; ok {
 		c.references(name, "secrets", secrets)
 	}

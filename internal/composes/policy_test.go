@@ -2,11 +2,15 @@ package composes
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"relist-panel/internal/dockernet"
+	"relist-panel/internal/domains"
 )
 
 // policyConfig is a resolved config binding src/conf through path, with
@@ -180,19 +184,36 @@ func TestPolicyRedactsSecretValues(t *testing.T) {
 	}
 }
 
-// The routers the panel writes for a Compose's own Domains pass the policy.
-func TestPolicyAllowsTheComposesOwnDomainRouters(t *testing.T) {
+// The Traefik labels the panel writes for a Compose's own Domains pass the
+// policy; any other Traefik label does not.
+func TestPolicyAllowsOnlyTheComposesOwnDomainLabels(t *testing.T) {
 	svc, runner, target, db := newDeployService(t, "services: {web: {image: nginx}}\n")
 	if _, err := db.Exec(`INSERT INTO domains (compose_id, host, path, service, port, created_at, updated_at) VALUES (?, 'shop.example.com', '/api', 'web', 80, 0, 0)`, target.Compose.ID); err != nil {
 		t.Fatal(err)
 	}
-	runner.config = []byte("{\"name\":\"relist-c1\",\"services\":{\"web\":{\"image\":\"nginx\",\"labels\":{\"traefik.http.routers.d1.rule\":\"Host(`shop.example.com`) && PathPrefix(`/api`)\"}}}}")
+	ds, err := svc.domains.ListForCompose(context.Background(), target.Compose.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := map[string]any{}
+	for key, value := range domains.Generated(target.Compose.ID, ds, dockernet.NetworkName, nil)["web"] {
+		labels[key] = value
+	}
+	if len(labels) == 0 {
+		t.Fatalf("no generated labels for %d domains", len(ds))
+	}
+	withLabels := func(labels map[string]any) []byte {
+		raw, _ := json.Marshal(map[string]any{"name": "relist-c1", "services": map[string]any{"web": map[string]any{"image": "nginx", "labels": labels}}})
+		return raw
+	}
+	runner.config = withLabels(labels)
 	result, err := svc.EvaluatePolicy(context.Background(), target)
 	if err != nil || len(result.Violations) != 0 {
 		t.Fatalf("result = %+v, err = %v", result, err)
 	}
-	runner.config = []byte("{\"name\":\"relist-c1\",\"services\":{\"web\":{\"image\":\"nginx\",\"labels\":{\"traefik.http.routers.d1.rule\":\"Host(`shop.example.com`)\"}}}}")
-	if wider, _ := svc.EvaluatePolicy(context.Background(), target); len(wider.Violations) != 1 {
-		t.Fatalf("a rule wider than the Domain: %+v", wider.Violations)
+	labels["traefik.http.services.panel.loadbalancer.server.port"] = "80"
+	runner.config = withLabels(labels)
+	if merged, _ := svc.EvaluatePolicy(context.Background(), target); len(merged.Violations) != 1 {
+		t.Fatalf("a label the panel does not write: %+v", merged.Violations)
 	}
 }

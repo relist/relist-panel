@@ -28,7 +28,11 @@ func newFixture(t *testing.T) fixture {
 		t.Fatal(err)
 	}
 	return fixture{dir: dir, rules: Rules{ComposeDir: dir, Roots: []string{srv}, ProjectName: "relist-c1", PanelDomain: "panel.example.com",
-		Routes: []string{"Host(`app.example.com`)", "Host(`app.panel.example.com`)", "Host(`shop.example.com`) && PathPrefix(`/api`)"}}}
+		Traefik: map[string]map[string]string{"web": {
+			"traefik.enable":                                        "true",
+			"traefik.http.routers.c1-web.rule":                      "Host(`app.example.com`)",
+			"traefik.http.services.c1-web.loadbalancer.server.port": "80",
+		}}}}
 }
 
 // config is a resolved config with one service "web" (plus any extra
@@ -161,6 +165,13 @@ func TestEachViolation(t *testing.T) {
 		{"router by regexp", map[string]any{"labels": map[string]any{"traefik.http.routers.x.rule": "HostRegexp(`.+`)"}}, nil},
 		{"router for a host no Domain of this Compose has", map[string]any{"labels": map[string]any{"traefik.http.routers.x.rule": "Host(`victim.example.com`)"}}, nil},
 		{"router widening a Domain", map[string]any{"labels": map[string]any{"traefik.http.routers.x.rule": "Host(`shop.example.com`)"}}, nil},
+		{"panel router with another rule", map[string]any{"labels": map[string]any{"traefik.http.routers.c1-web.rule": "HostRegexp(`.+`)"}}, nil},
+		{"service merged into the panel's", map[string]any{"labels": map[string]any{"traefik.enable": "true", "traefik.http.services.panel.loadbalancer.server.port": "80"}}, nil},
+		{"middleware", map[string]any{"labels": map[string]any{"traefik.http.middlewares.x.headers.customrequestheaders.a": "b"}}, nil},
+		{"tls options", map[string]any{"labels": map[string]any{"traefik.http.routers.c1-web.tls.options": "weak@file"}}, nil},
+		{"shared network label elsewhere", map[string]any{"labels": map[string]any{"traefik.docker.network": "relist-c2_default"}}, nil},
+		{"build traefik label", map[string]any{"build": map[string]any{"context": filepath.Join(f.dir, "src"), "labels": map[string]any{"traefik.enable": "true"}}}, nil},
+		{"build docker label", map[string]any{"build": map[string]any{"context": filepath.Join(f.dir, "src"), "labels": map[string]any{"com.docker.compose.project": "relist-c2"}}}, nil},
 		{"router key in another case", map[string]any{"labels": map[string]any{"Traefik.HTTP.Routers.x.Rule": "PathPrefix(`/`)"}}, nil},
 		{"router priority", map[string]any{"labels": map[string]any{"traefik.http.routers.c1-web.priority": "999999999"}}, nil},
 		{"tcp router", map[string]any{"labels": map[string]any{"traefik.tcp.routers.x.rule": "HostSNI(`*`)"}}, nil},
@@ -194,19 +205,20 @@ func TestEachViolation(t *testing.T) {
 func TestAllowedShapes(t *testing.T) {
 	f := newFixture(t)
 	for name, web := range map[string]map[string]any{
-		"bind in a root":                 {"volumes": []any{bind(filepath.Join(f.rules.Roots[0], "media"))}},
-		"same bind twice":                {"volumes": []any{bind(filepath.Join(f.dir, "data")), map[string]any{"type": "bind", "source": filepath.Join(f.dir, "data"), "target": "/again"}}},
-		"privileged false":               {"privileged": false},
-		"network of another service":     {"network_mode": "service:db"},
-		"volumes_from a service":         {"volumes_from": []any{"db:ro"}},
-		"build in the source":            {"build": map[string]any{"context": filepath.Join(f.dir, "src"), "dockerfile": "Dockerfile", "additional_contexts": map[string]any{"base": "docker-image://alpine", "dep": "service:db"}}},
-		"build from git":                 {"build": map[string]any{"context": "https://github.com/example/app.git#main", "dockerfile": "Dockerfile"}},
-		"traefik label of a subdomain":   {"labels": map[string]any{"traefik.http.routers.x.rule": "Host(`app.panel.example.com`)"}},
-		"router of a Domain with a path": {"labels": map[string]any{"traefik.http.routers.x.rule": "Host(`shop.example.com`) && PathPrefix(`/api`)", "traefik.http.routers.x.tls": "true"}},
-		"router with no rule":            {"labels": map[string]any{"traefik.enable": "true", "traefik.http.routers.x.middlewares": "auth"}},
-		"network_mode none":              {"network_mode": "none"},
-		"built image in its namespace":   {"image": "relist-c1-web:latest", "build": map[string]any{"context": filepath.Join(f.dir, "src"), "tags": []any{"relist-c1-web:v2"}}},
-		"bind to a missing file":         {"volumes": []any{bind(filepath.Join(f.dir, "src", "not-yet", "file"))}},
+		"bind in a root":                    {"volumes": []any{bind(filepath.Join(f.rules.Roots[0], "media"))}},
+		"same bind twice":                   {"volumes": []any{bind(filepath.Join(f.dir, "data")), map[string]any{"type": "bind", "source": filepath.Join(f.dir, "data"), "target": "/again"}}},
+		"privileged false":                  {"privileged": false},
+		"network of another service":        {"network_mode": "service:db"},
+		"volumes_from a service":            {"volumes_from": []any{"db:ro"}},
+		"build in the source":               {"build": map[string]any{"context": filepath.Join(f.dir, "src"), "dockerfile": "Dockerfile", "additional_contexts": map[string]any{"base": "docker-image://alpine", "dep": "service:db"}}},
+		"build from git":                    {"build": map[string]any{"context": "https://github.com/example/app.git#main", "dockerfile": "Dockerfile"}},
+		"traefik off":                       {"labels": map[string]any{"traefik.enable": "false"}},
+		"traefik off on the shared network": {"labels": map[string]any{"Traefik.Enable": "0", "traefik.docker.network": "relist-network"}},
+		"the panel's own Domain labels":     {"labels": map[string]any{"traefik.enable": "true", "traefik.http.routers.c1-web.rule": "Host(`app.example.com`)"}},
+		"a build label":                     {"build": map[string]any{"context": filepath.Join(f.dir, "src"), "labels": map[string]any{"org.opencontainers.image.title": "app"}}},
+		"network_mode none":                 {"network_mode": "none"},
+		"built image in its namespace":      {"image": "relist-c1-web:latest", "build": map[string]any{"context": filepath.Join(f.dir, "src"), "tags": []any{"relist-c1-web:v2"}}},
+		"bind to a missing file":            {"volumes": []any{bind(filepath.Join(f.dir, "src", "not-yet", "file"))}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			doc := map[string]any{"name": "relist-c1", "services": map[string]any{"web": mergeImage(web), "db": map[string]any{"image": "postgres"}}}
