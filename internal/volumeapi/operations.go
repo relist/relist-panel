@@ -99,6 +99,19 @@ func (s *Service) operationOf(w http.ResponseWriter, r *http.Request, op volumes
 		return volumes.Request{}, volumes.Volume{}, false
 	}
 
+	// A Volume the Compose policy refuses opens only for an approver, once
+	// the config is approved (ADR-0032).
+	composeID, _ := parsePositiveID(r.PathValue("composeID"))
+	allowed, err := s.composes.VolumeAllowed(r.Context(), composeID, request, volume.Kind == volumes.VolumeBind, volume.Source, volume.LogicalName, s.composes.CurrentUserIsApprover(r.Context()))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "could not check the volume against the policy: "+err.Error())
+		return volumes.Request{}, volumes.Volume{}, false
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "This volume is outside what the Compose policy allows; an approver must approve the Compose first")
+		return volumes.Request{}, volumes.Volume{}, false
+	}
+
 	preflight, err := s.resolver.Preflight(r.Context(), volume)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "volume pre-flight failed: "+err.Error())

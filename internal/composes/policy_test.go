@@ -71,3 +71,47 @@ func TestPolicyEvaluationErrorIsAnError(t *testing.T) {
 		t.Fatal("a config failure was not an error")
 	}
 }
+
+// The Volume Explorer opens a Volume of the deployed file only when no
+// violation names it, or for an approver when the config is approved.
+func TestVolumeAllowed(t *testing.T) {
+	svc, runner, target, db := newDeployService(t, "services: {web: {image: nginx}}\n")
+	if _, err := db.Exec("INSERT INTO users (id, email, password_hash, is_admin, created_at) VALUES (1, 'owner@example.com', 'x', 1, 1)"); err != nil {
+		t.Fatal(err)
+	}
+	dir := ComposeDir(target.Request)
+	runner.config = []byte(fmt.Sprintf(`{"name":"x","services":{"web":{"image":"nginx","volumes":[
+		{"type":"bind","source":"/etc","target":"/e"},
+		{"type":"bind","source":%q,"target":"/d"},
+		{"type":"volume","source":"open","target":"/o"},
+		{"type":"volume","source":"root","target":"/r"}]}},
+		"volumes":{"open":{"name":"%s_open"},"root":{"name":"%s_root","driver_opts":{"device":"/","o":"bind","type":"none"}}}}`,
+		filepath.Join(dir, "data"), target.Request.ProjectName, target.Request.ProjectName))
+	ctx := context.Background()
+	for _, c := range []struct {
+		bind            bool
+		source, logical string
+		want            bool
+	}{
+		{true, "/etc", "", false},
+		{true, filepath.Join(dir, "data"), "", true},
+		{false, target.Request.ProjectName + "_open", "open", true},
+		{false, target.Request.ProjectName + "_root", "root", false},
+	} {
+		got, err := svc.VolumeAllowed(ctx, target.Compose.ID, target.Request, c.bind, c.source, c.logical, false)
+		if err != nil || got != c.want {
+			t.Errorf("%s: allowed = %v, %v, want %v", c.source, got, err, c.want)
+		}
+	}
+	// An approver opens it once the current config is approved.
+	result, _ := svc.EvaluatePolicy(ctx, target)
+	if got, _ := svc.VolumeAllowed(ctx, target.Compose.ID, target.Request, true, "/etc", "", true); got {
+		t.Fatal("an approver opened /etc before approving")
+	}
+	if err := svc.Approve(ctx, target.Compose.ID, result.Hash, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := svc.VolumeAllowed(ctx, target.Compose.ID, target.Request, true, "/etc", "", true); !got {
+		t.Fatal("an approver could not open /etc after approving")
+	}
+}

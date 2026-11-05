@@ -80,6 +80,14 @@ func (c *checker) file(service, what, path string) bool {
 	if path == "" {
 		return true
 	}
+	if what == "bind" {
+		before := len(c.violations)
+		defer func() {
+			for i := before; i < len(c.violations); i++ {
+				c.violations[i].Bind = path
+			}
+		}()
+	}
 	if !isAbs(path) {
 		c.add(service, "%s %s is not an absolute path", what, path)
 		return false
@@ -132,6 +140,7 @@ func (c *checker) nested() {
 			a, b := resolve(filepath.Clean(inner.path)), resolve(filepath.Clean(outer.path))
 			if a != b && within(a, b) {
 				c.add(inner.service, "bind %s is inside bind %s", inner.path, outer.path)
+				c.violations[len(c.violations)-1].Bind = inner.path
 				break
 			}
 		}

@@ -149,3 +149,42 @@ func (s *Service) Approve(ctx context.Context, composeID int64, hash string, use
 		composeID, hash, by, s.now().Unix())
 	return err
 }
+
+// VolumeAllowed reports whether the Volume Explorer may open a Volume of the
+// deployed file req points at: when no violation of that file names it (its
+// bind source, or its named volume key), or for an approver when the
+// Compose's current config is approved. Any failure answers false.
+func (s *Service) VolumeAllowed(ctx context.Context, composeID int64, req RunRequest, bind bool, source, logical string, approver bool) (bool, error) {
+	out, err := s.runner.PolicyConfig(ctx, req)
+	if err != nil {
+		return false, fmt.Errorf("resolve the deployed config for the policy: %w", err)
+	}
+	violations, err := policy.Check(out, "", policy.Rules{
+		ComposeDir: ComposeDir(req), Roots: s.policyRoots, ProjectName: req.ProjectName, PanelDomain: s.panelDomain,
+	})
+	if err != nil {
+		return false, err
+	}
+	named := false
+	for _, v := range violations {
+		if bind && v.Bind != "" && filepath.Clean(v.Bind) == filepath.Clean(source) || !bind && v.Volume != "" && v.Volume == logical {
+			named = true
+			break
+		}
+	}
+	if !named {
+		return true, nil
+	}
+	if !approver {
+		return false, nil
+	}
+	t, err := s.Target(ctx, composeID)
+	if err != nil {
+		return false, err
+	}
+	result, err := s.EvaluatePolicy(ctx, t)
+	if err != nil {
+		return false, err
+	}
+	return result.Approved, nil
+}

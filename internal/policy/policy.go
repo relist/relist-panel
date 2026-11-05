@@ -21,6 +21,10 @@ import (
 type Violation struct {
 	Service string `json:"service"`
 	Message string `json:"message"`
+	// Bind and Volume name the bind source or named volume key the
+	// violation is about, for the Volume Explorer.
+	Bind   string `json:"-"`
+	Volume string `json:"-"`
 }
 
 // Rules is what a config is checked against.
@@ -263,6 +267,12 @@ func (c *checker) volumes(name string, value any) {
 // namedVolume refuses a volume that can open a host path or another
 // Compose's data.
 func (c *checker) namedVolume(name, key string) {
+	before := len(c.violations)
+	defer func() {
+		for i := before; i < len(c.violations); i++ {
+			c.violations[i].Volume = key
+		}
+	}()
 	volumes, _ := c.top["volumes"].(map[string]any)
 	volume, ok := volumes[key].(map[string]any)
 	if !ok {
