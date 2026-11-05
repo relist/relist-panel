@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -114,5 +115,19 @@ func TestFailedLoginCapIsPerEmail(t *testing.T) {
 	events := loginEvents(t, f)
 	if last := events[len(events)-1]; last.actor != "admin@example.com" {
 		t.Fatalf("the admin's failure was dropped: last event %+v", last)
+	}
+}
+
+// Emails with no account share one cap per address: typing a new email on
+// every try must not get past it.
+func TestFailedLoginsWithUnknownEmailsShareOneCap(t *testing.T) {
+	f := newUserFixture(t)
+	for i := range failedLoginsPerMinute + 3 {
+		f.login(fmt.Sprintf("nobody%d@example.com", i), "guess")
+	}
+	f.login("admin@example.com", "wrong password typed")
+	events := loginEvents(t, f)
+	if len(events) != failedLoginsPerMinute+1 || events[len(events)-1].actor != "admin@example.com" {
+		t.Fatalf("events = %d, want %d unknown and the admin's failure", len(events), failedLoginsPerMinute)
 	}
 }

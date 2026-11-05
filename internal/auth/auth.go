@@ -218,7 +218,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	// database has one connection): this defer runs after its Rollback.
 	var event *audit.Event
 	defer func() {
-		if event == nil || (event.Outcome == audit.OutcomeDenied && !s.failedLogins.Allow(event.IP+" "+strings.ToLower(email))) {
+		if event == nil || (event.Outcome == audit.OutcomeDenied && !s.failedLogins.Allow(failedLoginKey(*event))) {
 			return
 		}
 		s.recordAudit(r.Context(), *event)
@@ -714,7 +714,17 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 // failedLoginsPerMinute caps the failed sign-ins one address records a
-// minute for one typed email. Per email too: behind Traefik every sign-in
-// comes from one address, and one script must not hide another account's
-// failures.
+// minute for one account, and for all emails with no account together.
+// Per account: behind Traefik every sign-in comes from one address, and one
+// script must not hide a real account's failures. Unknown emails together:
+// typing a new one on every try must not get past the cap.
 const failedLoginsPerMinute = 10
+
+// failedLoginKey is the cap a failed sign-in counts against: its address
+// and account, or its address and "unknown".
+func failedLoginKey(e audit.Event) string {
+	if e.ActorUserID == 0 {
+		return e.IP + " unknown"
+	}
+	return fmt.Sprintf("%s %d", e.IP, e.ActorUserID)
+}

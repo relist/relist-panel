@@ -71,8 +71,8 @@ Rulings where the spec was silent:
 11. The HTTP side lives in `internal/auditapi`, since `authz` imports `audit`.
 12. A create event carries the new Environment's or Compose's `name` in its detail; SSH key, Certificate and Builder events are targeted at the thing's name, read before the handler.
 13. On Activity, a non-admin reads a grant change with only the Project-wide roles and those of the Environments they edit.
-14. HEAD is not a download. A partial download (a GET answered 206) records the `range` it asked for, cut to 64 bytes. A download whose body broke off midway is still `ok`, with `incomplete: true`: the bytes sent left the host.
-15. A User records at most 10 `denied` events per action a minute, and an address at most 10 `auth.login_failed` a minute for each email typed (behind Traefik every sign-in shares one address); the rest are dropped, in memory, until the minute passes. A script hammering the panel shows as its first ten tries each minute, not every one.
+14. HEAD is not a download. A partial download (a GET answered 206) records the `range` it asked for, cut to 64 bytes. A download whose body broke off midway (the browser hung up, or the file or stream being read failed) is still `ok`, with `incomplete: true`: the bytes already sent left the host.
+15. A User records at most 10 `denied` events per action a minute, and an address at most 10 `auth.login_failed` a minute for each account, and 10 for all emails with no account together (behind Traefik every sign-in shares one address, so the cap must not let one script hide a real account's failures, nor let a new email on each try get past it); the rest are dropped, in memory, until the minute passes. A script hammering the panel shows as its first ten tries each minute, not every one.
 
 **The Audit log is not tamper-proof against an Admin**, who can reach `panel.db` from a container; it records a trusted team's work, it does not police Admins.
 
