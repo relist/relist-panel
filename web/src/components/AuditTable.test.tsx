@@ -57,4 +57,25 @@ describe('AuditTable', () => {
     await user.click(screen.getByRole('button', { name: /Retry/ }));
     expect(await screen.findByText('compose.update')).toBeTruthy();
   });
+
+  it('retries a failed Load more from the page that failed, keeping the rows already shown', async () => {
+    let failNext = true;
+    const load = vi.fn(async (query: { cursor?: number }): Promise<AuditPage> => {
+      if (!query.cursor) return { items: [event(3)], nextCursor: 3 };
+      if (failNext) {
+        failNext = false;
+        throw new Error('boom');
+      }
+      return { items: [event(2, { action: 'project.update' })], nextCursor: null };
+    });
+    const user = userEvent.setup();
+    render(<App><AuditTable load={load} /></App>);
+    expect(await screen.findByText('compose.update')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /Load more/ }));
+    expect(await screen.findByText('boom')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /Retry/ }));
+    expect(await screen.findByText('project.update')).toBeTruthy();
+    expect(load).toHaveBeenLastCalledWith({ cursor: 3 });
+    expect(screen.getByText('compose.update')).toBeTruthy();
+  });
 });
