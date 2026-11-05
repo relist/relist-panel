@@ -44,6 +44,9 @@ type Service struct {
 	selfAuthenticated func(path string) bool
 	// version is the build's version, shown by the public status route.
 	version string
+	// access reports a signed-in User's roles for the status route; nil
+	// leaves "access" null.
+	access func(context.Context, User) (any, error)
 }
 
 // AllowSelfAuthenticated lets requests to the paths allow reports true for
@@ -77,6 +80,13 @@ func New(db *sql.DB) *Service {
 }
 
 // WithVersion sets the build version that GET /api/auth/status reports.
+// WithAccess makes the status route report fn's answer as "access": the
+// User's effective roles, which package auth cannot work out itself.
+func (s *Service) WithAccess(fn func(context.Context, User) (any, error)) *Service {
+	s.access = fn
+	return s
+}
+
 func (s *Service) WithVersion(version string) *Service {
 	s.version = version
 	return s
@@ -156,6 +166,14 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 	body := map[string]any{"authenticated": authenticated, "version": s.version}
 	if authenticated {
 		body["user"] = map[string]any{"id": user.ID, "email": user.Email, "isAdmin": user.IsAdmin, "isOwner": user.IsOwner()}
+		var access any
+		if s.access != nil {
+			if access, err = s.access(r.Context(), user); err != nil {
+				writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
+				return
+			}
+		}
+		body["access"] = access
 	}
 	writeJSON(w, http.StatusOK, body)
 }
@@ -390,6 +408,12 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 // authenticated resolves the request's session cookie to its User. A
 // disabled User's sessions count as signed out, so a disable takes effect on
 // the next request even before its sessions are deleted.
+// CurrentUser is the User whose live session r carries, if any: the check
+// Middleware makes, for authz to repeat on a long-lived connection.
+func (s *Service) CurrentUser(r *http.Request) (User, bool, error) {
+	return s.authenticated(r)
+}
+
 func (s *Service) authenticated(r *http.Request) (User, bool, error) {
 	if err := s.requireDatabase(); err != nil {
 		return User{}, false, err

@@ -81,10 +81,33 @@ import type { PanelUpdateStatus, PreviewResponse } from './panel-update';
 /** The signed-in User as `/api/auth/status` reports it. */
 export type SignedInUser = { id: number; email: string; isAdmin: boolean; isOwner: boolean };
 
+/** A Role in an Environment; `none` is No access, set only on an Environment. */
+export type Role = 'none' | 'viewer' | 'operator' | 'editor';
+
+/**
+ * What a member may reach, from `/api/auth/status`: each visible Project with
+ * its Project Grant (null when there is none) and the Environments they have a
+ * role in. Null for an admin, who reaches everything.
+ */
+export type AccessView = {
+  projects: { id: number; role: Role | null; environments: { id: number; role: Role }[] }[];
+};
+
 export type AuthStatus = {
   authenticated: boolean;
   /** Present when authenticated. */
   user?: SignedInUser;
+  /** Present when authenticated; null for an admin. */
+  access?: AccessView | null;
+};
+
+/** One Grant: on the Project when `environmentId` is null. */
+export type Grant = {
+  userId: number;
+  email: string;
+  projectId: number;
+  environmentId: number | null;
+  role: Role;
 };
 
 export type UserStatus = 'invited' | 'active' | 'disabled';
@@ -316,6 +339,14 @@ export const api = {
     request<PanelUser>(`/api/users/${id}`, jsonInit('PATCH', patch)),
   deleteUser: (id: number) => request<void>(`/api/users/${id}`, { method: 'DELETE' }),
   resetUser: (id: number) => request<IssuedLink>(`/api/users/${id}/reset`, { method: 'POST' }),
+  listUserGrants: (userId: number) => request<Grant[]>(`/api/users/${userId}/grants`),
+  /** Replaces every Grant of the User. */
+  putUserGrants: (userId: number, grants: Pick<Grant, 'projectId' | 'environmentId' | 'role'>[]) =>
+    request<Grant[]>(`/api/users/${userId}/grants`, jsonInit('PUT', grants)),
+  listProjectGrants: (projectId: number) => request<Grant[]>(`/api/projects/${projectId}/grants`),
+  /** Replaces every Grant on the Project. */
+  putProjectGrants: (projectId: number, grants: Pick<Grant, 'userId' | 'environmentId' | 'role'>[]) =>
+    request<Grant[]>(`/api/projects/${projectId}/grants`, jsonInit('PUT', grants)),
   getInvite: (token: string) =>
     request<{ email: string; kind: IssuedLink['kind'] }>(`/api/invites/${encodeURIComponent(token)}`),
   acceptInvite: (token: string, password: string) =>

@@ -164,6 +164,7 @@ func volumeArgv(image string, req volumes.Request) []string {
 // the helper. exec.CommandContext kills the CLI child when ctx is cancelled.
 func execDocker(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env = cliEnv(os.Environ())
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr

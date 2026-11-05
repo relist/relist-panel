@@ -103,3 +103,54 @@ describe('ProjectPage deploy', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe(paths.compose(1, 2, 7)));
   });
 });
+
+describe('Roles on the Project page', () => {
+  const member = { id: 5, email: 'm@example.com', isAdmin: false, isOwner: false };
+  const as = (projectRole: 'editor' | null, environmentRole: 'viewer' | 'operator' | 'editor') =>
+    vi.mocked(api.authStatus).mockResolvedValue({
+      authenticated: true, user: member,
+      access: { projects: [{ id: 1, role: projectRole, environments: [{ id: 2, role: environmentRole }] }] },
+    });
+  const disabled = (name: RegExp | string) => (screen.getByRole('button', { name }) as HTMLButtonElement).disabled;
+
+  it('lets a Project Editor add an Environment and edit details', async () => {
+    as('editor', 'editor');
+    renderPage();
+    await screen.findByText('Compose A');
+    await waitFor(() => expect(disabled(/New Environment/)).toBe(false));
+    expect(disabled(/Edit details/)).toBe(false);
+  });
+
+  it('keeps an Environment Editor from Project-level changes, but not from Composes', async () => {
+    as(null, 'editor');
+    renderPage();
+    await screen.findByText('Compose A');
+    await waitFor(() => expect(disabled(/New Environment/)).toBe(true));
+    expect(disabled(/Edit details/)).toBe(true);
+    expect(disabled(/New Compose/)).toBe(false);
+  });
+
+  it('shows the Members tab to admins only', async () => {
+    renderPage();
+    expect(await screen.findByRole('tab', { name: 'Members' })).toBeTruthy();
+  });
+
+  it('hides the Members tab from a Project Editor', async () => {
+    as('editor', 'editor');
+    renderPage();
+    await screen.findByText('Compose A');
+    await waitFor(() => expect(disabled(/New Environment/)).toBe(false));
+    expect(screen.queryByRole('tab', { name: 'Members' })).toBeNull();
+  });
+
+  it('lets a Viewer open Composes only', async () => {
+    as(null, 'viewer');
+    renderPage();
+    await screen.findByText('Compose A');
+    await waitFor(() => expect(disabled(/New Compose/)).toBe(true));
+    for (const button of screen.getAllByRole('button', { name: /Deploy$/ })) {
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect(screen.getAllByRole('button', { name: /Open$/ }).every((button) => !(button as HTMLButtonElement).disabled)).toBe(true);
+  });
+});

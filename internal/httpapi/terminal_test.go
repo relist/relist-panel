@@ -1015,3 +1015,31 @@ func TestTerminalSessionPassesDockerErrorsThrough(t *testing.T) {
 		t.Fatalf("Starts = %+v, want none", starts)
 	}
 }
+
+// A member whose Editor Grant drops to Viewer loses an open Terminal within
+// one re-check, and cannot open another.
+func TestTerminalClosesWhenAccessIsRemoved(t *testing.T) {
+	server, projectID, environmentID, composeID, projectName := newTerminalSessionServer(t)
+	scriptAppContainer(server, projectName, terminal.Container{ID: "c1", Name: "relist-c3-app-1", Number: 1}, "/bin/bash")
+	signInAsUser(t, server, 2, "member@example.com", false)
+	if _, err := server.db.Exec("INSERT INTO grants (user_id, project_id, environment_id, role) VALUES (2, ?, NULL, 'editor')", projectID); err != nil {
+		t.Fatal(err)
+	}
+	path := terminalSessionPath(projectID, environmentID, composeID, "service=app")
+	conn, _ := dialReady(t, server, path)
+
+	if _, err := server.db.Exec("UPDATE grants SET role = 'viewer' WHERE user_id = 2"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _, err := conn.Read(ctx)
+	if status := websocket.CloseStatus(err); status != websocket.StatusPolicyViolation {
+		t.Fatalf("after demotion: read = %v (status %d), want close %d", err, status, websocket.StatusPolicyViolation)
+	}
+
+	_, resp, err := dialTerminal(t, server, path, nil)
+	if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("reopen as viewer: err %v, response %v; want 403", err, resp)
+	}
+}

@@ -13,6 +13,8 @@ vi.mock('./api', async (importOriginal) => {
     ...original,
     api: {
       authStatus: vi.fn(),
+      createEnvironment: vi.fn(),
+      deleteEnvironment: vi.fn(),
       login: vi.fn(),
       createComposeVariable: vi.fn(),
       deleteComposeVariable: vi.fn(),
@@ -201,5 +203,41 @@ describe('signed-in User', () => {
       await expect(hook.result.current.signIn('bob@example.com', 'pw')).resolves.toEqual({ kind: 'signedIn' });
     });
     expect(hook.result.current.auth).toEqual({ checked: true, authenticated: true });
+  });
+});
+
+describe('Access after Environment changes', () => {
+  const bob = { id: 5, email: 'bob@example.com', isAdmin: false, isOwner: false };
+  const before = { projects: [{ id: 1, role: 'editor' as const, environments: [{ id: 2, role: 'editor' as const }] }] };
+  const after = { projects: [{ id: 1, role: 'editor' as const, environments: [{ id: 2, role: 'editor' as const }, { id: 3, role: 'editor' as const }] }] };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocked.authStatus.mockResolvedValue({ authenticated: true, user: bob, access: before } as never);
+    mocked.listProjects.mockResolvedValue([{ id: 1, name: 'p' }] as never);
+    mocked.listEnvironments.mockResolvedValue([{ id: 2, name: 'e' }] as never);
+    mocked.listComposes.mockResolvedValue([] as never);
+    mocked.createEnvironment.mockResolvedValue({ id: 3, name: 'staging' } as never);
+    mocked.deleteEnvironment.mockResolvedValue(undefined as never);
+  });
+
+  it('re-reads access after creating an Environment, so its role is known', async () => {
+    const hook = await loadedPanel();
+    await waitFor(() => expect(hook.result.current.auth.access).toEqual(before));
+    mocked.authStatus.mockResolvedValue({ authenticated: true, user: bob, access: after } as never);
+    await act(async () => {
+      await hook.result.current.addEnvironment(1, 'staging');
+    });
+    await waitFor(() => expect(hook.result.current.auth.access).toEqual(after));
+  });
+
+  it('re-reads access after deleting an Environment', async () => {
+    const hook = await loadedPanel();
+    await waitFor(() => expect(hook.result.current.auth.access).toEqual(before));
+    const calls = mocked.authStatus.mock.calls.length;
+    await act(async () => {
+      await hook.result.current.deleteEnvironment(1, 2);
+    });
+    await waitFor(() => expect(mocked.authStatus.mock.calls.length).toBe(calls + 1));
   });
 });

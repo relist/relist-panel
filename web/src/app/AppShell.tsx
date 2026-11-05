@@ -11,6 +11,7 @@ import {
   Flex,
   Layout,
   Menu,
+  Result,
   Tag,
   Tooltip,
   Typography,
@@ -19,7 +20,7 @@ import {
 import type { MenuProps } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Link, Outlet, useLocation, useNavigate } from 'react-router';
+import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router';
 
 import { DiskPressureFooter } from '../components/DiskPressureFooter';
 import { PanelVersionFooter } from '../components/PanelVersionFooter';
@@ -28,7 +29,7 @@ import { useDiskPressure } from '../data/useDiskPressure';
 import { useGlobalDeploymentQueue } from '../data/useGlobalDeploymentQueue';
 import { usePanelUpdateStatus } from '../data/usePanelUpdate';
 import { useVulnSummary } from '../data/useVulnSummary';
-import { NoAccessPage } from '../pages/NoAccessPage';
+import { useIsAdmin } from '../data/useCan';
 import { summaryBadge } from '../pages/vulnerabilities-view';
 import { usePanel } from '../data/store';
 import { composeState, projectComposes, summarize } from '../data/types';
@@ -36,6 +37,14 @@ import { COMPOSE_STATE_META, LAYOUT } from './theme';
 import { paths, resolvePath } from './paths';
 
 const { Text } = Typography;
+
+/**
+ * The routes a member reaches: their Projects, the Deployments and their own
+ * Account. The API decides inside each; every other page is an admin's.
+ */
+function memberMay(pattern: string | undefined): boolean {
+  return pattern === 'projects' || pattern === 'deployments' || pattern === 'account' || !!pattern?.startsWith('projects/');
+}
 
 /** antd's zero-width sider trigger is a 40px square. */
 const MOBILE_TRIGGER = 40;
@@ -55,11 +64,12 @@ export function AppShell() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { auth, loadProjects, projects, refreshStatus, signOut } = usePanel();
-  // A non-admin may reach only their Account until roles exist, so the shell
-  // offers nothing else and asks the API for nothing else. A status without a
-  // User (an older panel) is read as an admin; the API decides either way.
-  const adminView = auth.authenticated && (auth.user?.isAdmin ?? true);
-  const { data: deploymentQueue } = useGlobalDeploymentQueue(adminView);
+  // A member sees their Projects and the Deployments; the host-wide pages and
+  // their requests stay an admin's (ADR-0031). A status without a User (an
+  // older panel) is read as an admin; the API decides either way.
+  const isAdmin = useIsAdmin();
+  const adminView = auth.authenticated && isAdmin;
+  const { data: deploymentQueue } = useGlobalDeploymentQueue(auth.authenticated);
   const diskPressure = useDiskPressure(adminView);
   const queuedCount = deploymentQueue?.filter((d) => d.status === 'queued').length ?? 0;
   const { data: vulnSummary } = useVulnSummary({}, adminView);
@@ -83,10 +93,10 @@ export function AppShell() {
   }, [loadProjects]);
 
   useEffect(() => {
-    if (adminView) {
+    if (auth.authenticated) {
       void loadTree();
     }
-  }, [adminView, loadTree]);
+  }, [auth.authenticated, loadTree]);
 
   const resolved = useMemo(() => resolvePath(pathname), [pathname]);
 
@@ -115,7 +125,7 @@ export function AppShell() {
             ? 'certificates'
           : resolved.pattern === 'traefik'
             ? 'traefik'
-          : resolved.pattern === 'users'
+          : resolved.pattern === 'users' || resolved.pattern === 'users/:userId'
             ? 'users'
           : resolved.pattern === 'vulnerabilities'
             ? 'vulnerabilities'
@@ -140,13 +150,32 @@ export function AppShell() {
     [projects],
   );
 
-  const menuItems: MenuProps['items'] = !adminView ? [] : [
+  const projectsItem = { key: 'projects', icon: <FolderOutlined />, label: 'Projects' };
+  const deploymentsItem = {
+    key: 'deployments', icon: <RocketOutlined />,
+    label: <Flex align="center" justify="space-between" gap={8}><span>Deployments</span><Badge count={queuedCount} color={token.colorPrimary} title={`${queuedCount} queued deployments`} /></Flex>,
+  };
+  const recentProjects = {
+    type: 'group' as const,
+    label: 'Recent Projects',
+    children: projects.slice(0, 5).map((project) => {
+      const composes = projectComposes(project);
+      const rollup = summarize(composes);
+      const state = composeState(
+        { running: rollup.running, total: rollup.total },
+        composes.find((compose) => compose.lastDeployedAt)?.lastDeployedAt,
+      );
+      return {
+        key: `project-${project.id}`,
+        label: project.name,
+        icon: <Badge status={COMPOSE_STATE_META[state].badge} />,
+      };
+    }),
+  };
+  const menuItems: MenuProps['items'] = !auth.authenticated ? [] : !adminView ? [projectsItem, deploymentsItem, recentProjects] : [
     { key: 'overview', icon: <AppstoreOutlined />, label: 'Overview' },
-    { key: 'projects', icon: <FolderOutlined />, label: 'Projects' },
-    {
-      key: 'deployments', icon: <RocketOutlined />,
-      label: <Flex align="center" justify="space-between" gap={8}><span>Deployments</span><Badge count={queuedCount} color={token.colorPrimary} title={`${queuedCount} queued deployments`} /></Flex>,
-    },
+    projectsItem,
+    deploymentsItem,
     { key: 'monitoring', icon: <DashboardOutlined />, label: 'Monitoring' },
     { key: 'docker', icon: <CloudServerOutlined />, label: 'Docker' },
     { key: 'panel-update', icon: <CloudDownloadOutlined />, label: 'Panel update' },
@@ -160,23 +189,7 @@ export function AppShell() {
     { key: 'certificates', icon: <SafetyCertificateOutlined />, label: 'Certificates' },
     { key: 'traefik', icon: <GlobalOutlined />, label: 'Traefik' },
     { key: 'users', icon: <TeamOutlined />, label: 'Users' },
-    {
-      type: 'group',
-      label: 'Recent Projects',
-      children: projects.slice(0, 5).map((project) => {
-        const composes = projectComposes(project);
-        const rollup = summarize(composes);
-        const state = composeState(
-          { running: rollup.running, total: rollup.total },
-          composes.find((compose) => compose.lastDeployedAt)?.lastDeployedAt,
-        );
-        return {
-          key: `project-${project.id}`,
-          label: project.name,
-          icon: <Badge status={COMPOSE_STATE_META[state].badge} />,
-        };
-      }),
-    },
+    recentProjects,
   ];
 
   const onMenuClick: MenuProps['onClick'] = ({ key }) => {
@@ -406,7 +419,13 @@ export function AppShell() {
               />
             )}
             <PasswordFromEnvBanner />
-            {adminView || resolved?.pattern === 'account' ? <Outlet /> : <NoAccessPage />}
+            {isAdmin || memberMay(resolved?.pattern) ? (
+              <Outlet />
+            ) : resolved?.pattern === '/' ? (
+              <Navigate replace to={paths.projects} />
+            ) : (
+              <Result status="403" subTitle="An admin manages this page." title="You don't have permission" />
+            )}
           </div>
         </Layout.Content>
       </Layout>

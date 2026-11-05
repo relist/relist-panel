@@ -10,8 +10,10 @@ import (
 	"strconv"
 	"time"
 
+	"relist-panel/internal/authz"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/dockerhost"
+	"relist-panel/internal/grants"
 	"relist-panel/internal/sources"
 )
 
@@ -108,6 +110,13 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusBadRequest, "mode must be deploy, build or skip-build")
 		return
+	}
+	if in.FreshVolumes {
+		// Wiping volumes deletes data, which only an Editor may (ADR-0031).
+		if scope, ok := authz.ScopeFrom(r.Context()); ok && authz.RoleIn(r.Context(), scope.EnvironmentID) < grants.RoleEditor {
+			writeError(w, http.StatusForbidden, "Deploying with fresh volumes needs the Editor role")
+			return
+		}
 	}
 	req := Request{Mode: in.Mode, NoCache: in.NoCache, FreshVolumes: in.FreshVolumes}
 	if existing, err := queuedFor(r.Context(), a.q.d.Store.db, composeID); err == nil {
@@ -327,9 +336,16 @@ func (a *API) queue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not list the queue")
 		return
 	}
+	access, member := authz.Member(r.Context())
 	out := make([]activeJSON, 0, len(active))
 	for _, x := range active {
-		out = append(out, activeJSON(x))
+		row := activeJSON(x)
+		if member && access.EnvironmentRole(x.EnvironmentID) == grants.RoleNone {
+			// Another member's work: its place in the queue shows why
+			// theirs waits, but not whose it is.
+			row = activeJSON{Number: x.Number, Status: x.Status, Step: x.Step}
+		}
+		out = append(out, row)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

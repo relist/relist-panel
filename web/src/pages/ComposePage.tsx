@@ -21,6 +21,7 @@ import {
   Button,
   Card,
   Col,
+  ConfigProvider,
   Descriptions,
   Dropdown,
   Empty,
@@ -41,6 +42,7 @@ import {
 } from 'antd';
 import type { MenuProps } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
 import { paths } from '../app/paths';
@@ -54,6 +56,7 @@ import { ComposeTerminalTab } from '../components/ComposeTerminalTab';
 import { ComposeVariablesTab } from '../components/ComposeVariablesTab';
 import { ComposeVolumesTab } from '../components/ComposeVolumesTab';
 import { DangerModal } from '../components/DangerModal';
+import { needsRole, RoleHint } from '../components/RoleHint';
 import { ZeroDowntimeRefusalModal } from '../components/ZeroDowntimeRefusalModal';
 import { DetectDockerfilesModal } from '../components/DetectDockerfilesModal';
 import { FullscreenEditor } from '../components/FullscreenEditor';
@@ -85,6 +88,7 @@ import { useComposeSource } from './useComposeSource';
 import { useDeploymentHistory } from './useDeploymentHistory';
 import { VulnBadges } from '../components/VulnBadges';
 import { VulnReportButton } from '../components/VulnReportButton';
+import { useCan, useIsAdmin } from '../data/useCan';
 import { useVulnSummary } from '../data/useVulnSummary';
 import { summaryBadge, vulnLink } from './vulnerabilities-view';
 import { buildComposeReport, composeBuilds, reportFilename } from './vuln-report';
@@ -139,6 +143,10 @@ export function ComposePage() {
   const compose = location?.compose;
   const environment = location?.environment;
   const project = location?.project;
+  // Convenience only: the API decides (ADR-0031).
+  const canOperate = useCan(environment?.id, 'operator');
+  const canEdit = useCan(environment?.id, 'editor');
+  const isAdmin = useIsAdmin();
 
   const [draft, setDraft] = useState(compose?.yamlContent ?? '');
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
@@ -147,7 +155,7 @@ export function ComposePage() {
   const screens = Grid.useBreakpoint();
   const [logsText, setLogsText] = useState<string>();
   const [logServices, setLogServices] = useState<string[]>([]);
-  const { data: vulnSummary } = useVulnSummary({ composeId });
+  const { data: vulnSummary } = useVulnSummary({ composeId }, isAdmin);
   const [logLines, setLogLines] = useState(200);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [freshOpen, setFreshOpen] = useState(false);
@@ -392,11 +400,12 @@ export function ComposePage() {
   // The Volumes tab cannot ask for its own data — whether the tab exists at
   // all depends on the answer — so the page loads it once per Compose, behind
   // the same deep-link gate as the Services rows.
+  // The Volume Explorer is an Editor's; anyone else is not asked about it.
   useEffect(() => {
-    if (knownComposeId !== undefined) {
+    if (knownComposeId !== undefined && canEdit) {
       void fetchVolumes();
     }
-  }, [fetchVolumes, knownComposeId]);
+  }, [canEdit, fetchVolumes, knownComposeId]);
 
   const fetchOrphans = useCallback(() => {
     const request = ++orphansRequest.current;
@@ -420,10 +429,10 @@ export function ComposePage() {
   }, [composeId, loadOrphanVolumes]);
 
   useEffect(() => {
-    if (knownComposeId !== undefined) {
+    if (knownComposeId !== undefined && canEdit) {
       void fetchOrphans();
     }
-  }, [fetchOrphans, knownComposeId]);
+  }, [canEdit, fetchOrphans, knownComposeId]);
 
   const deletePlan = useRemovalPlan(
     deleteOpen && compose && environment && project
@@ -529,8 +538,10 @@ export function ComposePage() {
   // which volumes are orphans.
   const refreshAfterDeploy = () => {
     fetchServices();
-    void fetchVolumes();
-    void fetchOrphans();
+    if (canEdit) {
+      void fetchVolumes();
+      void fetchOrphans();
+    }
   };
 
   // Queues a Deployment, then shows it on the Deployments tab. `fresh` removes
@@ -632,6 +643,10 @@ export function ComposePage() {
     }
   };
 
+  // The tabs that change the Compose: their controls stay visible but
+  // disabled below Editor, and the Alert above the tabs says why.
+  const editorOnly = (node: ReactNode) => <ConfigProvider componentDisabled={!canEdit}>{node}</ConfigProvider>;
+
   // Fresh volumes needs the page's Volumes resolution: it names what will be
   // removed. A never-deployed Compose has none (an error payload) and a hidden
   // tab means the feature cannot run, so the item stays visible but disabled
@@ -655,11 +670,11 @@ export function ComposePage() {
         ]
       : []),
     {
-      disabled: freshRefusal !== undefined,
+      disabled: !canEdit || freshRefusal !== undefined,
       icon: <DeleteOutlined />,
       key: 'deploy-fresh',
       label: (
-        <Tooltip placement="left" title={freshRefusal}>
+        <Tooltip placement="left" title={canEdit ? freshRefusal : needsRole('editor')}>
           <span>Deploy with fresh volumes</span>
         </Tooltip>
       ),
@@ -669,21 +684,28 @@ export function ComposePage() {
 
   const moreMenu: MenuProps['items'] = [
     {
-      disabled: compose.status.total === 0,
+      disabled: !canOperate || compose.status.total === 0,
       icon: <RedoOutlined />,
       key: 'restart',
-      label: 'Restart containers',
+      label: <RoleHint allowed={canOperate} level="operator">Restart containers</RoleHint>,
       onClick: () => void lifecycle('restart'),
     },
     {
-      disabled: compose.status.total === 0,
+      disabled: !canOperate || compose.status.total === 0,
       icon: <StopOutlined />,
       key: 'stop',
-      label: 'Stop containers',
+      label: <RoleHint allowed={canOperate} level="operator">Stop containers</RoleHint>,
       onClick: () => void lifecycle('stop'),
     },
     { type: 'divider' },
-    { danger: true, icon: <DeleteOutlined />, key: 'delete', label: 'Delete Compose', onClick: () => setDeleteOpen(true) },
+    {
+      danger: true,
+      disabled: !canEdit,
+      icon: <DeleteOutlined />,
+      key: 'delete',
+      label: <RoleHint allowed={canEdit} level="editor">Delete Compose</RoleHint>,
+      onClick: () => setDeleteOpen(true),
+    },
   ];
 
   return (
@@ -714,7 +736,7 @@ export function ComposePage() {
               <Button icon={<MoreOutlined />} />
             </Dropdown>
             <Button
-              disabled={!dirty}
+              disabled={!dirty || !canEdit}
               icon={<SaveOutlined />}
               loading={isPending(`save-compose:${compose.id}`)}
               onClick={() => void save()}
@@ -731,18 +753,20 @@ export function ComposePage() {
                   {deploymentButtonLabel(latestDeployment, runningDeployment)}
                 </Button>
               ) : (
-                <Button
-                  icon={<RocketOutlined />}
-                  disabled={!sourceReady}
-                  loading={isPending(`deploy:${compose.id}`)}
-                  onClick={() => void deploy()}
-                  type="primary"
-                >
-                  {hasSource ? 'Build & Deploy' : dirty ? 'Save & Deploy' : 'Deploy'}
-                </Button>
+                <RoleHint allowed={canOperate} level="operator">
+                  <Button
+                    icon={<RocketOutlined />}
+                    disabled={!sourceReady || !canOperate}
+                    loading={isPending(`deploy:${compose.id}`)}
+                    onClick={() => void deploy()}
+                    type="primary"
+                  >
+                    {hasSource ? 'Build & Deploy' : dirty ? 'Save & Deploy' : 'Deploy'}
+                  </Button>
+                </RoleHint>
               )}
               <Dropdown menu={{ items: deployMenu }} placement="bottomRight" trigger={['click']}>
-                <Button aria-label="More deploy options" disabled={!sourceReady} icon={<DownOutlined />} type="primary" />
+                <Button aria-label="More deploy options" disabled={!sourceReady || !canOperate} icon={<DownOutlined />} type="primary" />
               </Dropdown>
             </Space.Compact>
           </>
@@ -783,6 +807,15 @@ export function ComposePage() {
           showIcon
           style={{ marginBottom: LAYOUT.gutterSmall }}
           type="warning"
+        />
+      )}
+
+      {!canEdit && (
+        <Alert
+          showIcon
+          style={{ marginBottom: LAYOUT.gutterSmall }}
+          title="You can view this Compose. Changing it needs the Editor role."
+          type="info"
         />
       )}
 
@@ -863,6 +896,7 @@ export function ComposePage() {
                       <YamlEditor
                         autoHeight={{ max: LAYOUT.editorAutoMaxHeight, min: LAYOUT.editorAutoMinHeight }}
                         onChange={setDraft}
+                        readOnly={!canEdit}
                         path={`${project.id}-${environment.id}-${compose.id}.yml`}
                         value={draft}
                       />
@@ -1028,7 +1062,7 @@ export function ComposePage() {
                             label: 'Variables',
                           },
                           {
-                            children: (
+                            children: editorOnly(
                               <Text code style={{ fontSize: 12 }}>
                                 {`\${${environment.variables[0]?.key ?? 'KEY'}}`}
                               </Text>
@@ -1058,7 +1092,7 @@ export function ComposePage() {
             label: 'Editor',
           },
           {
-            children: (
+            children: editorOnly(
               <ComposeVariablesTab
                 compose={compose}
                 deploying={isPending(`deploy:${compose.id}`)}
@@ -1074,7 +1108,7 @@ export function ComposePage() {
             label: 'Variables',
           },
           {
-            children: (
+            children: editorOnly(
               <ComposeDomainsTab
                 compose={compose}
                 deploying={isPending(`deploy:${compose.id}`)}
@@ -1218,8 +1252,9 @@ export function ComposePage() {
                 onOpenEditor={() => navigate(paths.compose(project.id, environment.id, compose.id))}
               />
             ),
+            disabled: !canEdit,
             key: 'terminal',
-            label: 'Terminal',
+            label: <RoleHint allowed={canEdit} level="editor">Terminal</RoleHint>,
           },
           {
             children: (
@@ -1254,8 +1289,9 @@ export function ComposePage() {
                       payload={volumesPayload}
                     />
                   ),
+                  disabled: !canEdit,
                   key: 'volumes',
-                  label: 'Volumes',
+                  label: <RoleHint allowed={canEdit} level="editor">Volumes</RoleHint>,
                 },
               ]),
         ]}

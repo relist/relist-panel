@@ -24,6 +24,7 @@ import (
 	"relist-panel/internal/domains"
 	"relist-panel/internal/environments"
 	"relist-panel/internal/environmentvariables"
+	"relist-panel/internal/grants"
 	"relist-panel/internal/images"
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/migration"
@@ -110,7 +111,13 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	migrationOptions := d.Migration
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
-	authService := auth.New(db).WithVersion(d.Version)
+	authService := auth.New(db).WithVersion(d.Version).WithAccess(func(ctx context.Context, u auth.User) (any, error) {
+		access, err := grants.Load(ctx, db, u.ID, u.IsAdmin)
+		if err != nil {
+			return nil, err
+		}
+		return access.View(), nil
+	})
 	authService.RegisterRoutes(mux)
 	composesService := composes.New(db, runner, dataDir).WithEngine(d.Engine)
 	projectsService := projects.New(db, composesService)
@@ -119,6 +126,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	environmentsService.RegisterRoutes(mux)
 	environmentVariablesService := environmentvariables.New(db)
 	environmentVariablesService.RegisterRoutes(mux)
+	grants.New(db).RegisterRoutes(mux)
 	deploymentStore := deployments.NewStore(db)
 	var builderPool deployments.BuilderPool
 	if d.Buildx != nil {
@@ -355,7 +363,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	// browser headers, like the migration pull, pass.
 	// authz sits inside auth, which puts the User in the context, and outside
 	// every lock: a request without the right is refused before a lock sees it.
-	return http.NewCrossOriginProtection().Handler(authService.Middleware(authz.Middleware(mux, inner))), worker.Wait
+	return http.NewCrossOriginProtection().Handler(authService.Middleware(authz.New(db, authService.CurrentUser).Middleware(mux, inner))), worker.Wait
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {

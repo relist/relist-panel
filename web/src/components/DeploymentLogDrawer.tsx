@@ -6,6 +6,8 @@ import type { ComposePath } from '../data/api';
 import { deploymentHeadline, isActive, stepLabel } from '../data/deployments-view';
 import type { ActiveDeployment } from '../data/deployments-view';
 import type { Deployment } from '../data/types';
+import { useCan } from '../data/useCan';
+import { RoleHint } from './RoleHint';
 
 const { Text } = Typography;
 const POLL_MS = 1000;
@@ -128,6 +130,7 @@ function DeploymentDetails({ target, follow, running, onCanceled }: {
     if (el) el.scrollTop = el.scrollHeight;
   }, [log]);
 
+  const canCancel = useCan(location.environmentId, 'operator');
   const cancel = async () => {
     if (!shown) return;
     setCanceling(true);
@@ -153,7 +156,11 @@ function DeploymentDetails({ target, follow, running, onCanceled }: {
         <Flex gap={12} vertical style={{ maxHeight: '45%', flexShrink: 0, overflow: 'auto', overflowWrap: 'anywhere' }}>
           <Flex align="start" gap={12} justify="space-between">
             <Text strong style={{ minWidth: 0 }}>{deploymentHeadline(shown, running)}</Text>
-            {isActive(shown) && <Button danger loading={canceling} onClick={() => void cancel()} size="small">Cancel</Button>}
+            {isActive(shown) && (
+              <RoleHint allowed={canCancel} level="operator">
+                <Button danger disabled={!canCancel} loading={canceling} onClick={() => void cancel()} size="small">Cancel</Button>
+              </RoleHint>
+            )}
           </Flex>
           {shown.warnings.length > 0 && <Alert showIcon title={<Flex gap={4} vertical>{shown.warnings.map((warning) => <span key={warning}>{warning}</span>)}</Flex>} type="warning" />}
           {(shown.sourceRef || shown.sourceSubject) && <Text type="secondary">{[shown.sourceRef, shown.sourceSubject].filter(Boolean).join(' · ')}</Text>}

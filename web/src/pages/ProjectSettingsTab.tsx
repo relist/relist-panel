@@ -5,6 +5,8 @@ import { useNavigate } from 'react-router';
 
 import { paths } from '../app/paths';
 import { DangerModal } from '../components/DangerModal';
+import { RoleHint } from '../components/RoleHint';
+import { useIsAdmin } from '../data/useCan';
 import { RemovalPlanList } from '../components/RemovalPlanList';
 import { TeardownDetails } from '../components/TeardownDetails';
 import { RelativeTime } from '../components/primitives';
@@ -38,6 +40,7 @@ export function ProjectSettingsTab({
   project: Project;
 }) {
   const { deleteEnvironment, deleteProject, isPending, updateProject } = usePanel();
+  const isAdmin = useIsAdmin();
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -196,9 +199,11 @@ export function ProjectSettingsTab({
                 networks, volumes and deployment files; volumes another Compose uses are kept.
               </Text>
             </div>
-            <Button danger icon={<DeleteOutlined />} onClick={() => setDeleteProjectOpen(true)}>
-              Delete Project
-            </Button>
+            <RoleHint allowed={isAdmin} level="admin">
+              <Button danger disabled={!isAdmin} icon={<DeleteOutlined />} onClick={() => setDeleteProjectOpen(true)}>
+                Delete Project
+              </Button>
+            </RoleHint>
           </Flex>
         </Card>
       </Flex>

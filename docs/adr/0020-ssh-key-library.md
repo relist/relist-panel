@@ -13,6 +13,6 @@ ADR-0016 gave each Git Source its own **Deploy key**, generated when the Source 
 
 - New `ssh_keys` table and `compose_sources.ssh_key_id`. Existing per-Source keys are discarded: Git Sources have no key after the upgrade. The old `ssh_private_key` and `ssh_public_key` columns stay, unused, because dropping them in SQLite rebuilds the table.
 - `POST .../source/key` (regenerate) is removed. Queuing a `build` Deployment for a Git Source without a key is refused with `400`.
-- The private key is stored in the database and never returned by the API. Like ADR-0016's Deploy key, this is not a security boundary: the single admin owns the host.
+- The private key is stored in the database and never returned by the API. Like ADR-0016's Deploy key, this is not a security boundary: an Admin owns the host.
 - A Migration (ADR-0018) copies `panel.db` whole, so the library travels with no change.
 - Spec: `.scratch/ssh-keys/spec.md`.

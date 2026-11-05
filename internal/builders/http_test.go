@@ -9,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"relist-panel/internal/authz"
+	"relist-panel/internal/grants"
 )
 
 func (f *serviceFixture) do(t *testing.T, method, path, body string) (int, map[string]any) {
@@ -181,5 +184,24 @@ func TestDockerRefusalsAre502WithDockersWords(t *testing.T) {
 	f.engine.removeErr = errors.New("remove failed")
 	if code, out := f.do(t, "DELETE", "/api/builders/1", ""); code != 502 || out["error"] != "Docker refused: remove failed" {
 		t.Fatalf("delete refused = %d %v", code, out)
+	}
+}
+
+func TestListBuildersForAMemberNamesThemOnly(t *testing.T) {
+	f := newServiceFixture(t)
+	b := f.builder(t, "large")
+	if err := f.store.SetDefault(context.Background(), b.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.engine.capacityErr = errors.New("a member's list must not ask Docker")
+	mux := http.NewServeMux()
+	f.svc.RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	request := httptest.NewRequest("GET", "/api/builders", nil)
+	request = request.WithContext(authz.WithAccess(request.Context(), grants.Access{}))
+	mux.ServeHTTP(rec, request)
+	want := `{"builders":[{"id":1,"name":"large"}],"defaultBuilderId":1}` + "\n"
+	if rec.Code != 200 || rec.Body.String() != want {
+		t.Fatalf("member list = %d %s\nwant %s", rec.Code, rec.Body.String(), want)
 	}
 }

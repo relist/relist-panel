@@ -164,6 +164,26 @@ describe('Global Deployments', () => {
     expect(within(rows[2]).getByText('Position 3 · 2 ahead')).toBeTruthy();
   });
 
+  it('shows redacted queue rows of other Composes without links or logs', async () => {
+    const hidden = { composeId: 0, composeName: '', projectId: 0, projectName: '', environmentId: 0, environmentName: '' };
+    mocks.api.globalDeploymentQueue.mockResolvedValue([
+      queued({ ...hidden, status: 'running', number: 1 }),
+      queued({ ...hidden, status: 'queued', step: '', number: 1 }),
+      queued({ composeId: 112, composeName: 'Worker', status: 'queued', step: '', number: 4 }),
+    ]);
+    renderPage();
+    await screen.findByRole('link', { name: 'Worker' });
+    const rows = within(screen.getAllByRole('table')[0]).getAllByRole('row').slice(1);
+    expect(rows).toHaveLength(3);
+    for (const row of rows.slice(0, 2)) {
+      expect(within(row).getByText('Another Compose')).toBeTruthy();
+      expect(within(row).queryByRole('link')).toBeNull();
+      expect(within(row).queryByRole('button')).toBeNull();
+    }
+    expect(within(rows[1]).getByText('Position 2 · 1 ahead')).toBeTruthy();
+    expect(within(rows[2]).getByRole('button', { name: /View logs/ })).toBeTruthy();
+  });
+
   it('preserves archive filenames while shortening only Git hashes in Source', async () => {
     const originalMatchMedia = window.matchMedia;
     vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({ ...originalMatchMedia(query), matches: !query.includes('max-width') }));

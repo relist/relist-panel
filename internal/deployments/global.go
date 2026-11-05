@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"relist-panel/internal/authz"
 )
 
 // GlobalQuery selects retained Deployments across all Composes. Page and
@@ -18,6 +20,9 @@ type GlobalQuery struct {
 	ProjectID, EnvironmentID, ComposeID int64
 	Status                              Status
 	From, To                            *time.Time
+	// EnvironmentIDs limits the list to these Environments: a member's
+	// visible ones. Nil lists all; empty lists none.
+	EnvironmentIDs []int64
 }
 
 // GlobalDeployment carries the current context needed to identify a
@@ -73,6 +78,16 @@ func (s *Store) ListGlobal(ctx context.Context, q GlobalQuery) ([]GlobalDeployme
 	}
 	if q.To != nil {
 		add("d.queued_at <= ?", q.To.Unix())
+	}
+	if q.EnvironmentIDs != nil {
+		if len(q.EnvironmentIDs) == 0 {
+			where = append(where, "0")
+		} else {
+			where = append(where, "e.id IN (?"+strings.Repeat(", ?", len(q.EnvironmentIDs)-1)+")")
+			for _, id := range q.EnvironmentIDs {
+				args = append(args, id)
+			}
+		}
 	}
 	from := globalFrom
 	if len(where) != 0 {
@@ -152,6 +167,9 @@ func (a *API) globalList(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if access, member := authz.Member(r.Context()); member {
+		q.EnvironmentIDs = access.AllVisibleEnvironments()
 	}
 	items, total, err := a.q.d.Store.ListGlobal(r.Context(), q)
 	if err != nil {

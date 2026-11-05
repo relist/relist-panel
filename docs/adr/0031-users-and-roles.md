@@ -20,8 +20,32 @@ What a User may reach is decided by one middleware, `internal/authz`, between `a
 
 ## Consequences
 
-- **Until roles exist, a User who is not an Admin sees only their Account** and a page saying they have no access yet.
+- **A User who is not an Admin sees only what their Grants reach** (see Roles below); with no Grant they see an empty Projects list.
 - **Recovery stays on the host.** `create-admin` still makes only the first User; `reset-password`, `change-email` and `reset-2fa` take `--email`, required once there is more than one User.
-- **Secrets, SSH keys and certificates are still not a boundary against Admins.** ADR-0016, ADR-0020 and ADR-0022 say "the single admin owns the host"; with Users, read it as "an Admin owns the host".
+- **Secrets, SSH keys and certificates are still not a boundary against Admins.** ADR-0016, ADR-0020 and ADR-0022 now say "an Admin owns the host".
 - **A Migration moves Users and their sessions** with `panel.db`, like everything else (ADR-0018).
-- Spec: `.scratch/multi-user/spec.md`. Plan: `.scratch/multi-user/plan-1-users.md`.
+- Spec: `.scratch/multi-user/spec.md`. Plans: `.scratch/multi-user/plan-1-users.md`, `.scratch/multi-user/plan-2-roles.md`.
+
+## Roles (phase 2, 2026-11-04)
+
+A User who is not an Admin gets a **Role** per Project or per Environment through a **Grant**: Viewer (read everything in it, secret values excepted), Operator (also deploy, restart, stop, cancel), Editor (also change the Compose, its Variables, Domains and settings; Preview, Terminal, Volume Explorer, secret values). An Environment Grant wins over the Project Grant and may be **No access**, which hides that Environment. A **Project Editor** holds `editor` on the Project itself and may also edit the Project's details and add or delete its Environments. Grants live in `grants` (migration `00032`); only Admins read or change them.
+
+`internal/authz` holds every route's level in one table. For a scoped route it aligns the path with the ServeMux pattern to find the Project, Environment and Compose ids, checks in the database that each belongs to the one before it, loads the User's Grants, and only then runs the handler. A non-admin who cannot see the target, or who forged the path (an unknown, non-numeric or mismatched id), gets **404**, so a hidden Project is indistinguishable from a missing one; one who can see it but whose Role is too low gets **403**; a database error is a **500**, never a pass. Admins skip every check. Lists (Projects, Environments, Deployment history) are filtered to what the User can see; the Deployment queue keeps other rows with their names and ids blanked, so a member sees why theirs waits.
+
+A secret variable's value is sent as `""` to anyone below Editor, from every list that carries it (Environment and Compose Variables, Variable Sets, effective variables). For an Editor and an Admin the secret flag stays a display tier.
+
+`docker compose` and `docker buildx` no longer inherit the panel's environment: they get only `PATH`, `HOME`, `TMPDIR`, the XDG and Buildx paths and `DOCKER_*`, so `${RELIST_ADMIN_PASSWORD}` in a Compose file interpolates as empty. An open Terminal re-checks its User's access every 5 seconds and closes when it is gone.
+
+Rulings where the spec was silent:
+
+1. An Editor of an Environment writes its Environment Variables; reading keys is Viewer.
+2. Deploying with `freshVolumes` needs Editor, since it deletes data; a plain Deployment is Operator.
+3. Hidden wins for a Project Editor: an Environment set to No access answers 404 to them too.
+4. Deployment history is filtered in SQL so totals and pages are right; only the queue keeps other rows, redacted.
+5. The Members tab writes with `PUT /api/projects/{id}/grants`, which replaces that Project's Grants in one transaction.
+6. `POST /api/users` takes no Grants; an Admin invites, then sets Grants on the User page.
+7. A member's `/` redirects to `/projects`; Overview, Monitoring and every host-wide page stay admin-only.
+8. This ADR is amended rather than a new one written; ADR-0032 is kept for the Compose policy.
+9. A Project's `environmentCount` counts only the Environments the User can see.
+
+**Until the Compose policy ships, an Editor can take the host**: a Compose that mounts the Docker socket or runs privileged, then the Terminal. Grant Editor only to people you would give root.

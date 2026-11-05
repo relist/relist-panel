@@ -12,6 +12,7 @@ import {
   App,
   Button,
   Card,
+  ConfigProvider,
   Dropdown,
   Flex,
   Form,
@@ -33,11 +34,13 @@ import { useNavigate, useParams } from 'react-router';
 
 import { paths } from '../app/paths';
 import { DangerModal } from '../components/DangerModal';
+import { RoleHint } from '../components/RoleHint';
 import { ZeroDowntimeRefusalModal } from '../components/ZeroDowntimeRefusalModal';
 import { VariablesPanel } from '../components/VariablesPanel';
 import { YamlEditor } from '../components/YamlEditor';
 import { ComposeStatusInline, ComposeStatusTag, EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { VulnBadges } from '../components/VulnBadges';
+import { useAccess, useIsAdmin } from '../data/useCan';
 import { useVulnSummary } from '../data/useVulnSummary';
 import { summaryBadge, vulnLink } from './vulnerabilities-view';
 import { ZeroDowntimeRefusedError } from '../data/api';
@@ -47,6 +50,7 @@ import { composeState, projectComposes, summarize } from '../data/types';
 import { activeTab, selectEnvironment } from './project-view';
 import { composeDeployIdentity } from './compose-view';
 import { ProjectSettingsTab } from './ProjectSettingsTab';
+import { ProjectMembersTab } from '../components/ProjectMembersTab';
 import { deployFromList } from './project-deploy';
 
 const { Text, Paragraph } = Typography;
@@ -72,7 +76,8 @@ const STARTER_YAML = `services:
 export function ProjectPage() {
   const { environmentId, projectId: projectParam, tab } = useParams();
   const projectId = Number(projectParam);
-  const { data: vulnSummary } = useVulnSummary({ projectId }, Number.isFinite(projectId));
+  const isAdmin = useIsAdmin();
+  const { data: vulnSummary } = useVulnSummary({ projectId }, isAdmin && Number.isFinite(projectId));
   const navigate = useNavigate();
   const {
     addEnvironment,
@@ -103,7 +108,13 @@ export function ProjectPage() {
   const project = projects.find((candidate) => candidate.id === projectId);
   const environments = project?.environments ?? [];
   const activeEnvironment = project ? selectEnvironment(project, Number(environmentId)) : undefined;
-  const activeTabKey = activeTab(tab);
+  // Convenience only: the API decides (ADR-0031).
+  const access = useAccess();
+  const projectEditor = access.isProjectEditor(project?.id);
+  const canOperate = access.can(activeEnvironment?.id, 'operator');
+  const canEdit = access.can(activeEnvironment?.id, 'editor');
+  // Members is an admin's tab; anyone else landing on its URL gets Composes.
+  const activeTabKey = tab === 'members' && !isAdmin ? 'composes' : activeTab(tab);
 
   useEffect(() => {
     setActionError(undefined);
@@ -220,44 +231,47 @@ export function ProjectPage() {
       },
       { type: 'divider' },
       {
-        disabled: state === 'running',
+        disabled: !canOperate || state === 'running',
         icon: <RocketOutlined />,
         key: 'deploy',
-        label: 'Deploy',
+        label: <RoleHint allowed={canOperate} level="operator">Deploy</RoleHint>,
         onClick: () => void lifecycle(compose, 'deploy'),
       },
       {
-        disabled: compose.status.total === 0,
+        disabled: !canOperate || compose.status.total === 0,
         icon: <SyncOutlined />,
         key: 'restart',
-        label: 'Restart',
+        label: <RoleHint allowed={canOperate} level="operator">Restart</RoleHint>,
         onClick: () => void lifecycle(compose, 'restart'),
       },
       {
-        disabled: compose.status.total === 0,
+        disabled: !canOperate || compose.status.total === 0,
         icon: <StopOutlined />,
         key: 'stop',
-        label: 'Stop',
+        label: <RoleHint allowed={canOperate} level="operator">Stop</RoleHint>,
         onClick: () => void lifecycle(compose, 'stop'),
       },
       { type: 'divider' },
       {
         danger: true,
+        disabled: !canEdit,
         icon: <DeleteOutlined />,
         key: 'delete',
-        label: 'Delete',
+        label: <RoleHint allowed={canEdit} level="editor">Delete</RoleHint>,
         onClick: () => setDeletingCompose(compose),
       },
     ];
   };
 
   const settingsTab = (
-    <ProjectSettingsTab
-      activeEnvironmentId={activeEnvironment?.id}
-      onNewEnvironment={() => setEnvironmentModalOpen(true)}
-      onError={fail}
-      project={project}
-    />
+    <ConfigProvider componentDisabled={!projectEditor}>
+      <ProjectSettingsTab
+        activeEnvironmentId={activeEnvironment?.id}
+        onNewEnvironment={() => setEnvironmentModalOpen(true)}
+        onError={fail}
+        project={project}
+      />
+    </ConfigProvider>
   );
 
   return (
@@ -266,19 +280,25 @@ export function ProjectPage() {
         description={project.description || 'No description yet.'}
         extra={
           <>
-            <Button
-              icon={<EditOutlined />}
-              onClick={() => navigate(paths.environment(project.id, activeEnvironment?.id ?? 0, 'settings'))}
-            >
-              Edit details
-            </Button>
-            <Button
-              icon={<PlusOutlined />}
-              onClick={() => setEnvironmentModalOpen(true)}
-              type={environments.length === 0 ? 'primary' : 'default'}
-            >
-              New Environment
-            </Button>
+            <RoleHint allowed={projectEditor} level="project editor">
+              <Button
+                disabled={!projectEditor}
+                icon={<EditOutlined />}
+                onClick={() => navigate(paths.environment(project.id, activeEnvironment?.id ?? 0, 'settings'))}
+              >
+                Edit details
+              </Button>
+            </RoleHint>
+            <RoleHint allowed={projectEditor} level="project editor">
+              <Button
+                disabled={!projectEditor}
+                icon={<PlusOutlined />}
+                onClick={() => setEnvironmentModalOpen(true)}
+                type={environments.length === 0 ? 'primary' : 'default'}
+              >
+                New Environment
+              </Button>
+            </RoleHint>
           </>
         }
         tags={
@@ -309,9 +329,11 @@ export function ProjectPage() {
         <Card variant="outlined">
           <EmptyState
             action={
-              <Button icon={<PlusOutlined />} onClick={() => setEnvironmentModalOpen(true)} type="primary">
-                Create the first Environment
-              </Button>
+              <RoleHint allowed={projectEditor} level="project editor">
+                <Button disabled={!projectEditor} icon={<PlusOutlined />} onClick={() => setEnvironmentModalOpen(true)} type="primary">
+                  Create the first Environment
+                </Button>
+              </RoleHint>
             }
             description="An Environment is a deployment target — production, staging, preview. Its Environment Variables are shared by every Compose inside it."
             title="No Environments yet"
@@ -354,31 +376,37 @@ export function ProjectPage() {
                       <Text type="secondary">
                         Each Compose is one <Text code>docker-compose.yml</Text> deployed and stopped on its own.
                       </Text>
-                      <Button
-                        icon={<PlusOutlined />}
-                        onClick={() => {
-                          setComposeYAML('');
-                          setComposeModalOpen(true);
-                        }}
-                        type="primary"
-                      >
-                        New Compose
-                      </Button>
+                      <RoleHint allowed={canEdit} level="editor">
+                        <Button
+                          disabled={!canEdit}
+                          icon={<PlusOutlined />}
+                          onClick={() => {
+                            setComposeYAML('');
+                            setComposeModalOpen(true);
+                          }}
+                          type="primary"
+                        >
+                          New Compose
+                        </Button>
+                      </RoleHint>
                     </Flex>
                     {composes.length === 0 ? (
                       <Card variant="outlined">
                         <EmptyState
                           action={
-                            <Button
-                              icon={<PlusOutlined />}
-                              onClick={() => {
-                                setComposeYAML('');
-                                setComposeModalOpen(true);
-                              }}
-                              type="primary"
-                            >
-                              Write the first Compose
-                            </Button>
+                            <RoleHint allowed={canEdit} level="editor">
+                              <Button
+                                disabled={!canEdit}
+                                icon={<PlusOutlined />}
+                                onClick={() => {
+                                  setComposeYAML('');
+                                  setComposeModalOpen(true);
+                                }}
+                                type="primary"
+                              >
+                                Write the first Compose
+                              </Button>
+                            </RoleHint>
                           }
                           description="Paste an existing docker-compose.yml, or start from a small Traefik-ready example."
                           title={`No Composes in ${activeEnvironment?.name}`}
@@ -442,6 +470,7 @@ export function ProjectPage() {
                                   </Button>
                                   {composeState(compose.status, compose.lastDeployedAt) === 'running' ? (
                                     <Button
+                                      disabled={!canOperate}
                                       icon={<StopOutlined />}
                                       loading={isPending(`stop:${compose.id}`)}
                                       onClick={() => void lifecycle(compose, 'stop')}
@@ -451,6 +480,7 @@ export function ProjectPage() {
                                     </Button>
                                   ) : (
                                     <Button
+                                      disabled={!canOperate}
                                       icon={<RocketOutlined />}
                                       loading={isPending(`deploy:${compose.id}`)}
                                       onClick={() => void lifecycle(compose, 'deploy')}
@@ -490,7 +520,9 @@ export function ProjectPage() {
               },
               {
                 children: activeEnvironment ? (
-                  <VariablesPanel environment={activeEnvironment} onError={fail} />
+                  <ConfigProvider componentDisabled={!canEdit}>
+                    <VariablesPanel environment={activeEnvironment} onError={fail} />
+                  </ConfigProvider>
                 ) : null,
                 key: 'variables',
                 label: `Variables (${activeEnvironment?.variables.length ?? 0})`,
@@ -500,6 +532,23 @@ export function ProjectPage() {
                 key: 'settings',
                 label: 'Settings',
               },
+              ...(isAdmin
+                ? [
+                    {
+                      children: (
+                        <ProjectMembersTab
+                          project={{
+                            id: project.id,
+                            name: project.name,
+                            environments: project.environments.map(({ id, name }) => ({ id, name })),
+                          }}
+                        />
+                      ),
+                      key: 'members',
+                      label: 'Members',
+                    },
+                  ]
+                : []),
             ]}
             onChange={(key) => {
               if (!activeEnvironment) return;

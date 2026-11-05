@@ -110,6 +110,8 @@ describe('global Deployments path', () => {
 describe('invite links', () => {
   it('builds the users and invite paths', () => {
     expect(paths.users).toBe('/users');
+    expect(paths.user(3)).toBe('/users/3');
+    expect(resolvePath('/users/3')).toEqual({ params: { userId: '3' }, pattern: 'users/:userId' });
     expect(paths.invite('a b')).toBe('/invite/a%20b');
   });
 

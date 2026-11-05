@@ -118,7 +118,9 @@ func (Runner) Logs(ctx context.Context, req composes.RunRequest) (string, error)
 
 // command builds the docker invocation; tests replace it to run a stand-in.
 var command = func(ctx context.Context, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, "docker", args...)
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Env = cliEnv(os.Environ())
+	return cmd
 }
 
 // waitDelay bounds how long Wait lingers for output pipes after the CLI exits
@@ -183,7 +185,7 @@ func runOn(ctx context.Context, req composes.RunRequest, out io.Writer, builder 
 	// without a WaitDelay, Wait would block on them and hang Cancel and Delete.
 	cmd.WaitDelay = waitDelay
 	if builder != "" {
-		cmd.Env = append(os.Environ(), "BUILDX_BUILDER="+builder)
+		cmd.Env = append(cmd.Env, "BUILDX_BUILDER="+builder)
 	}
 	var stdout, stderr bytes.Buffer
 	tail := &tailWriter{}

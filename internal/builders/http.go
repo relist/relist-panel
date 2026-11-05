@@ -9,6 +9,8 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+
+	"relist-panel/internal/authz"
 )
 
 const maxRequestBody = 1 << 20
@@ -71,8 +73,39 @@ type capacityJSON struct {
 	MemoryMB int `json:"memoryMb"`
 }
 
+// listNames is a member's list: enough to choose a Builder on a Compose,
+// and nothing about the host.
+func (s *Service) listNames(w http.ResponseWriter, r *http.Request) {
+	type named struct {
+		ID   int64  `json:"id"`
+		Name string `json:"name"`
+	}
+	resp := struct {
+		Builders         []named `json:"builders"`
+		DefaultBuilderID int64   `json:"defaultBuilderId"`
+	}{Builders: []named{}}
+	var err error
+	if resp.DefaultBuilderID, err = s.d.Store.DefaultID(r.Context()); err != nil {
+		s.internal(w, "load the default builder", err)
+		return
+	}
+	list, err := s.d.Store.List(r.Context())
+	if err != nil {
+		s.internal(w, "list builders", err)
+		return
+	}
+	for _, b := range list {
+		resp.Builders = append(resp.Builders, named{ID: b.ID, Name: b.Name})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if _, member := authz.Member(ctx); member {
+		s.listNames(w, r)
+		return
+	}
 	resp := listResponse{DefaultBuildKitImage: DefaultBuildKitImage, Builders: []builderJSON{}}
 	var err error
 	if resp.DefaultBuilderID, err = s.d.Store.DefaultID(ctx); err != nil {

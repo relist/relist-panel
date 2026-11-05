@@ -3,9 +3,10 @@ import { Alert, App, Button, Card, Dropdown, Flex, Form, Input, Modal, Switch, T
 import type { MenuProps, TableColumnsType } from 'antd';
 import dayjs from 'dayjs';
 import { useState } from 'react';
+import { Link, useNavigate } from 'react-router';
 import useSWR from 'swr';
 
-import { inviteUrl } from '../app/paths';
+import { inviteUrl, paths } from '../app/paths';
 import { PageHeader, RelativeTime } from '../components/primitives';
 import { api } from '../data/api';
 import type { IssuedLink, PanelUser, UserStatus } from '../data/api';
@@ -25,6 +26,7 @@ const statusColor: Record<UserStatus, string | undefined> = { active: 'success',
 export function UsersPage() {
   const { message, modal } = App.useApp();
   const { auth, loadAuthStatus } = usePanel();
+  const navigate = useNavigate();
   const { data, error, isLoading, mutate } = useSWR(USERS_KEY, () => api.listUsers());
   const [inviting, setInviting] = useState(false);
   const [link, setLink] = useState<IssuedLink>();
@@ -48,7 +50,11 @@ export function UsersPage() {
       key: 'email',
       // An address broken mid-word reads as two; the table scrolls instead.
       onCell: () => ({ style: { whiteSpace: 'nowrap' } }),
-      render: (email: string) => <Text strong>{email}</Text>,
+      render: (email: string, user) => (
+        <Link to={paths.user(user.id)}>
+          <Text strong>{email}</Text>
+        </Link>
+      ),
       title: 'Email',
     },
     {
@@ -86,6 +92,8 @@ export function UsersPage() {
           return null;
         }
         const items: MenuProps['items'] = [
+          // An admin sees every Project, so only a member has access to edit.
+          ...(user.isAdmin ? [] : [{ key: 'access', label: 'Edit access', onClick: () => void navigate(paths.user(user.id)) }]),
           {
             key: 'admin',
             label: user.isAdmin ? 'Remove admin' : 'Make admin',

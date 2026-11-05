@@ -343,3 +343,52 @@ describe('Compose vulnerability badges', () => {
     expect(screen.queryByRole('button', { name: /Export report/ })).toBeNull();
   });
 });
+
+describe('Roles on the Compose page', () => {
+  const member = { id: 5, email: 'm@example.com', isAdmin: false, isOwner: false };
+  const as = (role: 'viewer' | 'operator' | 'editor') =>
+    vi.mocked(api.authStatus).mockResolvedValue({
+      authenticated: true, user: member,
+      access: { projects: [{ id: 1, role: null, environments: [{ id: 2, role }] }] },
+    });
+
+  it('lets a Viewer look but not deploy, edit, or open the Terminal and Volumes', async () => {
+    as('viewer');
+    vi.spyOn(api, 'getSource').mockResolvedValue(null);
+    renderPage();
+    await screen.findByRole('heading', { name: 'Compose 7' });
+    expect(await screen.findByText('You can view this Compose. Changing it needs the Editor role.')).toBeTruthy();
+    await waitFor(() => expect((screen.getByRole('button', { name: /Deploy$/ }) as HTMLButtonElement).disabled).toBe(true));
+    expect((screen.getByRole('button', { name: 'More deploy options' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /Save/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('tab', { name: /Terminal/ }).getAttribute('aria-disabled')).toBe('true');
+    expect(screen.getByRole('tab', { name: /Volumes/ }).getAttribute('aria-disabled')).toBe('true');
+    expect(api.listVolumes).not.toHaveBeenCalled();
+    expect(api.listOrphanVolumes).not.toHaveBeenCalled();
+  });
+
+  it('lets an Operator deploy, but not with fresh volumes', async () => {
+    as('operator');
+    vi.spyOn(api, 'getSource').mockResolvedValue(null);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole('heading', { name: 'Compose 7' });
+    await waitFor(() => expect((screen.getByRole('button', { name: /Deploy$/ }) as HTMLButtonElement).disabled).toBe(false));
+    expect((screen.getByRole('button', { name: /Save/ }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'More deploy options' }));
+    const fresh = await screen.findByRole('menuitem', { name: /Deploy with fresh volumes/ });
+    expect(fresh.getAttribute('aria-disabled')).toBe('true');
+    await user.hover(within(fresh).getByText('Deploy with fresh volumes'));
+    expect(await screen.findByText('Needs the Editor role')).toBeTruthy();
+  });
+
+  it('gives an Editor every action', async () => {
+    as('editor');
+    vi.spyOn(api, 'getSource').mockResolvedValue(null);
+    renderPage();
+    await screen.findByRole('heading', { name: 'Compose 7' });
+    await waitFor(() => expect(api.listVolumes).toHaveBeenCalled());
+    expect(screen.queryByText('You can view this Compose. Changing it needs the Editor role.')).toBeNull();
+    expect(screen.getByRole('tab', { name: /Terminal/ }).getAttribute('aria-disabled')).not.toBe('true');
+  });
+});

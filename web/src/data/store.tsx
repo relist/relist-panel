@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react';
 
 import { api } from './api';
-import type { LoginResult, ProjectInput, SignedInUser } from './api';
+import type { AccessView, LoginResult, ProjectInput, SignedInUser } from './api';
 import type { Compose, ComposeDomains, DeploymentRequest, ComposeVariable, ComposePreview, EffectiveVariable, ServiceBindings, VariableSet, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeListing, VolumeAccess, ZeroDowntimeService } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
 
@@ -44,6 +44,8 @@ export type AuthState = {
   authenticated: boolean;
   /** The signed-in User, once the status has said who it is. */
   user?: SignedInUser;
+  /** A member's roles; null or absent for an admin. */
+  access?: AccessView | null;
 };
 
 const signedOut: AuthState = { checked: true, authenticated: false };
@@ -210,7 +212,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   const loadAuthStatus = useCallback(async () => {
     await track('auth-status', async () => {
       const status = await api.authStatus();
-      setAuth({ checked: true, authenticated: status.authenticated, user: status.user });
+      setAuth({ checked: true, authenticated: status.authenticated, user: status.user, access: status.access });
     });
   }, [track]);
 
@@ -227,7 +229,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           // User; the next status read fills it in.
           try {
             const status = await api.authStatus();
-            setAuth({ checked: true, authenticated: status.authenticated, user: status.user });
+            setAuth({ checked: true, authenticated: status.authenticated, user: status.user, access: status.access });
           } catch {
             setAuth({ checked: true, authenticated: true });
           }
@@ -342,8 +344,11 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           ),
         );
       });
+      // A Project Editor's role on the new Environment comes from their
+      // Project Grant, which the access view does not list until re-read.
+      void loadAuthStatus().catch(() => undefined);
     },
-    [patchProjects, track],
+    [loadAuthStatus, patchProjects, track],
   );
 
   const deleteEnvironment = useCallback(
@@ -362,8 +367,9 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           ),
         );
       });
+      void loadAuthStatus().catch(() => undefined);
     },
-    [patchProjects, track],
+    [loadAuthStatus, patchProjects, track],
   );
 
   // ---- Environment Variables ---------------------------------------------------
@@ -1199,6 +1205,15 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   );
 
   return <PanelContext.Provider value={value}>{children}</PanelContext.Provider>;
+}
+
+/**
+ * The signed-in User's auth state, or undefined outside a PanelProvider (a
+ * component rendered on its own in a test). The role hooks read it, so a
+ * component can ask about roles without requiring the whole store.
+ */
+export function useAuthState(): AuthState | undefined {
+  return useContext(PanelContext)?.auth;
 }
 
 export function usePanel(): PanelValue {

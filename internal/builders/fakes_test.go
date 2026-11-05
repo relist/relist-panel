@@ -17,6 +17,7 @@ type fakeEngine struct {
 	pullErr     error
 	cpus        int
 	memory      int64
+	capacityErr error
 	images      map[string]bool
 	diskUsage   int64
 	recreateHit chan struct{} // when set, Recreate blocks until it is closed
@@ -104,7 +105,7 @@ func (f *fakeEngine) Prune(_ context.Context, name string) error {
 }
 
 func (f *fakeEngine) Capacity(context.Context) (int, int64, error) {
-	return f.cpus, f.memory, nil
+	return f.cpus, f.memory, f.capacityErr
 }
 
 func (f *fakeEngine) ImageExists(_ context.Context, ref string) (bool, error) {

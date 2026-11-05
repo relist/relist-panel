@@ -5,6 +5,7 @@ import useSWR from 'swr';
 
 import { paths } from '../app/paths';
 import type { ComposePath } from '../data/api';
+import { useIsAdmin } from '../data/useCan';
 import { api } from '../data/api';
 import { yamlServices } from '../data/source-view';
 import type { ComposeBuilderChoice } from '../data/types';
@@ -43,6 +44,7 @@ function BuilderChoice({ location }: { location: ComposePath }) {
   const builders = useSWR('/api/builders', () => api.listBuilders());
   const choiceKey = `/api/composes/${location.composeId}/builder`;
   const choice = useSWR(choiceKey, () => api.getComposeBuilder(location));
+  const isAdmin = useIsAdmin();
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string>();
 
@@ -52,7 +54,8 @@ function BuilderChoice({ location }: { location: ComposePath }) {
   const options = [
     { label: `Use panel default (${defaultName})`, value: 'default' },
     { label: DOCKER_DEFAULT_NAME, value: 'docker' },
-    ...list.map((b) => ({ label: formatLimits(b), value: `builder:${b.id}` })),
+    // A member's list names each Builder only (ADR-0031).
+    ...list.map((b) => ({ label: b.cpus === undefined ? b.name : formatLimits(b), value: `builder:${b.id}` })),
   ];
 
   const change = async (value: string) => {
@@ -75,8 +78,8 @@ function BuilderChoice({ location }: { location: ComposePath }) {
     <Card size="small" style={{ marginBottom: 16 }} title="Builder">
       <Flex gap={8} vertical>
         <Text type="secondary">
-          Builds of this Compose run on this Builder. A change applies to Deployments queued after it.{' '}
-          <Link to={paths.builders}>Manage Builders</Link>
+          Builds of this Compose run on this Builder. A change applies to Deployments queued after it.
+          {isAdmin && <> <Link to={paths.builders}>Manage Builders</Link></>}
         </Text>
         {loadError && <Alert showIcon title={loadError instanceof Error ? loadError.message : 'Could not load Builders'} type="error" />}
         {saveError && <Alert showIcon title={saveError} type="error" />}
