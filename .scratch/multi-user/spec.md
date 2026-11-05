@@ -507,3 +507,6 @@ installed `antd`.
 11. (Review) A bind of the panel's own files in the Compose directory (dot names, `docker-compose.yml`, `sets`) is refused, except the Deployment's own Source copy; a link the panel cannot follow is refused; include and extends are followed into the files they name.
 12. `com.docker.*` labels on services, volumes and networks are refused; other labels naming the panel domain are harmless (only Traefik reads labels).
 13. Secret values are masked in violation messages and evaluation errors.
+14. (Security review) An HTTP router's `rule` must be exactly the rule of one of the Compose's own Domains; any router `priority`, and any TCP or UDP router, is a violation. Router label keys are matched in any case.
+15. (Security review) A built service's `image` and `build.tags` must start with `<project>-`; pulled images keep any name.
+16. (Security review) `network_mode` passes only as `none` or `service:<a service of this Compose>`; a network name, `bridge` and anything else need approval.

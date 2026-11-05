@@ -148,7 +148,7 @@ One recorded action: who, when, what, where, and whether it was done or refused.
 _Avoid_: Log entry (the Access log and container logs are other things), History (Deployment history is another thing).
 
 **Compose policy**:
-The rules a Compose's resolved config must meet to deploy without an Approval: nothing that reaches the host (binds outside its directory and the bind roots, the Docker socket, privileged, host namespaces) or another Compose's volumes.
+The rules a Compose's resolved config must meet to deploy without an Approval: nothing that reaches the host (binds outside its directory and the bind roots, the Docker socket, privileged, host namespaces), another Compose's volumes, networks or images, or requests for a host that is not one of its own Domains.
 _Avoid_: Security policy, Sandbox.
 
 **Approval**:

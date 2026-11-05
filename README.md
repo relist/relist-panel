@@ -44,7 +44,8 @@ is not tamper-proof against an Admin, who can reach the database.
 
 A Compose that could take the host (mounting the Docker socket or a path
 outside its directory, running privileged, opening another Compose's
-volume) deploys only after an **approver** approves that exact config on
+volume or network, routing a host that is not one of its own Domains,
+building an image under a name outside `relist-c<ID>-…`) deploys only after an **approver** approves that exact config on
 the Compose page; any later change to it needs approving again. Approvers
 are every Admin, or only the Owner with `RELIST_POLICY_APPROVER=owner`.
 Host paths a Compose may bind without approval go in
