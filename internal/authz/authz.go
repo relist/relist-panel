@@ -164,15 +164,23 @@ func (a *Authorizer) Middleware(mux *http.ServeMux, next http.Handler) http.Hand
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		if byteRange := r.Header.Get("Range"); byteRange != "" {
-			// Still a download: only part of it.
-			audit.Detail(ctx, "range", byteRange)
-		}
 		sw := &statusWriter{ResponseWriter: w}
 		next.ServeHTTP(sw, r.WithContext(ctx))
 		if sw.status >= 200 && sw.status < 300 {
 			e := pending.Event()
 			e.Action, e.Outcome, e.At = action, audit.OutcomeOK, time.Now()
+			if sw.status == http.StatusPartialContent && r.Method == http.MethodGet {
+				// Still a download, only part of it. The header is the
+				// caller's text, so it is cut short.
+				if e.Detail == nil {
+					e.Detail = map[string]any{}
+				}
+				byteRange := r.Header.Get("Range")
+				if len(byteRange) > maxRangeDetail {
+					byteRange = byteRange[:maxRangeDetail]
+				}
+				e.Detail["range"] = byteRange
+			}
 			if sw.failed {
 				// The body broke off midway; what was sent still left.
 				if e.Detail == nil {

@@ -3,6 +3,7 @@ package authz
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -325,5 +326,36 @@ func TestHostThingEventsKeepTheirName(t *testing.T) {
 		if events := c.take(); len(events) != 1 || events[0].Target != call.want {
 			t.Errorf("%s %s: events = %+v, want target %q", call.method, call.path, events, call.want)
 		}
+	}
+}
+
+// range is recorded only for a partial download (206), and cut short: the
+// header is the caller's text.
+func TestRangeIsRecordedOnlyOnPartialContent(t *testing.T) {
+	f, c := recordingFixture(t, func(mux *http.ServeMux) {
+		mux.HandleFunc(volumeRead, answer(http.StatusOK))
+		mux.HandleFunc("PUT "+compose, answer(http.StatusNoContent))
+		mux.HandleFunc("GET /api/traefik/access-logs/{name}", answer(http.StatusPartialContent))
+	})
+	serve := func(method, path, byteRange string) audit.Event {
+		request := httptest.NewRequest(method, path, nil)
+		request.Header.Set("Range", byteRange)
+		request = request.WithContext(auth.WithUser(request.Context(), *admin))
+		f.handler.ServeHTTP(httptest.NewRecorder(), request)
+		events := c.take()
+		if len(events) != 1 {
+			t.Fatalf("%s %s: events = %+v", method, path, events)
+		}
+		return events[0]
+	}
+	if e := serve(http.MethodGet, composePath(pA, eA1, cC, "/volumes/read"), "bytes=0-9"); e.Detail["range"] != nil {
+		t.Errorf("full download recorded range: %+v", e.Detail)
+	}
+	if e := serve(http.MethodPut, composePath(pA, eA1, cC, ""), "bytes=0-9"); e.Detail["range"] != nil {
+		t.Errorf("PUT recorded range: %+v", e.Detail)
+	}
+	long := "bytes=" + strings.Repeat("1", 500)
+	if e := serve(http.MethodGet, "/api/traefik/access-logs/a.log", long); len(fmt.Sprint(e.Detail["range"])) != maxRangeDetail {
+		t.Errorf("range = %d bytes, want %d", len(fmt.Sprint(e.Detail["range"])), maxRangeDetail)
 	}
 }

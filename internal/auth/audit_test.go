@@ -100,3 +100,19 @@ func TestFailedLoginsAreCappedPerAddress(t *testing.T) {
 		t.Fatalf("events = %d, want %d failed and the login", len(events), failedLoginsPerMinute)
 	}
 }
+
+// Behind Traefik every sign-in comes from one address: one script's tries
+// must not use up the cap for another account's failures.
+func TestFailedLoginCapIsPerEmail(t *testing.T) {
+	f := newUserFixture(t)
+	for range failedLoginsPerMinute + 3 {
+		f.login("nobody@example.com", "guess")
+	}
+	if response := f.login("Admin@Example.com", "wrong password typed"); response.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong password = %d", response.Code)
+	}
+	events := loginEvents(t, f)
+	if last := events[len(events)-1]; last.actor != "admin@example.com" {
+		t.Fatalf("the admin's failure was dropped: last event %+v", last)
+	}
+}

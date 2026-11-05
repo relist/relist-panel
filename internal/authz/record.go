@@ -138,3 +138,6 @@ func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 // deniedPerMinute caps the denied events one User records per action a
 // minute.
 const deniedPerMinute = 10
+
+// maxRangeDetail is how much of a Range header a partial download records.
+const maxRangeDetail = 64
