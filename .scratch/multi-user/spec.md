@@ -514,3 +514,6 @@ installed `antd`.
 18. (Security review 2) `build.labels` follow the label rules: no `traefik.*`, no `com.docker.*`.
 19. (Security review 2) The deploy step builds, pulls and inspects every image before `up`; an image's own `traefik.*` labels that reach a container Traefik reads fail the deploy whatever the approval. `up` and `scale` then run with `--no-build --pull never`; rollouts no longer build.
 20. (Security review 2) The deploy pulls missing images with `--policy missing` and refreshes only Services whose `pull_policy` asks for it (`always`, `daily`, `weekly`, `every_…`); `never` is never pulled.
+21. (Editors and the file) Only an Admin creates a Compose, saves its YAML or previews an unsaved file; the three routes leave `authz.Routes`. An Editor keeps Variables, Variable Sets, Domains, Source, Builder, zero-downtime, Terminal and Volumes. The web disables Save, Preview, the editor and New Compose for non-admins and says why.
+22. (Editors and the file) The policy and the deploy's image check stay: Variables interpolate into the file and a Source builds the image.
+23. (Security review 3) The image check reads the labels of each Service's `platform` (`docker image inspect --platform`).

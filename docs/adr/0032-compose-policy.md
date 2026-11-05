@@ -27,11 +27,21 @@ A Compose that hand-writes routers for its own Domains with a different rule, se
 4. **Labels from the image.** The checks read only the Compose's `labels`. Docker merges an image's `LABEL`s into its containers' labels, and Traefik reads them, so a Dockerfile in the Compose's Source (or `build.labels`, or a pulled image) with `traefik.enable=true` and a router for the panel's host at priority 200000 passed with no violation. Now `build.labels` follow the label rules, and the deploy step builds and pulls every image, refuses one whose own Traefik labels would reach Traefik, and starts only those images (no rebuild, no second pull, since a registry could answer it with another image).
 5. **Traefik service merging.** Only router labels were checked. Traefik merges same-named services from different containers into one load balancer, so `traefik.http.services.panel.loadbalancer.server.port=80` added the Editor's container as a second server of the panel's own `panel` service and drew half of the panel's requests; a Domain's `relist-c<ID>-d<ID>` service could be joined the same way. Middlewares and transports share that namespace too. Patching key family after key family had already missed this twice, so the first round's ruling is revised: a Compose may carry only the Traefik labels the panel writes for its own Domains, with their exact values. Anything hand-written needs approval.
 
+## Only an admin writes the file (2026-11-05)
+
+Three review rounds kept finding new ways a Compose file reaches past the rules: Compose exposes nearly the whole Docker API, and Traefik merges labels across every container on one shared host. Checking an Editor's file key by key does not converge. So **only an Admin creates a Compose, saves its YAML, or previews an unsaved file** (`POST …/composes`, `PUT …/composes/{id}`, `POST …/preview` are admin-only routes). An Editor still deploys it and changes its Variables, Variable Sets, Domains, Source, Builder and zero-downtime switches, and opens the Terminal and the Volume Explorer.
+
+The policy and the image check stay, because an Editor still shapes what deploys in two ways: a Variable interpolated into the file (`image: ${IMAGE}`, a label value), and a Source whose Dockerfile builds the image. The image check now reads the labels of the platform each Service runs (`docker image inspect --platform`): one tag can hold a different image per platform, so reading the host's would check an image that never starts.
+
+Still open: a Domain is unique only on host and path, so an Editor can claim a longer path on a host another Project serves, and Traefik prefers the longer rule.
+
 ## Considered options
 
 **Checking the YAML before the panel injects its keys.** The spec's wording. Rejected for what deploys: the snapshot is what `up` runs, and the panel's own keys (Domain labels, the shared network, the log cap, Variable Set files) pass the rules.
 
 **Refusing every hand-written Traefik label.** First rejected because only the rule and priority seemed to decide which requests a router takes. Round 2 showed that wrong (services merge by name across containers), so it is now the rule: only the labels the panel writes for the Compose's Domains pass without approval.
+
+**A form for Editors instead of a file** (image, port, environment, named volumes, resources, healthcheck, Domains), the way ECS or Cloud Run take a service. Deferred, not rejected: the panel would write every key itself, so the surface is the form's fields, not Compose's. It is a feature of its own and needs its own spec.
 
 **Creating the containers, inspecting them, then starting them.** Rejected for image labels: it relies on Traefik ignoring created containers, and on a violation it has already replaced the running ones. Checking the images first fails before anything running is touched.
 

@@ -136,7 +136,7 @@ A User who sees every Project and may use every screen of the panel, the host-wi
 _Avoid_: Administrator (spell it Admin), Staff.
 
 **Role**:
-Viewer, Operator or Editor: what a User may do in an Environment. A Viewer reads, an Operator also deploys, restarts and stops, an Editor also changes the Compose and its settings and reads secret values. A **Project Editor** holds Editor on the Project itself and may also edit the Project and add or delete its Environments.
+Viewer, Operator or Editor: what a User may do in an Environment. A Viewer reads, an Operator also deploys, restarts and stops, an Editor also changes a Compose's variables, Domains, Source and settings and reads secret values; only an Admin writes the Compose file itself. A **Project Editor** holds Editor on the Project itself and may also edit the Project and add or delete its Environments.
 _Avoid_: Permission (a Role is the unit; there are no separate permissions).
 
 **Grant**:
