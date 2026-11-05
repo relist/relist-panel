@@ -127,15 +127,56 @@ func (Runner) ImageLabels(ctx context.Context, image, platform string) (map[stri
 	if platform != "" {
 		args = append(args, "--platform", platform)
 	}
-	cmd := command(ctx, append(args, "--format", "{{json .Config.Labels}}", image)...)
+	out, stderr, err := inspect(ctx, append(args, "--format", "{{json .Config.Labels}}", image)...)
+	if err != nil && platform != "" && strings.Contains(stderr, "requires API version") {
+		return labelsOfHeldPlatform(ctx, image, platform)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("docker image inspect %s: %w: %s", image, err, strings.TrimSpace(stderr))
+	}
+	return parseLabels(image, out)
+}
+
+// labelsOfHeldPlatform reads an image's labels on an Engine without image
+// inspect --platform (API < 1.49). Such an Engine keeps one platform per
+// tag, so the labels are the ones that run, but only if that platform is
+// the one asked for: any other is refused, never passed.
+func labelsOfHeldPlatform(ctx context.Context, image, platform string) (map[string]string, error) {
+	out, stderr, err := inspect(ctx, "image", "inspect", "--format",
+		"{{json .Config.Labels}}\n{{.Os}}/{{.Architecture}}{{if .Variant}}/{{.Variant}}{{end}}", image)
+	if err != nil {
+		return nil, fmt.Errorf("docker image inspect %s: %w: %s", image, err, strings.TrimSpace(stderr))
+	}
+	labels, held, _ := strings.Cut(strings.TrimSpace(out), "\n")
+	if !samePlatform(platform, strings.TrimSpace(held)) {
+		return nil, fmt.Errorf("image %s on the host is %s, not %s", image, strings.TrimSpace(held), platform)
+	}
+	return parseLabels(image, labels)
+}
+
+// samePlatform reports whether held (os/arch[/variant]) is the platform
+// wanted names; parts wanted leaves out match anything.
+func samePlatform(wanted, held string) bool {
+	w, h := strings.Split(strings.ToLower(wanted), "/"), strings.Split(strings.ToLower(held), "/")
+	for i, part := range w {
+		if i >= len(h) || part != h[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func inspect(ctx context.Context, args ...string) (string, string, error) {
+	cmd := command(ctx, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("docker image inspect %s: %w: %s", image, err, strings.TrimSpace(stderr.String()))
-	}
+	return string(out), stderr.String(), err
+}
+
+func parseLabels(image, out string) (map[string]string, error) {
 	labels := map[string]string{}
-	if err := json.Unmarshal(bytes.TrimSpace(out), &labels); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &labels); err != nil {
 		return nil, fmt.Errorf("read labels of %s: %w", image, err)
 	}
 	return labels, nil

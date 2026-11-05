@@ -5,6 +5,7 @@ import (
 	"context"
 	"os/exec"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -221,5 +222,31 @@ func TestImageLabels(t *testing.T) {
 	output = "null"
 	if labels, err := (Runner{}).ImageLabels(context.Background(), "app:1", ""); err != nil || len(labels) != 0 {
 		t.Fatalf("no labels = %v, err = %v", labels, err)
+	}
+}
+
+// An Engine older than API 1.49 has no image inspect --platform: the labels
+// come from the image the tag holds, and only when it is the platform asked
+// for (one platform per tag there).
+func TestImageLabelsOnAnOldEngine(t *testing.T) {
+	old := command
+	t.Cleanup(func() { command = old })
+	held := "linux/amd64"
+	command = func(ctx context.Context, args ...string) *exec.Cmd {
+		if slices.Contains(args, "--platform") {
+			return exec.CommandContext(ctx, "sh", "-c", `echo '"--platform" requires API version 1.49, but the Docker daemon API version is 1.45' >&2; exit 1`)
+		}
+		return exec.CommandContext(ctx, "printf", `{"traefik.enable":"true"}\n%s\n`, held)
+	}
+	labels, err := Runner{}.ImageLabels(context.Background(), "app:1", "linux/amd64")
+	if err != nil || labels["traefik.enable"] != "true" {
+		t.Fatalf("same platform: labels = %v, err = %v", labels, err)
+	}
+	if _, err := (Runner{}).ImageLabels(context.Background(), "app:1", "linux/386"); err == nil || !strings.Contains(err.Error(), "linux/amd64") {
+		t.Fatalf("another platform: err = %v, want a refusal naming linux/amd64", err)
+	}
+	held = "linux/arm64/v8"
+	if _, err := (Runner{}).ImageLabels(context.Background(), "app:1", "linux/arm64"); err != nil {
+		t.Fatalf("platform without its variant: err = %v", err)
 	}
 }
