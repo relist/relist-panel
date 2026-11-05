@@ -407,3 +407,15 @@ func TestDockerLabelsAreRefused(t *testing.T) {
 		t.Fatalf("an ordinary label: %+v", violations)
 	}
 }
+
+func TestHandWrittenTraefikLabelPointsToDomains(t *testing.T) {
+	f := newFixture(t)
+	web := map[string]any{"image": "nginx", "labels": map[string]any{"traefik.http.routers.x.rule": "Host(`app.example.com`)"}}
+	violations, err := Check(config(t, web, nil), "", f.rules)
+	if err != nil || len(violations) != 1 {
+		t.Fatalf("violations = %+v, err = %v", violations, err)
+	}
+	if !strings.Contains(violations[0].Message, "Domains tab") {
+		t.Errorf("message %q does not point to the Domains tab", violations[0].Message)
+	}
+}
