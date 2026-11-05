@@ -66,20 +66,28 @@ func (s *Service) EvaluatePolicy(ctx context.Context, t DeployTarget) (PolicyRes
 	if err != nil {
 		return PolicyResult{}, fmt.Errorf("resolve the config for the policy: %w", err)
 	}
-	normalized, err := normalizePolicyPaths(out, map[string]string{
+	staged := map[string]string{
 		stage + ".env":  t.Request.EnvFilePath,
 		stage + "-sets": setsDir(t.Request.EnvFilePath),
-	}, dir)
+	}
+	// The check reads the paths that deploy, this Deployment's own Source
+	// copy included; the hash reads them as the Compose directory's, so
+	// it is the same from one Deployment to the next.
+	deploying, err := normalizePolicyPaths(out, staged, "")
 	if err != nil {
 		return PolicyResult{}, err
 	}
-	violations, err := policy.Check(normalized, t.Compose.YAMLContent, policy.Rules{
-		ComposeDir: dir, Roots: s.policyRoots, ProjectName: t.Request.ProjectName, PanelDomain: s.panelDomain,
+	violations, err := policy.Check(deploying, t.Compose.YAMLContent, policy.Rules{
+		ComposeDir: dir, Roots: s.policyRoots, ProjectName: t.Request.ProjectName, PanelDomain: s.panelDomain, SourceCopy: t.SourceDir,
 	})
 	if err != nil {
 		return PolicyResult{}, err
 	}
-	hash, err := policy.Hash(normalized)
+	stable, err := normalizePolicyPaths(out, staged, dir)
+	if err != nil {
+		return PolicyResult{}, err
+	}
+	hash, err := s.policyHash(ctx, t.Compose.ID, stable)
 	if err != nil {
 		return PolicyResult{}, err
 	}
@@ -97,7 +105,10 @@ func normalizePolicyPaths(config []byte, replace map[string]string, dir string) 
 	if err := json.Unmarshal(config, &doc); err != nil {
 		return nil, fmt.Errorf("read resolved config: %w", err)
 	}
-	private := filepath.Join(dir, privateSourcesDir) + string(filepath.Separator)
+	private := "\x00" // matches no path: dir "" keeps private copies as they are
+	if dir != "" {
+		private = filepath.Join(dir, privateSourcesDir) + string(filepath.Separator)
+	}
 	var walk func(any) any
 	walk = func(value any) any {
 		switch v := value.(type) {
@@ -159,8 +170,10 @@ func (s *Service) VolumeAllowed(ctx context.Context, composeID int64, req RunReq
 	if err != nil {
 		return false, fmt.Errorf("resolve the deployed config for the policy: %w", err)
 	}
+	// The deployed file's binds point at its Deployment's Source copy.
 	violations, err := policy.Check(out, "", policy.Rules{
 		ComposeDir: ComposeDir(req), Roots: s.policyRoots, ProjectName: req.ProjectName, PanelDomain: s.panelDomain,
+		SourceCopy: sourceCopyOf(ComposeDir(req), source),
 	})
 	if err != nil {
 		return false, err
@@ -187,4 +200,38 @@ func (s *Service) VolumeAllowed(ctx context.Context, composeID int64, req RunReq
 		return false, err
 	}
 	return result.Approved, nil
+}
+
+// policyHash is the hash of the config together with the Compose's Source
+// settings: another repository, branch, paths or zip upload needs a new
+// approval. A new commit on the same branch does not (ADR-0032).
+func (s *Service) policyHash(ctx context.Context, composeID int64, config []byte) (string, error) {
+	var source []any
+	var kind, repo, branch, sparse, zipName string
+	var zipSize, zipFiles int64
+	var uploaded sql.NullInt64
+	err := s.repository.db.QueryRowContext(ctx, `SELECT kind, repo_url, branch, sparse_paths, zip_name, zip_size, zip_files, uploaded_at
+		FROM compose_sources WHERE compose_id = ?`, composeID).Scan(&kind, &repo, &branch, &sparse, &zipName, &zipSize, &zipFiles, &uploaded)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return "", fmt.Errorf("load source for the policy: %w", err)
+	default:
+		source = []any{kind, repo, branch, sparse, zipName, zipSize, zipFiles, uploaded.Int64}
+	}
+	doc, err := json.Marshal(map[string]any{"config": json.RawMessage(config), "source": source})
+	if err != nil {
+		return "", err
+	}
+	return policy.Hash(doc)
+}
+
+// sourceCopyOf is the private Source copy path lies in, or "".
+func sourceCopyOf(dir, path string) string {
+	rest, ok := strings.CutPrefix(filepath.Clean(path), filepath.Join(dir, privateSourcesDir)+string(filepath.Separator))
+	if !ok {
+		return ""
+	}
+	first, _, _ := strings.Cut(rest, string(filepath.Separator))
+	return filepath.Join(dir, privateSourcesDir, first)
 }

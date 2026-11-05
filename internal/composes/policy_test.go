@@ -22,6 +22,7 @@ func TestPolicyHashIsStableAcrossStagingAndSourceCopies(t *testing.T) {
 	dir := ComposeDir(target.Request)
 	hashes := []string{}
 	for _, copy := range []string{"source-a", "source-b"} {
+		target.SourceDir = filepath.Join(dir, ".deployment-sources", copy)
 		runner.onConfig = func(req RunRequest) {
 			runner.config = policyConfig(filepath.Join(dir, ".deployment-sources", copy, "src", "conf"), req.EnvFilePath)
 		}
@@ -113,5 +114,45 @@ func TestVolumeAllowed(t *testing.T) {
 	}
 	if got, _ := svc.VolumeAllowed(ctx, target.Compose.ID, target.Request, true, "/etc", "", true); !got {
 		t.Fatal("an approver could not open /etc after approving")
+	}
+}
+
+// The check reads the paths that deploy: another Deployment's Source copy
+// is the panel's own files, and only this Deployment's own copy passes.
+func TestPolicyChecksTheDeployingCopy(t *testing.T) {
+	svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+	dir := ComposeDir(target.Request)
+	runner.onConfig = func(req RunRequest) {
+		runner.config = policyConfig(filepath.Join(dir, ".deployment-sources", "source-a", "src", "conf"), req.EnvFilePath)
+	}
+	result, err := svc.EvaluatePolicy(context.Background(), target)
+	if err != nil || len(result.Violations) == 0 {
+		t.Fatalf("a copy that is not this Deployment's passed: %+v %v", result, err)
+	}
+}
+
+// A new Source (another repository, branch or zip upload) needs a new
+// approval: its settings are part of the hash.
+func TestPolicyHashCoversTheSource(t *testing.T) {
+	svc, runner, target, db := newDeployService(t, "services: {web: {image: nginx}}\n")
+	runner.config = []byte(`{"name":"x","services":{"web":{"image":"nginx"}}}`)
+	ctx := context.Background()
+	hashOf := func() string {
+		result, err := svc.EvaluatePolicy(ctx, target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.Hash
+	}
+	none := hashOf()
+	if _, err := db.Exec("INSERT INTO compose_sources (compose_id, kind, repo_url, branch, created_at, updated_at) VALUES (1, 'git', 'git@example.com:a/app.git', 'main', 0, 0)"); err != nil {
+		t.Fatal(err)
+	}
+	first := hashOf()
+	if _, err := db.Exec("UPDATE compose_sources SET repo_url = 'git@example.com:evil/app.git'"); err != nil {
+		t.Fatal(err)
+	}
+	if second := hashOf(); first == none || second == first {
+		t.Fatalf("hashes none=%s first=%s second=%s", none, first, second)
 	}
 }

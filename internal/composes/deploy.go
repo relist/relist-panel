@@ -33,6 +33,9 @@ type DeployTarget struct {
 	Compose   Compose
 	Request   RunRequest
 	Snapshot  *ExecutionSnapshot `json:"-"`
+	// SourceDir is this Deployment's private Source copy, which its paths
+	// point at (WithSourceDirectory); empty without one.
+	SourceDir string
 }
 
 // DeployOptions tunes RunDeploy. FreshVolumes deletes the Compose's named

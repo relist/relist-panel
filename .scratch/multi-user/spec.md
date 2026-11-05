@@ -503,3 +503,5 @@ installed `antd`.
 7. The Volume Explorer checks the deployed file it resolves from.
 8. A git Source in build mode that cannot be resolved before its fetch queues; the check after the fetch decides.
 9. The Compose list tag is left out; the Compose page shows the state.
+10. (Review) The hash covers the Source settings (kind, repository, branch, paths, zip upload), not each commit.
+11. (Review) A bind of the panel's own files in the Compose directory (dot names, `docker-compose.yml`, `sets`) is refused, except the Deployment's own Source copy; a link the panel cannot follow is refused; include and extends are followed into the files they name.
