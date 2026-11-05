@@ -3,8 +3,10 @@ package authz
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -184,5 +186,104 @@ func TestForgedRefusalRecordsNoScope(t *testing.T) {
 	e := events[0]
 	if e.Outcome != audit.OutcomeDenied || e.ProjectID != 0 || e.EnvironmentID != 0 || e.ComposeID != 0 || e.Target != path {
 		t.Fatalf("denied event = %+v, want no scope and the path as target", e)
+	}
+}
+
+const volumeRead = "GET " + compose + "/volumes/read"
+
+// io.Copy into the response must keep the underlying writer's ReadFrom (a
+// file sent with sendfile) and still count as a 200.
+func TestStatusWriterKeepsReaderFrom(t *testing.T) {
+	var isReaderFrom bool
+	f, c := recordingFixture(t, func(mux *http.ServeMux) {
+		mux.HandleFunc(volumeRead, func(w http.ResponseWriter, r *http.Request) {
+			_, isReaderFrom = w.(io.ReaderFrom)
+			if _, err := io.Copy(w, strings.NewReader("hello")); err != nil {
+				t.Error(err)
+			}
+		})
+	})
+	response := f.serve(admin, http.MethodGet, composePath(pA, eA1, cC, "/volumes/read"))
+	if !isReaderFrom {
+		t.Error("the wrapped writer is not an io.ReaderFrom")
+	}
+	if response.Code != http.StatusOK || response.Body.String() != "hello" {
+		t.Fatalf("response = %d %q", response.Code, response.Body.String())
+	}
+	if events := c.take(); len(events) != 1 || events[0].Action != "volume.read" || events[0].Detail["incomplete"] != nil {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+// brokenWriter fails every Write after the headers, as a client that hung
+// up midway through a download.
+type brokenWriter struct {
+	header http.Header
+	status int
+}
+
+func (w *brokenWriter) Header() http.Header       { return w.header }
+func (w *brokenWriter) WriteHeader(status int)    { w.status = status }
+func (w *brokenWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+func TestDownloadCutShortIsMarkedIncomplete(t *testing.T) {
+	f, c := recordingFixture(t, func(mux *http.ServeMux) {
+		mux.HandleFunc(volumeRead, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("part"))
+		})
+	})
+	request := httptest.NewRequest(http.MethodGet, composePath(pA, eA1, cC, "/volumes/read"), nil)
+	request = request.WithContext(auth.WithUser(request.Context(), *admin))
+	f.handler.ServeHTTP(&brokenWriter{header: http.Header{}}, request)
+	events := c.take()
+	if len(events) != 1 || events[0].Outcome != audit.OutcomeOK || events[0].Detail["incomplete"] != true {
+		t.Fatalf("events = %+v, want one ok event marked incomplete", events)
+	}
+}
+
+// HEAD sends no body, so it is not a download.
+func TestHeadIsNotRecorded(t *testing.T) {
+	f, c := recordingFixture(t, func(mux *http.ServeMux) {
+		mux.HandleFunc(volumeRead, answer(http.StatusOK))
+	})
+	if got := f.serve(admin, http.MethodHead, composePath(pA, eA1, cC, "/volumes/read")).Code; got != http.StatusOK {
+		t.Fatalf("HEAD = %d", got)
+	}
+	if events := c.take(); len(events) != 0 {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+// A Range request is still a download (skipping it would let a file be read
+// piecewise with no event), and the range it asked for is in the detail.
+func TestRangeDownloadNamesTheRange(t *testing.T) {
+	f, c := recordingFixture(t, func(mux *http.ServeMux) {
+		mux.HandleFunc(volumeRead, answer(http.StatusPartialContent))
+	})
+	request := httptest.NewRequest(http.MethodGet, composePath(pA, eA1, cC, "/volumes/read"), nil)
+	request.Header.Set("Range", "bytes=100-199")
+	request = request.WithContext(auth.WithUser(request.Context(), *admin))
+	f.handler.ServeHTTP(httptest.NewRecorder(), request)
+	events := c.take()
+	if len(events) != 1 || events[0].Detail["range"] != "bytes=100-199" {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+// A member who repeats a refused change records at most deniedPerMinute
+// denied events a minute for that action.
+func TestRepeatedRefusalsAreCapped(t *testing.T) {
+	f, c := recordingFixture(t, func(mux *http.ServeMux) {
+		mux.HandleFunc("PUT "+compose, answer(http.StatusNoContent))
+	})
+	grant(t, f.db, pA, eA1, "viewer")
+	for range deniedPerMinute + 5 {
+		if got := f.serve(member, http.MethodPut, composePath(pA, eA1, cC, "")).Code; got != http.StatusForbidden {
+			t.Fatalf("viewer PUT = %d", got)
+		}
+	}
+	if got := len(c.take()); got != deniedPerMinute {
+		t.Fatalf("denied events = %d, want %d", got, deniedPerMinute)
 	}
 }

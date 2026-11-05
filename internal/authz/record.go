@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -43,11 +44,12 @@ func peerIP(r *http.Request) string {
 	return host
 }
 
-// statusWriter remembers the status a handler answered with. A Write
-// without WriteHeader is a 200.
+// statusWriter remembers the status a handler answered with, and whether
+// writing the body failed. A Write without WriteHeader is a 200.
 type statusWriter struct {
 	http.ResponseWriter
 	status int
+	failed bool
 }
 
 func (w *statusWriter) WriteHeader(status int) {
@@ -61,7 +63,31 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	return w.ResponseWriter.Write(b)
+	n, err := w.ResponseWriter.Write(b)
+	if err != nil {
+		w.failed = true
+	}
+	return n, err
+}
+
+// ReadFrom keeps the underlying writer's ReadFrom (sendfile for a file)
+// for io.Copy.
+func (w *statusWriter) ReadFrom(src io.Reader) (int64, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	var n int64
+	var err error
+	if from, ok := w.ResponseWriter.(io.ReaderFrom); ok {
+		n, err = from.ReadFrom(src)
+	} else {
+		// Hide this ReadFrom from io.Copy, which would call it again.
+		n, err = io.Copy(struct{ io.Writer }{w.ResponseWriter}, src)
+	}
+	if err != nil {
+		w.failed = true
+	}
+	return n, err
 }
 
 func (w *statusWriter) Flush() {
@@ -73,3 +99,7 @@ func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 }
 
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// deniedPerMinute caps the denied events one User records per action a
+// minute.
+const deniedPerMinute = 10
