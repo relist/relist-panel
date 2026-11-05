@@ -518,3 +518,6 @@ installed `antd`.
 22. (Editors and the file) The policy and the deploy's image check stay: Variables interpolate into the file and a Source builds the image.
 23. (Security review 3) The image check reads the labels of each Service's `platform` (`docker image inspect --platform`).
 24. (Domains) A host belongs to one Project: creating or moving a Domain onto a host a Compose of another Project serves answers 409 for everyone, Admins included, without naming that Project. Composes of one Project share a host by path. Existing cross-Project sharing is left alone.
+25. (Review) A Domain shared across Projects before ruling 24 stays editable while the edit keeps its host. A host goes to the first Project that claims it.
+26. (Review) On an Engine older than API 1.49 the image check reads the image the tag holds and refuses it when its platform is not the Service's `platform`.
+27. (Review) The web offers non-admins no helper that edits the file (Detect, build snippets), disables the dirty banner's Save, and Deploy sends the saved file.
