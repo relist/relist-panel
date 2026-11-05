@@ -79,7 +79,14 @@ func Emit(ctx context.Context, action string, detail map[string]any) {
 	}
 	e := p.Event()
 	if e.Target == "" && p.resolveTarget != nil {
-		e.Target = p.resolveTarget(ctx)
+		// Resolved once, without the request's cancel: a Terminal's close
+		// comes after its request is gone, maybe after its Compose is.
+		e.Target = p.resolveTarget(context.WithoutCancel(ctx))
+		p.mu.Lock()
+		if p.base.Target == "" {
+			p.base.Target = e.Target
+		}
+		p.mu.Unlock()
 	}
 	e.Action, e.Outcome, e.Detail, e.At = action, OutcomeOK, detail, time.Now()
 	if err := p.record(context.WithoutCancel(ctx), e); err != nil {
