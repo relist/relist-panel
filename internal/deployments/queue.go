@@ -924,6 +924,11 @@ func (j *job) runPrepare(p plan) (outcome, bool) {
 		}
 	}()
 	prepareBuild := func() (outcome, bool) {
+		// A build runs with what the file asks for too (privileged, host
+		// network), so the policy is checked before the first one.
+		if err := j.checkPolicy(); err != nil {
+			return j.stepFailed(err), false
+		}
 		j.step = ""
 		plan, err := q.d.Composes.PrepareBuild(j.tctx, j.target)
 		if err != nil {
@@ -1035,6 +1040,12 @@ func (j *job) runApply(steps []step) outcome {
 			return outcome{status: StatusCanceled, reason: reasonComposeDeleted}
 		}
 		return failed(j.step, firstLine(err.Error()))
+	}
+	// Checked again as late as possible before volumes are wiped, a rollout
+	// starts or up runs.
+	if err := j.checkPolicy(); err != nil {
+		release()
+		return j.stepFailed(err)
 	}
 	q.mu.Lock()
 	if j.tctx.Err() != nil {
@@ -1174,4 +1185,25 @@ func (q *Queue) admit(ctx context.Context, composeID int64, r Request, snapshot 
 		return nil
 	}
 	return &PolicyError{Result: result, Approver: r.Approver}
+}
+
+// checkPolicy evaluates the Deployment's own snapshot against the Compose
+// policy. A config that violates and is not approved fails the step, and so
+// does one that cannot be evaluated.
+func (j *job) checkPolicy() error {
+	if j.q.d.Policy == nil {
+		return nil
+	}
+	result, err := j.q.d.Policy.EvaluatePolicy(j.tctx, j.target)
+	if err != nil {
+		return fmt.Errorf("policy: could not check the config: %w", err)
+	}
+	if result.Passes() {
+		return nil
+	}
+	reasons := make([]string, 0, len(result.Violations))
+	for _, v := range result.Violations {
+		reasons = append(reasons, v.Service+": "+v.Message)
+	}
+	return fmt.Errorf("policy: this Compose needs an approver's approval: %s", strings.Join(reasons, "; "))
 }
