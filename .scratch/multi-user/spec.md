@@ -477,3 +477,18 @@ installed `antd`.
 7. A member's `/` redirects to `/projects`; Overview, Monitoring and every host-wide page stay admin-only.
 8. Roles are recorded by amending ADR-0031; ADR-0032 stays for the Compose policy.
 9. A Project's `environmentCount` is the visible count for a non-admin.
+
+### 2026-11-05 — Phase 3 rulings
+
+1. Actions are a separate `authz.Actions` map (pattern → `<resource>.<verb>`); every registered non-GET, non-Public pattern has one; GETs only for Volume read/archive and Access log downloads.
+2. `denied` is recorded only for actioned patterns.
+3. Target names are read before the handler, for admins too; unscoped routes use the handler's `audit.Target`, else the path.
+4. `secret.read` is one event per list response that carried a secret value, with `detail.keys`.
+5. The Terminal records `terminal.open` and `terminal.close` (`detail.seconds`) itself.
+6. Sign-in events: `auth.login`, `auth.login_failed` (denied, `detail.email`, reason `locked`/`code`), `auth.invite_accepted` (`detail.kind`).
+7. CLI events, actor `cli`: `cli.create_admin`, `cli.reset_password`, `cli.change_email`, `cli.reset_2fa`.
+8. Settings API is `{retentionDays, keepForever}`, stored as `retention_days` (0 = forever).
+9. Filters: actor exact (case-insensitive) or `cli`; action prefix; from/to inclusive ms.
+10. `GET /api/projects/{id}/audit` is Viewer in the route table; the handler answers 403 unless the User edits one of its Environments.
+11. HTTP lives in `internal/auditapi`.
+

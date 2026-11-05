@@ -23,6 +23,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"relist-panel/internal/audit"
 	"relist-panel/internal/authz"
 )
 
@@ -171,6 +172,11 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.hangUp(target.ID, pid)
 
+	opened := time.Now()
+	audit.Emit(r.Context(), "terminal.open", map[string]any{"service": service, "container": target.Name})
+	defer func() {
+		audit.Emit(r.Context(), "terminal.close", map[string]any{"service": service, "seconds": int(time.Since(opened).Seconds())})
+	}()
 	if err := writeControl(r.Context(), conn, readyFrame{
 		Type:      "ready",
 		Shell:     shellName,

@@ -32,6 +32,7 @@ export const paths = {
   projects: '/projects',
   signIn: '/signin',
   users: '/users',
+  audit: '/audit',
   user: (userId: number | string) => `/users/${userId}`,
   /**
    * The Volume Explorer's URL: the Compose's route plus a `volumes/explorer`
@@ -79,6 +80,7 @@ export const routePaths = [
   { path: 'traefik' },
   { path: 'users' },
   { path: 'users/:userId' },
+  { path: 'audit' },
   { path: 'vulnerabilities' },
   { path: 'docker' },
   { path: 'panel-update' },

@@ -1,0 +1,111 @@
+package authz
+
+// Actions names the Audit log action of each pattern that changes something,
+// and of the few reads the spec records (.scratch/multi-user/spec.md, Audit
+// log). The middleware records an actioned request that ends 2xx as ok, and
+// one it refuses as denied; a pattern without an action is not recorded.
+// Names are <resource>.<verb>: the singular of what changed, then
+// create/update/delete from the method, or the verb the path ends in.
+// TestEveryChangeHasAnAction fails on a registered change with no action.
+var Actions = map[string]string{
+	// Your own account.
+	"POST /api/auth/logout":      "auth.logout",
+	"POST /api/auth/password":    "auth.password_change",
+	"POST /api/auth/2fa/setup":   "auth.2fa_setup",
+	"POST /api/auth/2fa/enable":  "auth.2fa_enable",
+	"POST /api/auth/2fa/disable": "auth.2fa_disable",
+
+	// Users and Grants.
+	"POST /api/users":               "user.create",
+	"PATCH /api/users/{id}":         "user.update",
+	"DELETE /api/users/{id}":        "user.delete",
+	"POST /api/users/{id}/reset":    "user.reset",
+	"PUT /api/users/{id}/grants":    "grant.set",
+	"PUT /api/projects/{id}/grants": "grant.set",
+
+	// Projects and Environments.
+	"POST /api/projects":                                 "project.create",
+	"PUT " + project:                                     "project.update",
+	"DELETE " + project:                                  "project.delete",
+	"POST /api/projects/{projectID}/environments":        "environment.create",
+	"DELETE /api/projects/{projectID}/environments/{id}": "environment.delete",
+	"POST " + environment + "/variables":                 "environment_variable.create",
+	"PUT " + environment + "/variables/{variableID}":     "environment_variable.update",
+	"DELETE " + environment + "/variables/{variableID}":  "environment_variable.delete",
+
+	// Composes.
+	"POST " + environment + "/composes":                              "compose.create",
+	"PUT " + compose:                                                 "compose.update",
+	"DELETE " + compose:                                              "compose.delete",
+	"POST " + compose + "/preview":                                   "compose.preview",
+	"POST " + compose + "/restart":                                   "compose.restart",
+	"POST " + compose + "/stop":                                      "compose.stop",
+	"PUT " + compose + "/builder":                                    "compose_builder.update",
+	"PUT " + compose + "/zero-downtime/{service}":                    "zero_downtime.update",
+	"PUT " + compose + "/bindings/{service}":                         "binding.update",
+	"POST " + compose + "/deployments":                               "deployment.create",
+	"POST " + compose + "/deployments/{number}/cancel":               "deployment.cancel",
+	"POST " + compose + "/domains":                                   "domain.create",
+	"PUT " + compose + "/domains/{domainID}":                         "domain.update",
+	"DELETE " + compose + "/domains/{domainID}":                      "domain.delete",
+	"PUT " + compose + "/source":                                     "source.update",
+	"DELETE " + compose + "/source":                                  "source.delete",
+	"POST " + compose + "/source/test":                               "source.test",
+	"POST " + compose + "/source/upload":                             "source.upload",
+	"POST " + compose + "/source/known-hosts/reset":                  "source.known_hosts_reset",
+	"POST " + compose + "/variables":                                 "compose_variable.create",
+	"PUT " + compose + "/variables/{variableID}":                     "compose_variable.update",
+	"DELETE " + compose + "/variables/{variableID}":                  "compose_variable.delete",
+	"POST " + compose + "/variable-sets":                             "variable_set.create",
+	"PUT " + compose + "/variable-sets/{setID}":                      "variable_set.update",
+	"DELETE " + compose + "/variable-sets/{setID}":                   "variable_set.delete",
+	"POST " + compose + "/variable-sets/{setID}/entries":             "variable_set_entry.create",
+	"PUT " + compose + "/variable-sets/{setID}/entries/{entryID}":    "variable_set_entry.update",
+	"DELETE " + compose + "/variable-sets/{setID}/entries/{entryID}": "variable_set_entry.delete",
+
+	// Volumes: changes, and the two downloads the spec records.
+	"GET " + compose + "/volumes/read":              "volume.read",
+	"GET " + compose + "/volumes/archive":           "volume.archive",
+	"PUT " + compose + "/volumes/content":           "volume.content_update",
+	"DELETE " + compose + "/volumes/content":        "volume.content_delete",
+	"PUT " + compose + "/volumes/directory":         "volume.directory_create",
+	"PUT " + compose + "/volumes/file":              "volume.file_upload",
+	"PUT " + compose + "/volumes/restore":           "volume.restore",
+	"DELETE " + compose + "/volumes/orphans/{name}": "volume.orphan_delete",
+
+	// Host-wide (admin).
+	"POST /api/ssh-keys":                              "ssh_key.create",
+	"PATCH /api/ssh-keys/{id}":                        "ssh_key.update",
+	"DELETE /api/ssh-keys/{id}":                       "ssh_key.delete",
+	"POST /api/certificates":                          "certificate.create",
+	"PUT /api/certificates/{id}":                      "certificate.update",
+	"DELETE /api/certificates/{id}":                   "certificate.delete",
+	"POST /api/builders":                              "builder.create",
+	"PUT /api/builders/{id}":                          "builder.update",
+	"DELETE /api/builders/{id}":                       "builder.delete",
+	"POST /api/builders/{id}/prune":                   "builder.prune",
+	"POST /api/builders/{id}/start":                   "builder.start",
+	"PUT /api/builders/default":                       "builder.default_update",
+	"PUT /api/builders/settings":                      "builder.settings_update",
+	"PUT /api/images":                                 "image.update",
+	"POST /api/docker/prune":                          "docker.prune",
+	"POST /api/docker/recover":                        "docker.recover",
+	"POST /api/panel-update/apply":                    "panel_update.apply",
+	"POST /api/panel-update/cancel":                   "panel_update.cancel",
+	"POST /api/panel-update/check":                    "panel_update.check",
+	"POST /api/panel-update/preflight":                "panel_update.preflight",
+	"PUT /api/panel-update/settings":                  "panel_update.settings_update",
+	"POST /api/traefik/restart":                       "traefik.restart",
+	"POST /api/traefik/config/apply":                  "traefik.config_apply",
+	"POST /api/traefik/config/apply/ack":              "traefik.config_apply_ack",
+	"POST /api/traefik/config/history/{name}/restore": "traefik.config_restore",
+	"POST /api/traefik/config/preview":                "traefik.config_preview",
+	"POST /api/traefik/config/test":                   "traefik.config_test",
+	"PUT /api/traefik/access-log-settings":            "access_log.settings_update",
+	"GET /api/traefik/access-logs/{name}":             "access_log.download",
+	"POST /api/vulnerabilities/scans":                 "vulnerability.scan",
+	"POST /api/vulnerabilities/db-update":             "vulnerability.db_update",
+	"PUT /api/vulnerabilities/settings":               "vulnerability.settings_update",
+	"DELETE /api/vulnerabilities/cache":               "vulnerability.cache_delete",
+	"PUT /api/audit/settings":                         "audit_settings.update",
+}

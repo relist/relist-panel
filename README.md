@@ -36,6 +36,12 @@ stop) or Editor (also change the Compose, its variables and settings, open
 the Terminal and the Volume Explorer). An Environment can be set to No
 access to hide it. Admins see everything; a User with no Role sees nothing.
 
+Every change made in the panel, every refusal, each sign-in and the
+sensitive reads (secret values, Volume downloads, Terminal sessions) go to
+the **Audit log**, kept 90 days by default. Admins read it all; a Project's
+Editors read its **Activity** tab. Variable values are never recorded. It
+is not tamper-proof against an Admin, who can reach the database.
+
 **Until the Compose policy ships, an Editor can take the host** (a Compose
 that mounts the Docker socket or runs privileged, then the Terminal), **so
 grant Editor only to people you would give root.**

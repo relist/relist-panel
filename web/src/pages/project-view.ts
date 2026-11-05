@@ -8,11 +8,11 @@ import { composeDeployIdentity } from './compose-view';
  * how the Projects list filters and sorts — are testable without a router.
  */
 
-export type ProjectTab = 'composes' | 'members' | 'settings' | 'variables';
+export type ProjectTab = 'activity' | 'composes' | 'members' | 'settings' | 'variables';
 
 /** The tab a path segment resolves to; an unknown segment falls back to Composes. */
 export function activeTab(tab?: string): ProjectTab {
-  return tab === 'variables' || tab === 'settings' || tab === 'members' ? tab : 'composes';
+  return tab === 'variables' || tab === 'settings' || tab === 'members' || tab === 'activity' ? tab : 'composes';
 }
 
 /** The Environment the switcher shows: the URL's when it exists, else the first. */

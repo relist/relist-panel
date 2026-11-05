@@ -29,7 +29,7 @@ import {
   theme,
 } from 'antd';
 import type { MenuProps } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
 import { paths } from '../app/paths';
@@ -43,7 +43,8 @@ import { VulnBadges } from '../components/VulnBadges';
 import { useAccess, useIsAdmin } from '../data/useCan';
 import { useVulnSummary } from '../data/useVulnSummary';
 import { summaryBadge, vulnLink } from './vulnerabilities-view';
-import { ZeroDowntimeRefusedError } from '../data/api';
+import { ZeroDowntimeRefusedError, api } from '../data/api';
+import type { AuditQuery } from '../data/api';
 import { usePanel } from '../data/store';
 import type { Compose } from '../data/types';
 import { composeState, projectComposes, summarize } from '../data/types';
@@ -51,6 +52,7 @@ import { activeTab, selectEnvironment } from './project-view';
 import { composeDeployIdentity } from './compose-view';
 import { ProjectSettingsTab } from './ProjectSettingsTab';
 import { ProjectMembersTab } from '../components/ProjectMembersTab';
+import { AuditTable } from '../components/AuditTable';
 import { deployFromList } from './project-deploy';
 
 const { Text, Paragraph } = Typography;
@@ -113,8 +115,13 @@ export function ProjectPage() {
   const projectEditor = access.isProjectEditor(project?.id);
   const canOperate = access.can(activeEnvironment?.id, 'operator');
   const canEdit = access.can(activeEnvironment?.id, 'editor');
-  // Members is an admin's tab; anyone else landing on its URL gets Composes.
-  const activeTabKey = tab === 'members' && !isAdmin ? 'composes' : activeTab(tab);
+  // Activity is for admins and Editors of at least one of its Environments
+  // (the API answers the rest 403); Members for admins only. Anyone else
+  // landing on either URL gets Composes.
+  const canSeeActivity = isAdmin || (project?.environments ?? []).some((environment) => access.can(environment.id, 'editor'));
+  const requested = activeTab(tab);
+  const activeTabKey = (requested === 'members' && !isAdmin) || (requested === 'activity' && !canSeeActivity) ? 'composes' : requested;
+  const loadActivity = useCallback((query: AuditQuery) => api.listProjectAudit(projectId, query), [projectId]);
 
   useEffect(() => {
     setActionError(undefined);
@@ -532,6 +539,15 @@ export function ProjectPage() {
                 key: 'settings',
                 label: 'Settings',
               },
+              ...(canSeeActivity
+                ? [
+                    {
+                      children: <AuditTable load={loadActivity} />,
+                      key: 'activity',
+                      label: 'Activity',
+                    },
+                  ]
+                : []),
               ...(isAdmin
                 ? [
                     {

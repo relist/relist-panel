@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"relist-panel/internal/audit"
 	"strconv"
 )
 
@@ -58,6 +59,10 @@ func (s *Service) replaceUser(w http.ResponseWriter, r *http.Request) {
 	for i := range inputs {
 		inputs[i].UserID = id
 	}
+	var email string
+	if err := s.db.QueryRowContext(r.Context(), "SELECT email FROM users WHERE id = ?", id).Scan(&email); err == nil {
+		audit.Target(r.Context(), email)
+	}
 	s.replace(w, r, "user_id", id, inputs, "grants.user_id = ?")
 }
 
@@ -73,10 +78,15 @@ func (s *Service) replaceProject(w http.ResponseWriter, r *http.Request) {
 	for i := range inputs {
 		inputs[i].ProjectID = id
 	}
+	var name string
+	if err := s.db.QueryRowContext(r.Context(), "SELECT name FROM projects WHERE id = ?", id).Scan(&name); err == nil {
+		audit.Target(r.Context(), name)
+	}
 	s.replace(w, r, "project_id", id, inputs, "grants.project_id = ?")
 }
 
 func (s *Service) replace(w http.ResponseWriter, r *http.Request, scope string, id int64, inputs []grantInput, where string) {
+	audit.Detail(r.Context(), "grants", inputs)
 	err := replace(r.Context(), s.db, scope, id, inputs)
 	var invalid validationError
 	if errors.As(err, &invalid) {

@@ -143,6 +143,30 @@ describe('Roles on the Project page', () => {
     expect(screen.queryByRole('tab', { name: 'Members' })).toBeNull();
   });
 
+  it('shows the Activity tab to an admin and loads the Project audit', async () => {
+    const audit = vi.spyOn(api, 'listProjectAudit').mockResolvedValue({ items: [], nextCursor: null });
+    renderPage();
+    await userEvent.click(await screen.findByRole('tab', { name: 'Activity' }));
+    await waitFor(() => expect(audit).toHaveBeenCalledWith(1, {}));
+  });
+
+  it('shows the Activity tab to an Editor of one Environment', async () => {
+    as(null, 'editor');
+    renderPage();
+    await screen.findByText('Compose A');
+    expect(await screen.findByRole('tab', { name: 'Activity' })).toBeTruthy();
+  });
+
+  it('hides the Activity tab from a Viewer, whose activity URL shows Composes', async () => {
+    as(null, 'viewer');
+    const router = renderPage();
+    await screen.findByText('Compose A');
+    await waitFor(() => expect(disabled(/New Compose/)).toBe(true));
+    expect(screen.queryByRole('tab', { name: 'Activity' })).toBeNull();
+    await router.navigate('/projects/1/env/2/activity');
+    expect(await screen.findByRole('tab', { name: /Composes/, selected: true })).toBeTruthy();
+  });
+
   it('lets a Viewer open Composes only', async () => {
     as(null, 'viewer');
     renderPage();

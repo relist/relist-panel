@@ -15,6 +15,9 @@ import (
 // adminOnly is every registered pattern deliberately left out of Routes:
 // only an admin reaches it. A new route must be added here or to Routes.
 var adminOnly = []string{
+	"GET /api/audit",
+	"GET /api/audit/settings",
+	"PUT /api/audit/settings",
 	"POST /api/projects",
 	"DELETE /api/projects/{id}",
 	"GET /api/projects/{id}/removal-plan",

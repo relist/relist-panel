@@ -642,3 +642,32 @@ describe('users and invites', () => {
     );
   });
 });
+
+describe('audit log', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('requests the audit log with its filters and leaves empty ones out', async () => {
+    const page = { items: [], nextCursor: null };
+    const fetch = vi.fn(async (_url: string) => new Response(JSON.stringify(page)));
+    vi.stubGlobal('fetch', fetch);
+    await expect(api.listAudit({ actor: 'a@b', action: 'compose.', from: 1, cursor: 9, to: undefined })).resolves.toEqual(page);
+    const url = new URL(fetch.mock.calls[0][0], 'http://panel.localhost');
+    expect(url.pathname).toBe('/api/audit');
+    expect(Object.fromEntries(url.searchParams)).toEqual({ cursor: '9', actor: 'a@b', action: 'compose.', from: '1' });
+    await api.listProjectAudit(3, {});
+    expect(fetch.mock.calls[1][0]).toBe('/api/projects/3/audit');
+    await api.listAudit({ actor: '' });
+    expect(fetch.mock.calls[2][0]).toBe('/api/audit');
+  });
+
+  it('reads and saves the retention', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{"retentionDays":30,"keepForever":false}'));
+    vi.stubGlobal('fetch', fetch);
+    await expect(api.getAuditSettings()).resolves.toEqual({ retentionDays: 30, keepForever: false });
+    await api.putAuditSettings({ retentionDays: 30, keepForever: false });
+    const [url, init] = fetch.mock.calls[1];
+    expect(url).toBe('/api/audit/settings');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({ retentionDays: 30, keepForever: false });
+  });
+});

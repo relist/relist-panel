@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"relist-panel/internal/audit"
 	"relist-panel/internal/authz"
 )
 
@@ -361,6 +362,14 @@ func (s *Service) effectiveVariables(w http.ResponseWriter, r *http.Request) {
 				effective[i].Value = ""
 			}
 		}
+	} else {
+		var keys []string
+		for _, variable := range effective {
+			if variable.Secret && variable.Value != "" {
+				keys = append(keys, variable.Key)
+			}
+		}
+		audit.SecretRead(r.Context(), keys)
 	}
 	writeJSON(w, http.StatusOK, effective)
 }

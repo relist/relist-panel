@@ -10,8 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/mail"
+	"relist-panel/internal/audit"
 	"strings"
 	"sync"
 	"time"
@@ -209,6 +212,14 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	// does not change this; the mutex alone provides the ordering.
 	s.loginMu.Lock()
 	defer s.loginMu.Unlock()
+	// The attempt's event is written after the transaction below ends (the
+	// database has one connection): this defer runs after its Rollback.
+	var event *audit.Event
+	defer func() {
+		if event != nil {
+			s.recordAudit(r.Context(), *event)
+		}
+	}()
 
 	account, remaining, err := s.readLoginAccount(r.Context(), email)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -216,6 +227,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		// anyway, so the answer takes as long as a wrong password and its
 		// timing does not tell which emails belong to active Users.
 		_ = s.comparePassword(dummyHash(), []byte(input.Password))
+		event = loginFailed(r, 0, "unknown", email, "")
 		writeError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
@@ -224,6 +236,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if remaining > 0 {
+		event = loginFailed(r, account.id, account.email, email, "locked")
 		writeLocked(w, remaining)
 		return
 	}
@@ -253,6 +266,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if remaining > 0 {
+		event = loginFailed(r, account.id, account.email, email, "locked")
 		writeLocked(w, remaining)
 		return
 	}
@@ -272,6 +286,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 			return
 		}
+		event = loginFailed(r, account.id, account.email, email, "")
 		writeError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
@@ -298,16 +313,21 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 				return
 			}
+			event = loginFailed(r, account.id, account.email, email, "code")
 			writeError(w, http.StatusUnauthorized, "invalid code")
 			return
 		}
 
-		s.completeLogin(w, r, tx, account, sql.NullInt64{Int64: step, Valid: true})
+		if s.completeLogin(w, r, tx, account, sql.NullInt64{Int64: step, Valid: true}) {
+			event = loginOK(r, account)
+		}
 		return
 	}
 
 	// Two-factor is off: any code sent is ignored.
-	s.completeLogin(w, r, tx, account, sql.NullInt64{})
+	if s.completeLogin(w, r, tx, account, sql.NullInt64{}) {
+		event = loginOK(r, account)
+	}
 }
 
 // readLoginAccount is the login's short first phase: it finds the account and
@@ -334,14 +354,14 @@ func (s *Service) readLoginAccount(ctx context.Context, email string) (userRow, 
 // step when a code was used, creates the session and writes the success
 // response. Every write shares the caller's transaction, so two requests
 // cannot both accept the same code.
-func (s *Service) completeLogin(w http.ResponseWriter, r *http.Request, tx *sql.Tx, account userRow, lastStep sql.NullInt64) {
+func (s *Service) completeLogin(w http.ResponseWriter, r *http.Request, tx *sql.Tx, account userRow, lastStep sql.NullInt64) bool {
 	if err := s.recordSuccess(r.Context(), tx, account.id); err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
-		return
+		return false
 	}
 	if _, err := tx.ExecContext(r.Context(), "UPDATE users SET last_login_at = ? WHERE id = ?", s.now().UTC().Unix(), account.id); err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
-		return
+		return false
 	}
 	if lastStep.Valid {
 		if _, err := tx.ExecContext(r.Context(),
@@ -349,18 +369,18 @@ func (s *Service) completeLogin(w http.ResponseWriter, r *http.Request, tx *sql.
 			lastStep.Int64, account.id,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
-			return
+			return false
 		}
 	}
 
 	token, expiresAt, err := s.startSession(r.Context(), tx, account.id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create a session")
-		return
+		return false
 	}
 	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create a session")
-		return
+		return false
 	}
 
 	setSessionCookie(w, r, token, expiresAt)
@@ -368,6 +388,37 @@ func (s *Service) completeLogin(w http.ResponseWriter, r *http.Request, tx *sql.
 		"authenticated": true,
 		"email":         account.email,
 	})
+	return true
+}
+
+// loginOK and loginFailed are a sign-in's events. failed carries the email
+// typed, never the password; reason is "locked", "code" or empty.
+func loginOK(r *http.Request, account userRow) *audit.Event {
+	return &audit.Event{Action: "auth.login", Outcome: audit.OutcomeOK, ActorUserID: account.id, Actor: account.email, IP: peerIP(r)}
+}
+
+func loginFailed(r *http.Request, userID int64, actor, typed, reason string) *audit.Event {
+	detail := map[string]any{"email": typed}
+	if reason != "" {
+		detail["reason"] = reason
+	}
+	return &audit.Event{Action: "auth.login_failed", Outcome: audit.OutcomeDenied, ActorUserID: userID, Actor: actor, Detail: detail, IP: peerIP(r)}
+}
+
+// recordAudit writes an event; a failure is logged and changes nothing.
+func (s *Service) recordAudit(ctx context.Context, e audit.Event) {
+	if err := audit.Record(context.WithoutCancel(ctx), s.db, e); err != nil {
+		log.Printf("audit: %s: %v", e.Action, err)
+	}
+}
+
+// peerIP is the TCP peer, as authz records it.
+func peerIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // startSession creates a session for userID in the caller's transaction. The

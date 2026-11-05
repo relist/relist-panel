@@ -27,8 +27,8 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 32 {
-		t.Fatalf("migration version = %d, want 32", version)
+	if version != 33 {
+		t.Fatalf("migration version = %d, want 33", version)
 	}
 
 	var one int
@@ -695,5 +695,27 @@ func TestGrantsMigration(t *testing.T) {
 	}
 	if n := count(); n != 0 {
 		t.Fatalf("after deleting the user, grants = %d, want 0", n)
+	}
+}
+
+func TestAuditMigration(t *testing.T) {
+	db, err := OpenAndMigrate(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var days int
+	if err := db.QueryRow("SELECT retention_days FROM audit_settings WHERE id = 1").Scan(&days); err != nil || days != 90 {
+		t.Fatalf("retention_days = %d, %v, want 90", days, err)
+	}
+	insert := `INSERT INTO audit_events (at, actor, action, outcome, project_id, target) VALUES (1, 'a@example.com', 'compose.update', ?, 999, 'x')`
+	if _, err := db.Exec(insert, "maybe"); err == nil {
+		t.Fatal("an unknown outcome was accepted")
+	}
+	if _, err := db.Exec(insert, "ok"); err != nil {
+		t.Fatalf("an event naming a missing Project: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO audit_settings (id, retention_days) VALUES (2, 1)"); err == nil {
+		t.Fatal("a second settings row was accepted")
 	}
 }

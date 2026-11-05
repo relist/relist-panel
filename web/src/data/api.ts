@@ -102,6 +102,39 @@ export type AuthStatus = {
 };
 
 /** One Grant: on the Project when `environmentId` is null. */
+/** One Audit log event; `at` is unix milliseconds. */
+export type AuditEvent = {
+  id: number;
+  at: number;
+  actorUserId: number | null;
+  actor: string;
+  action: string;
+  outcome: 'ok' | 'denied';
+  projectId: number | null;
+  environmentId: number | null;
+  composeId: number | null;
+  target: string;
+  detail: Record<string, unknown> | null;
+  ip: string | null;
+};
+
+/** Audit log filters: `action` is a prefix, `from`/`to` unix ms, inclusive. */
+export type AuditQuery = { cursor?: number; actor?: string; action?: string; from?: number; to?: number };
+
+export type AuditPage = { items: AuditEvent[]; nextCursor: number | null };
+
+export type AuditSettings = { retentionDays: number; keepForever: boolean };
+
+function auditUrl(path: string, query: AuditQuery): string {
+  const params = new URLSearchParams();
+  for (const key of ['cursor', 'actor', 'action', 'from', 'to'] as const) {
+    const value = query[key];
+    if (value !== undefined && value !== '') params.set(key, String(value));
+  }
+  const search = params.toString();
+  return search ? `${path}?${search}` : path;
+}
+
 export type Grant = {
   userId: number;
   email: string;
@@ -344,6 +377,12 @@ export const api = {
   putUserGrants: (userId: number, grants: Pick<Grant, 'projectId' | 'environmentId' | 'role'>[]) =>
     request<Grant[]>(`/api/users/${userId}/grants`, jsonInit('PUT', grants)),
   listProjectGrants: (projectId: number) => request<Grant[]>(`/api/projects/${projectId}/grants`),
+  // The Audit log (ADR-0031): admins read all of it, a Project's Editors its events.
+  listAudit: (query: AuditQuery) => request<AuditPage>(auditUrl('/api/audit', query)),
+  listProjectAudit: (projectId: number, query: AuditQuery) =>
+    request<AuditPage>(auditUrl(`/api/projects/${projectId}/audit`, query)),
+  getAuditSettings: () => request<AuditSettings>('/api/audit/settings'),
+  putAuditSettings: (settings: AuditSettings) => request<AuditSettings>('/api/audit/settings', jsonInit('PUT', settings)),
   /** Replaces every Grant on the Project. */
   putProjectGrants: (projectId: number, grants: Pick<Grant, 'userId' | 'environmentId' | 'role'>[]) =>
     request<Grant[]>(`/api/projects/${projectId}/grants`, jsonInit('PUT', grants)),

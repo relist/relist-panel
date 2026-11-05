@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"relist-panel/internal/audit"
 	"strconv"
 	"strings"
 	"time"
@@ -305,6 +306,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	audit.Detail(r.Context(), "host", in.Host)
 	d, err := s.store.create(r.Context(), rt.composeID, in)
 	if err != nil {
 		writeStoreError(w, err, "could not save domain")
@@ -322,6 +324,7 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	audit.Detail(r.Context(), "host", in.Host)
 	d, err := s.store.update(r.Context(), rt.composeID, rt.domainID, in)
 	if err != nil {
 		writeStoreError(w, err, "could not save domain")
@@ -338,6 +341,9 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.store.composeYAML(r.Context(), rt.projectID, rt.environmentID, rt.composeID); err != nil {
 		writeStoreError(w, err, "could not load compose")
 		return
+	}
+	if existing, err := s.store.get(r.Context(), rt.composeID, rt.domainID); err == nil {
+		audit.Detail(r.Context(), "host", existing.Host)
 	}
 	if err := s.store.delete(r.Context(), rt.composeID, rt.domainID); err != nil {
 		writeStoreError(w, err, "could not delete domain")

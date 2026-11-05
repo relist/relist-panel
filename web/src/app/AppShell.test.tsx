@@ -124,6 +124,7 @@ describe('Users and non-admins', () => {
         { path: '/account', element: <h1>Account screen</h1> },
         { path: '/projects', element: <h1>Projects screen</h1> },
         { path: '/docker', element: <h1>Docker screen</h1> },
+        { path: '/audit', element: <h1>Audit screen</h1> },
       ] }],
       { initialEntries: [path] },
     );
@@ -185,6 +186,13 @@ describe('Users and non-admins', () => {
     vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: { ...member, isAdmin: true } });
     renderShell('/');
     expect(await screen.findByRole('menuitem', { name: /Users/ })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: /Audit log/ })).toBeTruthy();
+  });
+
+  it('shows a member the 403 result on the audit log page', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member, access: { projects: [] } });
+    renderShell('/audit');
+    expect(await screen.findByText("You don't have permission")).toBeTruthy();
   });
 });
 

@@ -45,6 +45,8 @@ var Routes = map[string]Rule{
 
 	// Viewer: read.
 	"GET " + project: {Level: LevelViewer},
+	// The handler answers 403 unless the User edits one of its Environments.
+	"GET " + project + "/audit":                                  {Level: LevelViewer},
 	"GET /api/projects/{projectID}/environments":                 {Level: LevelViewer},
 	"GET " + environment + "/variables":                          {Level: LevelViewer},
 	"GET " + environment + "/composes":                           {Level: LevelViewer},
