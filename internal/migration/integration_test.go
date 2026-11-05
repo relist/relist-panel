@@ -417,3 +417,8 @@ func TestResumeOnOldHostAfterMigrated(t *testing.T) {
 		t.Fatal("resume did not start the Compose")
 	}
 }
+
+// PolicyConfig answers what Config does: the fake's config is the policy's.
+func (r statusRunner) PolicyConfig(ctx context.Context, req composes.RunRequest) ([]byte, error) {
+	return r.Config(ctx, req)
+}

@@ -680,3 +680,8 @@ func TestBuildServicesRejectsInvalidMerges(t *testing.T) {
 		})
 	}
 }
+
+// PolicyConfig answers what Config does: the fake's config is the policy's.
+func (r *recordingRunner) PolicyConfig(ctx context.Context, req RunRequest) ([]byte, error) {
+	return r.Config(ctx, req)
+}

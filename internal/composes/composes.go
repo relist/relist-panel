@@ -101,6 +101,9 @@ type ComposeRunner interface {
 	// Config is `docker compose config --format json`: the file as Compose
 	// resolves it, interpolated and with inactive profiles dropped.
 	Config(ctx context.Context, req RunRequest) ([]byte, error)
+	// PolicyConfig is the file as the Compose policy reads it: every profile
+	// on, env files left as paths (ADR-0032).
+	PolicyConfig(ctx context.Context, req RunRequest) ([]byte, error)
 	Scale(ctx context.Context, req RunRequest, opts ScaleOptions) error
 }
 

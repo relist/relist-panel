@@ -84,6 +84,17 @@ func (Runner) Config(ctx context.Context, req composes.RunRequest) ([]byte, erro
 	return []byte(content), err
 }
 
+// policyConfigArgs resolves the file for the Compose policy: every profile
+// on, and env files left as paths so the policy can check where they are.
+func policyConfigArgs() []string {
+	return []string{"--profile", "*", "config", "--format", "json", "--no-env-resolution"}
+}
+
+func (Runner) PolicyConfig(ctx context.Context, req composes.RunRequest) ([]byte, error) {
+	content, err := run(ctx, req, nil, policyConfigArgs()...)
+	return []byte(content), err
+}
+
 func (Runner) Build(ctx context.Context, req composes.RunRequest, opts composes.BuildOptions) error {
 	_, err := runOn(ctx, req, opts.Out, req.Builder, buildArgs(opts.Service, opts.NoCache)...)
 	return err

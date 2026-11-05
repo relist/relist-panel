@@ -3323,3 +3323,8 @@ func wantCaptureRejected(t *testing.T, server *testServer, path string, body any
 		t.Fatalf("capture failure created deployment: rows%d ->%d", before, after)
 	}
 }
+
+// PolicyConfig answers what Config does: the fake's config is the policy's.
+func (f *fakeComposeRunner) PolicyConfig(ctx context.Context, req composes.RunRequest) ([]byte, error) {
+	return f.Config(ctx, req)
+}
