@@ -69,6 +69,10 @@ Rulings where the spec was silent:
 9. Filters: actor matches the stored email (any case) or `cli`; action is a prefix; from/to are inclusive milliseconds.
 10. `GET /api/projects/{id}/audit` is Viewer in the route table; the handler answers 403 unless the User edits one of its Environments.
 11. The HTTP side lives in `internal/auditapi`, since `authz` imports `audit`.
+12. A create event carries the new Environment's or Compose's `name` in its detail; SSH key, Certificate and Builder events are targeted at the thing's name, read before the handler.
+13. On Activity, a non-admin reads a grant change with only the Project-wide roles and those of the Environments they edit.
+14. HEAD is not a download. A Range request is, with the `range` it asked for in its detail. A download whose body broke off midway is still `ok`, with `incomplete: true`: the bytes sent left the host.
+15. A User records at most 10 `denied` events per action a minute, and an address at most 10 `auth.login_failed` a minute; the rest are dropped, in memory, until the minute passes. A script hammering the panel shows as its first ten tries each minute, not every one.
 
 **The Audit log is not tamper-proof against an Admin**, who can reach `panel.db` from a container; it records a trusted team's work, it does not police Admins.
 
