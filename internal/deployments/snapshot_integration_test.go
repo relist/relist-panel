@@ -324,7 +324,7 @@ func (r *snapshotRunner) Pull(ctx context.Context, req composes.RunRequest, opts
 	return nil
 }
 
-func (r *snapshotRunner) ImageLabels(ctx context.Context, image string) (map[string]string, error) {
+func (r *snapshotRunner) ImageLabels(ctx context.Context, image, platform string) (map[string]string, error) {
 	return nil, nil
 }
 

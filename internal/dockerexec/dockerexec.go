@@ -122,8 +122,12 @@ func (Runner) Pull(ctx context.Context, req composes.RunRequest, opts composes.P
 	return err
 }
 
-func (Runner) ImageLabels(ctx context.Context, image string) (map[string]string, error) {
-	cmd := command(ctx, "image", "inspect", "--format", "{{json .Config.Labels}}", image)
+func (Runner) ImageLabels(ctx context.Context, image, platform string) (map[string]string, error) {
+	args := []string{"image", "inspect"}
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
+	cmd := command(ctx, append(args, "--format", "{{json .Config.Labels}}", image)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

@@ -205,15 +205,21 @@ func TestImageLabels(t *testing.T) {
 		argv = args
 		return exec.CommandContext(ctx, "echo", output)
 	}
-	labels, err := Runner{}.ImageLabels(context.Background(), "app:1")
+	labels, err := Runner{}.ImageLabels(context.Background(), "app:1", "")
 	if err != nil || labels["traefik.enable"] != "true" {
 		t.Fatalf("labels = %v, err = %v", labels, err)
 	}
 	if want := []string{"image", "inspect", "--format", "{{json .Config.Labels}}", "app:1"}; !reflect.DeepEqual(argv, want) {
 		t.Fatalf("argv = %v, want %v", argv, want)
 	}
+	if _, err := (Runner{}).ImageLabels(context.Background(), "app:1", "linux/386"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"image", "inspect", "--platform", "linux/386", "--format", "{{json .Config.Labels}}", "app:1"}; !reflect.DeepEqual(argv, want) {
+		t.Fatalf("argv with platform = %v, want %v", argv, want)
+	}
 	output = "null"
-	if labels, err := (Runner{}).ImageLabels(context.Background(), "app:1"); err != nil || len(labels) != 0 {
+	if labels, err := (Runner{}).ImageLabels(context.Background(), "app:1", ""); err != nil || len(labels) != 0 {
 		t.Fatalf("no labels = %v, err = %v", labels, err)
 	}
 }

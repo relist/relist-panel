@@ -423,7 +423,7 @@ func (r statusRunner) Pull(ctx context.Context, req composes.RunRequest, opts co
 	return nil
 }
 
-func (r statusRunner) ImageLabels(ctx context.Context, image string) (map[string]string, error) {
+func (r statusRunner) ImageLabels(ctx context.Context, image, platform string) (map[string]string, error) {
 	return nil, nil
 }
 

@@ -119,8 +119,9 @@ type ComposeRunner interface {
 	PolicyConfig(ctx context.Context, req RunRequest) ([]byte, error)
 	Scale(ctx context.Context, req RunRequest, opts ScaleOptions) error
 	Pull(ctx context.Context, req RunRequest, opts PullOptions) error
-	// ImageLabels is the labels an image on the host carries.
-	ImageLabels(ctx context.Context, image string) (map[string]string, error)
+	// ImageLabels is the labels an image on the host carries for platform,
+	// or for the host's platform when platform is "".
+	ImageLabels(ctx context.Context, image, platform string) (map[string]string, error)
 }
 
 type Service struct {

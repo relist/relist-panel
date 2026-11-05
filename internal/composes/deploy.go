@@ -620,6 +620,7 @@ func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool,
 			Image      string            `json:"image"`
 			Build      any               `json:"build"`
 			PullPolicy string            `json:"pull_policy"`
+			Platform   string            `json:"platform"`
 			Labels     map[string]string `json:"labels"`
 		} `json:"services"`
 	}
@@ -671,7 +672,9 @@ func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool,
 		if image == "" {
 			image = project + "-" + name // Compose's name for a built image
 		}
-		labels, err := s.runner.ImageLabels(ctx, image)
+		// One tag can hold another image per platform: read the one this
+		// Service runs.
+		labels, err := s.runner.ImageLabels(ctx, image, service.Platform)
 		if err != nil {
 			return failure(FailureRunner, "could not inspect image "+image+": "+err.Error(), err)
 		}

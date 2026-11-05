@@ -49,9 +49,14 @@ func (r *recordingRunner) Pull(_ context.Context, _ RunRequest, opts PullOptions
 	return nil
 }
 
-func (r *recordingRunner) ImageLabels(_ context.Context, image string) (map[string]string, error) {
-	r.inspected = append(r.inspected, image)
-	return r.imageLabels[image], nil
+// ImageLabels records image@platform, or image when no platform is asked.
+func (r *recordingRunner) ImageLabels(_ context.Context, image, platform string) (map[string]string, error) {
+	key := image
+	if platform != "" {
+		key += "@" + platform
+	}
+	r.inspected = append(r.inspected, key)
+	return r.imageLabels[key], nil
 }
 
 func (r *recordingRunner) DownWithVolumesTracked(ctx context.Context, req RunRequest) (bool, error) {
@@ -767,5 +772,21 @@ func TestDeployBuildsNothingWithoutBuild(t *testing.T) {
 	}
 	if len(runner.builds) != 0 {
 		t.Fatalf("builds = %+v, want none", runner.builds)
+	}
+}
+
+// A Service that runs another platform's image is checked against that
+// platform's labels: one tag can hold a different image per platform.
+func TestDeployChecksTheImageOfTheServicesPlatform(t *testing.T) {
+	svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+	runner.config = []byte(`{"name":"relist-c1","services":{"a":{"image":"app:1"},"b":{"image":"app:1","platform":"linux/386"}}}`)
+	runner.imageLabels = map[string]map[string]string{"app:1@linux/386": {"traefik.enable": "true", "traefik.http.routers.x.rule": "HostRegexp(`.+`)"}}
+	_, err := svc.RunDeploy(context.Background(), target, DeployOptions{})
+	if err == nil || !strings.Contains(err.Error(), "b: image app:1") {
+		t.Fatalf("err = %v", err)
+	}
+	sort.Strings(runner.inspected)
+	if want := []string{"app:1", "app:1@linux/386"}; !reflect.DeepEqual(runner.inspected, want) {
+		t.Fatalf("inspected = %v, want %v", runner.inspected, want)
 	}
 }

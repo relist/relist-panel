@@ -3330,7 +3330,7 @@ func (f *fakeComposeRunner) Pull(ctx context.Context, req composes.RunRequest, o
 	return nil
 }
 
-func (f *fakeComposeRunner) ImageLabels(ctx context.Context, image string) (map[string]string, error) {
+func (f *fakeComposeRunner) ImageLabels(ctx context.Context, image, platform string) (map[string]string, error) {
 	return nil, nil
 }
 
