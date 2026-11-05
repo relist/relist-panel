@@ -39,16 +39,20 @@ type Rules struct {
 	ProjectName string
 	// PanelDomain is the install's own domain, which no traefik label may name.
 	PanelDomain string
+	// SourceCopy is this Deployment's private copy of its Source
+	// (<ComposeDir>/.deployment-sources/<copy>), where its paths point;
+	// empty when it has none.
+	SourceCopy string
 }
 
 // harmless are service keys that cannot reach the host.
 var harmless = []string{
 	"annotations", "attach", "blkio_config", "cap_drop", "command", "container_name",
 	"cpu_count", "cpu_percent", "cpu_period", "cpu_quota", "cpu_rt_period", "cpu_rt_runtime",
-	"cpu_shares", "cpus", "cpuset", "depends_on", "deploy", "develop", "dns", "dns_opt",
+	"cpu_shares", "cpus", "cpuset", "depends_on", "develop", "dns", "dns_opt",
 	"dns_search", "domainname", "entrypoint", "environment", "expose", "external_links",
 	"extra_hosts", "group_add", "healthcheck", "hostname", "image", "init", "links", "logging",
-	"mac_address", "mem_limit", "mem_reservation", "mem_swappiness", "memswap_limit", "networks",
+	"mac_address", "mem_limit", "mem_reservation", "mem_swappiness", "memswap_limit",
 	"oom_kill_disable", "oom_score_adj", "pids_limit", "platform", "ports", "profiles",
 	"pull_policy", "read_only", "restart", "scale", "shm_size", "stdin_open", "stop_grace_period",
 	"stop_signal", "storage_opt", "tmpfs", "tty", "ulimits", "user", "working_dir",
@@ -56,7 +60,7 @@ var harmless = []string{
 
 // checked are service keys allowed with the rules below.
 var checked = []string{
-	"build", "volumes", "volumes_from", "env_file", "label_file", "secrets", "configs", "labels",
+	"build", "deploy", "networks", "volumes", "volumes_from", "env_file", "label_file", "secrets", "configs", "labels",
 	"network_mode", "pid", "ipc", "uts", "cgroup", "userns_mode", "privileged", "use_api_socket",
 	"post_start", "pre_stop",
 }
@@ -189,6 +193,10 @@ func (c *checker) checkedKey(name, key string, value any) {
 		c.references(name, key, value)
 	case "build":
 		c.build(name, value)
+	case "deploy":
+		c.deploy(name, value)
+	case "networks":
+		c.networks(name, value)
 	}
 }
 
@@ -317,10 +325,31 @@ func (c *checker) references(name, key string, value any) {
 	}
 }
 
+// buildKeys are the build keys the policy knows; the ones that can reach
+// the host are checked below.
+var buildKeys = []string{
+	"context", "dockerfile", "dockerfile_inline", "args", "labels", "target", "tags", "platforms",
+	"pull", "no_cache", "shm_size", "extra_hosts", "cache_from", "cache_to", "additional_contexts",
+	"network", "privileged", "entitlements", "secrets", "ssh", "ulimits", "provenance", "sbom",
+}
+
 func (c *checker) build(name string, value any) {
 	build, _ := value.(map[string]any)
 	if build == nil {
 		return
+	}
+	for key := range build {
+		if !slices.Contains(buildKeys, key) && !strings.HasPrefix(key, "x-") {
+			c.add(name, "build %s is not a key the policy knows", key)
+		}
+	}
+	for _, key := range []string{"cache_from", "cache_to"} {
+		for _, entry := range list(build[key]) {
+			// A local cache reads or writes a path on the Builder's host.
+			if text, _ := entry.(string); strings.Contains(text, "type=local") {
+				c.add(name, "build %s of type local is not allowed", key)
+			}
+		}
 	}
 	context, _ := build["context"].(string)
 	local := context != "" && !remote(context)
@@ -402,4 +431,57 @@ func Hash(config []byte) (string, error) {
 	}
 	sum := sha256.Sum256(canonical)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// deployKeys are the deploy keys the policy knows; resources may not
+// reserve devices (another spelling of gpus and devices).
+var deployKeys = []string{"mode", "replicas", "labels", "update_config", "rollback_config", "restart_policy", "placement", "resources", "endpoint_mode"}
+
+func (c *checker) deploy(name string, value any) {
+	deploy, _ := value.(map[string]any)
+	for key := range deploy {
+		if !slices.Contains(deployKeys, key) && !strings.HasPrefix(key, "x-") {
+			c.add(name, "deploy %s is not a key the policy knows", key)
+		}
+	}
+	resources, _ := deploy["resources"].(map[string]any)
+	for _, kind := range []string{"limits", "reservations"} {
+		limits, _ := resources[kind].(map[string]any)
+		for key, v := range limits {
+			if !slices.Contains([]string{"cpus", "memory", "pids"}, key) && present(v) {
+				c.add(name, "deploy resources %s %s is not allowed", kind, key)
+			}
+		}
+	}
+}
+
+// sharedNetwork is the panel's own network (ADR-0014), external by design.
+const sharedNetwork = "relist-network"
+
+// networks checks the top-level networks a service joins: this Compose's
+// own bridges, or the panel's shared network.
+func (c *checker) networks(name string, value any) {
+	joined, _ := value.(map[string]any)
+	top, _ := c.top["networks"].(map[string]any)
+	for key := range joined {
+		def, _ := top[key].(map[string]any)
+		if def == nil {
+			continue
+		}
+		if key == sharedNetwork && def["name"] == sharedNetwork && def["external"] == true {
+			continue
+		}
+		if def["external"] == true {
+			c.add(name, "network %s is external", key)
+		}
+		if driver, _ := def["driver"].(string); driver != "" && driver != "bridge" {
+			c.add(name, "network %s uses driver %s", key, driver)
+		}
+		if present(def["driver_opts"]) {
+			c.add(name, "network %s sets driver_opts", key)
+		}
+		if want := c.rules.ProjectName + "_" + key; def["name"] != want {
+			c.add(name, "network %s is not named %s", key, want)
+		}
+	}
 }

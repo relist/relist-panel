@@ -1,7 +1,9 @@
 package policy
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +15,8 @@ import (
 type paths struct {
 	composeDir []string // as written and with symlinks resolved
 	roots      []string // composeDir plus the bind roots, both ways
-	private    []string // the panel's own files inside the Compose directory
+	private    []string // a Source's git key, refused to every kind of path
+	sourceCopy []string // this Deployment's private Source copy, both ways
 }
 
 func newPaths(r Rules) *paths {
@@ -27,7 +30,31 @@ func newPaths(r Rules) *paths {
 	for _, root := range r.Roots {
 		p.roots = append(p.roots, both(root)...)
 	}
+	if r.SourceCopy != "" {
+		p.sourceCopy = both(r.SourceCopy)
+	}
 	return p
+}
+
+// panelOwned reports whether path is a file the panel keeps in the Compose
+// directory (anything named with a leading dot, the deployed file, the
+// Variable Set files): a container that could write one could change what
+// the next Deployment runs. This Deployment's own Source copy is not.
+func (p *paths) panelOwned(path string) bool {
+	if withinAny(path, p.sourceCopy) {
+		return false
+	}
+	for _, dir := range p.composeDir {
+		rel, err := filepath.Rel(dir, path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+			continue
+		}
+		first, _, _ := strings.Cut(rel, string(filepath.Separator))
+		if first == "." || strings.HasPrefix(first, ".") || first == "docker-compose.yml" || first == "sets" {
+			return true
+		}
+	}
+	return false
 }
 
 // both is path cleaned, and also with its symlinks resolved when that
@@ -40,18 +67,45 @@ func both(path string) []string {
 	return []string{clean}
 }
 
-// resolve follows every symlink in path's longest existing prefix; the rest
-// does not exist yet, so it holds no link.
+// resolve follows every symlink in path; see resolveStrict.
 func resolve(path string) string {
-	for prefix := path; ; prefix = filepath.Dir(prefix) {
-		if real, err := filepath.EvalSymlinks(prefix); err == nil {
-			rest, _ := filepath.Rel(prefix, path)
-			return filepath.Join(real, rest)
-		}
-		if prefix == filepath.Dir(prefix) {
-			return path
-		}
+	real, _ := resolveStrict(path)
+	return real
+}
+
+// resolveStrict follows every symlink in path, component by component. A
+// component that does not exist ends the walk: the rest holds no link yet.
+// ok is false when a link cannot be followed from the panel's side (its
+// target is not there): dockerd on the host might follow it anywhere.
+func resolveStrict(path string) (string, bool) {
+	clean := filepath.Clean(path)
+	if !filepath.IsAbs(clean) {
+		return clean, false
 	}
+	parts := strings.Split(strings.TrimPrefix(clean, string(filepath.Separator)), string(filepath.Separator))
+	current := string(filepath.Separator)
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		next := filepath.Join(current, part)
+		info, err := os.Lstat(next)
+		if errors.Is(err, fs.ErrNotExist) {
+			return filepath.Join(append([]string{next}, parts[i+1:]...)...), true
+		}
+		if err != nil {
+			return clean, false
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			real, err := filepath.EvalSymlinks(next)
+			if err != nil {
+				return clean, false
+			}
+			next = real
+		}
+		current = next
+	}
+	return current, true
 }
 
 func within(path, dir string) bool {
@@ -93,9 +147,18 @@ func (c *checker) file(service, what, path string) bool {
 		return false
 	}
 	clean := filepath.Clean(path)
-	for _, candidate := range []string{clean, resolve(clean)} {
+	real, ok := resolveStrict(clean)
+	if !ok {
+		c.add(service, "%s %s goes through a link the panel cannot follow", what, path)
+		return false
+	}
+	for _, candidate := range []string{clean, real} {
 		if !withinAny(candidate, c.paths.roots) {
 			c.add(service, "%s %s is outside the Compose directory and the allowed roots", what, path)
+			return false
+		}
+		if what == "bind" && c.paths.panelOwned(candidate) {
+			c.add(service, "%s %s is the panel's own files", what, path)
 			return false
 		}
 		for _, dir := range c.paths.composeDir {
@@ -119,12 +182,17 @@ func (c *checker) inCompose(service, what, path string) {
 		return
 	}
 	clean := filepath.Clean(path)
-	for _, candidate := range []string{clean, resolve(clean)} {
+	real, ok := resolveStrict(clean)
+	if !ok {
+		c.add(service, "%s %s goes through a link the panel cannot follow", what, path)
+		return
+	}
+	for _, candidate := range []string{clean, real} {
 		if !withinAny(candidate, c.paths.composeDir) {
 			c.add(service, "%s %s is outside the Compose directory", what, path)
 			return
 		}
-		if withinAny(candidate, c.paths.private) {
+		if withinAny(candidate, c.paths.private) || c.paths.panelOwned(candidate) {
 			c.add(service, "%s %s is the panel's own files", what, path)
 			return
 		}
@@ -150,6 +218,38 @@ func (c *checker) nested() {
 // stored checks include and extends in the YAML as saved: config merges
 // them away, and a file outside the Compose directory is read on the host.
 func (c *checker) stored(content string) error {
+	return c.storedFile(content, c.rules.ComposeDir, 0)
+}
+
+// maxIncludeDepth bounds how far include and extends are followed.
+const maxIncludeDepth = 8
+
+// follow checks the file an include or extends names, relative to base,
+// when the reference itself passed: its own include and extends are read
+// on the host too. A Deployment reads Source files from its own copy.
+func (c *checker) follow(service, what, path, base string, depth int) {
+	before := len(c.violations)
+	c.reference(service, what, path)
+	if len(c.violations) > before || depth >= maxIncludeDepth {
+		return
+	}
+	full := filepath.Join(base, path)
+	read := full
+	if c.rules.SourceCopy != "" {
+		if rel, err := filepath.Rel(c.rules.ComposeDir, full); err == nil && (rel == "src" || strings.HasPrefix(rel, "src/")) {
+			read = filepath.Join(c.rules.SourceCopy, rel)
+		}
+	}
+	content, err := os.ReadFile(read)
+	if err != nil {
+		return // config fails on a missing file anyway
+	}
+	if err := c.storedFile(string(content), filepath.Dir(full), depth+1); err != nil {
+		c.add(orTop(service), "%s %s cannot be read", what, path)
+	}
+}
+
+func (c *checker) storedFile(content, base string, depth int) error {
 	if strings.TrimSpace(content) == "" {
 		return nil
 	}
@@ -163,15 +263,15 @@ func (c *checker) stored(content string) error {
 	for _, entry := range doc.Include {
 		switch e := entry.(type) {
 		case string:
-			c.reference("", "include", e)
+			c.follow("", "include", e, base, depth)
 		case map[string]any:
 			switch p := e["path"].(type) {
 			case string:
-				c.reference("", "include", p)
+				c.follow("", "include", p, base, depth)
 			case []any:
 				for _, item := range p {
 					s, _ := item.(string)
-					c.reference("", "include", s)
+					c.follow("", "include", s, base, depth)
 				}
 			}
 			for _, key := range []string{"env_file", "project_directory"} {
@@ -190,7 +290,7 @@ func (c *checker) stored(content string) error {
 	for name, service := range doc.Services {
 		if extends, ok := service["extends"].(map[string]any); ok {
 			if file, ok := extends["file"].(string); ok {
-				c.reference(name, "extends", file)
+				c.follow(name, "extends", file, base, depth)
 			}
 		}
 	}

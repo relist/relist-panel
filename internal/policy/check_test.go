@@ -269,3 +269,87 @@ func TestHashIgnoresKeyOrder(t *testing.T) {
 		t.Fatalf("hashes %s %s %s", a, b, c)
 	}
 }
+
+// Final review: the panel's own files, links whose target the panel cannot
+// see, nested keys and networks.
+func TestReviewViolations(t *testing.T) {
+	f := newFixture(t)
+	dangling := filepath.Join(f.dir, "data", "link")
+	if err := os.Symlink("/no/such/dir/in/the/panel", dangling); err != nil {
+		t.Fatal(err)
+	}
+	net := func(def map[string]any) map[string]any {
+		return map[string]any{"networks": map[string]any{"n": def}}
+	}
+	cases := []struct {
+		name string
+		web  map[string]any
+		top  map[string]any
+	}{
+		{"deployment sources", map[string]any{"volumes": []any{bind(filepath.Join(f.dir, ".deployment-sources"))}}, nil},
+		{"env file", map[string]any{"volumes": []any{bind(filepath.Join(f.dir, ".env"))}}, nil},
+		{"deployed compose file", map[string]any{"volumes": []any{bind(filepath.Join(f.dir, "docker-compose.yml"))}}, nil},
+		{"sets", map[string]any{"volumes": []any{bind(filepath.Join(f.dir, "sets"))}}, nil},
+		{"deployment logs", map[string]any{"volumes": []any{bind(filepath.Join(f.dir, ".deployments"))}}, nil},
+		{"dangling link", map[string]any{"volumes": []any{bind(dangling)}}, nil},
+		{"deploy devices", map[string]any{"deploy": map[string]any{"resources": map[string]any{"reservations": map[string]any{"devices": []any{map[string]any{"driver": "cdi", "device_ids": []any{"nvidia.com/gpu=all"}}}}}}}, nil},
+		{"unknown deploy key", map[string]any{"deploy": map[string]any{"made_up": 1}}, nil},
+		{"build cache_to local", map[string]any{"build": map[string]any{"context": filepath.Join(f.dir, "src"), "cache_to": []any{"type=local,dest=/etc"}}}, nil},
+		{"build cache_from local", map[string]any{"build": map[string]any{"context": filepath.Join(f.dir, "src"), "cache_from": []any{"type=local,src=/root"}}}, nil},
+		{"unknown build key", map[string]any{"build": map[string]any{"context": filepath.Join(f.dir, "src"), "made_up": true}}, nil},
+		{"external network", map[string]any{"networks": map[string]any{"n": nil}}, net(map[string]any{"name": "relist-c2_default", "external": true})},
+		{"host network driver", map[string]any{"networks": map[string]any{"n": nil}}, net(map[string]any{"name": "relist-c1_n", "driver": "host"})},
+		{"network driver_opts", map[string]any{"networks": map[string]any{"n": nil}}, net(map[string]any{"name": "relist-c1_n", "driver_opts": map[string]any{"com.docker.network.bridge.name": "docker0"}})},
+		{"foreign network name", map[string]any{"networks": map[string]any{"n": nil}}, net(map[string]any{"name": "relist-c2_default"})},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			violations, err := Check(config(t, mergeImage(c.web), c.top), "", f.rules)
+			if err != nil || len(violations) == 0 {
+				t.Fatalf("violations = %+v, err = %v", violations, err)
+			}
+		})
+	}
+}
+
+// A Deployment's own private Source copy is where its binds point; it is
+// allowed, while another copy is not.
+func TestOwnSourceCopyIsAllowed(t *testing.T) {
+	f := newFixture(t)
+	own := filepath.Join(f.dir, ".deployment-sources", "source-a")
+	if err := os.MkdirAll(filepath.Join(own, "src", "conf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rules := f.rules
+	rules.SourceCopy = own
+	web := mergeImage(map[string]any{
+		"volumes": []any{bind(filepath.Join(own, "src", "conf"))},
+		"build":   map[string]any{"context": filepath.Join(own, "src"), "cache_from": []any{"type=registry,ref=x"}},
+	})
+	if violations, _ := Check(config(t, web, nil), "", rules); len(violations) != 0 {
+		t.Fatalf("own copy: %+v", violations)
+	}
+	other := mergeImage(map[string]any{"volumes": []any{bind(filepath.Join(f.dir, ".deployment-sources", "source-b", "src"))}})
+	if violations, _ := Check(config(t, other, nil), "", rules); len(violations) == 0 {
+		t.Fatal("another Deployment's copy was allowed")
+	}
+}
+
+// An include reached through a Source file is checked like the top file's.
+func TestIncludeInsideASourceFile(t *testing.T) {
+	f := newFixture(t)
+	write := func(rel, content string) {
+		if err := os.WriteFile(filepath.Join(f.dir, rel), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("src/a.yml", "include:\n  - path: b.yml\n    env_file: /var/lib/relist-panel/.composes/2/.env\n")
+	write("src/ok.yml", "include: [c.yml]\nservices: {x: {extends: {file: d.yml, service: x}}}\n")
+	raw := config(t, map[string]any{"image": "nginx"}, nil)
+	if violations, _ := Check(raw, "include: [src/a.yml]\nservices: {web: {image: nginx}}", f.rules); len(violations) == 0 {
+		t.Fatal("a nested include reading another Compose's .env passed")
+	}
+	if violations, _ := Check(raw, "include: [src/ok.yml]\nservices: {web: {image: nginx}}", f.rules); len(violations) != 0 {
+		t.Fatalf("nested relative includes: %+v", violations)
+	}
+}
