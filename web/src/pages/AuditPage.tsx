@@ -26,6 +26,7 @@ export function AuditPage() {
         {settings.data && (
           <RetentionCard
             keepForever={settings.data.keepForever}
+            max={36500}
             onSave={(input) => api.putAuditSettings(input)}
             onSaved={() => void settings.mutate()}
             retentionDays={settings.data.retentionDays}

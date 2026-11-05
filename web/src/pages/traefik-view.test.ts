@@ -47,4 +47,10 @@ describe('canSaveRetention', () => {
     expect(canSaveRetention(null, true, saved)).toBe(false);
     expect(canSaveRetention(0, false, saved)).toBe(false);
   });
+
+  it('refuses more days than the maximum, when there is one', () => {
+    expect(canSaveRetention(36501, false, saved, 36500)).toBe(false);
+    expect(canSaveRetention(36500, false, saved, 36500)).toBe(true);
+    expect(canSaveRetention(36501, false, saved)).toBe(true);
+  });
 });
