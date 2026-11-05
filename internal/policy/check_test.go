@@ -27,7 +27,8 @@ func newFixture(t *testing.T) fixture {
 	if err := os.MkdirAll(srv, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return fixture{dir: dir, rules: Rules{ComposeDir: dir, Roots: []string{srv}, ProjectName: "relist-c1", PanelDomain: "panel.example.com"}}
+	return fixture{dir: dir, rules: Rules{ComposeDir: dir, Roots: []string{srv}, ProjectName: "relist-c1", PanelDomain: "panel.example.com",
+		Routes: []string{"Host(`app.example.com`)", "Host(`app.panel.example.com`)", "Host(`shop.example.com`) && PathPrefix(`/api`)"}}}
 }
 
 // config is a resolved config with one service "web" (plus any extra
@@ -156,13 +157,24 @@ func TestEachViolation(t *testing.T) {
 		{"build ssh", map[string]any{"build": map[string]any{"context": filepath.Join(f.dir, "src"), "ssh": []any{"default"}}}, nil},
 		{"unknown key", map[string]any{"made_up_key": true}, nil},
 		{"traefik label naming the panel", map[string]any{"labels": map[string]any{"traefik.http.routers.x.rule": "Host(`panel.example.com`)"}}, nil},
+		{"router for every path", map[string]any{"labels": map[string]any{"traefik.http.routers.x.rule": "PathPrefix(`/`)"}}, nil},
+		{"router by regexp", map[string]any{"labels": map[string]any{"traefik.http.routers.x.rule": "HostRegexp(`.+`)"}}, nil},
+		{"router for a host no Domain of this Compose has", map[string]any{"labels": map[string]any{"traefik.http.routers.x.rule": "Host(`victim.example.com`)"}}, nil},
+		{"router widening a Domain", map[string]any{"labels": map[string]any{"traefik.http.routers.x.rule": "Host(`shop.example.com`)"}}, nil},
+		{"router key in another case", map[string]any{"labels": map[string]any{"Traefik.HTTP.Routers.x.Rule": "PathPrefix(`/`)"}}, nil},
+		{"router priority", map[string]any{"labels": map[string]any{"traefik.http.routers.c1-web.priority": "999999999"}}, nil},
+		{"tcp router", map[string]any{"labels": map[string]any{"traefik.tcp.routers.x.rule": "HostSNI(`*`)"}}, nil},
+		{"udp router", map[string]any{"labels": map[string]any{"traefik.udp.routers.x.entrypoints": "websecure"}}, nil},
+		{"network_mode another compose's network", map[string]any{"network_mode": "relist-c2_default"}, nil},
+		{"network_mode bridge", map[string]any{"network_mode": "bridge"}, nil},
+		{"built image named like another's", map[string]any{"image": "postgres:16", "build": map[string]any{"context": filepath.Join(f.dir, "src")}}, nil},
+		{"built image in a registry", map[string]any{"image": "ghcr.io/example/app:1", "build": map[string]any{"context": filepath.Join(f.dir, "src")}}, nil},
+		{"built image of a longer project name", map[string]any{"image": "relist-c12-web", "build": map[string]any{"context": filepath.Join(f.dir, "src")}}, nil},
+		{"build tag named like another's", map[string]any{"image": "relist-c1-web", "build": map[string]any{"context": filepath.Join(f.dir, "src"), "tags": []any{"postgres:16"}}}, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			web := map[string]any{"image": "nginx"}
-			for k, v := range c.web {
-				web[k] = v
-			}
+			web := mergeImage(c.web)
 			violations, err := Check(config(t, web, c.top), "", f.rules)
 			if err != nil {
 				t.Fatal(err)
@@ -182,15 +194,19 @@ func TestEachViolation(t *testing.T) {
 func TestAllowedShapes(t *testing.T) {
 	f := newFixture(t)
 	for name, web := range map[string]map[string]any{
-		"bind in a root":               {"volumes": []any{bind(filepath.Join(f.rules.Roots[0], "media"))}},
-		"same bind twice":              {"volumes": []any{bind(filepath.Join(f.dir, "data")), map[string]any{"type": "bind", "source": filepath.Join(f.dir, "data"), "target": "/again"}}},
-		"privileged false":             {"privileged": false},
-		"network of another service":   {"network_mode": "service:db"},
-		"volumes_from a service":       {"volumes_from": []any{"db:ro"}},
-		"build in the source":          {"build": map[string]any{"context": filepath.Join(f.dir, "src"), "dockerfile": "Dockerfile", "additional_contexts": map[string]any{"base": "docker-image://alpine", "dep": "service:db"}}},
-		"build from git":               {"build": map[string]any{"context": "https://github.com/example/app.git#main", "dockerfile": "Dockerfile"}},
-		"traefik label of a subdomain": {"labels": map[string]any{"traefik.http.routers.x.rule": "Host(`app.panel.example.com`)"}},
-		"bind to a missing file":       {"volumes": []any{bind(filepath.Join(f.dir, "src", "not-yet", "file"))}},
+		"bind in a root":                 {"volumes": []any{bind(filepath.Join(f.rules.Roots[0], "media"))}},
+		"same bind twice":                {"volumes": []any{bind(filepath.Join(f.dir, "data")), map[string]any{"type": "bind", "source": filepath.Join(f.dir, "data"), "target": "/again"}}},
+		"privileged false":               {"privileged": false},
+		"network of another service":     {"network_mode": "service:db"},
+		"volumes_from a service":         {"volumes_from": []any{"db:ro"}},
+		"build in the source":            {"build": map[string]any{"context": filepath.Join(f.dir, "src"), "dockerfile": "Dockerfile", "additional_contexts": map[string]any{"base": "docker-image://alpine", "dep": "service:db"}}},
+		"build from git":                 {"build": map[string]any{"context": "https://github.com/example/app.git#main", "dockerfile": "Dockerfile"}},
+		"traefik label of a subdomain":   {"labels": map[string]any{"traefik.http.routers.x.rule": "Host(`app.panel.example.com`)"}},
+		"router of a Domain with a path": {"labels": map[string]any{"traefik.http.routers.x.rule": "Host(`shop.example.com`) && PathPrefix(`/api`)", "traefik.http.routers.x.tls": "true"}},
+		"router with no rule":            {"labels": map[string]any{"traefik.enable": "true", "traefik.http.routers.x.middlewares": "auth"}},
+		"network_mode none":              {"network_mode": "none"},
+		"built image in its namespace":   {"image": "relist-c1-web:latest", "build": map[string]any{"context": filepath.Join(f.dir, "src"), "tags": []any{"relist-c1-web:v2"}}},
+		"bind to a missing file":         {"volumes": []any{bind(filepath.Join(f.dir, "src", "not-yet", "file"))}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			doc := map[string]any{"name": "relist-c1", "services": map[string]any{"web": mergeImage(web), "db": map[string]any{"image": "postgres"}}}
@@ -203,8 +219,13 @@ func TestAllowedShapes(t *testing.T) {
 	}
 }
 
+// mergeImage gives a service that builds nothing an image, as config does;
+// a built service without image gets none.
 func mergeImage(web map[string]any) map[string]any {
-	out := map[string]any{"image": "nginx"}
+	out := map[string]any{}
+	if _, builds := web["build"]; !builds {
+		out["image"] = "nginx"
+	}
 	for k, v := range web {
 		out[k] = v
 	}

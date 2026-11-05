@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"relist-panel/internal/domains"
 	"relist-panel/internal/policy"
 )
 
@@ -80,8 +81,13 @@ func (s *Service) EvaluatePolicy(ctx context.Context, t DeployTarget) (PolicyRes
 	if err != nil {
 		return PolicyResult{}, err
 	}
+	routes, err := s.policyRoutes(ctx, t.Compose.ID)
+	if err != nil {
+		return PolicyResult{}, err
+	}
 	violations, err := policy.Check(deploying, t.Compose.YAMLContent, policy.Rules{
 		ComposeDir: dir, Roots: s.policyRoots, ProjectName: t.Request.ProjectName, PanelDomain: s.panelDomain, SourceCopy: t.SourceDir,
+		Routes: routes,
 	})
 	if err != nil {
 		return PolicyResult{}, err
@@ -103,6 +109,20 @@ func (s *Service) EvaluatePolicy(ctx context.Context, t DeployTarget) (PolicyRes
 		return PolicyResult{}, err
 	}
 	return PolicyResult{Violations: violations, Hash: hash, Approved: approved == hash}, nil
+}
+
+// policyRoutes are the Traefik rules of the Compose's Domains, the only
+// rules its routers may match.
+func (s *Service) policyRoutes(ctx context.Context, composeID int64) ([]string, error) {
+	ds, err := s.domains.ListForCompose(ctx, composeID)
+	if err != nil {
+		return nil, fmt.Errorf("load domains for the policy: %w", err)
+	}
+	routes := make([]string, 0, len(ds))
+	for _, d := range ds {
+		routes = append(routes, domains.Rule(d))
+	}
+	return routes, nil
 }
 
 // normalizePolicyPaths rewrites every string in the config that starts with

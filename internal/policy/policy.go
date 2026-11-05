@@ -39,6 +39,9 @@ type Rules struct {
 	ProjectName string
 	// PanelDomain is the install's own domain, which no traefik label may name.
 	PanelDomain string
+	// Routes are the Traefik rules of the Compose's own Domains
+	// (domains.Rule): the only rules a router may match.
+	Routes []string
 	// SourceCopy is this Deployment's private copy of its Source
 	// (<ComposeDir>/.deployment-sources/<copy>), where its paths point;
 	// empty when it has none.
@@ -145,7 +148,9 @@ func (c *checker) checkedKey(name, key string, value any) {
 		if value == true {
 			c.add(name, "%s is not allowed", key)
 		}
-	case "network_mode", "pid", "ipc", "uts", "cgroup":
+	case "network_mode":
+		c.networkMode(name, value)
+	case "pid", "ipc", "uts", "cgroup":
 		c.namespace(name, key, value)
 	case "userns_mode":
 		if value == "host" {
@@ -193,6 +198,7 @@ func (c *checker) checkedKey(name, key string, value any) {
 		c.references(name, key, value)
 	case "build":
 		c.build(name, value)
+		c.builtImage(name, value)
 	case "deploy":
 		c.deploy(name, value)
 	case "networks":
@@ -200,8 +206,8 @@ func (c *checker) checkedKey(name, key string, value any) {
 	}
 }
 
-// namespace refuses sharing the host's namespace, or another container's
-// outside this Compose.
+// namespace refuses sharing the host's pid, ipc, uts or cgroup namespace,
+// or another container's outside this Compose.
 func (c *checker) namespace(name, key string, value any) {
 	mode, _ := value.(string)
 	switch {
@@ -216,16 +222,82 @@ func (c *checker) namespace(name, key string, value any) {
 	}
 }
 
+// networkMode allows no network, or the network of a service in this
+// Compose. Any other mode names a network outside the checks networks makes:
+// dockerd joins a network by its name, another Compose's included.
+func (c *checker) networkMode(name string, value any) {
+	mode, _ := value.(string)
+	switch {
+	case mode == "" || mode == "none":
+	case strings.HasPrefix(mode, "service:"):
+		if _, ok := c.services[strings.TrimPrefix(mode, "service:")]; !ok {
+			c.add(name, "network_mode names a service outside this Compose")
+		}
+	case mode == "host":
+		c.add(name, "network_mode host is not allowed")
+	case strings.HasPrefix(mode, "container:"):
+		c.add(name, "network_mode of another container is not allowed")
+	default:
+		c.add(name, "network_mode %s is not this Compose's own network", mode)
+	}
+}
+
 func (c *checker) labels(name string, value any) {
 	labels, _ := value.(map[string]any)
 	c.dockerLabels(name, "service", labels)
-	if c.rules.PanelDomain == "" {
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		text, _ := labels[key].(string)
+		if !strings.HasPrefix(strings.ToLower(key), "traefik.") {
+			continue
+		}
+		if c.rules.PanelDomain != "" && namesHost(text, c.rules.PanelDomain) {
+			c.add(name, "label %s names the panel's own domain", key)
+			continue
+		}
+		c.router(name, key, text)
+	}
+}
+
+// router keeps a Traefik router to the Compose's own Domains: Traefik
+// routes by rule and priority across every Compose, so a wider rule or a
+// higher priority would take requests for the panel or another Project.
+// Traefik reads label keys in any case.
+func (c *checker) router(name, key, value string) {
+	parts := strings.Split(strings.ToLower(key), ".")
+	if len(parts) < 4 || parts[2] != "routers" {
 		return
 	}
-	for key, raw := range labels {
-		text, _ := raw.(string)
-		if strings.HasPrefix(key, "traefik.") && namesHost(text, c.rules.PanelDomain) {
-			c.add(name, "label %s names the panel's own domain", key)
+	switch protocol, option := parts[1], parts[len(parts)-1]; {
+	case protocol != "http":
+		c.add(name, "label %s is a %s router; only HTTP routers of Domains are allowed", key, protocol)
+	case len(parts) != 5:
+	case option == "priority":
+		c.add(name, "label %s sets a router priority", key)
+	case option == "rule" && !slices.Contains(c.rules.Routes, strings.TrimSpace(value)):
+		c.add(name, "label %s is not the rule of one of this Compose's Domains", key)
+	}
+}
+
+// builtImage keeps the names a built image is tagged with inside this
+// Compose's own <project>- namespace: the image store is the host's, and
+// no Deployment pulls, so a built postgres:16 would be what every other
+// Compose that runs postgres:16 starts next.
+func (c *checker) builtImage(name string, value any) {
+	build, _ := value.(map[string]any)
+	if build == nil {
+		return
+	}
+	names := []any{c.services[name]["image"]}
+	names = append(names, list(build["tags"])...)
+	for _, raw := range names {
+		ref, _ := raw.(string)
+		if ref != "" && !strings.HasPrefix(strings.ToLower(ref), c.rules.ProjectName+"-") {
+			c.add(name, "built image %s is not named %s-<name>", ref, c.rules.ProjectName)
 		}
 	}
 }

@@ -179,3 +179,20 @@ func TestPolicyRedactsSecretValues(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// The routers the panel writes for a Compose's own Domains pass the policy.
+func TestPolicyAllowsTheComposesOwnDomainRouters(t *testing.T) {
+	svc, runner, target, db := newDeployService(t, "services: {web: {image: nginx}}\n")
+	if _, err := db.Exec(`INSERT INTO domains (compose_id, host, path, service, port, created_at, updated_at) VALUES (?, 'shop.example.com', '/api', 'web', 80, 0, 0)`, target.Compose.ID); err != nil {
+		t.Fatal(err)
+	}
+	runner.config = []byte("{\"name\":\"relist-c1\",\"services\":{\"web\":{\"image\":\"nginx\",\"labels\":{\"traefik.http.routers.d1.rule\":\"Host(`shop.example.com`) && PathPrefix(`/api`)\"}}}}")
+	result, err := svc.EvaluatePolicy(context.Background(), target)
+	if err != nil || len(result.Violations) != 0 {
+		t.Fatalf("result = %+v, err = %v", result, err)
+	}
+	runner.config = []byte("{\"name\":\"relist-c1\",\"services\":{\"web\":{\"image\":\"nginx\",\"labels\":{\"traefik.http.routers.d1.rule\":\"Host(`shop.example.com`)\"}}}}")
+	if wider, _ := svc.EvaluatePolicy(context.Background(), target); len(wider.Violations) != 1 {
+		t.Fatalf("a rule wider than the Domain: %+v", wider.Violations)
+	}
+}
