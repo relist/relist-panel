@@ -158,6 +158,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		Store:       deploymentStore,
 		Sources:     sources.NewStore(db),
 		Composes:    composesService,
+		Policy:      composesService,
 		Fetcher:     sources.Git{},
 		Builder:     runner,
 		Builders:    builderPool,
@@ -174,7 +175,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		},
 	})
 	composesService.SetDeploymentCanceler(queue)
-	deployments.NewAPI(queue, composesService).RegisterRoutes(mux)
+	deployments.NewAPI(queue, composesService).WithApprover(composesService.IsApprover).RegisterRoutes(mux)
 	var worker sync.WaitGroup
 	// vulnService is set before the queue starts, so OnSucceeded never reads
 	// it while it is being written.

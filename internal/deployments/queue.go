@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"relist-panel/internal/audit"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/dockerhost"
 	"relist-panel/internal/safely"
@@ -67,14 +68,17 @@ type Deps struct {
 	Store       *Store
 	Sources     *sources.Store
 	Composes    Composes
-	Fetcher     Fetcher
-	Builder     Builder
-	Builders    BuilderPool // nil builds everything on Docker default, unlogged
-	Gate        Gate
-	Mounts      MountLister   // nil turns off snapshot collection
-	Timeout     time.Duration // 60 * time.Minute in production
-	Keep        int           // 20
-	Now         func() time.Time
+	// Policy checks every Deployment against the Compose policy; nil turns
+	// the check off (package tests).
+	Policy   Policy
+	Fetcher  Fetcher
+	Builder  Builder
+	Builders BuilderPool // nil builds everything on Docker default, unlogged
+	Gate     Gate
+	Mounts   MountLister   // nil turns off snapshot collection
+	Timeout  time.Duration // 60 * time.Minute in production
+	Keep     int           // 20
+	Now      func() time.Time
 	// OnSucceeded, if set, is called in its own goroutine once a Deployment
 	// is recorded as succeeded, outside the Project gate.
 	OnSucceeded func(composeID int64)
@@ -83,6 +87,30 @@ type Deps struct {
 type Request struct {
 	Mode                  Mode
 	NoCache, FreshVolumes bool
+	// UserID and Approver are who asked; ConfigHash is the config hash an
+	// approver was shown, which approves that config as it queues
+	// (ADR-0032).
+	UserID     int64
+	Approver   bool
+	ConfigHash string
+}
+
+// Policy evaluates a Compose's snapshot against the Compose policy and
+// records approvals; composes.Service implements it.
+type Policy interface {
+	EvaluatePolicy(ctx context.Context, t composes.DeployTarget) (composes.PolicyResult, error)
+	Approve(ctx context.Context, composeID int64, hash string, userID int64) error
+}
+
+// PolicyError refuses a Deployment whose config violates the Compose policy
+// and is not approved. Approver says whether the requester may see the hash.
+type PolicyError struct {
+	Result   composes.PolicyResult
+	Approver bool
+}
+
+func (e *PolicyError) Error() string {
+	return "This Compose needs an approver's approval before it can deploy"
 }
 
 // ErrNotCancelable is returned for a Deployment that is in its Deploy step or
@@ -334,6 +362,10 @@ func (q *Queue) Enqueue(ctx context.Context, composeID int64, r Request) (Deploy
 		return Deployment{}, false, err
 	}
 	defer snapshot.release()
+	if err := q.admit(ctx, composeID, r, snapshot); err != nil {
+		discardCaptured(snapshot)
+		return Deployment{}, false, err
+	}
 	if !r.FreshVolumes && snapshot.Files != nil && len(snapshot.Files.ZeroDowntime) > 0 {
 		problems, err := q.d.Composes.ZeroDowntimeProblems(ctx, snapshot.Target)
 		if err == nil && len(problems) > 0 {
@@ -1115,3 +1147,31 @@ var (
 	_ Fetcher                     = (*sources.Git)(nil)
 	_ Builder                     = composes.ComposeRunner(nil)
 )
+
+// admit checks the captured snapshot against the Compose policy. A config
+// that passes, or is approved, queues. An approver who sends the hash they
+// were shown approves it here. A config that cannot be resolved before a
+// git Source is fetched queues: the check after the fetch decides.
+func (q *Queue) admit(ctx context.Context, composeID int64, r Request, snapshot *executionSnapshot) error {
+	if q.d.Policy == nil {
+		return nil
+	}
+	result, err := q.d.Policy.EvaluatePolicy(ctx, snapshot.Target)
+	if err != nil {
+		if snapshot.Source != nil && snapshot.Source.Kind == sources.KindGit && r.Mode == ModeBuild {
+			return nil
+		}
+		return err
+	}
+	if result.Passes() {
+		return nil
+	}
+	if r.Approver && r.ConfigHash != "" && r.ConfigHash == result.Hash {
+		if err := q.d.Policy.Approve(ctx, composeID, result.Hash, r.UserID); err != nil {
+			return err
+		}
+		audit.Detail(ctx, "approved", true)
+		return nil
+	}
+	return &PolicyError{Result: result, Approver: r.Approver}
+}
