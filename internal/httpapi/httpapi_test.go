@@ -2527,6 +2527,7 @@ type fakeComposeRunner struct {
 	// mu guards calls and statuses: the deployment worker calls the runner
 	// from its own goroutine.
 	mu                 sync.Mutex
+	policyConfig       []byte
 	buildErr           map[string]error
 	calls              []fakeComposeRun
 	statuses           map[string]composes.ComposeStatus
@@ -3324,7 +3325,20 @@ func wantCaptureRejected(t *testing.T, server *testServer, path string, body any
 	}
 }
 
-// PolicyConfig answers what Config does: the fake's config is the policy's.
+// PolicyConfig answers setPolicyConfig's config, else what Config does.
 func (f *fakeComposeRunner) PolicyConfig(ctx context.Context, req composes.RunRequest) ([]byte, error) {
+	f.mu.Lock()
+	config := f.policyConfig
+	f.mu.Unlock()
+	if config != nil {
+		return config, nil
+	}
 	return f.Config(ctx, req)
+}
+
+// setPolicyConfig makes every policy evaluation read config.
+func (f *fakeComposeRunner) setPolicyConfig(config string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.policyConfig = []byte(config)
 }

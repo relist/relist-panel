@@ -30,6 +30,7 @@ import (
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/migration"
 	"relist-panel/internal/panelupdate"
+	"relist-panel/internal/policy"
 	"relist-panel/internal/projects"
 	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
@@ -99,6 +100,10 @@ type Deps struct {
 	// host, or Traefik could route the panel's own traffic to an app. Empty
 	// means unknown and refuses nothing.
 	PanelDomain string
+	// PolicyApprover and PolicyRoots are the Compose policy's settings
+	// (ADR-0032); the zero values are every admin and no roots.
+	PolicyApprover policy.Approver
+	PolicyRoots    []string
 	// Version is the build version, shown by GET /api/auth/status.
 	Version string
 }
@@ -121,6 +126,9 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	})
 	authService.RegisterRoutes(mux)
 	composesService := composes.New(db, runner, dataDir).WithEngine(d.Engine)
+	composesService.SetPolicyRules(d.PolicyRoots, d.PanelDomain)
+	composesService.SetApprover(d.PolicyApprover)
+	authService.WithApprover(composesService.IsApprover)
 	projectsService := projects.New(db, composesService)
 	projectsService.RegisterRoutes(mux)
 	environmentsService := environments.New(db, composesService)

@@ -39,6 +39,7 @@ var Actions = map[string]string{
 	"DELETE " + compose:                                              "compose.delete",
 	"POST " + compose + "/preview":                                   "compose.preview",
 	"POST " + compose + "/restart":                                   "compose.restart",
+	"POST " + compose + "/approval":                                  "compose.approve",
 	"POST " + compose + "/stop":                                      "compose.stop",
 	"PUT " + compose + "/builder":                                    "compose_builder.update",
 	"PUT " + compose + "/zero-downtime/{service}":                    "zero_downtime.update",

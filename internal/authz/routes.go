@@ -81,6 +81,7 @@ var Routes = map[string]Rule{
 	"PUT " + compose:                                                 {Level: LevelEditor},
 	"DELETE " + compose:                                              {Level: LevelEditor},
 	"GET " + compose + "/removal-plan":                               {Level: LevelEditor},
+	"GET " + compose + "/policy":                                     {Level: LevelViewer},
 	"PUT " + compose + "/builder":                                    {Level: LevelEditor},
 	"POST " + compose + "/preview":                                   {Level: LevelEditor},
 	"PUT " + compose + "/zero-downtime/{service}":                    {Level: LevelEditor},

@@ -18,6 +18,9 @@ var adminOnly = []string{
 	"GET /api/audit",
 	"GET /api/audit/settings",
 	"PUT /api/audit/settings",
+	// An approver approves; the handler narrows admins to the Owner when
+	// RELIST_POLICY_APPROVER=owner.
+	"POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/approval",
 	"POST /api/projects",
 	"DELETE /api/projects/{id}",
 	"GET /api/projects/{id}/removal-plan",

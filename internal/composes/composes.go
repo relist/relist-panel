@@ -21,6 +21,7 @@ import (
 
 	"relist-panel/internal/audit"
 	"relist-panel/internal/domains"
+	"relist-panel/internal/policy"
 	"relist-panel/internal/slug"
 	"relist-panel/internal/zerodowntime"
 )
@@ -118,6 +119,7 @@ type Service struct {
 	// config against (SetPolicyRules).
 	policyRoots []string
 	panelDomain string
+	approver    policy.Approver
 	engine      ContainerEngine
 	canceler    DeploymentCanceler
 	now         func() time.Time
@@ -208,6 +210,8 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/restart", s.restart)
 	mux.HandleFunc("DELETE /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.delete)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/removal-plan", s.removalPlan)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/policy", s.getPolicy)
+	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/approval", s.approve)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/logs", s.logs)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/services/{service}/effective-variables", s.effectiveVariables)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/zero-downtime", s.listZeroDowntime)
