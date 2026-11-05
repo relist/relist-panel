@@ -510,3 +510,7 @@ installed `antd`.
 14. (Security review) An HTTP router's `rule` must be exactly the rule of one of the Compose's own Domains; any router `priority`, and any TCP or UDP router, is a violation. Router label keys are matched in any case.
 15. (Security review) A built service's `image` and `build.tags` must start with `<project>-`; pulled images keep any name.
 16. (Security review) `network_mode` passes only as `none` or `service:<a service of this Compose>`; a network name, `bridge` and anything else need approval.
+17. (Security review 2) Ruling 14 is replaced: a `traefik.*` label passes only when it is exactly one the panel writes for the Compose's own Domains (`domains.Generated`) with the same value; `traefik.enable` false and `traefik.docker.network: relist-network` also pass.
+18. (Security review 2) `build.labels` follow the label rules: no `traefik.*`, no `com.docker.*`.
+19. (Security review 2) The deploy step builds, pulls and inspects every image before `up`; an image's own `traefik.*` labels that reach a container Traefik reads fail the deploy whatever the approval. `up` and `scale` then run with `--no-build --pull never`; rollouts no longer build.
+20. (Security review 2) The deploy pulls missing images with `--policy missing` and refreshes only Services whose `pull_policy` asks for it (`always`, `daily`, `weekly`, `every_…`); `never` is never pulled.
