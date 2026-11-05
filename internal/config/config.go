@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+
+	"relist-panel/internal/policy"
 )
 
 const (
@@ -26,6 +28,15 @@ type Config struct {
 	// new host pull from an http:// old host.
 	ControlSocket   string
 	InsecureOldHost bool
+	// Policy is the Compose policy's environment-only settings (ADR-0032).
+	Policy Policy
+}
+
+// Policy is who approves a violating Compose and which host paths outside a
+// Compose's directory it may bind without approval.
+type Policy struct {
+	Approver policy.Approver
+	Roots    []string
 }
 
 // InstallSettings are the install `.env` values a Migration cannot copy,
@@ -55,12 +66,21 @@ func Load() (Config, error) {
 		HTTPPort:  os.Getenv("TRAEFIK_HTTP_PORT"),
 		HTTPSPort: os.Getenv("TRAEFIK_HTTPS_PORT"),
 	}
+	approver, err := policy.ParseApprover(os.Getenv("RELIST_POLICY_APPROVER"))
+	if err != nil {
+		return Config{}, err
+	}
+	roots, err := policy.ParseRoots(os.Getenv("RELIST_POLICY_BIND_ROOTS"))
+	if err != nil {
+		return Config{}, err
+	}
 	controlSocket := os.Getenv("RELIST_CONTROL_SOCKET")
 	if controlSocket == "" {
 		controlSocket = defaultControlSocket
 	}
 	return Config{Port: port, DataDir: dataDir, Install: install,
-		ControlSocket: controlSocket, InsecureOldHost: slices.Contains(os.Args[1:], "--insecure-migration-source")}, nil
+		ControlSocket: controlSocket, InsecureOldHost: slices.Contains(os.Args[1:], "--insecure-migration-source"),
+		Policy: Policy{Approver: approver, Roots: roots}}, nil
 }
 
 func (c Config) Address() string {

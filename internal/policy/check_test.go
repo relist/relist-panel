@@ -1,0 +1,271 @@
+package policy
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// fixture is a Compose directory and the rules over it.
+type fixture struct {
+	dir   string
+	rules Rules
+}
+
+func newFixture(t *testing.T) fixture {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, ".composes", "1")
+	for _, d := range []string{"data", "src", ".ssh", "sets"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := filepath.Join(root, "srv")
+	if err := os.MkdirAll(srv, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return fixture{dir: dir, rules: Rules{ComposeDir: dir, Roots: []string{srv}, ProjectName: "relist-c1", PanelDomain: "panel.example.com"}}
+}
+
+// config is a resolved config with one service "web" (plus any extra
+// top-level keys).
+func config(t *testing.T, web map[string]any, top map[string]any) []byte {
+	t.Helper()
+	doc := map[string]any{"name": "relist-c1", "services": map[string]any{"web": web}}
+	for k, v := range top {
+		doc[k] = v
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func bind(source string) map[string]any {
+	return map[string]any{"type": "bind", "source": source, "target": "/mnt", "bind": map[string]any{}}
+}
+
+// ordinary is a Compose as the panel deploys it: named volume, a bind
+// under the Compose directory, Domain labels, the shared network, the log
+// cap, a Variable Set file, a healthcheck and resources.
+func ordinary(f fixture) map[string]any {
+	return map[string]any{
+		"image":       "nginx:1.27",
+		"command":     nil,
+		"entrypoint":  nil,
+		"environment": map[string]any{"A": "1"},
+		"env_file":    []any{map[string]any{"path": filepath.Join(f.dir, "sets", "3.env")}},
+		"labels": map[string]any{
+			"traefik.enable":                                        "true",
+			"traefik.http.routers.c1-web.rule":                      "Host(`app.example.com`)",
+			"traefik.http.services.c1-web.loadbalancer.server.port": "80",
+		},
+		"logging":     map[string]any{"driver": "json-file", "options": map[string]any{"max-size": "10m", "max-file": "5"}},
+		"networks":    map[string]any{"default": nil, "relist-network": map[string]any{"aliases": []any{"web.c1.internal"}}},
+		"healthcheck": map[string]any{"test": []any{"CMD", "true"}},
+		"deploy":      map[string]any{"resources": map[string]any{"limits": map[string]any{"memory": "512M"}}},
+		"restart":     "unless-stopped",
+		"ports":       []any{map[string]any{"target": 80, "published": "8080", "protocol": "tcp", "mode": "ingress"}},
+		"depends_on":  map[string]any{},
+		"volumes": []any{
+			map[string]any{"type": "volume", "source": "db", "target": "/var/lib/db", "volume": map[string]any{}},
+			bind(filepath.Join(f.dir, "data")),
+			bind(filepath.Join(f.dir, "src", "conf")),
+			map[string]any{"type": "tmpfs", "target": "/tmp"},
+		},
+	}
+}
+
+func ordinaryTop() map[string]any {
+	return map[string]any{
+		"volumes":  map[string]any{"db": map[string]any{"name": "relist-c1_db"}},
+		"networks": map[string]any{"default": map[string]any{"name": "relist-c1_default"}, "relist-network": map[string]any{"name": "relist-network", "external": true}},
+	}
+}
+
+func TestOrdinaryComposePasses(t *testing.T) {
+	f := newFixture(t)
+	violations, err := Check(config(t, ordinary(f), ordinaryTop()), "services: {web: {image: nginx}}", f.rules)
+	if err != nil || len(violations) != 0 {
+		t.Fatalf("violations = %+v, err = %v", violations, err)
+	}
+}
+
+func TestEachViolation(t *testing.T) {
+	f := newFixture(t)
+	outside := t.TempDir()
+	escape := filepath.Join(f.dir, "src", "escape")
+	if err := os.Symlink(outside, escape); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		web  map[string]any
+		top  map[string]any
+	}{
+		{"bind outside", map[string]any{"volumes": []any{bind("/etc")}}, nil},
+		{"docker socket", map[string]any{"volumes": []any{bind("/var/run/docker.sock")}}, nil},
+		{"symlink escaping the source", map[string]any{"volumes": []any{bind(filepath.Join(escape, "x"))}}, nil},
+		{"compose directory itself", map[string]any{"volumes": []any{bind(f.dir)}}, nil},
+		{"ssh keys", map[string]any{"volumes": []any{bind(filepath.Join(f.dir, ".ssh"))}}, nil},
+		{"nested binds", map[string]any{"volumes": []any{bind(filepath.Join(f.dir, "data")), map[string]any{"type": "bind", "source": filepath.Join(f.dir, "data", "inner"), "target": "/i"}}}, nil},
+		{"env_file outside", map[string]any{"env_file": []any{map[string]any{"path": "/etc/environment"}}}, nil},
+		{"label_file outside", map[string]any{"label_file": []any{"/etc/hostname"}}, nil},
+		{"config file outside", map[string]any{"configs": []any{map[string]any{"source": "c"}}}, map[string]any{"configs": map[string]any{"c": map[string]any{"name": "relist-c1_c", "file": "/etc/passwd"}}}},
+		{"secret file outside", map[string]any{"secrets": []any{map[string]any{"source": "s"}}}, map[string]any{"secrets": map[string]any{"s": map[string]any{"name": "relist-c1_s", "file": "/etc/shadow"}}}},
+		{"secret from environment", map[string]any{"secrets": []any{map[string]any{"source": "s"}}}, map[string]any{"secrets": map[string]any{"s": map[string]any{"name": "relist-c1_s", "environment": "HOME"}}}},
+		{"config from environment", map[string]any{"configs": []any{map[string]any{"source": "c"}}}, map[string]any{"configs": map[string]any{"c": map[string]any{"name": "relist-c1_c", "environment": "HOME"}}}},
+		{"volume driver_opts", map[string]any{"volumes": []any{map[string]any{"type": "volume", "source": "v", "target": "/v"}}}, map[string]any{"volumes": map[string]any{"v": map[string]any{"name": "relist-c1_v", "driver_opts": map[string]any{"device": "/", "o": "bind", "type": "none"}}}}},
+		{"volume driver", map[string]any{"volumes": []any{map[string]any{"type": "volume", "source": "v", "target": "/v"}}}, map[string]any{"volumes": map[string]any{"v": map[string]any{"name": "relist-c1_v", "driver": "nfs"}}}},
+		{"volume external", map[string]any{"volumes": []any{map[string]any{"type": "volume", "source": "v", "target": "/v"}}}, map[string]any{"volumes": map[string]any{"v": map[string]any{"name": "other_db", "external": true}}}},
+		{"volume foreign name", map[string]any{"volumes": []any{map[string]any{"type": "volume", "source": "v", "target": "/v"}}}, map[string]any{"volumes": map[string]any{"v": map[string]any{"name": "relist-c2_db"}}}},
+		{"volumes_from container", map[string]any{"volumes_from": []any{"container:db"}}, nil},
+		{"privileged", map[string]any{"privileged": true}, nil},
+		{"cap_add", map[string]any{"cap_add": []any{"SYS_ADMIN"}}, nil},
+		{"devices", map[string]any{"devices": []any{map[string]any{"source": "/dev/sda", "target": "/dev/sda"}}}, nil},
+		{"device_cgroup_rules", map[string]any{"device_cgroup_rules": []any{"a *:* rwm"}}, nil},
+		{"security_opt", map[string]any{"security_opt": []any{"seccomp=unconfined"}}, nil},
+		{"sysctls", map[string]any{"sysctls": map[string]any{"kernel.x": "1"}}, nil},
+		{"cgroup_parent", map[string]any{"cgroup_parent": "/"}, nil},
+		{"runtime", map[string]any{"runtime": "runc"}, nil},
+		{"use_api_socket", map[string]any{"use_api_socket": true}, nil},
+		{"gpus", map[string]any{"gpus": []any{map[string]any{"count": -1}}}, nil},
+		{"provider", map[string]any{"provider": map[string]any{"type": "model"}}, nil},
+		{"userns_mode host", map[string]any{"userns_mode": "host"}, nil},
+		{"pid host", map[string]any{"pid": "host"}, nil},
+		{"ipc host", map[string]any{"ipc": "host"}, nil},
+		{"uts host", map[string]any{"uts": "host"}, nil},
+		{"cgroup host", map[string]any{"cgroup": "host"}, nil},
+		{"network_mode host", map[string]any{"network_mode": "host"}, nil},
+		{"network_mode container", map[string]any{"network_mode": "container:other"}, nil},
+		{"pid of a service elsewhere", map[string]any{"pid": "service:nope"}, nil},
+		{"hook privileged", map[string]any{"post_start": []any{map[string]any{"command": []any{"id"}, "privileged": true}}}, nil},
+		{"image mount", map[string]any{"volumes": []any{map[string]any{"type": "image", "source": "alpine", "target": "/i"}}}, nil},
+		{"npipe mount", map[string]any{"volumes": []any{map[string]any{"type": "npipe", "source": "x", "target": "/p"}}}, nil},
+		{"build context outside", map[string]any{"build": map[string]any{"context": "/etc", "dockerfile": "Dockerfile"}}, nil},
+		{"build context in a bind root", map[string]any{"build": map[string]any{"context": f.rules.Roots[0], "dockerfile": "Dockerfile"}}, nil},
+		{"dockerfile outside", map[string]any{"build": map[string]any{"context": filepath.Join(f.dir, "src"), "dockerfile": "/etc/Dockerfile"}}, nil},
+		{"additional context outside", map[string]any{"build": map[string]any{"context": filepath.Join(f.dir, "src"), "additional_contexts": map[string]any{"x": "/etc"}}}, nil},
+		{"build network host", map[string]any{"build": map[string]any{"context": filepath.Join(f.dir, "src"), "network": "host"}}, nil},
+		{"build privileged", map[string]any{"build": map[string]any{"context": filepath.Join(f.dir, "src"), "privileged": true}}, nil},
+		{"build entitlements", map[string]any{"build": map[string]any{"context": filepath.Join(f.dir, "src"), "entitlements": []any{"network.host"}}}, nil},
+		{"build ssh", map[string]any{"build": map[string]any{"context": filepath.Join(f.dir, "src"), "ssh": []any{"default"}}}, nil},
+		{"unknown key", map[string]any{"made_up_key": true}, nil},
+		{"traefik label naming the panel", map[string]any{"labels": map[string]any{"traefik.http.routers.x.rule": "Host(`panel.example.com`)"}}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			web := map[string]any{"image": "nginx"}
+			for k, v := range c.web {
+				web[k] = v
+			}
+			violations, err := Check(config(t, web, c.top), "", f.rules)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(violations) == 0 {
+				t.Fatal("no violation")
+			}
+			for _, v := range violations {
+				if v.Service == "" || v.Message == "" {
+					t.Errorf("violation %+v names no service or message", v)
+				}
+			}
+		})
+	}
+}
+
+func TestAllowedShapes(t *testing.T) {
+	f := newFixture(t)
+	for name, web := range map[string]map[string]any{
+		"bind in a root":               {"volumes": []any{bind(filepath.Join(f.rules.Roots[0], "media"))}},
+		"same bind twice":              {"volumes": []any{bind(filepath.Join(f.dir, "data")), map[string]any{"type": "bind", "source": filepath.Join(f.dir, "data"), "target": "/again"}}},
+		"privileged false":             {"privileged": false},
+		"network of another service":   {"network_mode": "service:db"},
+		"volumes_from a service":       {"volumes_from": []any{"db:ro"}},
+		"build in the source":          {"build": map[string]any{"context": filepath.Join(f.dir, "src"), "dockerfile": "Dockerfile", "additional_contexts": map[string]any{"base": "docker-image://alpine", "dep": "service:db"}}},
+		"build from git":               {"build": map[string]any{"context": "https://github.com/example/app.git#main", "dockerfile": "Dockerfile"}},
+		"traefik label of a subdomain": {"labels": map[string]any{"traefik.http.routers.x.rule": "Host(`app.panel.example.com`)"}},
+		"bind to a missing file":       {"volumes": []any{bind(filepath.Join(f.dir, "src", "not-yet", "file"))}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			doc := map[string]any{"name": "relist-c1", "services": map[string]any{"web": mergeImage(web), "db": map[string]any{"image": "postgres"}}}
+			raw, _ := json.Marshal(doc)
+			violations, err := Check(raw, "", f.rules)
+			if err != nil || len(violations) != 0 {
+				t.Fatalf("violations = %+v, err = %v", violations, err)
+			}
+		})
+	}
+}
+
+func mergeImage(web map[string]any) map[string]any {
+	out := map[string]any{"image": "nginx"}
+	for k, v := range web {
+		out[k] = v
+	}
+	return out
+}
+
+func TestStoredIncludeAndExtends(t *testing.T) {
+	f := newFixture(t)
+	raw := config(t, map[string]any{"image": "nginx"}, nil)
+	for stored, wantViolation := range map[string]bool{
+		"include: [other.yml]\nservices: {web: {image: nginx}}":                            false,
+		"include: [{path: [sub/a.yml]}]\nservices: {web: {image: nginx}}":                  false,
+		"services: {web: {extends: {file: base.yml, service: web}}}":                       false,
+		"services: {web: {extends: web2}, web2: {image: nginx}}":                           false,
+		"include: [/etc/compose.yml]\nservices: {web: {image: nginx}}":                     true,
+		"include: [../other/compose.yml]\nservices: {web: {image: nginx}}":                 true,
+		"include: ['${DIR}/compose.yml']\nservices: {web: {image: nginx}}":                 true,
+		"include: ['oci://registry.example.com/app:1']\nservices: {web: {image: nginx}}":   true,
+		"include: [{path: /etc/x.yml}]\nservices: {web: {image: nginx}}":                   true,
+		"services: {web: {extends: {file: /srv/base.yml, service: web}}}":                  true,
+		"services: {web: {extends: {file: 'https://example.com/base.yml', service: web}}}": true,
+	} {
+		violations, err := Check(raw, stored, f.rules)
+		if err != nil {
+			t.Fatalf("%q: %v", stored, err)
+		}
+		if got := len(violations) > 0; got != wantViolation {
+			t.Errorf("%q: violations = %+v, want violation %v", stored, violations, wantViolation)
+		}
+	}
+}
+
+// A violation names the service, the key and the path, never a value an
+// environment or label carries.
+func TestViolationsCarryNoValues(t *testing.T) {
+	f := newFixture(t)
+	web := map[string]any{
+		"image":       "nginx",
+		"environment": map[string]any{"TOKEN": "s3cr3t"},
+		"labels":      map[string]any{"traefik.http.routers.x.rule": "Host(`panel.example.com`) && s3cr3t"},
+		"made_up":     "s3cr3t",
+	}
+	violations, err := Check(config(t, web, nil), "", f.rules)
+	if err != nil || len(violations) == 0 {
+		t.Fatalf("violations = %+v, err = %v", violations, err)
+	}
+	for _, v := range violations {
+		if strings.Contains(v.Message, "s3cr3t") {
+			t.Errorf("message carries a value: %q", v.Message)
+		}
+	}
+}
+
+func TestHashIgnoresKeyOrder(t *testing.T) {
+	a, err := Hash([]byte(`{"services":{"web":{"image":"nginx","restart":"always"}},"name":"x"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := Hash([]byte(`{"name":"x","services":{"web":{"restart":"always","image":"nginx"}}}`))
+	c, _ := Hash([]byte(`{"name":"x","services":{"web":{"restart":"no","image":"nginx"}}}`))
+	if a != b || a == c || len(a) != 64 {
+		t.Fatalf("hashes %s %s %s", a, b, c)
+	}
+}
