@@ -114,9 +114,13 @@ type Service struct {
 	domains    *domains.Store
 	switches   zeroDowntimeSwitches
 	builders   builderChoices
-	engine     ContainerEngine
-	canceler   DeploymentCanceler
-	now        func() time.Time
+	// policyRoots and panelDomain are what the Compose policy checks a
+	// config against (SetPolicyRules).
+	policyRoots []string
+	panelDomain string
+	engine      ContainerEngine
+	canceler    DeploymentCanceler
+	now         func() time.Time
 }
 
 // zeroDowntimeSwitches is the per-Service zero-downtime switch (ADR-0023).
