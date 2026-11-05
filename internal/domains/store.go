@@ -142,8 +142,19 @@ func (s *Store) update(ctx context.Context, composeID, id int64, in Input) (Doma
 	middlewares, _ := json.Marshal(in.Middlewares)
 	at := s.now().Unix()
 	err := s.inTx(ctx, composeID, func(tx *sql.Tx) error {
-		if err := hostFree(ctx, tx, composeID, in.Host); err != nil {
+		// A host shared across Projects before the rule stays editable while
+		// the edit keeps it; moving onto another Project's host does not.
+		var current string
+		err := tx.QueryRowContext(ctx, `SELECT host FROM domains WHERE id = ? AND compose_id = ?`, id, composeID).Scan(&current)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		} else if err != nil {
 			return err
+		}
+		if !strings.EqualFold(current, in.Host) {
+			if err := hostFree(ctx, tx, composeID, in.Host); err != nil {
+				return err
+			}
 		}
 		result, err := tx.ExecContext(ctx, `
 			UPDATE domains

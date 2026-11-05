@@ -554,3 +554,28 @@ func TestDomainOnPanelHostIsRefused(t *testing.T) {
 		t.Errorf("unknown panel domain must refuse nothing: status = %d, body %s", response.StatusCode, raw)
 	}
 }
+
+// A host two Projects already shared before the rule stays editable in both
+// as long as the edit keeps the host.
+func TestDomainsSharedBeforeTheRuleStayEditable(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	first := newDomainsCompose(t, server, "shop", "web")
+	second := newDomainsCompose(t, server, "blog", "site")
+	first.createDomain(t, "shared.example.com", "/")
+	if _, err := server.db.Exec(`INSERT INTO domains (compose_id, host, path, service, port, created_at, updated_at) VALUES (?, 'shared.example.com', '/blog', 'web', 3000, 0, 0)`, second.composeID); err != nil {
+		t.Fatal(err)
+	}
+	var id int64
+	if err := server.db.QueryRow(`SELECT id FROM domains WHERE compose_id = ?`, second.composeID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	body := domainBody("shared.example.com", "/blog")
+	body["port"] = 8080
+	if response, raw := second.send(t, http.MethodPut, "/domains/"+idString(id), body); response.StatusCode != http.StatusOK {
+		t.Fatalf("edit keeping the shared host = %d %s, want 200", response.StatusCode, raw)
+	}
+	if response, _ := second.send(t, http.MethodPost, "/domains", domainBody("shared.example.com", "/more")); response.StatusCode != http.StatusConflict {
+		t.Fatalf("a new path on the shared host = %d, want 409", response.StatusCode)
+	}
+}
