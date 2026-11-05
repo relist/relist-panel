@@ -79,7 +79,13 @@ import type { MigrationStatus } from './migration';
 import type { PanelUpdateStatus, PreviewResponse } from './panel-update';
 
 /** The signed-in User as `/api/auth/status` reports it. */
-export type SignedInUser = { id: number; email: string; isAdmin: boolean; isOwner: boolean };
+export type SignedInUser = { id: number; email: string; isAdmin: boolean; isOwner: boolean; isApprover?: boolean };
+
+/** One reason a Compose's config needs an approver (ADR-0032). */
+export type PolicyViolation = { service: string; message: string };
+
+/** GET …/policy: what is wrong, whether it is approved, and the hash an approver approves. */
+export type ComposePolicy = { violations: PolicyViolation[]; configHash: string | null; approved: boolean };
 
 /** A Role in an Environment; `none` is No access, set only on an Environment. */
 export type Role = 'none' | 'viewer' | 'operator' | 'editor';
@@ -488,6 +494,9 @@ export const api = {
     }
     return JSON.parse(text) as { number: number };
   },
+  getComposePolicy: (location: ComposePath) => request<ComposePolicy>(`${composePath(location)}/policy`),
+  approveCompose: (location: ComposePath, configHash: string) =>
+    request<void>(`${composePath(location)}/approval`, jsonInit('POST', { configHash })),
   /** The Compose's Deployments, newest first. */
   listDeployments: (location: ComposePath) => request<Deployment[]>(`${composePath(location)}/deployments`),
   listGlobalDeployments: (query: DeploymentHistoryQuery = {}) => {

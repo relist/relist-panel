@@ -57,8 +57,13 @@ func (r *holdRunner) Up(ctx context.Context, req composes.RunRequest, opts compo
 	return r.fakeComposeRunner.Up(ctx, req, opts)
 }
 
-// Build blocks until its context ends, so a test sees it canceled.
-func (r *holdRunner) Build(ctx context.Context, _ composes.RunRequest, _ composes.BuildOptions) error {
+// Build blocks a Source's build step (one Service) until its context ends,
+// so a test sees it canceled. The deploy step's build of every Service, which
+// Cancel does not reach, returns at once.
+func (r *holdRunner) Build(ctx context.Context, req composes.RunRequest, opts composes.BuildOptions) error {
+	if opts.Service == "" {
+		return r.fakeComposeRunner.Build(ctx, req, opts)
+	}
 	r.buildStarted <- struct{}{}
 	<-ctx.Done()
 	r.buildEnded <- ctx.Err()
@@ -168,8 +173,10 @@ func TestDeploymentPostQueuesAndRunsADeploy(t *testing.T) {
 		t.Fatalf("deployment = %+v, want steps and warnings as arrays and both times set", d)
 	}
 	calls := server.runner.snapshotCalls()
-	if len(calls) != 1 || calls[0].method != "up" || !calls[0].build {
-		t.Fatalf("runner calls = %+v, want one up with build", calls)
+	// The deploy builds and checks its images first (nothing builds here),
+	// so up starts them without building.
+	if len(calls) != 1 || calls[0].method != "up" || calls[0].build {
+		t.Fatalf("runner calls = %+v, want one up without build", calls)
 	}
 }
 

@@ -2,12 +2,14 @@ package composes
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"relist-panel/internal/certificates"
 	"relist-panel/internal/dockernet"
 	"relist-panel/internal/domains"
+	"relist-panel/internal/policy"
 )
 
 const (
@@ -33,6 +36,9 @@ type DeployTarget struct {
 	Compose   Compose
 	Request   RunRequest
 	Snapshot  *ExecutionSnapshot `json:"-"`
+	// SourceDir is this Deployment's private Source copy, which its paths
+	// point at (WithSourceDirectory); empty without one.
+	SourceDir string
 }
 
 // DeployOptions tunes RunDeploy. FreshVolumes deletes the Compose's named
@@ -282,13 +288,22 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 			fmt.Fprintf(opts.Out, "warning: %s\n", w)
 		}
 	}
+	if err := s.prepareImages(ctx, req, opts.Build, opts.Out); err != nil {
+		var f *DeployFailure
+		if errors.As(err, &f) {
+			f.Message += suffix + volumesAdvice(removed)
+		}
+		return nil, err
+	}
+	// prepareImages built and pulled everything: up starts what it checked.
+	opts.Build = false
 	if len(opts.Exclude) > 0 {
 		if err := s.deploySubset(ctx, req, files.composeYAML, opts); err != nil {
 			return nil, failure(FailureRunner, "deploy failed: "+err.Error(), err)
 		}
 		return files.warnings, nil
 	}
-	if err := s.runner.Up(ctx, req, UpOptions{Build: opts.Build, Out: opts.Out}); err != nil {
+	if err := s.runner.Up(ctx, req, UpOptions{NoPull: true, Out: opts.Out}); err != nil {
 		return nil, failure(FailureRunner, "deploy failed"+suffix+": "+err.Error()+volumesAdvice(removed), err)
 	}
 
@@ -586,5 +601,89 @@ func (s *Service) deploySubset(ctx context.Context, req RunRequest, yamlContent 
 	if len(rest) == 0 {
 		return s.removeOrphans(ctx, req.ProjectName, yamlContent)
 	}
-	return s.runner.Up(ctx, req, UpOptions{Build: opts.Build, Services: rest, Out: opts.Out})
+	return s.runner.Up(ctx, req, UpOptions{NoPull: true, Services: rest, Out: opts.Out})
+}
+
+// prepareImages builds (when build) and pulls every image the deployed file
+// runs, then refuses one that brings its own Traefik labels onto a container
+// Traefik reads (policy.ImageLabels, ADR-0032): the Compose policy only sees
+// the Compose's labels. Every up after it runs with --no-build and --pull
+// never, so the images it checked are the images that start.
+func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool, out io.Writer) error {
+	raw, err := s.runner.Config(ctx, req)
+	if err != nil {
+		return failure(FailureRunner, "could not read compose config: "+err.Error(), err)
+	}
+	var config struct {
+		Name     string `json:"name"`
+		Services map[string]struct {
+			Image      string            `json:"image"`
+			Build      any               `json:"build"`
+			PullPolicy string            `json:"pull_policy"`
+			Platform   string            `json:"platform"`
+			Labels     map[string]string `json:"labels"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return failure(FailureInternal, "could not read compose config", err)
+	}
+	project := config.Name
+	if project == "" {
+		project = req.ProjectName
+	}
+	names := make([]string, 0, len(config.Services))
+	for name := range config.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var missing, refresh []string
+	builds := false
+	for _, name := range names {
+		service := config.Services[name]
+		if service.Build != nil {
+			builds = true
+			continue
+		}
+		switch pull := service.PullPolicy; {
+		case pull == "never":
+		case pull == "" || pull == "missing" || pull == "if_not_present":
+			missing = append(missing, name)
+		default: // always, daily, weekly, every_<duration>
+			refresh = append(refresh, name)
+		}
+	}
+	if build && builds {
+		if err := s.runner.Build(ctx, req, BuildOptions{Out: out}); err != nil {
+			return failure(FailureRunner, "build failed: "+err.Error(), err)
+		}
+	}
+	for _, pull := range []PullOptions{{Missing: true, Services: missing, Out: out}, {Services: refresh, Out: out}} {
+		if len(pull.Services) == 0 {
+			continue
+		}
+		if err := s.runner.Pull(ctx, req, pull); err != nil {
+			return failure(FailureRunner, "pull failed: "+err.Error(), err)
+		}
+	}
+	var refused []string
+	for _, name := range names {
+		service := config.Services[name]
+		image := service.Image
+		if image == "" {
+			image = project + "-" + name // Compose's name for a built image
+		}
+		// One tag can hold another image per platform: read the one this
+		// Service runs.
+		labels, err := s.runner.ImageLabels(ctx, image, service.Platform)
+		if err != nil {
+			return failure(FailureRunner, "could not inspect image "+image+": "+err.Error(), err)
+		}
+		for _, v := range policy.ImageLabels(name, image, labels, service.Labels) {
+			refused = append(refused, v.Service+": "+v.Message)
+		}
+	}
+	if len(refused) > 0 {
+		return failure(FailureInvalid, "policy: "+strings.Join(refused, "; "), nil)
+	}
+	return nil
 }

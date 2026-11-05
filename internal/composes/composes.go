@@ -21,6 +21,7 @@ import (
 
 	"relist-panel/internal/audit"
 	"relist-panel/internal/domains"
+	"relist-panel/internal/policy"
 	"relist-panel/internal/slug"
 	"relist-panel/internal/zerodowntime"
 )
@@ -63,6 +64,9 @@ type ComposeStatus struct {
 // set, receives the command's stdout and stderr as they arrive.
 type UpOptions struct {
 	Build bool
+	// NoPull starts the images already on the host: `--pull never`. A
+	// deploy pulls and checks its images first (prepareImages).
+	NoPull bool
 	// Services, when set, limits up to them, with --no-deps (ADR-0023).
 	Services []string
 	Out      io.Writer
@@ -74,6 +78,15 @@ type ScaleOptions struct {
 	Service  string
 	Replicas int
 	Build    bool
+	NoPull   bool
+	Out      io.Writer
+}
+
+// PullOptions pulls the images of a Compose that are not built: every one
+// missing from the host with Missing, else the Services named.
+type PullOptions struct {
+	Services []string
+	Missing  bool
 	Out      io.Writer
 }
 
@@ -101,7 +114,14 @@ type ComposeRunner interface {
 	// Config is `docker compose config --format json`: the file as Compose
 	// resolves it, interpolated and with inactive profiles dropped.
 	Config(ctx context.Context, req RunRequest) ([]byte, error)
+	// PolicyConfig is the file as the Compose policy reads it: every profile
+	// on, env files left as paths (ADR-0032).
+	PolicyConfig(ctx context.Context, req RunRequest) ([]byte, error)
 	Scale(ctx context.Context, req RunRequest, opts ScaleOptions) error
+	Pull(ctx context.Context, req RunRequest, opts PullOptions) error
+	// ImageLabels is the labels an image on the host carries for platform,
+	// or for the host's platform when platform is "".
+	ImageLabels(ctx context.Context, image, platform string) (map[string]string, error)
 }
 
 type Service struct {
@@ -111,9 +131,14 @@ type Service struct {
 	domains    *domains.Store
 	switches   zeroDowntimeSwitches
 	builders   builderChoices
-	engine     ContainerEngine
-	canceler   DeploymentCanceler
-	now        func() time.Time
+	// policyRoots and panelDomain are what the Compose policy checks a
+	// config against (SetPolicyRules).
+	policyRoots []string
+	panelDomain string
+	approver    policy.Approver
+	engine      ContainerEngine
+	canceler    DeploymentCanceler
+	now         func() time.Time
 }
 
 // zeroDowntimeSwitches is the per-Service zero-downtime switch (ADR-0023).
@@ -201,6 +226,8 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/restart", s.restart)
 	mux.HandleFunc("DELETE /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}", s.delete)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/removal-plan", s.removalPlan)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/policy", s.getPolicy)
+	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/approval", s.approve)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/logs", s.logs)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/services/{service}/effective-variables", s.effectiveVariables)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/zero-downtime", s.listZeroDowntime)

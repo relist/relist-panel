@@ -66,6 +66,30 @@ func Inject(services map[string]any, composeID int64, domains []Domain, network 
 	return append(warnings, hostWarnings(handWritten, generated, ordered)...), nil
 }
 
+// Generated is, per Service, every Traefik label Inject writes for the
+// Compose's domains, with its value: what the Compose policy lets a Service
+// carry (ADR-0032).
+func Generated(composeID int64, domains []Domain, network string, zeroDowntime map[string]bool) map[string]map[string]string {
+	ordered := append([]Domain(nil), domains...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
+	generated := fmt.Sprintf("relist-c%d-", composeID)
+	sets := map[string]*labelSet{}
+	for _, d := range ordered {
+		labels, seen := sets[d.Service]
+		if !seen {
+			labels = readLabels(nil)
+			sets[d.Service] = labels
+			prepareService(d.Service, labels, generated, network)
+		}
+		addDomain(labels, composeID, d, zeroDowntime[d.Service])
+	}
+	out := make(map[string]map[string]string, len(sets))
+	for name, labels := range sets {
+		out[name] = labels.values
+	}
+	return out
+}
+
 // prepareService applies the overrides every Service with a domain gets and
 // returns their warnings.
 func prepareService(name string, labels *labelSet, generated, network string) []string {

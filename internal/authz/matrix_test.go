@@ -148,8 +148,6 @@ func TestKeyRoutesHaveTheSpecLevel(t *testing.T) {
 		"POST " + c + "/restart":       LevelOperator,
 		"POST " + c + "/stop":          LevelOperator,
 		"POST " + c + "/deployments":   LevelOperator,
-		"PUT " + c:                     LevelEditor,
-		"POST " + c + "/preview":       LevelEditor,
 		"GET " + c + "/terminal":       LevelEditor,
 		"GET " + c + "/volumes/read":   LevelEditor,
 		"POST " + c + "/source/upload": LevelEditor,
@@ -164,7 +162,10 @@ func TestKeyRoutesHaveTheSpecLevel(t *testing.T) {
 			t.Errorf("Routes[%q] = %v (present %v), want level %v", pattern, rule.Level, ok, want)
 		}
 	}
-	for _, pattern := range []string{"POST /api/projects", "DELETE /api/projects/{id}", "GET /api/users", "PUT /api/users/{id}/grants", "GET /api/docker"} {
+	// Only an admin writes a Compose's YAML (ADR-0032, Editors and the file).
+	adminOnly := []string{"POST /api/projects", "DELETE /api/projects/{id}", "GET /api/users", "PUT /api/users/{id}/grants", "GET /api/docker",
+		"PUT " + c, "POST " + c + "/preview", "POST /api/projects/{projectID}/environments/{environmentID}/composes"}
+	for _, pattern := range adminOnly {
 		if _, ok := Routes[pattern]; ok {
 			t.Errorf("%q must stay admin-only (absent from Routes)", pattern)
 		}

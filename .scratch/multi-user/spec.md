@@ -492,3 +492,32 @@ installed `antd`.
 10. `GET /api/projects/{id}/audit` is Viewer in the route table; the handler answers 403 unless the User edits one of its Environments.
 11. HTTP lives in `internal/auditapi`.
 
+### 2026-11-05 — Phase 4 rulings
+
+1. The check runs on the Deployment's snapshot (panel keys injected), the config `up` runs; injected keys pass the rules.
+2. Inside the Compose directory a path may not be the directory itself nor `.ssh` (a Source's git key).
+3. `include`/`extends` paths in the saved YAML must be relative, inside the directory, without variables or URLs.
+4. The same bind path used twice is not nested; only a bind strictly inside another is.
+5. `RELIST_POLICY_BIND_ROOTS` refuses `/`; roots the panel container cannot see are compared as text.
+6. `configHash` goes only to approvers (`GET …/policy`, the 409 body); everyone sees the violations.
+7. The Volume Explorer checks the deployed file it resolves from.
+8. A git Source in build mode that cannot be resolved before its fetch queues; the check after the fetch decides.
+9. The Compose list tag is left out; the Compose page shows the state.
+10. (Review) The hash covers the Source settings (kind, repository, branch, paths, zip upload), not each commit.
+11. (Review) A bind of the panel's own files in the Compose directory (dot names, `docker-compose.yml`, `sets`) is refused, except the Deployment's own Source copy; a link the panel cannot follow is refused; include and extends are followed into the files they name.
+12. `com.docker.*` labels on services, volumes and networks are refused; other labels naming the panel domain are harmless (only Traefik reads labels).
+13. Secret values are masked in violation messages and evaluation errors.
+14. (Security review) An HTTP router's `rule` must be exactly the rule of one of the Compose's own Domains; any router `priority`, and any TCP or UDP router, is a violation. Router label keys are matched in any case.
+15. (Security review) A built service's `image` and `build.tags` must start with `<project>-`; pulled images keep any name.
+16. (Security review) `network_mode` passes only as `none` or `service:<a service of this Compose>`; a network name, `bridge` and anything else need approval.
+17. (Security review 2) Ruling 14 is replaced: a `traefik.*` label passes only when it is exactly one the panel writes for the Compose's own Domains (`domains.Generated`) with the same value; `traefik.enable` false and `traefik.docker.network: relist-network` also pass.
+18. (Security review 2) `build.labels` follow the label rules: no `traefik.*`, no `com.docker.*`.
+19. (Security review 2) The deploy step builds, pulls and inspects every image before `up`; an image's own `traefik.*` labels that reach a container Traefik reads fail the deploy whatever the approval. `up` and `scale` then run with `--no-build --pull never`; rollouts no longer build.
+20. (Security review 2) The deploy pulls missing images with `--policy missing` and refreshes only Services whose `pull_policy` asks for it (`always`, `daily`, `weekly`, `every_…`); `never` is never pulled.
+21. (Editors and the file) Only an Admin creates a Compose, saves its YAML or previews an unsaved file; the three routes leave `authz.Routes`. An Editor keeps Variables, Variable Sets, Domains, Source, Builder, zero-downtime, Terminal and Volumes. The web disables Save, Preview, the editor and New Compose for non-admins and says why.
+22. (Editors and the file) The policy and the deploy's image check stay: Variables interpolate into the file and a Source builds the image.
+23. (Security review 3) The image check reads the labels of each Service's `platform` (`docker image inspect --platform`).
+24. (Domains) A host belongs to one Project: creating or moving a Domain onto a host a Compose of another Project serves answers 409 for everyone, Admins included, without naming that Project. Composes of one Project share a host by path. Existing cross-Project sharing is left alone.
+25. (Review) A Domain shared across Projects before ruling 24 stays editable while the edit keeps its host. A host goes to the first Project that claims it.
+26. (Review) On an Engine older than API 1.49 the image check reads the image the tag holds and refuses it when its platform is not the Service's `platform`.
+27. (Review) The web offers non-admins no helper that edits the file (Detect, build snippets), disables the dirty banner's Save, and Deploy sends the saved file.

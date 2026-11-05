@@ -54,6 +54,19 @@ func newDomainsCompose(t *testing.T, server *testServer, projectName, composeNam
 	return domainsFixture{server: server, project: project, base: composePath, composeID: compose.ID}
 }
 
+// sibling is another Compose in f's Environment, with the same YAML.
+func (f domainsFixture) sibling(t *testing.T, composeName string) domainsFixture {
+	t.Helper()
+	environmentPath := f.base[:strings.LastIndex(f.base, "/composes/")]
+	response := f.server.request(t, http.MethodPost, environmentPath+"/composes", map[string]any{"name": composeName, "yamlContent": domainsYAML})
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create sibling compose status = %d", response.StatusCode)
+	}
+	var compose composeResponse
+	decodeJSON(t, response, &compose)
+	return domainsFixture{server: f.server, project: f.project, base: environmentPath + "/composes/" + idString(compose.ID), composeID: compose.ID}
+}
+
 func domainBody(host, path string) map[string]any {
 	return map[string]any{
 		"host": host, "path": path, "internalPath": "/", "stripPath": false, "service": "web", "port": 3000,
@@ -174,16 +187,39 @@ func TestDomainsConflictAcrossComposes(t *testing.T) {
 	}
 	var body struct{ Error string }
 	_ = json.Unmarshal(raw, &body)
-	if want := "api.example.com/ is already used by shop / production / web"; body.Error != want {
+	if want := "api.example.com is already used by a Compose in another Project"; body.Error != want {
 		t.Errorf("error = %q, want %q", body.Error, want)
 	}
-	second.createDomain(t, "api.example.com", "/api")
+	// A host belongs to one Project: another Project's longer path would win
+	// its requests in Traefik (ADR-0032).
+	for _, path := range []string{"/api", "/login"} {
+		if response, raw := second.send(t, http.MethodPost, "/domains", domainBody("API.example.com", path)); response.StatusCode != http.StatusConflict {
+			t.Errorf("another Project on %s status = %d %s, want 409", path, response.StatusCode, raw)
+		}
+	}
 
-	// Moving an existing domain onto a taken address conflicts as well.
+	// Moving an existing domain onto a taken host conflicts as well.
 	other := second.createDomain(t, "other.example.com", "/")
-	response, _ = second.send(t, http.MethodPut, "/domains/"+idString(other.ID), domainBody("api.example.com", "/"))
+	response, _ = second.send(t, http.MethodPut, "/domains/"+idString(other.ID), domainBody("api.example.com", "/blog"))
 	if response.StatusCode != http.StatusConflict {
 		t.Errorf("update conflict status = %d, want 409", response.StatusCode)
+	}
+}
+
+// Composes of one Project share a host by path; the same address still
+// conflicts.
+func TestDomainsShareAHostWithinAProject(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	first := newDomainsCompose(t, server, "shop", "web")
+	second := first.sibling(t, "api")
+	first.createDomain(t, "shop.example.com", "/")
+	second.createDomain(t, "shop.example.com", "/api")
+	response, raw := second.send(t, http.MethodPost, "/domains", domainBody("shop.example.com", "/"))
+	var body struct{ Error string }
+	_ = json.Unmarshal(raw, &body)
+	if response.StatusCode != http.StatusConflict || body.Error != "shop.example.com/ is already used by shop / production / web" {
+		t.Fatalf("same address = %d %q", response.StatusCode, body.Error)
 	}
 }
 
@@ -516,5 +552,30 @@ func TestDomainOnPanelHostIsRefused(t *testing.T) {
 	server.useHandlerWithPanelDomain(t, "")
 	if response, raw := f.send(t, http.MethodPost, "/domains", domainBody("panel.example.com", "/")); response.StatusCode != http.StatusCreated {
 		t.Errorf("unknown panel domain must refuse nothing: status = %d, body %s", response.StatusCode, raw)
+	}
+}
+
+// A host two Projects already shared before the rule stays editable in both
+// as long as the edit keeps the host.
+func TestDomainsSharedBeforeTheRuleStayEditable(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	first := newDomainsCompose(t, server, "shop", "web")
+	second := newDomainsCompose(t, server, "blog", "site")
+	first.createDomain(t, "shared.example.com", "/")
+	if _, err := server.db.Exec(`INSERT INTO domains (compose_id, host, path, service, port, created_at, updated_at) VALUES (?, 'shared.example.com', '/blog', 'web', 3000, 0, 0)`, second.composeID); err != nil {
+		t.Fatal(err)
+	}
+	var id int64
+	if err := server.db.QueryRow(`SELECT id FROM domains WHERE compose_id = ?`, second.composeID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	body := domainBody("shared.example.com", "/blog")
+	body["port"] = 8080
+	if response, raw := second.send(t, http.MethodPut, "/domains/"+idString(id), body); response.StatusCode != http.StatusOK {
+		t.Fatalf("edit keeping the shared host = %d %s, want 200", response.StatusCode, raw)
+	}
+	if response, _ := second.send(t, http.MethodPost, "/domains", domainBody("shared.example.com", "/more")); response.StatusCode != http.StatusConflict {
+		t.Fatalf("a new path on the shared host = %d, want 409", response.StatusCode)
 	}
 }

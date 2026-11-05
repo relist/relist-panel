@@ -32,8 +32,9 @@ privately: see [SECURITY.md](SECURITY.md).
 An Admin invites people from **Users** and gives each a Role per Project or
 per Environment, on the User's page or on a Project's **Members** tab:
 Viewer (read, without secret values), Operator (also deploy, restart and
-stop) or Editor (also change the Compose, its variables and settings, open
-the Terminal and the Volume Explorer). An Environment can be set to No
+stop) or Editor (also change a Compose's variables, Domains, Source and
+settings, open the Terminal and the Volume Explorer). Only an Admin creates
+a Compose or changes its `docker-compose.yml`. An Environment can be set to No
 access to hide it. Admins see everything; a User with no Role sees nothing.
 
 Every change made in the panel, every refusal, each sign-in and the
@@ -42,9 +43,16 @@ the **Audit log**, kept 90 days by default. Admins read it all; a Project's
 Editors read its **Activity** tab. Variable values are never recorded. It
 is not tamper-proof against an Admin, who can reach the database.
 
-**Until the Compose policy ships, an Editor can take the host** (a Compose
-that mounts the Docker socket or runs privileged, then the Terminal), **so
-grant Editor only to people you would give root.**
+A Compose that could take the host (mounting the Docker socket or a path
+outside its directory, running privileged, opening another Compose's
+volume or network, hand-writing Traefik labels beyond what its own Domains generate,
+building an image under a name outside `relist-c<ID>-…`) deploys only after an **approver** approves that exact config on
+the Compose page; any later change to it needs approving again. Approvers
+are every Admin, or only the Owner with `RELIST_POLICY_APPROVER=owner`.
+Host paths a Compose may bind without approval go in
+`RELIST_POLICY_BIND_ROOTS` (comma-separated, absolute), for example
+`/srv/media`. Both are set in the install's `.env`. Admins remain fully
+trusted: the host-wide pages are theirs.
 
 Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 

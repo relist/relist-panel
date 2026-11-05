@@ -47,8 +47,9 @@ export function hasUnsavedChanges(draft: string, savedYaml: string): boolean {
  * the host (GUIDELINES §8 — deploy saves first and says so), so the host never
  * builds from older YAML than the one on screen.
  */
-export function deploySteps(dirty: boolean): readonly ('deploy' | 'save')[] {
-  return dirty ? ['save', 'deploy'] : ['deploy'];
+export function deploySteps(dirty: boolean, canSave: boolean): readonly ('deploy' | 'save')[] {
+  // Only an admin saves the file (ADR-0032); anyone else deploys the saved one.
+  return dirty && canSave ? ['save', 'deploy'] : ['deploy'];
 }
 
 /** The `web-1` in `web-1  | GET /healthz`: the label `docker compose logs` puts before the pipe. */

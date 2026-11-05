@@ -28,7 +28,7 @@ What a User may reach is decided by one middleware, `internal/authz`, between `a
 
 ## Roles (phase 2, 2026-11-04)
 
-A User who is not an Admin gets a **Role** per Project or per Environment through a **Grant**: Viewer (read everything in it, secret values excepted), Operator (also deploy, restart, stop, cancel), Editor (also change the Compose, its Variables, Domains and settings; Preview, Terminal, Volume Explorer, secret values). An Environment Grant wins over the Project Grant and may be **No access**, which hides that Environment. A **Project Editor** holds `editor` on the Project itself and may also edit the Project's details and add or delete its Environments. Grants live in `grants` (migration `00032`); only Admins read or change them.
+A User who is not an Admin gets a **Role** per Project or per Environment through a **Grant**: Viewer (read everything in it, secret values excepted), Operator (also deploy, restart, stop, cancel), Editor (also change the Compose's Variables, Domains, Source and settings; Terminal, Volume Explorer, secret values; since ADR-0032 only an Admin writes the Compose file itself or previews it). An Environment Grant wins over the Project Grant and may be **No access**, which hides that Environment. A **Project Editor** holds `editor` on the Project itself and may also edit the Project's details and add or delete its Environments. Grants live in `grants` (migration `00032`); only Admins read or change them.
 
 `internal/authz` holds every route's level in one table. For a scoped route it aligns the path with the ServeMux pattern to find the Project, Environment and Compose ids, checks in the database that each belongs to the one before it, loads the User's Grants, and only then runs the handler. A non-admin who cannot see the target, or who forged the path (an unknown, non-numeric or mismatched id), gets **404**, so a hidden Project is indistinguishable from a missing one; one who can see it but whose Role is too low gets **403**; a database error is a **500**, never a pass. Admins skip every check. Lists (Projects, Environments, Deployment history) are filtered to what the User can see; the Deployment queue keeps other rows with their names and ids blanked, so a member sees why theirs waits.
 
@@ -48,7 +48,7 @@ Rulings where the spec was silent:
 8. This ADR is amended rather than a new one written; ADR-0032 is kept for the Compose policy.
 9. A Project's `environmentCount` counts only the Environments the User can see.
 
-**Until the Compose policy ships, an Editor can take the host**: a Compose that mounts the Docker socket or runs privileged, then the Terminal. Grant Editor only to people you would give root.
+**Until the Compose policy ships, an Editor can take the host**: a Compose that mounts the Docker socket or runs privileged, then the Terminal. Grant Editor only to people you would give root. *(Closed by ADR-0032, 2026-11-05: such a Compose now deploys only once an approver approves it.)*
 
 ## Audit log (phase 3, 2026-11-05)
 

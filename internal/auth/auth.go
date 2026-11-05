@@ -50,6 +50,9 @@ type Service struct {
 	// access reports a signed-in User's roles for the status route; nil
 	// leaves "access" null.
 	access func(context.Context, User) (any, error)
+	// approver reports whether a User may approve a Compose that violates
+	// the Compose policy, for the status route; nil answers false.
+	approver func(User) bool
 	// failedLogins caps the failed sign-ins one address records.
 	failedLogins *audit.Limiter
 }
@@ -89,6 +92,12 @@ func New(db *sql.DB) *Service {
 // User's effective roles, which package auth cannot work out itself.
 func (s *Service) WithAccess(fn func(context.Context, User) (any, error)) *Service {
 	s.access = fn
+	return s
+}
+
+// WithApprover makes the status route say whether the User is an approver.
+func (s *Service) WithApprover(fn func(User) bool) *Service {
+	s.approver = fn
 	return s
 }
 
@@ -170,7 +179,8 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 
 	body := map[string]any{"authenticated": authenticated, "version": s.version}
 	if authenticated {
-		body["user"] = map[string]any{"id": user.ID, "email": user.Email, "isAdmin": user.IsAdmin, "isOwner": user.IsOwner()}
+		body["user"] = map[string]any{"id": user.ID, "email": user.Email, "isAdmin": user.IsAdmin, "isOwner": user.IsOwner(),
+			"isApprover": s.approver != nil && s.approver(user)}
 		var access any
 		if s.access != nil {
 			if access, err = s.access(r.Context(), user); err != nil {

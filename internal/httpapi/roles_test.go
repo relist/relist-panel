@@ -196,3 +196,32 @@ func TestSSHKeysAreReducedForMembers(t *testing.T) {
 		t.Fatalf("member keys = %d %s", code, body)
 	}
 }
+
+// Only an admin writes a Compose's YAML; an Editor still deploys it and
+// edits its variables (ADR-0032).
+func TestEditorCannotWriteComposeYAML(t *testing.T) {
+	f := newRoleFixture(t)
+	f.grant(t, f.alpha.ID, f.alphaProd.ID, "editor")
+	env := fmt.Sprintf("/api/projects/%d/environments/%d", f.alpha.ID, f.alphaProd.ID)
+	compose := fmt.Sprintf("%s/composes/%d", env, f.alphaWeb.ID)
+	yaml := "services: {web: {image: nginx}}\n"
+	for _, c := range []struct {
+		method, path string
+		body         any
+	}{
+		{http.MethodPut, compose, map[string]any{"yamlContent": yaml}},
+		{http.MethodPost, env + "/composes", map[string]any{"name": "new", "yamlContent": yaml}},
+		{http.MethodPost, compose + "/preview", map[string]any{"yamlContent": yaml}},
+	} {
+		response := f.server.request(t, c.method, c.path, c.body)
+		response.Body.Close()
+		if response.StatusCode != http.StatusForbidden {
+			t.Errorf("%s %s as editor = %d, want 403", c.method, c.path, response.StatusCode)
+		}
+	}
+	response := f.server.request(t, http.MethodPost, compose+"/variables", map[string]any{"key": "A", "value": "1"})
+	response.Body.Close()
+	if response.StatusCode >= 300 {
+		t.Fatalf("add a variable as editor = %d", response.StatusCode)
+	}
+}

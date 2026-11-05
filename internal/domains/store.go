@@ -18,7 +18,8 @@ const maxRequestBody = 1 << 20
 // ErrNotFound means the Compose or the domain does not exist under the route.
 var ErrNotFound = errors.New("not found")
 
-// ConflictError means another domain already claims the host and path.
+// ConflictError means another domain already claims the host and path, or
+// a Compose of another Project already serves the host.
 type ConflictError struct{ Message string }
 
 func (e *ConflictError) Error() string { return e.Message }
@@ -118,6 +119,9 @@ func (s *Store) create(ctx context.Context, composeID int64, in Input) (Domain, 
 	at := s.now().Unix()
 	var id int64
 	err := s.inTx(ctx, composeID, func(tx *sql.Tx) error {
+		if err := hostFree(ctx, tx, composeID, in.Host); err != nil {
+			return err
+		}
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO domains (compose_id, host, path, internal_path, strip_path, service, port, entrypoint, https, cert_provider, cert_resolver, middlewares, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -138,6 +142,20 @@ func (s *Store) update(ctx context.Context, composeID, id int64, in Input) (Doma
 	middlewares, _ := json.Marshal(in.Middlewares)
 	at := s.now().Unix()
 	err := s.inTx(ctx, composeID, func(tx *sql.Tx) error {
+		// A host shared across Projects before the rule stays editable while
+		// the edit keeps it; moving onto another Project's host does not.
+		var current string
+		err := tx.QueryRowContext(ctx, `SELECT host FROM domains WHERE id = ? AND compose_id = ?`, id, composeID).Scan(&current)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		} else if err != nil {
+			return err
+		}
+		if !strings.EqualFold(current, in.Host) {
+			if err := hostFree(ctx, tx, composeID, in.Host); err != nil {
+				return err
+			}
+		}
 		result, err := tx.ExecContext(ctx, `
 			UPDATE domains
 			SET host = ?, path = ?, internal_path = ?, strip_path = ?, service = ?, port = ?, entrypoint = ?, https = ?, cert_provider = ?, cert_resolver = ?, middlewares = ?, updated_at = ?
@@ -188,6 +206,30 @@ func (s *Store) inTx(ctx context.Context, composeID int64, write func(*sql.Tx) e
 		return err
 	}
 	return tx.Commit()
+}
+
+// hostFree refuses a host a Compose of another Project already serves. A
+// host belongs to one Project: Traefik prefers the longer rule, so another
+// Project's longer path on it would take that Project's requests (ADR-0032).
+// The other Project is not named, since the caller may not see it.
+func hostFree(ctx context.Context, tx *sql.Tx, composeID int64, host string) error {
+	var taken int
+	err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM domains d
+		JOIN composes c ON c.id = d.compose_id
+		JOIN environments e ON e.id = c.environment_id
+		WHERE lower(d.host) = lower(?)
+		  AND e.project_id <> (
+			SELECT e2.project_id FROM composes c2 JOIN environments e2 ON e2.id = c2.environment_id WHERE c2.id = ?)
+	`, host, composeID).Scan(&taken)
+	if err != nil {
+		return err
+	}
+	if taken > 0 {
+		return &ConflictError{Message: strings.ToLower(host) + " is already used by a Compose in another Project"}
+	}
+	return nil
 }
 
 func requireAffected(result sql.Result) error {

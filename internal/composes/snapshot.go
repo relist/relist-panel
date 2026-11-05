@@ -148,6 +148,7 @@ func (t DeployTarget) WithSourceDirectory(dir string) (DeployTarget, error) {
 	}
 	copy.YAML = content
 	t.Snapshot = &copy
+	t.SourceDir = filepath.Dir(dir)
 	return t, nil
 }
 

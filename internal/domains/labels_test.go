@@ -369,3 +369,28 @@ func TestInjectWithoutZeroDowntimeUnchanged(t *testing.T) {
 		t.Fatalf("labels =\n%v\nwant\n%v", got, want)
 	}
 }
+
+// Generated is exactly what Inject writes onto a service with no labels of
+// its own.
+func TestGeneratedMatchesInject(t *testing.T) {
+	ds := []domains.Domain{
+		{ID: 1, Host: "app.example.com", Service: "web", Port: 80, HTTPS: true, CertProvider: "letsencrypt"},
+		{ID: 2, Host: "app.example.com", Path: "/api", StripPath: true, Service: "api", Port: 8080},
+	}
+	services := map[string]any{"web": map[string]any{"labels": map[string]any{}}, "api": map[string]any{"labels": map[string]any{}}}
+	if _, err := domains.Inject(services, 7, ds, "relist-network", map[string]bool{"web": true}); err != nil {
+		t.Fatal(err)
+	}
+	generated := domains.Generated(7, ds, "relist-network", map[string]bool{"web": true})
+	for name, raw := range services {
+		labels := raw.(map[string]any)["labels"].(map[string]any)
+		if len(labels) == 0 || len(labels) != len(generated[name]) {
+			t.Fatalf("%s: inject %d labels, generated %d", name, len(labels), len(generated[name]))
+		}
+		for key, value := range labels {
+			if generated[name][key] != value {
+				t.Errorf("%s: %s = %q, generated %q", name, key, value, generated[name][key])
+			}
+		}
+	}
+}

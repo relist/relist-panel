@@ -1869,3 +1869,36 @@ func TestVolumeRestoreReportsTheFeatureUnavailable(t *testing.T) {
 		t.Errorf("runner calls = %+v, want none while unavailable", server.volumeRunner.Calls)
 	}
 }
+
+// A bind the Compose policy refuses (here /srv/media, outside the Compose
+// directory with no bind roots) does not open, even for an approver, until
+// the config is approved.
+func TestVolumeOperationsRefuseABindThePolicyRefuses(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+	server.runner.setPolicyConfig(string(server.volumeCLI.ComposeConfigOutput))
+	server.volumeRunner.Stdout = `{"entries":[],"truncated":false}`
+	list := func() int {
+		response := server.request(t, http.MethodGet, volumeOpPath(fixture, "list", url.Values{"source": {fixture.unverifiableBind}}), nil)
+		response.Body.Close()
+		return response.StatusCode
+	}
+	if got := list(); got != http.StatusForbidden {
+		t.Fatalf("refused bind = %d, want 403", got)
+	}
+	policyURL := fmt.Sprintf("/api/projects/%d/environments/%d/composes/%d/policy", fixture.project.ID, fixture.production.ID, fixture.compose.ID)
+	response := server.request(t, http.MethodGet, policyURL, nil)
+	var view struct {
+		ConfigHash string `json:"configHash"`
+	}
+	_ = json.NewDecoder(response.Body).Decode(&view)
+	response.Body.Close()
+	approval := strings.TrimSuffix(policyURL, "/policy") + "/approval"
+	if response := server.request(t, http.MethodPost, approval, map[string]string{"configHash": view.ConfigHash}); response.StatusCode != http.StatusNoContent {
+		t.Fatalf("approve = %d", response.StatusCode)
+	}
+	if got := list(); got != http.StatusOK {
+		t.Fatalf("approved bind = %d, want 200", got)
+	}
+}

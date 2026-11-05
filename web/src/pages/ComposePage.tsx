@@ -44,12 +44,14 @@ import type { MenuProps } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router';
+import useSWR from 'swr';
 
 import { paths } from '../app/paths';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { ComposeDeploymentsTab } from '../components/ComposeDeploymentsTab';
 import { ComposeDomainsTab } from '../components/ComposeDomainsTab';
 import { ComposeEditorGuide } from '../components/ComposeEditorGuide';
+import { ComposePolicyAlert, policyDeployState } from '../components/ComposePolicyAlert';
 import { ComposePreviewModal } from '../components/ComposePreviewModal';
 import { BuildSnippetsModal, snippetComment } from '../components/BuildSnippetsModal';
 import { ComposeTerminalTab } from '../components/ComposeTerminalTab';
@@ -88,7 +90,7 @@ import { useComposeSource } from './useComposeSource';
 import { useDeploymentHistory } from './useDeploymentHistory';
 import { VulnBadges } from '../components/VulnBadges';
 import { VulnReportButton } from '../components/VulnReportButton';
-import { useCan, useIsAdmin } from '../data/useCan';
+import { useCan, useIsAdmin, useIsApprover } from '../data/useCan';
 import { useVulnSummary } from '../data/useVulnSummary';
 import { summaryBadge, vulnLink } from './vulnerabilities-view';
 import { buildComposeReport, composeBuilds, reportFilename } from './vuln-report';
@@ -147,6 +149,16 @@ export function ComposePage() {
   const canOperate = useCan(environment?.id, 'operator');
   const canEdit = useCan(environment?.id, 'editor');
   const isAdmin = useIsAdmin();
+  // Only an admin writes docker-compose.yml (ADR-0032); an Editor deploys it
+  // and changes its variables, Domains and Source.
+  const canEditFile = isAdmin;
+  const isApprover = useIsApprover();
+  const policyLocation = compose && environment && project ? { composeId: compose.id, environmentId: environment.id, projectId: project.id } : undefined;
+  // The saved config against the Compose policy (ADR-0032); refetched when
+  // the Compose is saved, approved or refused.
+  const policy = useSWR(policyLocation ? ['compose-policy', policyLocation.composeId, compose?.updatedAt] : null, () =>
+    api.getComposePolicy(policyLocation!),
+  );
 
   const [draft, setDraft] = useState(compose?.yamlContent ?? '');
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
@@ -547,8 +559,8 @@ export function ComposePage() {
   // Queues a Deployment, then shows it on the Deployments tab. `fresh` removes
   // the Compose's named volumes first; the save-first steps are identical, so
   // unsaved YAML is what gets deployed. With a Source the default is a build.
-  const runDeploy = async (options: { fresh?: boolean; mode?: DeploymentRequest['mode']; noCache?: boolean } = {}) => {
-    const { fresh = false, noCache } = options;
+  const runDeploy = async (options: { configHash?: string; fresh?: boolean; mode?: DeploymentRequest['mode']; noCache?: boolean } = {}) => {
+    const { configHash, fresh = false, noCache } = options;
     if (!sourceReady) {
       message.warning(
         sourceState === 'failed' ? 'The Source could not be loaded — retry loading it first' : 'Still loading the Source — try again in a moment',
@@ -564,15 +576,16 @@ export function ComposePage() {
       setFreshRunning(true);
     }
     try {
-      for (const step of deploySteps(dirty)) {
+      for (const step of deploySteps(dirty, canEditFile)) {
         if (step === 'save') {
           await saveCompose(compose.id, draft);
         } else {
-          const request: DeploymentRequest = fresh
+          const base: DeploymentRequest = fresh
             ? { confirmName: compose.name, freshVolumes: true, mode }
             : noCache
               ? { mode, noCache: true }
               : { mode };
+          const request: DeploymentRequest = configHash ? { ...base, configHash } : base;
           const number = await deployCompose(compose.id, request);
           message.info(`Deployment #${number} queued`);
           setSelectedDeployment(number);
@@ -584,6 +597,10 @@ export function ComposePage() {
       if (reason instanceof ZeroDowntimeRefusedError) {
         setZeroDowntimeRefusal(reason.problems);
       } else {
+        if (reason instanceof ApiError && reason.status === 409) {
+          // Possibly the Compose policy: show what it says now.
+          void policy.mutate();
+        }
         fail(reason);
       }
     } finally {
@@ -594,7 +611,19 @@ export function ComposePage() {
       }
     }
   };
-  const deploy = () => runDeploy();
+  const policyState = policyDeployState(policy.data, isApprover, dirty);
+  const deploy = () => runDeploy(policyState === 'approve' && policy.data?.configHash ? { configHash: policy.data.configHash } : {});
+  const approveCompose = async () => {
+    if (!policyLocation || !policy.data?.configHash) return;
+    try {
+      await api.approveCompose(policyLocation, policy.data.configHash);
+      message.success('Approved');
+    } catch (reason: unknown) {
+      fail(reason);
+    } finally {
+      void policy.mutate();
+    }
+  };
 
   // The shown Deployment ended: the containers, the env file and the deploy
   // time may all have changed.
@@ -736,7 +765,7 @@ export function ComposePage() {
               <Button icon={<MoreOutlined />} />
             </Dropdown>
             <Button
-              disabled={!dirty || !canEdit}
+              disabled={!dirty || !canEditFile}
               icon={<SaveOutlined />}
               loading={isPending(`save-compose:${compose.id}`)}
               onClick={() => void save()}
@@ -756,12 +785,20 @@ export function ComposePage() {
                 <RoleHint allowed={canOperate} level="operator">
                   <Button
                     icon={<RocketOutlined />}
-                    disabled={!sourceReady || !canOperate}
+                    disabled={!sourceReady || !canOperate || policyState === 'waiting'}
                     loading={isPending(`deploy:${compose.id}`)}
                     onClick={() => void deploy()}
                     type="primary"
                   >
-                    {hasSource ? 'Build & Deploy' : dirty ? 'Save & Deploy' : 'Deploy'}
+                    {policyState === 'waiting'
+                      ? 'Waiting for approval'
+                      : policyState === 'approve'
+                        ? 'Approve & Deploy'
+                        : hasSource
+                          ? 'Build & Deploy'
+                          : dirty
+                            ? 'Save & Deploy'
+                            : 'Deploy'}
                   </Button>
                 </RoleHint>
               )}
@@ -796,6 +833,10 @@ export function ComposePage() {
         />
       )}
 
+      <div style={{ marginBottom: policy.data && policy.data.violations.length > 0 ? LAYOUT.gutterSmall : 0 }}>
+        <ComposePolicyAlert approver={isApprover} onApprove={approveCompose} policy={policy.data} />
+      </div>
+
       {sourceState === 'failed' && (
         <Alert
           action={
@@ -815,6 +856,14 @@ export function ComposePage() {
           showIcon
           style={{ marginBottom: LAYOUT.gutterSmall }}
           title="You can view this Compose. Changing it needs the Editor role."
+          type="info"
+        />
+      )}
+      {canEdit && !canEditFile && (
+        <Alert
+          showIcon
+          style={{ marginBottom: LAYOUT.gutterSmall }}
+          title="Only an admin changes docker-compose.yml. You can deploy it and change its variables, Domains and Source."
           type="info"
         />
       )}
@@ -851,10 +900,19 @@ export function ComposePage() {
                               {screens.sm && 'Discard'}
                             </Button>
                           </Tooltip>
-                          <Tooltip title="Show the file a deploy would write, with the panel's additions">
-                            <Button aria-label="Preview" icon={<EyeOutlined />} onClick={() => setPreviewOpen(true)} size="small">
-                              {screens.sm && 'Preview'}
-                            </Button>
+                          <Tooltip title={canEditFile ? "Show the file a deploy would write, with the panel's additions" : needsRole('admin')}>
+                            {/* The span lets the tooltip fire over the disabled button. */}
+                            <span style={{ display: 'inline-flex' }}>
+                              <Button
+                                aria-label="Preview"
+                                disabled={!canEditFile}
+                                icon={<EyeOutlined />}
+                                onClick={() => setPreviewOpen(true)}
+                                size="small"
+                              >
+                                {screens.sm && 'Preview'}
+                              </Button>
+                            </span>
                           </Tooltip>
                           <Tooltip title="Edit docker-compose.yml full screen, with the Environment variables beside it">
                             <Button
@@ -878,6 +936,7 @@ export function ComposePage() {
                               Discard
                             </Button>
                             <Button
+                              disabled={!canEditFile}
                               loading={isPending(`save-compose:${compose.id}`)}
                               onClick={() => void save()}
                               size="small"
@@ -896,7 +955,7 @@ export function ComposePage() {
                       <YamlEditor
                         autoHeight={{ max: LAYOUT.editorAutoMaxHeight, min: LAYOUT.editorAutoMinHeight }}
                         onChange={setDraft}
-                        readOnly={!canEdit}
+                        readOnly={!canEditFile}
                         path={`${project.id}-${environment.id}-${compose.id}.yml`}
                         value={draft}
                       />
@@ -1079,7 +1138,7 @@ export function ComposePage() {
                       draft={draft}
                       lastBuilt={lastBuilt}
                       onConfigure={() => setSourceModal({})}
-                      onShowSnippets={() => setSnippetsOpen(true)}
+                      onShowSnippets={canEditFile ? () => setSnippetsOpen(true) : undefined}
                       onUploadNew={() => setSourceModal({ mode: 'zip' })}
                       onViewDeployments={() => navigate(paths.compose(project.id, environment.id, compose.id, 'deployments'))}
                       source={currentSource}
@@ -1308,7 +1367,8 @@ export function ComposePage() {
         onRemoved={refreshSource}
         onSaved={(_saved, firstTime) => {
           refreshSource();
-          if (firstTime) {
+          // Detect offers build blocks to insert into the file, which only an admin writes.
+          if (firstTime && canEditFile) {
             openDetect();
           }
         }}
@@ -1344,6 +1404,7 @@ export function ComposePage() {
         onSave={() => void save()}
         open={fullscreenOpen}
         project={project}
+        readOnly={!canEditFile}
         saving={isPending(`save-compose:${compose.id}`)}
       />
 

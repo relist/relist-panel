@@ -74,7 +74,7 @@ func TestRolloutHealthy(t *testing.T) {
 	if elapsed := time.Since(start); elapsed < 50*time.Millisecond {
 		t.Fatalf("rollout took %s, want the 50ms overlap before stopping the old container", elapsed)
 	}
-	if !reflect.DeepEqual(f.runner.scales, []ScaleOptions{{Service: "web", Replicas: 2, Out: f.out}}) {
+	if !reflect.DeepEqual(f.runner.scales, []ScaleOptions{{Service: "web", Replicas: 2, NoPull: true, Out: f.out}}) {
 		t.Fatalf("scales = %+v", f.runner.scales)
 	}
 	want := []string{"inspect a", "inspect b", "inspect b", "stop a", "remove a force=false v=false"}
@@ -222,14 +222,14 @@ func TestRolloutDollarLabelIsNotDrift(t *testing.T) {
 func TestRolloutNoOldContainer(t *testing.T) {
 	f := newRollout(t)
 	f.engine.containers = nil
-	warnings, err := f.run(RolloutOptions{Build: true})
+	warnings, err := f.run(RolloutOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(warnings, []string{"web had no running container; deployed without rollout"}) {
 		t.Fatalf("warnings = %v", warnings)
 	}
-	if len(f.runner.scales) != 0 || len(f.runner.ups) != 1 || !reflect.DeepEqual(f.runner.ups[0].Services, []string{"web"}) || !f.runner.ups[0].Build {
+	if len(f.runner.scales) != 0 || len(f.runner.ups) != 1 || !reflect.DeepEqual(f.runner.ups[0].Services, []string{"web"}) || f.runner.ups[0].Build || !f.runner.ups[0].NoPull {
 		t.Fatalf("scales = %+v ups = %+v", f.runner.scales, f.runner.ups)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"relist-panel/internal/auth"
 	"relist-panel/internal/authz"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/dockerhost"
@@ -34,6 +35,13 @@ type APIComposes interface {
 type API struct {
 	q        *Queue
 	composes APIComposes
+	approver func(auth.User) bool
+}
+
+// WithApprover says who may approve a violating config as they deploy it.
+func (a *API) WithApprover(fn func(auth.User) bool) *API {
+	a.approver = fn
+	return a
 }
 
 func NewAPI(q *Queue, c APIComposes) *API { return &API{q: q, composes: c} }
@@ -93,6 +101,9 @@ type createInput struct {
 	NoCache      bool   `json:"noCache"`
 	FreshVolumes bool   `json:"freshVolumes"`
 	ConfirmName  string `json:"confirmName"`
+	// ConfigHash is the config an approver was shown: queueing it approves
+	// it (ADR-0032).
+	ConfigHash string `json:"configHash"`
 }
 
 func (a *API) create(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +129,11 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	req := Request{Mode: in.Mode, NoCache: in.NoCache, FreshVolumes: in.FreshVolumes}
+	req := Request{Mode: in.Mode, NoCache: in.NoCache, FreshVolumes: in.FreshVolumes, ConfigHash: in.ConfigHash}
+	if user, ok := auth.UserFrom(r.Context()); ok {
+		req.UserID = user.ID
+		req.Approver = a.approver != nil && a.approver(user)
+	}
 	if existing, err := queuedFor(r.Context(), a.q.d.Store.db, composeID); err == nil {
 		if !sameRequest(existing, req) {
 			writeQueuedConflict(w, &QueuedConflictError{Queued: existing})
@@ -174,6 +189,14 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 		var conflict *QueuedConflictError
 		if errors.As(err, &conflict) {
 			writeQueuedConflict(w, conflict)
+			return
+		}
+		var policyErr *PolicyError
+		if errors.As(err, &policyErr) {
+			view := policyErr.Result.View(policyErr.Approver)
+			writeJSON(w, http.StatusConflict, map[string]any{"error": policyErr.Error(), "policy": map[string]any{
+				"violations": view.Violations, "approvalRequired": true, "configHash": view.ConfigHash,
+			}})
 			return
 		}
 		var refused *ZeroDowntimeError

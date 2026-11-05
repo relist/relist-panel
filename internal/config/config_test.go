@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"testing"
+
+	"relist-panel/internal/policy"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -90,5 +92,25 @@ func TestLoadControlSocketDefault(t *testing.T) {
 	}
 	if cfg.ControlSocket != "/run/relist-panel/control.sock" {
 		t.Fatalf("ControlSocket = %q", cfg.ControlSocket)
+	}
+}
+
+func TestLoadPolicy(t *testing.T) {
+	t.Setenv("RELIST_POLICY_APPROVER", "owner")
+	t.Setenv("RELIST_POLICY_BIND_ROOTS", "/srv, /media/")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Policy.Approver != policy.ApproverOwner || len(cfg.Policy.Roots) != 2 || cfg.Policy.Roots[1] != "/media" {
+		t.Fatalf("Policy = %+v", cfg.Policy)
+	}
+	for name, value := range map[string]string{"RELIST_POLICY_APPROVER": "everyone", "RELIST_POLICY_BIND_ROOTS": "relative"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("%s=%s was accepted", name, value)
+			}
+		})
 	}
 }

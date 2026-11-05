@@ -592,6 +592,8 @@ export interface DeploymentRequest {
   noCache?: boolean;
   freshVolumes?: boolean;
   confirmName?: string;
+  /** The config hash an approver was shown: queueing it approves it (ADR-0032). */
+  configHash?: string;
 }
 
 /** A Deployment the host is working on or has waiting, across every Compose. */

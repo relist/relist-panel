@@ -37,7 +37,7 @@ func New() Runner {
 // volumes. Services, when set, limits up to them with --no-deps, so a Service
 // being rolled out is left alone. The argv is tested through this helper.
 func upArgs(opts composes.UpOptions) []string {
-	args := []string{"up", "-d", buildFlag(opts.Build)}
+	args := append([]string{"up", "-d", buildFlag(opts.Build)}, pullFlag(opts.NoPull)...)
 	if len(opts.Services) > 0 {
 		args = append(args, "--no-deps")
 	}
@@ -48,8 +48,27 @@ func upArgs(opts composes.UpOptions) []string {
 // scaleArgs starts one more Container of a Service from the current file and
 // leaves the running ones as they are (ADR-0023).
 func scaleArgs(opts composes.ScaleOptions) []string {
-	return []string{"up", "-d", buildFlag(opts.Build), "--no-deps", "--no-recreate",
-		"--scale", fmt.Sprintf("%s=%d", opts.Service, opts.Replicas), opts.Service}
+	args := append([]string{"up", "-d", buildFlag(opts.Build)}, pullFlag(opts.NoPull)...)
+	return append(args, "--no-deps", "--no-recreate",
+		"--scale", fmt.Sprintf("%s=%d", opts.Service, opts.Replicas), opts.Service)
+}
+
+// pullFlag keeps up from pulling images a deploy already pulled and checked.
+func pullFlag(noPull bool) []string {
+	if noPull {
+		return []string{"--pull", "never"}
+	}
+	return nil
+}
+
+// composePullArgs pulls the images no Service builds: the missing ones, or
+// the Services named.
+func composePullArgs(opts composes.PullOptions) []string {
+	args := []string{"pull", "--ignore-buildable"}
+	if opts.Missing {
+		args = append(args, "--policy", "missing")
+	}
+	return append(args, opts.Services...)
 }
 
 func buildFlag(build bool) string {
@@ -65,6 +84,9 @@ func buildArgs(service string, noCache bool) []string {
 	args := []string{"--progress", "plain", "build"}
 	if noCache {
 		args = append(args, "--no-cache")
+	}
+	if service == "" {
+		return args
 	}
 	return append(args, service)
 }
@@ -82,6 +104,82 @@ func (Runner) Scale(ctx context.Context, req composes.RunRequest, opts composes.
 func (Runner) Config(ctx context.Context, req composes.RunRequest) ([]byte, error) {
 	content, err := run(ctx, req, nil, "config", "--format", "json")
 	return []byte(content), err
+}
+
+// policyConfigArgs resolves the file for the Compose policy: every profile
+// on, and env files left as paths so the policy can check where they are.
+func policyConfigArgs() []string {
+	return []string{"--profile", "*", "config", "--format", "json", "--no-env-resolution"}
+}
+
+func (Runner) PolicyConfig(ctx context.Context, req composes.RunRequest) ([]byte, error) {
+	content, err := run(ctx, req, nil, policyConfigArgs()...)
+	return []byte(content), err
+}
+
+func (Runner) Pull(ctx context.Context, req composes.RunRequest, opts composes.PullOptions) error {
+	_, err := run(ctx, req, opts.Out, composePullArgs(opts)...)
+	return err
+}
+
+func (Runner) ImageLabels(ctx context.Context, image, platform string) (map[string]string, error) {
+	args := []string{"image", "inspect"}
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
+	out, stderr, err := inspect(ctx, append(args, "--format", "{{json .Config.Labels}}", image)...)
+	if err != nil && platform != "" && strings.Contains(stderr, "requires API version") {
+		return labelsOfHeldPlatform(ctx, image, platform)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("docker image inspect %s: %w: %s", image, err, strings.TrimSpace(stderr))
+	}
+	return parseLabels(image, out)
+}
+
+// labelsOfHeldPlatform reads an image's labels on an Engine without image
+// inspect --platform (API < 1.49). Such an Engine keeps one platform per
+// tag, so the labels are the ones that run, but only if that platform is
+// the one asked for: any other is refused, never passed.
+func labelsOfHeldPlatform(ctx context.Context, image, platform string) (map[string]string, error) {
+	out, stderr, err := inspect(ctx, "image", "inspect", "--format",
+		"{{json .Config.Labels}}\n{{.Os}}/{{.Architecture}}{{if .Variant}}/{{.Variant}}{{end}}", image)
+	if err != nil {
+		return nil, fmt.Errorf("docker image inspect %s: %w: %s", image, err, strings.TrimSpace(stderr))
+	}
+	labels, held, _ := strings.Cut(strings.TrimSpace(out), "\n")
+	if !samePlatform(platform, strings.TrimSpace(held)) {
+		return nil, fmt.Errorf("image %s on the host is %s, not %s", image, strings.TrimSpace(held), platform)
+	}
+	return parseLabels(image, labels)
+}
+
+// samePlatform reports whether held (os/arch[/variant]) is the platform
+// wanted names; parts wanted leaves out match anything.
+func samePlatform(wanted, held string) bool {
+	w, h := strings.Split(strings.ToLower(wanted), "/"), strings.Split(strings.ToLower(held), "/")
+	for i, part := range w {
+		if i >= len(h) || part != h[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func inspect(ctx context.Context, args ...string) (string, string, error) {
+	cmd := command(ctx, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	return string(out), stderr.String(), err
+}
+
+func parseLabels(image, out string) (map[string]string, error) {
+	labels := map[string]string{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &labels); err != nil {
+		return nil, fmt.Errorf("read labels of %s: %w", image, err)
+	}
+	return labels, nil
 }
 
 func (Runner) Build(ctx context.Context, req composes.RunRequest, opts composes.BuildOptions) error {

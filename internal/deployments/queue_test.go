@@ -248,6 +248,7 @@ type harness struct {
 	build   *fakeBuilder
 	gate    *fakeGate
 	pool    *fakePool // nil leaves Deps.Builders unset
+	policy  Policy    // nil leaves Deps.Policy unset
 	q       *Queue
 	a, b    int64
 	timeout time.Duration
@@ -281,6 +282,9 @@ func (h *harness) newQueue() {
 	}
 	if h.pool != nil {
 		d.Builders = h.pool
+	}
+	if h.policy != nil {
+		d.Policy = h.policy
 	}
 	h.q = NewQueue(d)
 }

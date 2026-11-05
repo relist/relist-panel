@@ -5,6 +5,7 @@ import (
 	"context"
 	"os/exec"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -166,5 +167,86 @@ func TestBuilderEnvOnlyOnBuildCapableCalls(t *testing.T) {
 		if got := hasBuilder(); got != tc.want {
 			t.Errorf("%s: BUILDX_BUILDER set = %v, want %v", name, got, tc.want)
 		}
+	}
+}
+
+// A deploy whose images were checked never pulls again: a registry could
+// answer a second pull with another image.
+func TestUpAndScaleArgsWithoutPulling(t *testing.T) {
+	if got, want := upArgs(composes.UpOptions{NoPull: true}), []string{"up", "-d", "--no-build", "--pull", "never", "--remove-orphans"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("upArgs(no pull) = %v, want %v", got, want)
+	}
+	got := scaleArgs(composes.ScaleOptions{Service: "web", Replicas: 2, NoPull: true})
+	if want := []string{"up", "-d", "--no-build", "--pull", "never", "--no-deps", "--no-recreate", "--scale", "web=2", "web"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scaleArgs(no pull) = %v, want %v", got, want)
+	}
+}
+
+func TestBuildArgsForEveryService(t *testing.T) {
+	if got, want := buildArgs("", false), []string{"--progress", "plain", "build"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildArgs(all) = %v, want %v", got, want)
+	}
+}
+
+func TestComposePullArgs(t *testing.T) {
+	if got, want := composePullArgs(composes.PullOptions{Missing: true}), []string{"pull", "--ignore-buildable", "--policy", "missing"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("composePullArgs(missing) = %v, want %v", got, want)
+	}
+	if got, want := composePullArgs(composes.PullOptions{Services: []string{"web", "db"}}), []string{"pull", "--ignore-buildable", "web", "db"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("composePullArgs(services) = %v, want %v", got, want)
+	}
+}
+
+func TestImageLabels(t *testing.T) {
+	var argv []string
+	old := command
+	t.Cleanup(func() { command = old })
+	output := `{"traefik.enable":"true"}`
+	command = func(ctx context.Context, args ...string) *exec.Cmd {
+		argv = args
+		return exec.CommandContext(ctx, "echo", output)
+	}
+	labels, err := Runner{}.ImageLabels(context.Background(), "app:1", "")
+	if err != nil || labels["traefik.enable"] != "true" {
+		t.Fatalf("labels = %v, err = %v", labels, err)
+	}
+	if want := []string{"image", "inspect", "--format", "{{json .Config.Labels}}", "app:1"}; !reflect.DeepEqual(argv, want) {
+		t.Fatalf("argv = %v, want %v", argv, want)
+	}
+	if _, err := (Runner{}).ImageLabels(context.Background(), "app:1", "linux/386"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"image", "inspect", "--platform", "linux/386", "--format", "{{json .Config.Labels}}", "app:1"}; !reflect.DeepEqual(argv, want) {
+		t.Fatalf("argv with platform = %v, want %v", argv, want)
+	}
+	output = "null"
+	if labels, err := (Runner{}).ImageLabels(context.Background(), "app:1", ""); err != nil || len(labels) != 0 {
+		t.Fatalf("no labels = %v, err = %v", labels, err)
+	}
+}
+
+// An Engine older than API 1.49 has no image inspect --platform: the labels
+// come from the image the tag holds, and only when it is the platform asked
+// for (one platform per tag there).
+func TestImageLabelsOnAnOldEngine(t *testing.T) {
+	old := command
+	t.Cleanup(func() { command = old })
+	held := "linux/amd64"
+	command = func(ctx context.Context, args ...string) *exec.Cmd {
+		if slices.Contains(args, "--platform") {
+			return exec.CommandContext(ctx, "sh", "-c", `echo '"--platform" requires API version 1.49, but the Docker daemon API version is 1.45' >&2; exit 1`)
+		}
+		return exec.CommandContext(ctx, "printf", `{"traefik.enable":"true"}\n%s\n`, held)
+	}
+	labels, err := Runner{}.ImageLabels(context.Background(), "app:1", "linux/amd64")
+	if err != nil || labels["traefik.enable"] != "true" {
+		t.Fatalf("same platform: labels = %v, err = %v", labels, err)
+	}
+	if _, err := (Runner{}).ImageLabels(context.Background(), "app:1", "linux/386"); err == nil || !strings.Contains(err.Error(), "linux/amd64") {
+		t.Fatalf("another platform: err = %v, want a refusal naming linux/amd64", err)
+	}
+	held = "linux/arm64/v8"
+	if _, err := (Runner{}).ImageLabels(context.Background(), "app:1", "linux/arm64"); err != nil {
+		t.Fatalf("platform without its variant: err = %v", err)
 	}
 }

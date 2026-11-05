@@ -14,8 +14,9 @@ import (
 
 // RolloutOptions tunes RunRollout. Build passes --build to the scale, Deadline
 // (when set) caps the health wait, and Out receives the log.
+// The deploy step before it built and checked every image (prepareImages),
+// so a rollout neither builds nor pulls.
 type RolloutOptions struct {
-	Build    bool
 	Deadline time.Time
 	Out      io.Writer
 }
@@ -77,7 +78,7 @@ func (s *Service) RunRollout(ctx context.Context, t DeployTarget, service string
 	if len(old) == 0 {
 		warning := service + " had no running container; deployed without rollout"
 		fmt.Fprintf(out, "warning: %s\n", warning)
-		if err := s.runner.Up(ctx, req, UpOptions{Build: opts.Build, Services: []string{service}, Out: opts.Out}); err != nil {
+		if err := s.runner.Up(ctx, req, UpOptions{NoPull: true, Services: []string{service}, Out: opts.Out}); err != nil {
 			return nil, failure(FailureRunner, "deploy failed: "+err.Error(), err)
 		}
 		return []string{warning}, nil
@@ -135,7 +136,7 @@ func (s *Service) RunRollout(ctx context.Context, t DeployTarget, service string
 	for _, c := range all {
 		before[c.ID] = true
 	}
-	scaleErr := s.runner.Scale(ctx, req, ScaleOptions{Service: service, Replicas: len(old) + 1, Build: opts.Build, Out: opts.Out})
+	scaleErr := s.runner.Scale(ctx, req, ScaleOptions{Service: service, Replicas: len(old) + 1, NoPull: true, Out: opts.Out})
 	// Listed past the deadline too, so whatever the scale created is removed.
 	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	started, listErr := s.serviceContainers(lctx, req.ProjectName, service, before)

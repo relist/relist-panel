@@ -383,9 +383,9 @@ export function ProjectPage() {
                       <Text type="secondary">
                         Each Compose is one <Text code>docker-compose.yml</Text> deployed and stopped on its own.
                       </Text>
-                      <RoleHint allowed={canEdit} level="editor">
+                      <RoleHint allowed={isAdmin} level="admin">
                         <Button
-                          disabled={!canEdit}
+                          disabled={!isAdmin}
                           icon={<PlusOutlined />}
                           onClick={() => {
                             setComposeYAML('');
@@ -401,9 +401,9 @@ export function ProjectPage() {
                       <Card variant="outlined">
                         <EmptyState
                           action={
-                            <RoleHint allowed={canEdit} level="editor">
+                            <RoleHint allowed={isAdmin} level="admin">
                               <Button
-                                disabled={!canEdit}
+                                disabled={!isAdmin}
                                 icon={<PlusOutlined />}
                                 onClick={() => {
                                   setComposeYAML('');

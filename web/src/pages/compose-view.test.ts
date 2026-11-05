@@ -59,11 +59,15 @@ describe('hasUnsavedChanges', () => {
 
 describe('deploySteps', () => {
   it('saves a dirty file before the deploy reaches the host', () => {
-    expect(deploySteps(true)).toEqual(['save', 'deploy']);
+    expect(deploySteps(true, true)).toEqual(['save', 'deploy']);
   });
 
   it('deploys a clean file without a redundant save', () => {
-    expect(deploySteps(false)).toEqual(['deploy']);
+    expect(deploySteps(false, true)).toEqual(['deploy']);
+  });
+
+  it('deploys the saved file when only an admin may save it', () => {
+    expect(deploySteps(true, false)).toEqual(['deploy']);
   });
 });
 

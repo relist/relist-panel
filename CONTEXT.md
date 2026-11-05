@@ -21,7 +21,7 @@ One service defined inside a Compose file — the unit the panel starts, stops a
 _Avoid_: Container (a Service is the definition; a Container is one running instance of it), Process
 
 **Domain**:
-A host and path that Traefik routes to one Service's port in a Compose, managed on the Compose's Domains tab and applied on deploy.
+A host and path that Traefik routes to one Service's port in a Compose, managed on the Compose's Domains tab and applied on deploy. A host belongs to one Project: Composes of that Project may split it by path, no other Project may use it.
 _Avoid_: Route, Hostname (as the entity name)
 
 **Certificate**:
@@ -136,7 +136,7 @@ A User who sees every Project and may use every screen of the panel, the host-wi
 _Avoid_: Administrator (spell it Admin), Staff.
 
 **Role**:
-Viewer, Operator or Editor: what a User may do in an Environment. A Viewer reads, an Operator also deploys, restarts and stops, an Editor also changes the Compose and its settings and reads secret values. A **Project Editor** holds Editor on the Project itself and may also edit the Project and add or delete its Environments.
+Viewer, Operator or Editor: what a User may do in an Environment. A Viewer reads, an Operator also deploys, restarts and stops, an Editor also changes a Compose's variables, Domains, Source and settings and reads secret values; only an Admin writes the Compose file itself. A **Project Editor** holds Editor on the Project itself and may also edit the Project and add or delete its Environments.
 _Avoid_: Permission (a Role is the unit; there are no separate permissions).
 
 **Grant**:
@@ -146,6 +146,14 @@ _Avoid_: Membership, ACL.
 **Audit event**:
 One recorded action: who, when, what, where, and whether it was done or refused. Changes, refusals, sensitive reads (secret values, Volume downloads, a Terminal session) and sign-ins are recorded; a variable's value never is. Admins read all of them, a Project's Editors that Project's.
 _Avoid_: Log entry (the Access log and container logs are other things), History (Deployment history is another thing).
+
+**Compose policy**:
+The rules a Compose's resolved config must meet to deploy without an Approval: nothing that reaches the host (binds outside its directory and the bind roots, the Docker socket, privileged, host namespaces), another Compose's volumes, networks or images, or requests for a host that is not one of its own Domains.
+_Avoid_: Security policy, Sandbox.
+
+**Approval**:
+An approver's consent to deploy one resolved config of one Compose, kept as that config's hash; any change to the config, a variable value included, needs a new one. The approver is every Admin, or only the Owner.
+_Avoid_: Review, Sign-off.
 
 **Invite link**:
 A single-use link with which a User sets their password: an invite for a new User (7 days) or a reset for an existing one (24 hours). The panel stores only its hash and shows it once; an Admin hands it over, the panel sends no email.

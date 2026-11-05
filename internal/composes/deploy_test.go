@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -35,6 +36,27 @@ type recordingRunner struct {
 	onScale   func(ScaleOptions)
 	scaleErr  error
 	configErr error
+	// builds, pulls and inspected record prepareImages; imageLabels is
+	// what ImageLabels answers per image.
+	builds      []BuildOptions
+	pulls       []PullOptions
+	inspected   []string
+	imageLabels map[string]map[string]string
+}
+
+func (r *recordingRunner) Pull(_ context.Context, _ RunRequest, opts PullOptions) error {
+	r.pulls = append(r.pulls, opts)
+	return nil
+}
+
+// ImageLabels records image@platform, or image when no platform is asked.
+func (r *recordingRunner) ImageLabels(_ context.Context, image, platform string) (map[string]string, error) {
+	key := image
+	if platform != "" {
+		key += "@" + platform
+	}
+	r.inspected = append(r.inspected, key)
+	return r.imageLabels[key], nil
 }
 
 func (r *recordingRunner) DownWithVolumesTracked(ctx context.Context, req RunRequest) (bool, error) {
@@ -47,8 +69,11 @@ func (r *recordingRunner) Up(_ context.Context, _ RunRequest, opts UpOptions) er
 	r.ups = append(r.ups, opts)
 	return r.upErr
 }
-func (r *recordingRunner) Build(context.Context, RunRequest, BuildOptions) error { return nil }
-func (r *recordingRunner) Down(context.Context, RunRequest) error                { return nil }
+func (r *recordingRunner) Build(_ context.Context, _ RunRequest, opts BuildOptions) error {
+	r.builds = append(r.builds, opts)
+	return nil
+}
+func (r *recordingRunner) Down(context.Context, RunRequest) error { return nil }
 func (r *recordingRunner) DownWithVolumes(_ context.Context, req RunRequest) error {
 	r.calls = append(r.calls, "down-volumes")
 	b, _ := os.ReadFile(req.ComposeFilePath)
@@ -164,7 +189,11 @@ func TestRunDeployWritesFilesAndUps(t *testing.T) {
 	if err != nil || !strings.Contains(string(env), "COMPOSE_KEY") || !strings.Contains(string(env), "ENV_KEY") {
 		t.Errorf(".env = %q, %v", env, err)
 	}
-	if !reflect.DeepEqual(runner.ups, []UpOptions{{Build: true, Out: &out}}) {
+	// Nothing in this Compose builds; up starts the images it checked.
+	if len(runner.builds) != 0 {
+		t.Errorf("builds = %+v", runner.builds)
+	}
+	if !reflect.DeepEqual(runner.ups, []UpOptions{{NoPull: true, Out: &out}}) {
 		t.Errorf("ups = %+v", runner.ups)
 	}
 	var deployedAt sql.NullInt64
@@ -215,7 +244,7 @@ func TestRunDeployFreshDownsBeforeWrite(t *testing.T) {
 	if _, err := svc.RunDeploy(context.Background(), target, DeployOptions{FreshVolumes: true}); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(runner.calls, []string{"down-volumes", "up"}) {
+	if !reflect.DeepEqual(runner.calls, []string{"down-volumes", "config", "up"}) {
 		t.Errorf("calls = %v", runner.calls)
 	}
 	if runner.composeAtDown != "old: yaml\n" {
@@ -678,5 +707,86 @@ func TestBuildServicesRejectsInvalidMerges(t *testing.T) {
 				t.Fatalf("expected invalid YAML error, got services %v", services)
 			}
 		})
+	}
+}
+
+// PolicyConfig answers what Config does: the fake's config is the policy's.
+func (r *recordingRunner) PolicyConfig(ctx context.Context, req RunRequest) ([]byte, error) {
+	return r.Config(ctx, req)
+}
+
+// imageConfig is a deployed file with a Service on an image, one that
+// refreshes its image, one that never pulls and one that is built.
+const imageConfig = `{"name":"relist-c1","services":{
+	"web":{"image":"app:1","labels":{"traefik.enable":"true"}},
+	"cache":{"image":"redis:7","pull_policy":"always"},
+	"local":{"image":"local:1","pull_policy":"never"},
+	"built":{"build":{"context":"."}}}}`
+
+// A deploy builds and pulls every image first, checks the labels each
+// image carries, and starts them without building or pulling again.
+func TestDeployStartsTheImagesItChecked(t *testing.T) {
+	svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+	runner.config = []byte(imageConfig)
+	if _, err := svc.RunDeploy(context.Background(), target, DeployOptions{Build: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.builds) != 1 || runner.builds[0].Service != "" {
+		t.Fatalf("builds = %+v, want every service once", runner.builds)
+	}
+	wantPulls := []PullOptions{{Missing: true, Services: []string{"web"}}, {Services: []string{"cache"}}}
+	if len(runner.pulls) != 2 || !reflect.DeepEqual(runner.pulls[0].Services, wantPulls[0].Services) || !runner.pulls[0].Missing ||
+		!reflect.DeepEqual(runner.pulls[1].Services, wantPulls[1].Services) || runner.pulls[1].Missing {
+		t.Fatalf("pulls = %+v", runner.pulls)
+	}
+	sort.Strings(runner.inspected)
+	if want := []string{"app:1", "local:1", "redis:7", "relist-c1-built"}; !reflect.DeepEqual(runner.inspected, want) {
+		t.Fatalf("inspected = %v, want %v", runner.inspected, want)
+	}
+	if len(runner.ups) != 1 || runner.ups[0].Build || !runner.ups[0].NoPull {
+		t.Fatalf("ups = %+v, want one up with no build and no pull", runner.ups)
+	}
+}
+
+// An image that brings its own Traefik labels onto a container Traefik reads
+// does not start.
+func TestDeployRefusesTraefikLabelsFromTheImage(t *testing.T) {
+	svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+	runner.config = []byte(imageConfig)
+	runner.imageLabels = map[string]map[string]string{"app:1": {"traefik.http.routers.x.rule": "HostRegexp(`.+`)"}}
+	_, err := svc.RunDeploy(context.Background(), target, DeployOptions{})
+	if err == nil || !strings.Contains(err.Error(), "traefik.http.routers.x.rule") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(runner.ups) != 0 {
+		t.Fatalf("ups = %+v, want none", runner.ups)
+	}
+}
+
+// A Compose with nothing to build runs no build.
+func TestDeployBuildsNothingWithoutBuild(t *testing.T) {
+	svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+	runner.config = []byte(`{"name":"relist-c1","services":{"web":{"image":"nginx"}}}`)
+	if _, err := svc.RunDeploy(context.Background(), target, DeployOptions{Build: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.builds) != 0 {
+		t.Fatalf("builds = %+v, want none", runner.builds)
+	}
+}
+
+// A Service that runs another platform's image is checked against that
+// platform's labels: one tag can hold a different image per platform.
+func TestDeployChecksTheImageOfTheServicesPlatform(t *testing.T) {
+	svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+	runner.config = []byte(`{"name":"relist-c1","services":{"a":{"image":"app:1"},"b":{"image":"app:1","platform":"linux/386"}}}`)
+	runner.imageLabels = map[string]map[string]string{"app:1@linux/386": {"traefik.enable": "true", "traefik.http.routers.x.rule": "HostRegexp(`.+`)"}}
+	_, err := svc.RunDeploy(context.Background(), target, DeployOptions{})
+	if err == nil || !strings.Contains(err.Error(), "b: image app:1") {
+		t.Fatalf("err = %v", err)
+	}
+	sort.Strings(runner.inspected)
+	if want := []string{"app:1", "app:1@linux/386"}; !reflect.DeepEqual(runner.inspected, want) {
+		t.Fatalf("inspected = %v, want %v", runner.inspected, want)
 	}
 }
