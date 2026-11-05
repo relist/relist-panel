@@ -114,7 +114,15 @@ func (a *Authorizer) Middleware(mux *http.ServeMux, next http.Handler) http.Hand
 		if status != 0 && action != "" {
 			denied := event
 			denied.Action, denied.Outcome, denied.At = action, audit.OutcomeDenied, time.Now()
-			denied.Target = a.target(r.Context(), pathScope, path)
+			if status == http.StatusNotFound {
+				// The path's ids were never confirmed to belong together (or
+				// name something hidden): naming them would show a hidden
+				// Compose's name on a Project the member can read.
+				denied.ProjectID, denied.EnvironmentID, denied.ComposeID = 0, 0, 0
+				denied.Target = path
+			} else {
+				denied.Target = a.target(r.Context(), pathScope, path)
+			}
 			a.write(r.Context(), denied)
 		}
 		switch status {

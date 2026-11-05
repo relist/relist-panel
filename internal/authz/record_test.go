@@ -164,3 +164,25 @@ func TestPlainGetIsNotWrapped(t *testing.T) {
 		t.Fatalf("events = %+v", events)
 	}
 }
+
+// A refusal on a forged path must not write the ids or names the path
+// claims: parentsMatch never confirmed them, and the event would show a
+// hidden Compose's name on a Project the member can read.
+func TestForgedRefusalRecordsNoScope(t *testing.T) {
+	f, c := recordingFixture(t, func(mux *http.ServeMux) {
+		mux.HandleFunc("POST "+compose+"/restart", answer(http.StatusNoContent))
+	})
+	grant(t, f.db, pA, eA1, "editor")
+	path := composePath(pA, eA1, cD, "/restart") // Compose D lives in A2
+	if got := f.serve(member, http.MethodPost, path).Code; got != http.StatusNotFound {
+		t.Fatalf("forged restart = %d", got)
+	}
+	events := c.take()
+	if len(events) != 1 {
+		t.Fatalf("events = %+v", events)
+	}
+	e := events[0]
+	if e.Outcome != audit.OutcomeDenied || e.ProjectID != 0 || e.EnvironmentID != 0 || e.ComposeID != 0 || e.Target != path {
+		t.Fatalf("denied event = %+v, want no scope and the path as target", e)
+	}
+}
