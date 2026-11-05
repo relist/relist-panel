@@ -353,3 +353,24 @@ func TestIncludeInsideASourceFile(t *testing.T) {
 		t.Fatalf("nested relative includes: %+v", violations)
 	}
 }
+
+// A com.docker.* label would make a container, volume or network pass as
+// another Compose's: the panel finds them by com.docker.compose.project.
+func TestDockerLabelsAreRefused(t *testing.T) {
+	f := newFixture(t)
+	for name, c := range map[string]struct{ web, top map[string]any }{
+		"service": {map[string]any{"labels": map[string]any{"com.docker.compose.project": "relist-c2"}}, nil},
+		"volume":  {map[string]any{"volumes": []any{map[string]any{"type": "volume", "source": "v", "target": "/v"}}}, map[string]any{"volumes": map[string]any{"v": map[string]any{"name": "relist-c1_v", "labels": map[string]any{"com.docker.compose.project": "relist-c2"}}}}},
+		"network": {map[string]any{"networks": map[string]any{"n": nil}}, map[string]any{"networks": map[string]any{"n": map[string]any{"name": "relist-c1_n", "labels": map[string]any{"com.docker.compose.project": "relist-c2"}}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if violations, _ := Check(config(t, mergeImage(c.web), c.top), "", f.rules); len(violations) == 0 {
+				t.Fatal("no violation")
+			}
+		})
+	}
+	ok := mergeImage(map[string]any{"labels": map[string]any{"com.example.owner": "panel.example.com"}})
+	if violations, _ := Check(config(t, ok, nil), "", f.rules); len(violations) != 0 {
+		t.Fatalf("an ordinary label: %+v", violations)
+	}
+}

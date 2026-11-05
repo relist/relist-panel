@@ -218,6 +218,7 @@ func (c *checker) namespace(name, key string, value any) {
 
 func (c *checker) labels(name string, value any) {
 	labels, _ := value.(map[string]any)
+	c.dockerLabels(name, "service", labels)
 	if c.rules.PanelDomain == "" {
 		return
 	}
@@ -296,6 +297,8 @@ func (c *checker) namedVolume(name, key string) {
 	if volume["external"] == true {
 		c.add(name, "volume %s is external", key)
 	}
+	labels, _ := volume["labels"].(map[string]any)
+	c.dockerLabels(name, "volume "+key, labels)
 	if want := c.rules.ProjectName + "_" + key; volume["name"] != want {
 		c.add(name, "volume %s is not named %s", key, want)
 	}
@@ -480,8 +483,26 @@ func (c *checker) networks(name string, value any) {
 		if present(def["driver_opts"]) {
 			c.add(name, "network %s sets driver_opts", key)
 		}
+		labels, _ := def["labels"].(map[string]any)
+		c.dockerLabels(name, "network "+key, labels)
 		if want := c.rules.ProjectName + "_" + key; def["name"] != want {
 			c.add(name, "network %s is not named %s", key, want)
+		}
+	}
+}
+
+// dockerLabels refuses com.docker.* labels: Compose sets them, and the
+// panel finds a Compose's containers, volumes and networks by them, so a
+// forged one would pass as another Compose's.
+func (c *checker) dockerLabels(name, what string, labels map[string]any) {
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if strings.HasPrefix(key, "com.docker.") {
+			c.add(name, "%s label %s is Docker's own", what, key)
 		}
 	}
 }
