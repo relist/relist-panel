@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"relist-panel/internal/audit"
 )
 
 type Service struct {
@@ -84,6 +86,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "could not create certificate")
 		return
 	}
+	audit.Target(r.Context(), c.Name)
 	s.reconcileAndWrite(w, r, http.StatusCreated, c)
 }
 

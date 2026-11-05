@@ -242,3 +242,71 @@ func TestProjectAuditShowsOnlyEditedEnvironments(t *testing.T) {
 		t.Fatalf("admin = %s", body)
 	}
 }
+
+// A create event names what it created, not only the parent it was made in.
+func TestCreateEventsNameWhatWasCreated(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "alpha", "")
+	response := postJSON(t, server, fmt.Sprintf("/api/projects/%d/environments", project.ID), map[string]string{"name": "staging"})
+	var environment struct{ ID int64 }
+	_ = json.NewDecoder(response.Body).Decode(&environment)
+	response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create environment = %d", response.StatusCode)
+	}
+	createCompose(t, server, project.ID, environment.ID, "api")
+	rows := auditRows(t, server)
+	for action, want := range map[string]string{"environment.create": "staging", "compose.create": "api"} {
+		events := auditActions(rows, action)
+		if len(events) != 1 || events[0].Detail["name"] != want {
+			t.Errorf("%s: events = %+v, want detail name %q", action, events, want)
+		}
+	}
+}
+
+// A Project's grant change, read on Activity by an Editor of one
+// Environment, shows only the Project-wide roles and that Environment's.
+func TestProjectGrantEventShowsOnlyEditedEnvironmentsRoles(t *testing.T) {
+	f := newRoleFixture(t)
+	if _, err := f.server.db.Exec("DELETE FROM audit_events"); err != nil {
+		t.Fatal(err)
+	}
+	detail := fmt.Sprintf(`{"grants":[{"userId":7,"projectId":%d,"environmentId":null,"role":"viewer"},{"userId":7,"projectId":%[1]d,"environmentId":%[2]d,"role":"editor"},{"userId":8,"projectId":%[1]d,"environmentId":%[3]d,"role":"operator"}]}`,
+		f.alpha.ID, f.alphaStaging.ID, f.alphaProd.ID)
+	if _, err := f.server.db.Exec("INSERT INTO audit_events (at, actor, action, outcome, project_id, target, detail) VALUES (1, 'x', 'grant.set', 'ok', ?, 'alpha', ?)",
+		f.alpha.ID, detail); err != nil {
+		t.Fatal(err)
+	}
+	environmentsIn := func(body string) []string {
+		var page struct {
+			Items []struct {
+				Detail struct {
+					Grants []struct{ EnvironmentID *int64 } `json:"grants"`
+				} `json:"detail"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal([]byte(body), &page); err != nil || len(page.Items) != 1 {
+			t.Fatalf("page = %s", body)
+		}
+		var out []string
+		for _, g := range page.Items[0].Detail.Grants {
+			if g.EnvironmentID == nil {
+				out = append(out, "project")
+			} else {
+				out = append(out, fmt.Sprint(*g.EnvironmentID))
+			}
+		}
+		return out
+	}
+	path := fmt.Sprintf("/api/projects/%d/audit", f.alpha.ID)
+	f.grant(t, f.alpha.ID, f.alphaStaging.ID, "editor")
+	_, body := f.get(t, path)
+	if got, want := strings.Join(environmentsIn(body), ","), fmt.Sprintf("project,%d", f.alphaStaging.ID); got != want {
+		t.Fatalf("editor of staging sees %s, want %s", got, want)
+	}
+	signInAsUser(t, f.server, 3, "admin2@example.com", true)
+	if _, body := f.get(t, path); len(environmentsIn(body)) != 3 {
+		t.Fatalf("admin = %s", body)
+	}
+}

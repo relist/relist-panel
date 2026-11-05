@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -59,6 +60,7 @@ type Authorizer struct {
 	routes      map[string]Rule
 	actions     map[string]string
 	record      func(context.Context, audit.Event) error
+	denied      *audit.Limiter
 }
 
 // New returns the Authorizer over Routes. currentUser is auth's session
@@ -68,7 +70,7 @@ func New(db *sql.DB, currentUser func(*http.Request) (auth.User, bool, error)) *
 }
 
 func newWithRoutes(db *sql.DB, currentUser func(*http.Request) (auth.User, bool, error), routes map[string]Rule) *Authorizer {
-	a := &Authorizer{db: db, currentUser: currentUser, routes: routes, actions: Actions}
+	a := &Authorizer{db: db, currentUser: currentUser, routes: routes, actions: Actions, denied: audit.NewLimiter(deniedPerMinute, time.Minute)}
 	a.record = func(ctx context.Context, e audit.Event) error { return audit.Record(ctx, a.db, e) }
 	return a
 }
@@ -100,6 +102,11 @@ func (a *Authorizer) Middleware(mux *http.ServeMux, next http.Handler) http.Hand
 		// inside its segment, so authz reads the same ids the handler will.
 		path := r.URL.EscapedPath()
 		action := a.actions[pattern]
+		if r.Method == http.MethodHead {
+			// ServeMux sends HEAD to the GET pattern; no body leaves, so a
+			// HEAD is not a download.
+			action = ""
+		}
 		pathScope, _ := scopeOf(pattern, path)
 		event := audit.Event{
 			ActorUserID: user.ID, Actor: user.Email, IP: peerIP(r),
@@ -111,7 +118,7 @@ func (a *Authorizer) Middleware(mux *http.ServeMux, next http.Handler) http.Hand
 			refuse(w, http.StatusInternalServerError, "authorization is temporarily unavailable")
 			return
 		}
-		if status != 0 && action != "" {
+		if status != 0 && action != "" && a.denied.Allow(fmt.Sprintf("%d %s", user.ID, action)) {
 			denied := event
 			denied.Action, denied.Outcome, denied.At = action, audit.OutcomeDenied, time.Now()
 			if status == http.StatusNotFound {
@@ -121,7 +128,7 @@ func (a *Authorizer) Middleware(mux *http.ServeMux, next http.Handler) http.Hand
 				denied.ProjectID, denied.EnvironmentID, denied.ComposeID = 0, 0, 0
 				denied.Target = path
 			} else {
-				denied.Target = a.target(r.Context(), pathScope, path)
+				denied.Target = a.target(r.Context(), pattern, pathScope, path)
 			}
 			a.write(r.Context(), denied)
 		}
@@ -147,7 +154,7 @@ func (a *Authorizer) Middleware(mux *http.ServeMux, next http.Handler) http.Hand
 		ctx := WithAccess(r.Context(), access)
 		ctx = context.WithValue(ctx, scopeKey{}, scope)
 		ctx = context.WithValue(ctx, stillKey{}, still)
-		resolve := func(ctx context.Context) string { return a.target(ctx, scope, path) }
+		resolve := func(ctx context.Context) string { return a.target(ctx, pattern, scope, path) }
 		if action != "" {
 			// Read the names now: after a delete they are gone.
 			event.Target = resolve(ctx)
@@ -162,6 +169,25 @@ func (a *Authorizer) Middleware(mux *http.ServeMux, next http.Handler) http.Hand
 		if sw.status >= 200 && sw.status < 300 {
 			e := pending.Event()
 			e.Action, e.Outcome, e.At = action, audit.OutcomeOK, time.Now()
+			if sw.status == http.StatusPartialContent && r.Method == http.MethodGet {
+				// Still a download, only part of it. The header is the
+				// caller's text, so it is cut short.
+				if e.Detail == nil {
+					e.Detail = map[string]any{}
+				}
+				byteRange := r.Header.Get("Range")
+				if len(byteRange) > maxRangeDetail {
+					byteRange = byteRange[:maxRangeDetail]
+				}
+				e.Detail["range"] = byteRange
+			}
+			if sw.failed {
+				// The body broke off midway; what was sent still left.
+				if e.Detail == nil {
+					e.Detail = map[string]any{}
+				}
+				e.Detail["incomplete"] = true
+			}
 			a.write(ctx, e)
 		}
 	})

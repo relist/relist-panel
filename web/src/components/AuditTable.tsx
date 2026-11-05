@@ -43,6 +43,8 @@ export function AuditTable({ load }: { load: (query: AuditQuery) => Promise<Audi
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  // The cursor of the page that failed, so Retry asks for that page again.
+  const [failedCursor, setFailedCursor] = useState<number>();
   // A response for older filters or an older page is dropped.
   const generation = useRef(0);
 
@@ -51,6 +53,7 @@ export function AuditTable({ load }: { load: (query: AuditQuery) => Promise<Audi
       const current = ++generation.current;
       setLoading(true);
       setError(undefined);
+      setFailedCursor(undefined);
       try {
         const page = await load(cursor ? { ...query, cursor } : query);
         if (current !== generation.current) return;
@@ -59,6 +62,7 @@ export function AuditTable({ load }: { load: (query: AuditQuery) => Promise<Audi
       } catch (reason) {
         if (current !== generation.current) return;
         setError(reason instanceof Error ? reason.message : 'Could not load the audit log');
+        setFailedCursor(cursor);
       } finally {
         if (current === generation.current) setLoading(false);
       }
@@ -158,7 +162,7 @@ export function AuditTable({ load }: { load: (query: AuditQuery) => Promise<Audi
       </Flex>
       {error && (
         <Alert
-          action={<Button onClick={() => void fetchPage(filters)}>Retry</Button>}
+          action={<Button onClick={() => void fetchPage(filters, failedCursor)}>Retry</Button>}
           description={error}
           showIcon
           title="Could not load the audit log"

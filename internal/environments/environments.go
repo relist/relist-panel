@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"relist-panel/internal/audit"
 	"relist-panel/internal/authz"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/grants"
@@ -152,6 +153,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	audit.Detail(r.Context(), "name", environment.Name)
 	writeJSON(w, http.StatusCreated, environment)
 }
 

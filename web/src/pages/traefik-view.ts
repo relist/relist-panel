@@ -30,7 +30,9 @@ export function canSaveRetention(
   days: number | null,
   keepForever: boolean,
   saved: { retentionDays: number; keepForever: boolean },
+  max?: number,
 ): boolean {
   if (days === null || !Number.isInteger(days) || days < 1) return false;
+  if (max !== undefined && days > max) return false;
   return days !== saved.retentionDays || keepForever !== saved.keepForever;
 }

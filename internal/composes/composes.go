@@ -19,6 +19,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"relist-panel/internal/audit"
 	"relist-panel/internal/domains"
 	"relist-panel/internal/slug"
 	"relist-panel/internal/zerodowntime"
@@ -290,6 +291,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not create compose")
 		return
 	}
+	audit.Detail(r.Context(), "name", compose.Name)
 	writeJSON(w, http.StatusCreated, s.withStatus(r.Context(), compose))
 }
 

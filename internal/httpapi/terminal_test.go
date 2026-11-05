@@ -374,11 +374,34 @@ func openAndReady(t *testing.T, server *testServer, path string) (*websocket.Con
 func dialReady(t *testing.T, server *testServer, path string) (*websocket.Conn, terminalControl) {
 	t.Helper()
 	conn, ctrl := openAndReady(t, server, path)
-	t.Cleanup(func() { conn.CloseNow() })
+	t.Cleanup(func() {
+		conn.CloseNow()
+		if ctrl.Type == "ready" {
+			waitTerminalClosed(t, server)
+		}
+	})
 	if ctrl.Type != "ready" {
 		t.Fatalf("control frame = %+v, want ready", ctrl)
 	}
 	return conn, ctrl
+}
+
+// waitTerminalClosed waits for every open session's terminal.close event:
+// the session writes it after its hijacked connection ends, which the test
+// server's Close does not wait for, and a write during teardown races the
+// temp dir's removal.
+func waitTerminalClosed(t *testing.T, server *testServer) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var open int
+		if err := server.db.QueryRow(`SELECT
+			(SELECT COUNT(*) FROM audit_events WHERE action = 'terminal.open') -
+			(SELECT COUNT(*) FROM audit_events WHERE action = 'terminal.close')`).Scan(&open); err != nil || open <= 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func writeText(t *testing.T, conn *websocket.Conn, value any) {

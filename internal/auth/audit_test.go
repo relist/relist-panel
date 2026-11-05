@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -80,5 +81,53 @@ func TestInviteAcceptIsRecorded(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("events = %+v", loginEvents(t, f))
+	}
+}
+
+// A script guessing passwords from one address records at most
+// failedLoginsPerMinute failed sign-ins a minute; a success still records.
+func TestFailedLoginsAreCappedPerAddress(t *testing.T) {
+	f := newUserFixture(t)
+	for range failedLoginsPerMinute + 3 {
+		if response := f.login("nobody@example.com", "guess"); response.Code != http.StatusUnauthorized {
+			t.Fatalf("unknown = %d", response.Code)
+		}
+	}
+	if response := f.login("admin@example.com", userPassword); response.Code != http.StatusOK {
+		t.Fatalf("login = %d", response.Code)
+	}
+	events := loginEvents(t, f)
+	if len(events) != failedLoginsPerMinute+1 || events[len(events)-1].action != "auth.login" {
+		t.Fatalf("events = %d, want %d failed and the login", len(events), failedLoginsPerMinute)
+	}
+}
+
+// Behind Traefik every sign-in comes from one address: one script's tries
+// must not use up the cap for another account's failures.
+func TestFailedLoginCapIsPerEmail(t *testing.T) {
+	f := newUserFixture(t)
+	for range failedLoginsPerMinute + 3 {
+		f.login("nobody@example.com", "guess")
+	}
+	if response := f.login("Admin@Example.com", "wrong password typed"); response.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong password = %d", response.Code)
+	}
+	events := loginEvents(t, f)
+	if last := events[len(events)-1]; last.actor != "admin@example.com" {
+		t.Fatalf("the admin's failure was dropped: last event %+v", last)
+	}
+}
+
+// Emails with no account share one cap per address: typing a new email on
+// every try must not get past it.
+func TestFailedLoginsWithUnknownEmailsShareOneCap(t *testing.T) {
+	f := newUserFixture(t)
+	for i := range failedLoginsPerMinute + 3 {
+		f.login(fmt.Sprintf("nobody%d@example.com", i), "guess")
+	}
+	f.login("admin@example.com", "wrong password typed")
+	events := loginEvents(t, f)
+	if len(events) != failedLoginsPerMinute+1 || events[len(events)-1].actor != "admin@example.com" {
+		t.Fatalf("events = %d, want %d unknown and the admin's failure", len(events), failedLoginsPerMinute)
 	}
 }

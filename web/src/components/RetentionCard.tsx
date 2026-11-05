@@ -12,12 +12,15 @@ const { Text } = Typography;
  */
 export function RetentionCard({
   keepForever: savedForever,
+  max,
   onSave,
   onSaved,
   title = 'Retention',
   retentionDays: savedDays,
 }: {
   keepForever: boolean;
+  /** The most days the server accepts; none when it has no limit. */
+  max?: number;
   onSave: (input: { keepForever: boolean; retentionDays: number }) => Promise<unknown>;
   onSaved: () => void;
   retentionDays: number;
@@ -53,6 +56,7 @@ export function RetentionCard({
         <InputNumber
           aria-label="Days to keep"
           disabled={forever}
+          max={max}
           min={1}
           onChange={(value) => setDays(typeof value === 'number' ? value : null)}
           precision={0}
@@ -64,7 +68,7 @@ export function RetentionCard({
           <Text>Keep forever</Text>
         </Flex>
         <Button
-          disabled={!canSaveRetention(days, forever, { keepForever: savedForever, retentionDays: savedDays })}
+          disabled={!canSaveRetention(days, forever, { keepForever: savedForever, retentionDays: savedDays }, max)}
           loading={saving}
           onClick={() => void save()}
           type="primary"

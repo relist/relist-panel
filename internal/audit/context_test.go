@@ -44,3 +44,44 @@ func TestContextHooks(t *testing.T) {
 		t.Fatalf("no-op recorded %d", len(recorded))
 	}
 }
+
+// A Terminal's close is emitted after its request context is gone, and
+// possibly after its Compose was deleted: it keeps the name open found.
+func TestEmitKeepsTheNameAfterTheRequestEnds(t *testing.T) {
+	var recorded []Event
+	rec := func(_ context.Context, e Event) error {
+		recorded = append(recorded, e)
+		return nil
+	}
+	name := "alpha / production / api"
+	resolve := func(ctx context.Context) string {
+		if ctx.Err() != nil {
+			return "/api/path"
+		}
+		return name
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx, _ = Begin(ctx, Event{ProjectID: 1}, resolve, rec)
+	Emit(ctx, "terminal.open", nil)
+	cancel()
+	name = "" // deleted
+	Emit(ctx, "terminal.close", nil)
+	if len(recorded) != 2 || recorded[0].Target != "alpha / production / api" || recorded[1].Target != "alpha / production / api" {
+		t.Fatalf("recorded = %+v", recorded)
+	}
+
+	// The first Emit after cancel still resolves, without the cancel.
+	recorded = nil
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	ctx2, _ = Begin(ctx2, Event{ProjectID: 1}, func(ctx context.Context) string {
+		if ctx.Err() != nil {
+			return "/api/path"
+		}
+		return "alpha"
+	}, rec)
+	cancel2()
+	Emit(ctx2, "terminal.close", nil)
+	if len(recorded) != 1 || recorded[0].Target != "alpha" {
+		t.Fatalf("recorded = %+v", recorded)
+	}
+}
