@@ -576,7 +576,7 @@ export function ComposePage() {
       setFreshRunning(true);
     }
     try {
-      for (const step of deploySteps(dirty)) {
+      for (const step of deploySteps(dirty, canEditFile)) {
         if (step === 'save') {
           await saveCompose(compose.id, draft);
         } else {
@@ -936,6 +936,7 @@ export function ComposePage() {
                               Discard
                             </Button>
                             <Button
+                              disabled={!canEditFile}
                               loading={isPending(`save-compose:${compose.id}`)}
                               onClick={() => void save()}
                               size="small"
@@ -1137,7 +1138,7 @@ export function ComposePage() {
                       draft={draft}
                       lastBuilt={lastBuilt}
                       onConfigure={() => setSourceModal({})}
-                      onShowSnippets={() => setSnippetsOpen(true)}
+                      onShowSnippets={canEditFile ? () => setSnippetsOpen(true) : undefined}
                       onUploadNew={() => setSourceModal({ mode: 'zip' })}
                       onViewDeployments={() => navigate(paths.compose(project.id, environment.id, compose.id, 'deployments'))}
                       source={currentSource}
@@ -1366,7 +1367,8 @@ export function ComposePage() {
         onRemoved={refreshSource}
         onSaved={(_saved, firstTime) => {
           refreshSource();
-          if (firstTime) {
+          // Detect offers build blocks to insert into the file, which only an admin writes.
+          if (firstTime && canEditFile) {
             openDetect();
           }
         }}

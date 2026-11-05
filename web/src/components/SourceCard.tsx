@@ -30,7 +30,8 @@ export function SourceCard({
   draft: string;
   lastBuilt: Deployment | undefined;
   onConfigure: () => void;
-  onShowSnippets: () => void;
+  /** Absent when the viewer cannot write the file the snippets go into. */
+  onShowSnippets?: () => void;
   onUploadNew: () => void;
   onViewDeployments: () => void;
   source: ComposeSource | null;
@@ -108,9 +109,11 @@ export function SourceCard({
           ) : (
             <Text style={{ fontSize: 12 }} type="secondary">
               No Service has build: yet.{' '}
-              <Button onClick={onShowSnippets} size="small" style={{ padding: 0 }} type="link">
-                Build args &amp; secrets
-              </Button>
+              {onShowSnippets && (
+                <Button onClick={onShowSnippets} size="small" style={{ padding: 0 }} type="link">
+                  Build args &amp; secrets
+                </Button>
+              )}
             </Text>
           )}
         </Flex>
