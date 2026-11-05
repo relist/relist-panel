@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"relist-panel/internal/audit"
 	"relist-panel/internal/authz"
 )
 
@@ -177,6 +178,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "create builder", err)
 		return
 	}
+	audit.Target(r.Context(), created.Name)
 	writeJSON(w, http.StatusCreated, toJSON(created))
 }
 

@@ -287,3 +287,43 @@ func TestRepeatedRefusalsAreCapped(t *testing.T) {
 		t.Fatalf("denied events = %d, want %d", got, deniedPerMinute)
 	}
 }
+
+// An SSH key, Certificate or Builder event names the thing, read before the
+// handler, so a delete still says what it deleted.
+func TestHostThingEventsKeepTheirName(t *testing.T) {
+	var f *fixture
+	deleting := func(table string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if _, err := f.db.ExecContext(r.Context(), "DELETE FROM "+table); err != nil {
+				t.Error(err)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}
+	f, c := recordingFixture(t, func(mux *http.ServeMux) {
+		mux.HandleFunc("DELETE /api/ssh-keys/{id}", deleting("ssh_keys"))
+		mux.HandleFunc("DELETE /api/certificates/{id}", deleting("certificates"))
+		mux.HandleFunc("POST /api/builders/{id}/prune", answer(http.StatusNoContent))
+		mux.HandleFunc("PUT /api/builders/default", answer(http.StatusNoContent))
+	})
+	if _, err := f.db.Exec(`
+		INSERT INTO ssh_keys (id, name, private_key, public_key, created_at) VALUES (5, 'deploy key', 'x', 'x', 1);
+		INSERT INTO certificates (id, name, certificate_pem, private_key_pem, sans, issuer, not_after, created_at, updated_at) VALUES (6, 'wildcard', 'x', 'x', '[]', 'x', 1, 1, 1);
+		INSERT INTO builders (id, name, cpus_milli, memory_mb, created_at, updated_at) VALUES (7, 'small', 1000, 1024, 1, 1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range []struct{ method, path, want string }{
+		{http.MethodDelete, "/api/ssh-keys/5", "deploy key"},
+		{http.MethodDelete, "/api/certificates/6", "wildcard"},
+		{http.MethodPost, "/api/builders/7/prune", "small"},
+		{http.MethodPut, "/api/builders/default", "/api/builders/default"},
+	} {
+		if got := f.serve(admin, call.method, call.path).Code; got != http.StatusNoContent {
+			t.Fatalf("%s %s = %d", call.method, call.path, got)
+		}
+		if events := c.take(); len(events) != 1 || events[0].Target != call.want {
+			t.Errorf("%s %s: events = %+v, want target %q", call.method, call.path, events, call.want)
+		}
+	}
+}

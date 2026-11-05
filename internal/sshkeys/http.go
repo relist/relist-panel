@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"relist-panel/internal/audit"
 	"relist-panel/internal/authz"
 )
 
@@ -87,6 +88,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err, "could not create SSH key")
 		return
 	}
+	audit.Target(r.Context(), k.Name)
 	writeJSON(w, http.StatusCreated, toResponse(k))
 }
 

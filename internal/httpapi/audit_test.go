@@ -242,3 +242,25 @@ func TestProjectAuditShowsOnlyEditedEnvironments(t *testing.T) {
 		t.Fatalf("admin = %s", body)
 	}
 }
+
+// A create event names what it created, not only the parent it was made in.
+func TestCreateEventsNameWhatWasCreated(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "alpha", "")
+	response := postJSON(t, server, fmt.Sprintf("/api/projects/%d/environments", project.ID), map[string]string{"name": "staging"})
+	var environment struct{ ID int64 }
+	_ = json.NewDecoder(response.Body).Decode(&environment)
+	response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create environment = %d", response.StatusCode)
+	}
+	createCompose(t, server, project.ID, environment.ID, "api")
+	rows := auditRows(t, server)
+	for action, want := range map[string]string{"environment.create": "staging", "compose.create": "api"} {
+		events := auditActions(rows, action)
+		if len(events) != 1 || events[0].Detail["name"] != want {
+			t.Errorf("%s: events = %+v, want detail name %q", action, events, want)
+		}
+	}
+}

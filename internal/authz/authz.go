@@ -128,7 +128,7 @@ func (a *Authorizer) Middleware(mux *http.ServeMux, next http.Handler) http.Hand
 				denied.ProjectID, denied.EnvironmentID, denied.ComposeID = 0, 0, 0
 				denied.Target = path
 			} else {
-				denied.Target = a.target(r.Context(), pathScope, path)
+				denied.Target = a.target(r.Context(), pattern, pathScope, path)
 			}
 			a.write(r.Context(), denied)
 		}
@@ -154,7 +154,7 @@ func (a *Authorizer) Middleware(mux *http.ServeMux, next http.Handler) http.Hand
 		ctx := WithAccess(r.Context(), access)
 		ctx = context.WithValue(ctx, scopeKey{}, scope)
 		ctx = context.WithValue(ctx, stillKey{}, still)
-		resolve := func(ctx context.Context) string { return a.target(ctx, scope, path) }
+		resolve := func(ctx context.Context) string { return a.target(ctx, pattern, scope, path) }
 		if action != "" {
 			// Read the names now: after a delete they are gone.
 			event.Target = resolve(ctx)
