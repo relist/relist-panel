@@ -66,9 +66,10 @@ func TestNoSecretValueReachesAViewerOrOperator(t *testing.T) {
 				t.Errorf("%s saw secret %q = %v, want %v", role, secret, seen[secret], want)
 			}
 		}
-		status, _ := f.call(t, http.MethodPost, base+"/preview", map[string]any{})
-		if want := role == "editor"; (status != http.StatusForbidden) != want {
-			t.Errorf("%s preview = %d", role, status)
+		// Preview resolves an unsaved file with every value: only an admin,
+		// who alone writes the file, reaches it (ADR-0032).
+		if status, _ := f.call(t, http.MethodPost, base+"/preview", map[string]any{}); status != http.StatusForbidden {
+			t.Errorf("%s preview = %d, want 403", role, status)
 		}
 	}
 }

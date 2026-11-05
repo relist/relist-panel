@@ -21,6 +21,11 @@ var adminOnly = []string{
 	// An approver approves; the handler narrows admins to the Owner when
 	// RELIST_POLICY_APPROVER=owner.
 	"POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/approval",
+	// Only an admin writes a Compose's YAML: creating one, saving it, or
+	// resolving an unsaved one (ADR-0032).
+	"POST /api/projects/{projectID}/environments/{environmentID}/composes",
+	"PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}",
+	"POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/preview",
 	"POST /api/projects",
 	"DELETE /api/projects/{id}",
 	"GET /api/projects/{id}/removal-plan",
