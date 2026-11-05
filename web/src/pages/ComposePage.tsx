@@ -803,7 +803,7 @@ export function ComposePage() {
                 </RoleHint>
               )}
               <Dropdown menu={{ items: deployMenu }} placement="bottomRight" trigger={['click']}>
-                <Button aria-label="More deploy options" disabled={!sourceReady || !canOperate} icon={<DownOutlined />} type="primary" />
+                <Button aria-label="More deploy options" disabled={!sourceReady || !canOperate || policyState === 'waiting'} icon={<DownOutlined />} type="primary" />
               </Dropdown>
             </Space.Compact>
           </>
