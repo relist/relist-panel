@@ -382,13 +382,16 @@ describe('Roles on the Compose page', () => {
     expect(await screen.findByText('Needs the Editor role')).toBeTruthy();
   });
 
-  it('gives an Editor every action', async () => {
+  it('gives an Editor every action but the file, which only an admin changes', async () => {
     as('editor');
     vi.spyOn(api, 'getSource').mockResolvedValue(null);
     renderPage();
     await screen.findByRole('heading', { name: 'Compose 7' });
     await waitFor(() => expect(api.listVolumes).toHaveBeenCalled());
     expect(screen.queryByText('You can view this Compose. Changing it needs the Editor role.')).toBeNull();
+    expect(screen.getByText('Only an admin changes docker-compose.yml. You can deploy it and change its variables, Domains and Source.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: /Save/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Preview' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole('tab', { name: /Terminal/ }).getAttribute('aria-disabled')).not.toBe('true');
   });
 });

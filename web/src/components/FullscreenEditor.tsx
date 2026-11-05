@@ -158,6 +158,7 @@ export function FullscreenEditor({
   onSave,
   open,
   project,
+  readOnly = false,
   saving,
 }: {
   compose: Compose;
@@ -170,6 +171,8 @@ export function FullscreenEditor({
   onSave: () => void;
   open: boolean;
   project: Project;
+  /** Only an admin changes the file (ADR-0032); anyone else reads it here. */
+  readOnly?: boolean;
   saving: boolean;
 }) {
   const { token } = theme.useToken();
@@ -258,7 +261,7 @@ export function FullscreenEditor({
               Discard
             </Button>
           </Tooltip>
-          <Button disabled={!dirty} icon={<SaveOutlined />} loading={saving} onClick={onSave} type="primary">
+          <Button disabled={!dirty || readOnly} icon={<SaveOutlined />} loading={saving} onClick={onSave} type="primary">
             Save
           </Button>
           <Tooltip title="Close the full screen editor (Esc)">
@@ -277,6 +280,7 @@ export function FullscreenEditor({
               editorRef.current = editor;
             }}
             path={`${project.id}-${environment.id}-${compose.id}.yml`}
+            readOnly={readOnly}
             value={draft}
           />
         </div>

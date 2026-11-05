@@ -149,6 +149,9 @@ export function ComposePage() {
   const canOperate = useCan(environment?.id, 'operator');
   const canEdit = useCan(environment?.id, 'editor');
   const isAdmin = useIsAdmin();
+  // Only an admin writes docker-compose.yml (ADR-0032); an Editor deploys it
+  // and changes its variables, Domains and Source.
+  const canEditFile = isAdmin;
   const isApprover = useIsApprover();
   const policyLocation = compose && environment && project ? { composeId: compose.id, environmentId: environment.id, projectId: project.id } : undefined;
   // The saved config against the Compose policy (ADR-0032); refetched when
@@ -762,7 +765,7 @@ export function ComposePage() {
               <Button icon={<MoreOutlined />} />
             </Dropdown>
             <Button
-              disabled={!dirty || !canEdit}
+              disabled={!dirty || !canEditFile}
               icon={<SaveOutlined />}
               loading={isPending(`save-compose:${compose.id}`)}
               onClick={() => void save()}
@@ -856,6 +859,14 @@ export function ComposePage() {
           type="info"
         />
       )}
+      {canEdit && !canEditFile && (
+        <Alert
+          showIcon
+          style={{ marginBottom: LAYOUT.gutterSmall }}
+          title="Only an admin changes docker-compose.yml. You can deploy it and change its variables, Domains and Source."
+          type="info"
+        />
+      )}
 
       <Tabs
         activeKey={activeTab}
@@ -889,10 +900,19 @@ export function ComposePage() {
                               {screens.sm && 'Discard'}
                             </Button>
                           </Tooltip>
-                          <Tooltip title="Show the file a deploy would write, with the panel's additions">
-                            <Button aria-label="Preview" icon={<EyeOutlined />} onClick={() => setPreviewOpen(true)} size="small">
-                              {screens.sm && 'Preview'}
-                            </Button>
+                          <Tooltip title={canEditFile ? "Show the file a deploy would write, with the panel's additions" : needsRole('admin')}>
+                            {/* The span lets the tooltip fire over the disabled button. */}
+                            <span style={{ display: 'inline-flex' }}>
+                              <Button
+                                aria-label="Preview"
+                                disabled={!canEditFile}
+                                icon={<EyeOutlined />}
+                                onClick={() => setPreviewOpen(true)}
+                                size="small"
+                              >
+                                {screens.sm && 'Preview'}
+                              </Button>
+                            </span>
                           </Tooltip>
                           <Tooltip title="Edit docker-compose.yml full screen, with the Environment variables beside it">
                             <Button
@@ -934,7 +954,7 @@ export function ComposePage() {
                       <YamlEditor
                         autoHeight={{ max: LAYOUT.editorAutoMaxHeight, min: LAYOUT.editorAutoMinHeight }}
                         onChange={setDraft}
-                        readOnly={!canEdit}
+                        readOnly={!canEditFile}
                         path={`${project.id}-${environment.id}-${compose.id}.yml`}
                         value={draft}
                       />
@@ -1382,6 +1402,7 @@ export function ComposePage() {
         onSave={() => void save()}
         open={fullscreenOpen}
         project={project}
+        readOnly={!canEditFile}
         saving={isPending(`save-compose:${compose.id}`)}
       />
 

@@ -121,13 +121,14 @@ describe('Roles on the Project page', () => {
     expect(disabled(/Edit details/)).toBe(false);
   });
 
-  it('keeps an Environment Editor from Project-level changes, but not from Composes', async () => {
+  it('keeps an Environment Editor from Project-level changes and from new Composes', async () => {
     as(null, 'editor');
     renderPage();
     await screen.findByText('Compose A');
     await waitFor(() => expect(disabled(/New Environment/)).toBe(true));
     expect(disabled(/Edit details/)).toBe(true);
-    expect(disabled(/New Compose/)).toBe(false);
+    // A new Compose is a new file, which only an admin writes (ADR-0032).
+    expect(disabled(/New Compose/)).toBe(true);
   });
 
   it('shows the Members tab to admins only', async () => {
