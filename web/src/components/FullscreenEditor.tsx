@@ -245,7 +245,9 @@ export function FullscreenEditor({
               <ComposeStatusTag lastDeployedAt={compose.lastDeployedAt} status={compose.status} />
             </Flex>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              The same file as the Compose page — edits are shared, and closing does not discard them.
+              {readOnly
+                ? 'Read-only: only an admin changes docker-compose.yml.'
+                : 'The same file as the Compose page — edits are shared, and closing does not discard them.'}
             </Text>
           </div>
         </Flex>

@@ -803,7 +803,7 @@ export function ComposePage() {
                 </RoleHint>
               )}
               <Dropdown menu={{ items: deployMenu }} placement="bottomRight" trigger={['click']}>
-                <Button aria-label="More deploy options" disabled={!sourceReady || !canOperate} icon={<DownOutlined />} type="primary" />
+                <Button aria-label="More deploy options" disabled={!sourceReady || !canOperate || policyState === 'waiting'} icon={<DownOutlined />} type="primary" />
               </Dropdown>
             </Space.Compact>
           </>
@@ -1030,16 +1030,18 @@ export function ComposePage() {
                           image={Empty.PRESENTED_IMAGE_SIMPLE}
                           styles={{ image: { height: 40 } }}
                         >
-                          <Button
-                            disabled={!sourceReady}
-                            icon={<RocketOutlined />}
-                            loading={isPending(`deploy:${compose.id}`)}
-                            onClick={() => void deploy()}
-                            size="small"
-                            type="primary"
-                          >
-                            Deploy now
-                          </Button>
+                          <RoleHint allowed={canOperate} level="operator">
+                            <Button
+                              disabled={!sourceReady || !canOperate || policyState === 'waiting'}
+                              icon={<RocketOutlined />}
+                              loading={isPending(`deploy:${compose.id}`)}
+                              onClick={() => void deploy()}
+                              size="small"
+                              type="primary"
+                            >
+                              Deploy now
+                            </Button>
+                          </RoleHint>
                         </Empty>
                       ) : (
                         <Text type="secondary" style={{ fontSize: 12 }}>

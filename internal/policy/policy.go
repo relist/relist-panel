@@ -278,7 +278,7 @@ func (c *checker) traefikLabels(name, what string, labels map[string]any, genera
 		case lower == "traefik.enable" && isFalse(text):
 		case lower == "traefik.docker.network" && text == sharedNetwork:
 		default:
-			c.add(name, "%s %s is not one the panel writes for this Compose's Domains", what, key)
+			c.add(name, "%s %s is not one the panel writes for this Compose's Domains; add the domain on the Domains tab instead", what, key)
 		}
 	}
 }
