@@ -360,6 +360,7 @@ describe('Roles on the Compose page', () => {
     expect(await screen.findByText('You can view this Compose. Changing it needs the Editor role.')).toBeTruthy();
     await waitFor(() => expect((screen.getByRole('button', { name: /Deploy$/ }) as HTMLButtonElement).disabled).toBe(true));
     expect((screen.getByRole('button', { name: 'More deploy options' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /Deploy now/ }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: /Save/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole('tab', { name: /Terminal/ }).getAttribute('aria-disabled')).toBe('true');
     expect(screen.getByRole('tab', { name: /Volumes/ }).getAttribute('aria-disabled')).toBe('true');
@@ -405,5 +406,6 @@ describe('Roles on the Compose page', () => {
     await screen.findByRole('button', { name: /Waiting for approval/ });
     expect((screen.getByRole('button', { name: /Waiting for approval/ }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'More deploy options' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /Deploy now/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
