@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"relist-panel/internal/policy"
@@ -61,10 +62,12 @@ func (s *Service) EvaluatePolicy(ctx context.Context, t DeployTarget) (PolicyRes
 	if err != nil {
 		return PolicyResult{}, fmt.Errorf("stage the config for the policy: %w", err)
 	}
+	secrets := t.Snapshot.Secrets
 	out, err := s.runner.PolicyConfig(ctx, req)
 	cleanup()
 	if err != nil {
-		return PolicyResult{}, fmt.Errorf("resolve the config for the policy: %w", err)
+		// Compose's error can quote interpolated values.
+		return PolicyResult{}, errors.New(redactSecrets("resolve the config for the policy: "+err.Error(), secrets))
 	}
 	staged := map[string]string{
 		stage + ".env":  t.Request.EnvFilePath,
@@ -82,6 +85,10 @@ func (s *Service) EvaluatePolicy(ctx context.Context, t DeployTarget) (PolicyRes
 	})
 	if err != nil {
 		return PolicyResult{}, err
+	}
+	for i := range violations {
+		// A path can carry a secret an Editor put in it; Viewers read these.
+		violations[i].Message = redactSecrets(violations[i].Message, secrets)
 	}
 	stable, err := normalizePolicyPaths(out, staged, dir)
 	if err != nil {
@@ -234,4 +241,16 @@ func sourceCopyOf(dir, path string) string {
 	}
 	first, _, _ := strings.Cut(rest, string(filepath.Separator))
 	return filepath.Join(dir, privateSourcesDir, first)
+}
+
+// redactSecrets replaces every secret value in text, longest first.
+func redactSecrets(text string, secrets []string) string {
+	sorted := append([]string{}, secrets...)
+	sort.Slice(sorted, func(i, j int) bool { return len(sorted[i]) > len(sorted[j]) })
+	for _, secret := range sorted {
+		if secret != "" {
+			text = strings.ReplaceAll(text, secret, "••••")
+		}
+	}
+	return text
 }

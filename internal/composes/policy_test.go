@@ -156,3 +156,26 @@ func TestPolicyHashCoversTheSource(t *testing.T) {
 		t.Fatalf("hashes none=%s first=%s second=%s", none, first, second)
 	}
 }
+
+// A secret value never reaches a violation message or an evaluation error,
+// even when an Editor puts it in a path.
+func TestPolicyRedactsSecretValues(t *testing.T) {
+	svc, runner, target, db := newDeployService(t, "services: {web: {image: nginx, volumes: ['${TOKEN}:/x']}}\n")
+	if _, err := db.Exec("INSERT INTO compose_variables (compose_id, key, value, secret) VALUES (1, 'TOKEN', 's3cr3t-value', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	runner.config = []byte(`{"name":"x","services":{"web":{"image":"nginx","volumes":[{"type":"bind","source":"/etc/s3cr3t-value","target":"/x"}]}}}`)
+	result, err := svc.EvaluatePolicy(context.Background(), target)
+	if err != nil || len(result.Violations) == 0 {
+		t.Fatalf("result = %+v, %v", result, err)
+	}
+	for _, v := range result.Violations {
+		if strings.Contains(v.Message, "s3cr3t-value") {
+			t.Errorf("message carries the secret: %q", v.Message)
+		}
+	}
+	runner.configErr = fmt.Errorf("invalid mount source /etc/s3cr3t-value")
+	if _, err := svc.EvaluatePolicy(context.Background(), target); err == nil || strings.Contains(err.Error(), "s3cr3t-value") {
+		t.Fatalf("error = %v", err)
+	}
+}
