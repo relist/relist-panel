@@ -190,6 +190,11 @@ describe('RegistryPage Push credentials', () => {
     expect(screen.getByText('docker login registry.example.com -u github-ci')).toBeTruthy();
     expect(screen.getByText(/docker\/login-action@v3/)).toBeTruthy();
     expect(screen.getByText(/shown only once/)).toBeTruthy();
+    const loads = api.listPushCredentials.mock.calls.length;
+    await user.keyboard('{Escape}');
+    expect(api.listPushCredentials.mock.calls.length).toBe(loads);
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(api.listPushCredentials.mock.calls.length).toBeGreaterThan(loads));
   });
 });
 
@@ -229,6 +234,17 @@ describe('RegistryPage Repositories', () => {
     await waitFor(() => expect(api.deleteRegistryTag).toHaveBeenCalledWith('app', 'v1', undefined));
   });
 
+  it('sends the confirm when only a tag sharing the digest is in use', async () => {
+    const user_ = { composeId: 7, composeName: 'web', environmentId: 2, environmentName: 'prod', projectId: 1, projectName: 'shop' };
+    api.listRegistryTags.mockResolvedValue([tags[0], { ...tags[1], inUseBy: [user_] }, tags[2]]);
+    const user = userEvent.setup();
+    await openTags(user);
+    await user.click(screen.getByRole('button', { name: 'Delete app:v1' }));
+    await user.type(await screen.findByLabelText('Type v1 to confirm'), 'v1');
+    await user.click(screen.getByRole('button', { name: 'Delete tag' }));
+    await waitFor(() => expect(api.deleteRegistryTag).toHaveBeenCalledWith('app', 'v1', 'v1'));
+  });
+
   it('needs the tag typed when a Compose uses it', async () => {
     const user_ = { composeId: 7, composeName: 'web', environmentId: 2, environmentName: 'prod', projectId: 1, projectName: 'shop' };
     api.listRegistryTags.mockResolvedValue([{ ...tags[0], inUseBy: [user_] }, tags[1], tags[2]]);
@@ -261,6 +277,20 @@ describe('RegistryPage Settings', () => {
     show('/registry?tab=settings');
     await user.click(await screen.findByRole('button', { name: /Repair/ }));
     await waitFor(() => expect(api.repairRegistry).toHaveBeenCalled());
+  });
+
+  it.each(['stopped', 'error'] as const)('offers Repair when %s', async (status) => {
+    api.getRegistry.mockResolvedValue({ ...on, lastError: status === 'error' ? 'pull failed' : '', status });
+    show('/registry?tab=settings');
+    expect(await screen.findByRole('button', { name: /Repair/ })).toBeTruthy();
+  });
+
+  it('names a refused connection as such', async () => {
+    api.checkRegistry.mockResolvedValue({ error: 'dial tcp 203.0.113.9:443: connect: connection refused', ok: false, step: 'connect' });
+    const user = userEvent.setup();
+    show('/registry?tab=settings');
+    await user.click(await screen.findByRole('button', { name: /Check endpoint/ }));
+    expect(await screen.findByText('Connection failed')).toBeTruthy();
   });
 
   it('names the failing step of Check endpoint', async () => {

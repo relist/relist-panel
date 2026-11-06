@@ -131,7 +131,10 @@ function CreateCredentialModal({ hostname, onClose, open }: { hostname: string; 
       afterClose={() => setCreated(undefined)}
       cancelButtonProps={created ? { style: { display: 'none' } } : undefined}
       confirmLoading={busy}
+      closable={!created}
       destroyOnHidden
+      keyboard={!created}
+      mask={{ closable: !created }}
       okText={created ? 'Done' : 'Create'}
       onCancel={onClose}
       onOk={() => (created ? onClose() : form.submit())}

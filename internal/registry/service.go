@@ -253,6 +253,10 @@ func (s *Service) reconcile(ctx context.Context, st Settings) (bool, error) {
 			return true, err
 		}
 	default:
+		// Nothing to repair; an error left from an earlier attempt is stale.
+		if st.LastError != "" {
+			return false, s.d.Store.SetLastError(ctx, "")
+		}
 		return false, nil
 	}
 	return true, s.d.Store.SetLastError(ctx, "")

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"slices"
 	"sort"
@@ -145,25 +146,34 @@ func (a *API) repair(w http.ResponseWriter, r *http.Request) {
 }
 
 // checkStep names where a request to https://<hostname>/v2/ failed: dns,
-// tls or auth; "" is a pass.
-func checkStep(errText string, code int) string {
-	msg := strings.ToLower(errText)
+// connect, tls, auth (the login was refused) or http (something other than
+// the Registry answered); "" is a pass.
+func checkStep(err error, code int) string {
+	var dnsErr *net.DNSError
 	switch {
-	case strings.Contains(msg, "x509") || strings.Contains(msg, "tls") || strings.Contains(msg, "certificate"):
-		return "tls"
-	case msg != "":
+	case errors.As(err, &dnsErr):
 		return "dns"
-	case code == http.StatusUnauthorized:
+	case err != nil && (strings.Contains(err.Error(), "x509") || strings.Contains(err.Error(), "tls") || strings.Contains(err.Error(), "certificate")):
+		return "tls"
+	case err != nil:
+		return "connect"
+	case code == http.StatusUnauthorized || code == http.StatusForbidden:
 		return "auth"
 	case code >= 200 && code < 300:
 		return ""
 	default:
-		return "auth"
+		return "http"
 	}
 }
 
-// check requests https://<hostname>/v2/ from the panel with the system login,
-// the way CI reaches the Registry.
+// registryRealm is the htpasswd realm config.yml sets; only a host asking
+// for it gets the system login.
+const registryRealm = `realm="relist-registry"`
+
+// check requests https://<hostname>/v2/ from the panel, the way CI reaches
+// the Registry. It asks without a login first and sends the system login only
+// to a host that asks for this Registry's realm, so a mistyped hostname never
+// receives it.
 func (a *API) check(w http.ResponseWriter, r *http.Request) {
 	st, err := a.d.Service.d.Store.Settings(r.Context())
 	if err != nil {
@@ -174,28 +184,46 @@ func (a *API) check(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "the Registry is off")
 		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "https://"+st.Hostname+"/v2/", nil)
+	url := "https://" + st.Hostname + "/v2/"
+	get := func(login bool) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		if login {
+			req.SetBasicAuth(SystemUser, st.SystemSecret)
+		}
+		resp, err := a.d.CheckHTTP.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+		return resp, err
+	}
+	report := func(err error, code int, message string) {
+		step := checkStep(err, code)
+		if err != nil {
+			message = err.Error()
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": step == "", "step": step, "error": message})
+	}
+	resp, err := get(false)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		report(err, 0, "")
 		return
 	}
-	req.SetBasicAuth(SystemUser, st.SystemSecret)
-	code, errText := 0, ""
-	if resp, err := a.d.CheckHTTP.Do(req); err != nil {
-		errText = err.Error()
-	} else {
-		code = resp.StatusCode
-		resp.Body.Close()
-		if code < 200 || code > 299 {
-			errText = ""
-		}
+	if resp.StatusCode != http.StatusUnauthorized {
+		report(nil, http.StatusTeapot, url+" answered "+strconv.Itoa(resp.StatusCode)+" without asking for a login, so it is not this Registry")
+		return
 	}
-	step := checkStep(errText, code)
-	message := errText
-	if step == "auth" {
-		message = "https://" + st.Hostname + "/v2/ answered " + strconv.Itoa(code) + " to the panel's login"
+	if !strings.Contains(resp.Header.Get("WWW-Authenticate"), registryRealm) {
+		report(nil, http.StatusUnauthorized, url+" asked for another registry's login, so the panel did not send its own")
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": step == "", "step": step, "error": message})
+	if resp, err = get(true); err != nil {
+		report(err, 0, "")
+		return
+	}
+	report(nil, resp.StatusCode, url+" answered "+strconv.Itoa(resp.StatusCode)+" to the panel's login")
 }
 
 func (a *API) deleteData(w http.ResponseWriter, r *http.Request) {
@@ -284,6 +312,9 @@ func (a *API) client(w http.ResponseWriter, r *http.Request) (*Client, Settings,
 		writeError(w, http.StatusConflict, "Registry is off")
 		return nil, st, false
 	}
+	// Spec: before every Registry operation, repair drift (a cheap Inspect
+	// when there is none). A failure shows up as the call's own error.
+	_, _ = a.d.Service.Reconcile(r.Context())
 	return &Client{Base: a.d.RegistryBase, User: SystemUser, Secret: st.SystemSecret, HTTP: a.d.HTTP}, st, true
 }
 

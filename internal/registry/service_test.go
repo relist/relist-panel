@@ -269,3 +269,21 @@ func TestHostnameOnlyWhenEnabled(t *testing.T) {
 		t.Fatalf("Hostname = %q, %v", h, ok)
 	}
 }
+
+func TestReconcileClearsAStaleError(t *testing.T) {
+	f := newService(t)
+	f.enable(t)
+	ctx := context.Background()
+	if err := f.store.SetLastError(ctx, "toomanyrequests: rate limit"); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := f.svc.Status(ctx); status != StatusError {
+		t.Fatalf("status = %s, want error", status)
+	}
+	if _, err := f.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := f.svc.Status(ctx); status != StatusRunning {
+		t.Fatalf("status after repair = %s, want running", status)
+	}
+}

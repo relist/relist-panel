@@ -69,6 +69,8 @@ export function RegistrySettingsTab() {
   const { settings } = data;
   const status = REGISTRY_STATUS[data.status];
   const using = data.composesUsing;
+  // Reconcile restarts a stopped container, recreates a drifted one and clears a stale error.
+  const repairable = settings.enabled && (data.status === 'drift' || data.status === 'stopped' || data.status === 'error');
 
   return (
     <Flex gap={16} vertical>
@@ -105,7 +107,7 @@ export function RegistrySettingsTab() {
         <Flex gap={16} vertical>
           <Flex align="center" gap={8} wrap>
             <Tag color={status.color}>{status.label}</Tag>
-            {data.status === 'drift' && (
+            {repairable && (
               <Button
                 icon={<ToolOutlined />}
                 loading={busy === 'repair the Registry'}

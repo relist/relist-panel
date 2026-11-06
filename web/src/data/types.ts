@@ -1053,7 +1053,7 @@ export interface RegistryTag {
   kept: boolean;
 }
 
-export type RegistryCheckStep = 'dns' | 'tls' | 'auth';
+export type RegistryCheckStep = 'dns' | 'connect' | 'tls' | 'auth' | 'http';
 
 export interface RegistryCheck {
   ok: boolean;

@@ -3,8 +3,12 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -200,18 +204,92 @@ func TestRepositoriesWhenOff(t *testing.T) {
 
 func TestCheckClassifiesFailures(t *testing.T) {
 	for _, c := range []struct {
-		err  string
+		name string
+		err  error
 		code int
 		want string
 	}{
-		{"dial tcp: lookup registry.example.com: no such host", 0, "dns"},
-		{"tls: failed to verify certificate: x509: certificate signed by unknown authority", 0, "tls"},
-		{"", 401, "auth"},
-		{"", 200, ""},
+		{"dns", &net.DNSError{Err: "no such host", Name: "registry.example.com", IsNotFound: true}, 0, "dns"},
+		{"tls", errors.New("tls: failed to verify certificate: x509: certificate signed by unknown authority"), 0, "tls"},
+		{"refused", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}, 0, "connect"},
+		{"401", nil, 401, "auth"},
+		{"403", nil, 403, "auth"},
+		{"404", nil, 404, "http"},
+		{"200", nil, 200, ""},
 	} {
 		if got := checkStep(c.err, c.code); got != c.want {
-			t.Errorf("checkStep(%q, %d) = %q, want %q", c.err, c.code, got, c.want)
+			t.Errorf("%s: checkStep = %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func answer(code int, header http.Header) *http.Response {
+	if header == nil {
+		header = http.Header{}
+	}
+	return &http.Response{StatusCode: code, Header: header, Body: io.NopCloser(strings.NewReader(""))}
+}
+
+// checkWith runs Check endpoint against a host answering with respond, and
+// returns the Authorization headers it saw.
+func checkWith(t *testing.T, respond func(*http.Request) *http.Response) (map[string]any, []string) {
+	t.Helper()
+	f := newAPI(t)
+	var auths []string
+	f.mux = http.NewServeMux()
+	client, _ := fakeRegistry(t)
+	NewAPI(APIDeps{
+		Service: f.svc, RegistryBase: client.Base, HTTP: client.HTTP,
+		CheckHTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			auths = append(auths, r.Header.Get("Authorization"))
+			return respond(r), nil
+		})},
+	}).RegisterRoutes(f.mux)
+	rec := f.do("POST", "/api/registry/check", "")
+	var out map[string]any
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+		t.Fatalf("check = %d %s", rec.Code, rec.Body)
+	}
+	return out, auths
+}
+
+func TestCheckSendsLoginOnlyToThisRegistry(t *testing.T) {
+	out, auths := checkWith(t, func(r *http.Request) *http.Response {
+		if r.Header.Get("Authorization") == "" {
+			return answer(401, http.Header{"Www-Authenticate": {`Basic realm="relist-registry"`}})
+		}
+		return answer(200, nil)
+	})
+	if out["ok"] != true || len(auths) != 2 || auths[0] != "" || auths[1] == "" {
+		t.Fatalf("relist realm: out = %v, auths = %q", out, auths)
+	}
+
+	out, auths = checkWith(t, func(*http.Request) *http.Response {
+		return answer(401, http.Header{"Www-Authenticate": {`Basic realm="someone else"`}})
+	})
+	if out["ok"] != false || out["step"] != "auth" || len(auths) != 1 || auths[0] != "" {
+		t.Fatalf("other realm: out = %v, auths = %q", out, auths)
+	}
+
+	out, auths = checkWith(t, func(*http.Request) *http.Response { return answer(404, nil) })
+	if out["ok"] != false || out["step"] != "http" || len(auths) != 1 || auths[0] != "" {
+		t.Fatalf("not a registry: out = %v, auths = %q", out, auths)
+	}
+}
+
+func TestRegistryCallsRepairAMissingContainerFirst(t *testing.T) {
+	f := newAPI(t)
+	f.host.state = ContainerState{}
+	f.host.calls = nil
+	if rec := f.do("GET", "/api/registry/repositories", ""); rec.Code != 200 {
+		t.Fatalf("repositories = %d %s", rec.Code, rec.Body)
+	}
+	if !slices.Contains(f.host.calls, "Create") {
+		t.Fatalf("calls = %v, want the container recreated first", f.host.calls)
 	}
 }
 

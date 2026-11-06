@@ -99,11 +99,12 @@ function RepositoryTags({ hostname, repo }: { hostname: string; repo: string }) 
   const [failure, setFailure] = useState<string>();
   const tags = data ?? [];
 
-  const remove = async (tag: RegistryTag) => {
+  // The server checks every tag on the digest, so a sibling in use needs the confirm too.
+  const remove = async (tag: RegistryTag, confirm: boolean) => {
     setBusy(true);
     setFailure(undefined);
     try {
-      await api.deleteRegistryTag(repo, tag.tag, tag.inUseBy.length > 0 ? tag.tag : undefined);
+      await api.deleteRegistryTag(repo, tag.tag, confirm ? tag.tag : undefined);
       setDeleting(undefined);
       void mutate();
       void mutateGlobal(REGISTRY_REPOSITORIES_KEY);
@@ -197,7 +198,7 @@ function RepositoryTags({ hostname, repo }: { hostname: string; repo: string }) 
           loading={busy}
           okText="Delete tag"
           onCancel={() => setDeleting(undefined)}
-          onConfirm={() => void remove(deleting)}
+          onConfirm={() => void remove(deleting, true)}
           open
           title={`Delete ${repo}:${deleting.tag}?`}
         />
@@ -207,7 +208,7 @@ function RepositoryTags({ hostname, repo }: { hostname: string; repo: string }) 
           okButtonProps={{ danger: true }}
           okText="Delete tag"
           onCancel={() => setDeleting(undefined)}
-          onOk={() => deleting && void remove(deleting)}
+          onOk={() => deleting && void remove(deleting, false)}
           open={deleting !== undefined}
           title={deleting ? `Delete ${repo}:${deleting.tag}?` : ''}
         >
