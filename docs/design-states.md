@@ -108,7 +108,7 @@ The mock's own code, including the registry this was rendered from, is one `git 
 - `project-variable-edit-modal` — Project — Edit variable · `#/projects/1/env/1/variables` · *(overlay)* · forced by after:object:variables.editing
   The same modal prefilled with DATABASE_URL through the app's own setter: check the key is editable and the value arrives masked exactly as the row showed it.
 - `project-paste-env` — Project — Paste a .env, parsed · `#/projects/1/env/1/variables` · *(overlay)* · forced by ui:variables.bulkOpen=1, after:fixture:variables.bulkText
-  The paste is the state: the fixture .env is parsed into a preview table before anything is committed, so check the "Replace N variables with M" statement is the OK button's own label.
+  The paste is the state: the fixture .env is parsed into a preview table before anything is committed, so check the "Apply N changes" statement (or "Replace N variables with M" with Replace all ticked) is the OK button's own label.
 - `project-paste-env-duplicates` — Project — Paste a .env, duplicate key · `#/projects/1/env/1/variables` · *(overlay)* · forced by ui:variables.bulkOpen=1, after:fixture:variables.bulkDuplicate
   A duplicate key refuses the whole paste, naming the offending key and disabling OK: a bulk replace that silently picked a winner would be the worst kind of surprise.
 - `project-delete-variable-popconfirm` — Project — Delete variable · `#/projects/1/env/1/variables` · *(overlay)* · forced by ui:variables.deletePopconfirm.DATABASE_URL=1
