@@ -70,7 +70,7 @@
 - **Frontend:** before touching `web/`, read https://ant.design/llms.txt and the pages for Tabs, Table, Form, Input, InputNumber, Select, Checkbox, TimePicker, Switch, Modal, Popconfirm, Tag, Alert, Descriptions, Empty and Typography (copyable). Check them against the installed antd. Follow `docs/GUIDELINES.md`.
 - **Tests:**
   - `go test ./...`, `pnpm --dir web test` and `pnpm --dir web typecheck`.
-  - `task build-web` rebuilds `internal/webassets/dist`, which is committed; commit the rebuild as `chore: rebuild the embedded frontend`.
+  - `internal/webassets/dist` is git-ignored since c25ab7a: run `task build-web` to test the binary locally, and never commit its output.
 
 ## Decisions made while planning (sharpen the spec)
 
@@ -172,7 +172,7 @@ func TestWriteFormAcceptsBareSeconds(t *testing.T) // "120" → written "120s"
 - [ ] **Step 2: Run** `pnpm --dir web test traefik`. Expected: FAIL.
 - [ ] **Step 3: Implement.** Put an `Input` after Access log, with `extra` = help copy and an inline `Alert type="warning"` = warning copy when `readTimeoutWarning` is true.
 - [ ] **Step 4: Run** `pnpm --dir web test && pnpm --dir web typecheck`. Expected: PASS.
-- [ ] **Step 5: Commit** `feat: add the read timeout field to the Traefik page`, then `task build-web` and commit `chore: rebuild the embedded frontend`.
+- [ ] **Step 5: Commit** `feat: add the read timeout field to the Traefik page`.
 
 ---
 
@@ -308,7 +308,7 @@ func TestWriteFormAcceptsBareSeconds(t *testing.T) // "120" → written "120s"
   - **Rejected:** a lingering `docker login`, and encryption at rest (the reasons are in the spec's Decisions).
   - **Probes:** the 2026-11-06 buildx `ls` result.
 - [ ] **Step 5: Run** `pnpm --dir web test && pnpm --dir web typecheck && go test ./...`. Expected: PASS.
-- [ ] **Step 6: Commit** `feat: add the Registry page with External registries`, then rebuild the frontend and commit it.
+- [ ] **Step 6: Commit** `feat: add the Registry page with External registries`.
 
 ---
 
@@ -580,7 +580,7 @@ func TestWriteFormAcceptsBareSeconds(t *testing.T) // "120" → written "120s"
   - **Disable:** the warnings are shown.
 - [ ] **Step 2–4: Run → implement → run.**
 - [ ] **Step 5: Write ADR-0033** from the spec's Domain changes, and include the probe results from this plan and from Task 15.
-- [ ] **Step 6: Commit** `feat: add the Registry tabs`, `docs: record the Panel registry decision`, and the frontend rebuild.
+- [ ] **Step 6: Commit** `feat: add the Registry tabs`, and `docs: record the Panel registry decision`.
 
 ---
 
@@ -695,7 +695,7 @@ func TestWriteFormAcceptsBareSeconds(t *testing.T) // "120" → written "120s"
   - `TestRunNowConflict` (409 copy)
   - The UI test: the schedule offers Daily and Weekly with weekday checkboxes and a time. **Run cleanup now** opens the preview, then runs. The history lists the last runs with freed size.
 - [ ] **Step 2–4: Run → implement → run.**
-- [ ] **Step 5: Commit** `feat: schedule and run Registry cleanup from the Registry page`, plus the frontend rebuild.
+- [ ] **Step 5: Commit** `feat: schedule and run Registry cleanup from the Registry page`.
 
 ### Task 21: Migration option "Include registry data"
 
