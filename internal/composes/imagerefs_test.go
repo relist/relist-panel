@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sort"
 	"testing"
 )
@@ -27,7 +28,7 @@ func TestDeployRecordsImageRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"app:1", "local:1", "redis:7", "relist-c1-built"}; !reflect.DeepEqual(refKeys(refs), want) {
+	if want := []string{"app:1", "local:1", "redis:7", "relist-c1-built:latest"}; !reflect.DeepEqual(refKeys(refs), want) {
 		t.Fatalf("refs = %v, want %v", refKeys(refs), want)
 	}
 	want := []ComposeRef{{ComposeID: 1, Name: "c", ProjectID: 7, ProjectName: "p", EnvironmentID: 3, EnvironmentName: "e"}}
@@ -75,5 +76,20 @@ func TestDeletedComposeDropsRefs(t *testing.T) {
 	}
 	if refs, _ := svc.ImageRefs(context.Background()); len(refs) != 0 {
 		t.Fatalf("refs = %v after delete", refKeys(refs))
+	}
+}
+
+func TestNormaliseImageRef(t *testing.T) {
+	for in, want := range map[string][]string{
+		"registry.example.com/app":               {"registry.example.com/app:latest"},
+		"localhost:5000/app":                     {"localhost:5000/app:latest"},
+		"registry.example.com/app:v1":            {"registry.example.com/app:v1"},
+		"registry.example.com/app@sha256:abc":    {"registry.example.com/app@sha256:abc"},
+		"registry.example.com/app:v1@sha256:abc": {"registry.example.com/app:v1", "registry.example.com/app@sha256:abc"},
+		"Registry.Example.com/team/web":          {"registry.example.com/team/web:latest"},
+	} {
+		if got := normaliseImageRef(in); !slices.Equal(got, want) {
+			t.Errorf("normaliseImageRef(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

@@ -48,4 +48,10 @@ export const REGISTRY_STATUS: Record<RegistryStatus, { color: string; label: str
 };
 
 /** Where Check endpoint's request to https://<hostname>/v2/ failed. */
-export const CHECK_STEP: Record<RegistryCheckStep, string> = { auth: 'Login', dns: 'DNS', tls: 'TLS' };
+export const CHECK_STEP: Record<RegistryCheckStep, string> = {
+  auth: 'Login',
+  connect: 'Connection',
+  dns: 'DNS',
+  http: 'Registry',
+  tls: 'TLS',
+};

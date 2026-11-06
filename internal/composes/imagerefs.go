@@ -2,7 +2,9 @@ package composes
 
 import (
 	"context"
+	"slices"
 	"sort"
+	"strings"
 )
 
 // ComposeRef names a Compose that uses an image.
@@ -55,9 +57,42 @@ func (s *Service) ImageRefs(ctx context.Context) (map[string][]ComposeRef, error
 		if err := rows.Scan(&ref, &c.ComposeID, &c.Name, &c.ProjectID, &c.ProjectName, &c.EnvironmentID, &c.EnvironmentName); err != nil {
 			return nil, err
 		}
-		out[ref] = append(out[ref], c)
+		for _, key := range normaliseImageRef(ref) {
+			if !slices.ContainsFunc(out[key], func(u ComposeRef) bool { return u.ComposeID == c.ComposeID }) {
+				out[key] = append(out[key], c)
+			}
+		}
 	}
 	return out, rows.Err()
+}
+
+// normaliseImageRef spells a ref the way a registry lists it: an implicit
+// tag becomes :latest, a registry host is lowercased, and name:tag@digest
+// counts as both name:tag and name@digest. Refs are recorded as the Compose
+// file wrote them, so lookups by host/repo:tag need this.
+func normaliseImageRef(ref string) []string {
+	name, digest := ref, ""
+	if i := strings.Index(ref, "@"); i >= 0 {
+		name, digest = ref[:i], ref[i:]
+	}
+	if first, rest, ok := strings.Cut(name, "/"); ok && (strings.ContainsAny(first, ".:") || first == "localhost") {
+		name = strings.ToLower(first) + "/" + rest
+	}
+	hasTag := strings.Contains(name[strings.LastIndex(name, "/")+1:], ":")
+	base := name
+	if hasTag {
+		base = name[:strings.LastIndex(name, ":")]
+	}
+	switch {
+	case digest != "" && hasTag:
+		return []string{name, base + digest}
+	case digest != "":
+		return []string{base + digest}
+	case hasTag:
+		return []string{name}
+	default:
+		return []string{name + ":latest"}
+	}
 }
 
 // sortedUnique is refs without repeats, sorted.
