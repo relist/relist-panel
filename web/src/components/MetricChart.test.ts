@@ -146,3 +146,14 @@ describe('paths', () => {
     expect(stepLinePathFor([], x, y)).toBe('');
   });
 });
+
+describe('request units', () => {
+  it('formats requests per minute', () => {
+    expect(formatMetricValue(12.34, 'requestsPerMinute')).toBe('12.3 req/min');
+    expect(formatMetricValue(250.4, 'requestsPerMinute')).toBe('250 req/min');
+  });
+  it('formats milliseconds, seconds from 1000', () => {
+    expect(formatMetricValue(410, 'milliseconds')).toBe('410 ms');
+    expect(formatMetricValue(1250, 'milliseconds')).toBe('1.25 s');
+  });
+});

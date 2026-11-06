@@ -309,7 +309,7 @@ Plus extend the authz matrix: a Viewer of the Project gets 200 on the Compose ro
   - `latencySeries(m: RequestMetrics): MetricSeries[]` (p50/p90/p99; a `null` is a gap — omitted point, the same rule `monitor-view.ts` uses)
   - `summaryItems(m: RequestMetrics): { label: string; value: string }[]` — Requests, 5xx rate (`c5xx / requests`, `—` when 0 requests), p50, p90, p99
 
-- [ ] **Step 1: Write the failing tests** in `request-metrics-view.test.ts`:
+- [x] **Step 1: Write the failing tests** in `request-metrics-view.test.ts`:
 
 ```ts
 test('windowsFor', () => {
@@ -324,10 +324,10 @@ test('summary 5xx rate', ...)                  // 5 of 1000 → '0.5%'; 0 reques
 
 and in the existing MetricChart test file (or a new one), `formatMetricValue(12.34, 'requestsPerMinute') === '12.3 req/min'`, `formatMetricValue(1250, 'milliseconds') === '1.25 s'`, `formatMetricValue(410, 'milliseconds') === '410 ms'`.
 
-- [ ] **Step 2: Run** `cd web && npm test -- request-metrics-view MetricChart` — Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** `cd web && npm run typecheck && npm test` — Expected: PASS.
-- [ ] **Step 5: Commit** `feat: add the request metrics view model and chart units`
+- [x] **Step 2: Run** `cd web && npm test -- request-metrics-view MetricChart` — Expected: FAIL.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run** `cd web && npm run typecheck && npm test` — Expected: PASS.
+- [x] **Step 5: Commit** `feat: add the request metrics view model and chart units`
 
 ---
 
