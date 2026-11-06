@@ -178,7 +178,7 @@ export function VariablesEditor({
   const bulkBlocked = parsed.length === 0 || duplicated.length > 0 || invalid.length > 0;
   const changeCount = plan.added.length + plan.changed.length + (replaceAllKeys ? plan.missing.length : 0);
   const bulkOkText =
-    !bulkBlocked && changeCount === 0
+    changeCount === 0
       ? 'No changes'
       : replaceAllKeys
         ? `Replace ${variables.length} variable${variables.length === 1 ? '' : 's'} with ${parsed.length}`

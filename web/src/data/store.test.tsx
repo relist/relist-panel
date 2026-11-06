@@ -29,6 +29,10 @@ vi.mock('./api', async (importOriginal) => {
       listEnvironments: vi.fn(),
       listProjects: vi.fn(),
       listVariableSets: vi.fn(),
+      listVariables: vi.fn(),
+      createVariable: vi.fn(),
+      updateVariable: vi.fn(),
+      deleteVariable: vi.fn(),
       renameVariableSet: vi.fn(),
       updateSetEntry: vi.fn(),
     },
@@ -158,6 +162,29 @@ describe('.env replace', () => {
     expect(mocked.deleteComposeVariable).not.toHaveBeenCalled();
     expect(mocked.updateComposeVariable).not.toHaveBeenCalled();
     expect(mocked.createComposeVariable).toHaveBeenCalledWith(location, rows[1]);
+  });
+
+  it('merges a paste into the Environment against the server list, not the cached tree', async () => {
+    // The tree holds no variables yet; the server already has TZ (with another value) and KEEP.
+    mocked.listVariables.mockResolvedValue([
+      { environmentId: 2, id: 1, key: 'TZ', secret: false, updatedAt: '', value: 'Asia/Bangkok' },
+      { environmentId: 2, id: 2, key: 'KEEP', secret: true, updatedAt: '', value: 'new' },
+    ] as never);
+    const hook = await loadedPanel();
+    await act(async () => {
+      await hook.result.current.replaceVariables(
+        2,
+        [
+          { key: 'TZ', secret: false, value: 'UTC' },
+          { key: 'KEEP', secret: true, value: 'new' },
+        ],
+        { prune: false },
+      );
+    });
+    expect(mocked.updateVariable).toHaveBeenCalledTimes(1);
+    expect(mocked.updateVariable).toHaveBeenCalledWith(1, 2, 1, { key: 'TZ', secret: false, value: 'UTC' });
+    expect(mocked.createVariable).not.toHaveBeenCalled();
+    expect(mocked.deleteVariable).not.toHaveBeenCalled();
   });
 
   it("replaces one set's entries and leaves the other sets alone", async () => {

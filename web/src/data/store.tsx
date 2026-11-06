@@ -410,7 +410,9 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   );
 
   // No bulk endpoint exists, so a `.env` paste is composed from the existing
-  // per-variable calls (`pasteWrites` picks them), then the list is read back.
+  // per-variable calls (`pasteWrites` picks them) against the list as the
+  // server has it now — a merge skips rows it thinks unchanged, so a stale
+  // tree would drop a write — then the list is read back.
   const replaceVariables = useCallback(
     async (environmentId: number, rows: NewVariable[], mode: PasteMode) => {
       await track(`bulk-variables:${environmentId}`, async () => {
@@ -419,7 +421,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
           throw new Error('Environment not found');
         }
         const { project } = location;
-        const writes = pasteWrites(location.environment.variables, rows, mode);
+        const writes = pasteWrites(await api.listVariables(project.id, environmentId), rows, mode);
         for (const id of writes.deletes) await api.deleteVariable(project.id, environmentId, id);
         for (const { id, row } of writes.updates) await api.updateVariable(project.id, environmentId, id, row);
         for (const row of writes.creates) await api.createVariable(project.id, environmentId, row);
