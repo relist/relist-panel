@@ -8,3 +8,7 @@
 /.superpowers/
 docker-compose.override.yml
 .env
+# Vite build output, embedded by internal/webassets; built per checkout by
+# `task build-web` and in the Dockerfile, never committed (hashed names conflict).
+/internal/webassets/dist/*
+!/internal/webassets/dist/.gitkeep

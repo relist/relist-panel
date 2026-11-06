@@ -10,7 +10,11 @@ import (
 
 //go:generate pnpm --dir ../../web build
 
-//go:embed dist
+// dist is build output and stays out of git (each worktree builds its own);
+// only dist/.gitkeep is committed, and all: embeds it so a checkout that never
+// built the frontend still compiles.
+//
+//go:embed all:dist
 var files embed.FS
 
 // Handler serves the compiled Vite application from the binary. The frontend
@@ -22,6 +26,24 @@ func Handler() http.Handler {
 	dist, err := fs.Sub(files, "dist")
 	if err != nil {
 		panic("embedded web assets are missing: " + err.Error())
+	}
+	return handler(dist)
+}
+
+// notBuilt is the page a binary built without the frontend serves.
+const notBuilt = "The web frontend was not built into this binary. Run `task build-web` (or `task build`) and rebuild.\n"
+
+func handler(dist fs.FS) http.Handler {
+	if _, err := fs.Stat(dist, "index.html"); err != nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(notBuilt))
+		})
 	}
 	fileServer := http.FileServer(http.FS(dist))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
