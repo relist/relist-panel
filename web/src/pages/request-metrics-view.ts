@@ -54,9 +54,18 @@ export function latencySeries(metrics: RequestMetrics): MetricSeries[] {
   return [line('p50Ms', 'p50'), line('p90Ms', 'p90'), line('p99Ms', 'p99')];
 }
 
-/** The summary of the first series' points, for the chart header (the sum of lines would mislead). */
-export function chartSummary(series: MetricSeries[]) {
-  return summarizeMetric(series.flatMap((entry) => entry.points));
+/** The Status chart's header: all four classes added per bucket, in requests per minute. */
+export function statusHeader(series: MetricSeries[]) {
+  const totals = new Map<number, number>();
+  for (const entry of series) {
+    for (const point of entry.points) totals.set(point.at, (totals.get(point.at) ?? 0) + point.value);
+  }
+  return summarizeMetric([...totals].sort((x, y) => x[0] - y[0]).map(([at, value]) => ({ at, value })));
+}
+
+/** The Latency chart's header is the p50 line: the typical request. */
+export function latencyHeader(series: MetricSeries[]) {
+  return summarizeMetric(series.find((entry) => entry.key === 'p50Ms')?.points ?? []);
 }
 
 function ms(value: number | null): string {

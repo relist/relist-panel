@@ -342,11 +342,11 @@ and in the existing MetricChart test file (or a new one), `formatMetricValue(12.
 - Consumes: Task 7.
 - Produces: `RequestMetricsPanel({ swrKey, load, extra }: { swrKey: string; load: (w: RequestWindow) => Promise<RequestMetrics>; extra?: ReactNode })` — window `Segmented` (from `windowsFor(retentionDays)` of the last response, default `1h`), summary row (`Statistic`), Status and Latency `MetricChart`s, `Alert` when `!accessLogEnabled` (link to `/traefik`, text: "The Access log is off. Turn it on in Traefik › Settings to collect request metrics."), warning `Alert` when `accessLogFiltered` ("The Access log is filtered, so these numbers cover only the requests it logs."), error `Alert` with Retry as on MonitoringPage.
 
-- [ ] **Step 1: Write the failing tests** (`RequestMetricsPanel.test.tsx`, mocked `load`): renders summary values; access-log-off Alert replaces the charts; filtered warning shows above them; retention 7 offers `7d` but not `30d`.
-- [ ] **Step 2: Run** `cd web && npm test -- RequestMetricsPanel` — Expected: FAIL.
-- [ ] **Step 3: Implement** the panel; the drawer (`InputNumber` 1–90, Save; when the new value is lower than the current one, a confirm warns "History older than N days will be deleted within the hour."); MonitoringPage gets `Tabs` — `Host` (the current content, unchanged), `Requests` (panel with the Settings button as `extra`), `Panel`. Keep `?window=` for the Host tab; add `?tab=`.
-- [ ] **Step 4: Run** `cd web && npm run typecheck && npm test` — Expected: PASS.
-- [ ] **Step 5: Commit** `feat: show request metrics on the Monitoring page`
+- [x] **Step 1: Write the failing tests** (`RequestMetricsPanel.test.tsx`, mocked `load`): renders summary values; access-log-off Alert replaces the charts; filtered warning shows above them; retention 7 offers `7d` but not `30d`.
+- [x] **Step 2: Run** `cd web && npm test -- RequestMetricsPanel` — Expected: FAIL.
+- [x] **Step 3: Implement** the panel; the drawer (`InputNumber` 1–90, Save; when the new value is lower than the current one, a confirm warns "History older than N days will be deleted within the hour."); MonitoringPage gets `Tabs` — `Host` (the current content, unchanged), `Requests` (panel with the Settings button as `extra`), `Panel`. Keep `?window=` for the Host tab; add `?tab=`.
+- [x] **Step 4: Run** `cd web && npm run typecheck && npm test` — Expected: PASS.
+- [x] **Step 5: Commit** `feat: show request metrics on the Monitoring page`
 
 ---
 
