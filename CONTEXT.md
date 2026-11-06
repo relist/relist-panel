@@ -49,7 +49,7 @@ One running instance of a Service, created by a deploy. Its identity is not stab
 _Avoid_: Instance
 
 **Image**:
-A Docker image present on the host, listed and loaded from the Images page. A Compose references one by name in its file, or builds one from its Source; the panel builds images only from a Source and never pulls one itself — except the Scanner's own image (ADR-0021), the panel's own image for a Panel update (ADR-0024) and the BuildKit image Builders run (ADR-0028).
+A Docker image present on the host, listed and loaded from the Images page. A Compose references one by name in its file, or builds one from its Source; the panel builds images only from a Source and never pulls one itself — except the Scanner's own image (ADR-0021), the panel's own image for a Panel update (ADR-0024) the BuildKit image Builders run (ADR-0028) and the Registry's own `registry:3` image (ADR-0033).
 _Avoid_: Build, Artifact
 
 **Builder**:
@@ -75,6 +75,18 @@ _Avoid_: Repo (a zip Source has none), App, Application
 **SSH key**:
 An SSH key pair the panel generates and keeps in the host-wide SSH keys library. A Git Source chooses one; one key may serve many Composes. The operator adds its public half to each repository as a read-only deploy key (ADR-0020).
 _Avoid_: Credential, Deploy key (the per-Compose key of ADR-0016)
+
+**Registry**:
+The panel's own image registry, one per host: a `registry:3` container the panel runs, reached at its hostname through Traefik. CI pushes Images to it with Push credentials; Composes pull them from it (ADR-0033).
+_Avoid_: Docker registry, Hub
+
+**Push credential**:
+A named login (htpasswd) to the Registry with full push and pull access, for one CI pipeline. Only its hash is kept; the token is shown once.
+_Avoid_: Registry user, Token, Deploy key
+
+**Registry cleanup**:
+One run that deletes the tags retention does not keep, then garbage-collects unreferenced layers with the Registry read-only (ADR-0033).
+_Avoid_: Prune, GC (GC is one step of it)
 
 **External registry**:
 The login (host, username, token or password) for a registry the panel does not run, such as GHCR or Docker Hub, kept host-wide on the Registry page. Every pull and build the panel runs logs in with every External registry, through a Docker config made for that one call (ADR-0034).
