@@ -42,11 +42,12 @@ type recordingRunner struct {
 	pulls       []PullOptions
 	inspected   []string
 	imageLabels map[string]map[string]string
+	pullErr     error
 }
 
 func (r *recordingRunner) Pull(_ context.Context, _ RunRequest, opts PullOptions) error {
 	r.pulls = append(r.pulls, opts)
-	return nil
+	return r.pullErr
 }
 
 // ImageLabels records image@platform, or image when no platform is asked.
@@ -722,6 +723,32 @@ const imageConfig = `{"name":"relist-c1","services":{
 	"cache":{"image":"redis:7","pull_policy":"always"},
 	"local":{"image":"local:1","pull_policy":"never"},
 	"built":{"build":{"context":"."}}}}`
+
+// A pull refused for credentials points at External registries; any other
+// pull failure does not.
+func TestPullUnauthorizedAddsHint(t *testing.T) {
+	const hint = "If the image is private, add its registry's credentials on Registry → External registries."
+	for _, c := range []struct {
+		err  string
+		hint bool
+	}{
+		{"Error response from daemon: Head \"https://ghcr.io/v2/me/app/manifests/1\": unauthorized: authentication required", true},
+		{"pull access denied for me/app, repository does not exist or may require 'docker login': denied: requested access to the resource is denied", true},
+		{"dial tcp: lookup ghcr.io: no such host", false},
+	} {
+		svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+		runner.config = []byte(imageConfig)
+		runner.pullErr = errors.New(c.err)
+		_, err := svc.RunDeploy(context.Background(), target, DeployOptions{})
+		var f *DeployFailure
+		if !errors.As(err, &f) {
+			t.Fatalf("%s: err = %v, want a DeployFailure", c.err, err)
+		}
+		if strings.HasSuffix(f.Message, hint) != c.hint {
+			t.Errorf("%s: message = %q, want hint = %v", c.err, f.Message, c.hint)
+		}
+	}
+}
 
 // A deploy builds and pulls every image first, checks the labels each
 // image carries, and starts them without building or pulling again.

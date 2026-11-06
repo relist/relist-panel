@@ -317,6 +317,18 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 	return files.warnings, nil
 }
 
+// pullHint points a pull refused for credentials at External registries
+// (ADR-0034), or is empty.
+func pullHint(err error) string {
+	msg := strings.ToLower(err.Error())
+	for _, s := range []string{"unauthorized", "denied", "authentication required"} {
+		if strings.Contains(msg, s) {
+			return ". If the image is private, add its registry's credentials on Registry → External registries."
+		}
+	}
+	return ""
+}
+
 const volumesRemovedAdvice = "The Compose is stopped; fix the cause and deploy again."
 
 func volumesAdvice(fresh bool) string {
@@ -662,7 +674,7 @@ func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool,
 			continue
 		}
 		if err := s.runner.Pull(ctx, req, pull); err != nil {
-			return failure(FailureRunner, "pull failed: "+err.Error(), err)
+			return failure(FailureRunner, "pull failed: "+err.Error()+pullHint(err), err)
 		}
 	}
 	var refused []string

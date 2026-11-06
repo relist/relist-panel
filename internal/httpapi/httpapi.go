@@ -110,6 +110,9 @@ type Deps struct {
 	// RegistryAuth is the Runner's source of registry logins; the handler
 	// sets it once its stores exist. Nil (tests) leaves pulls without logins.
 	RegistryAuth *registryauth.Switch
+	// RegistryTester logs in for an External registry's Test button. Nil
+	// answers every Test with "not available".
+	RegistryTester registryauth.Tester
 }
 
 // NewHandler builds the top-level HTTP handler for the panel.
@@ -259,6 +262,11 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	}()
 	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
 	sshkeys.New(db).RegisterRoutes(mux)
+	externalRegistries := registryauth.NewStore(db)
+	registryauth.New(externalRegistries, d.RegistryTester, nil).RegisterRoutes(mux)
+	if d.RegistryAuth != nil {
+		d.RegistryAuth.Set(externalRegistries)
+	}
 	certificates.New(db, dataDir).RegisterRoutes(mux)
 	accessLogs := accesslog.New(db, dataDir, d.Traefik)
 	accessLogs.RegisterRoutes(mux)
