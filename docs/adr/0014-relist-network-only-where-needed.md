@@ -7,7 +7,7 @@ ADR-0002 put every Service of every Compose on the shared `relist-network`. A Se
 - it carries a hand-written `traefik.*` label;
 - its YAML already lists `relist-network`. This is the opt-in for calls from other Composes.
 
-Every other Service keeps the networks its YAML gives it. That is the Compose's private `default` network when it has none. A joining Service with no `networks:` key gets `default` beside `relist-network`, so it still reaches its own siblings. A list-form `networks:` becomes a map so aliases can be attached. A Service that joins through hand-written labels and has no `traefik.docker.network` gets `traefik.docker.network=relist-network`, because it is now on two networks and Traefik must pick the routable one. This supersedes ADR-0002's "every service" rule. The `env_file` injection still covers every Service; ADR-0015 adds per-Service variable sets beside it.
+Every other Service keeps the networks its YAML gives it. That is the Compose's private `default` network when it has none. A joining Service with no `networks:` key, or whose `networks:` lists only `relist-network`, gets `default` beside `relist-network`, so it still reaches its own siblings. A list-form `networks:` becomes a map so aliases can be attached. A Service that joins through hand-written labels and has no `traefik.docker.network` gets `traefik.docker.network=relist-network`, because it is now on two networks and Traefik must pick the routable one. This supersedes ADR-0002's "every service" rule. The `env_file` injection still covers every Service; ADR-0015 adds per-Service variable sets beside it.
 
 Each joining Service gets two aliases on `relist-network`, added beside any the operator wrote:
 - **stable**, `<service>.<deploy project name>.internal`, e.g. `web.relist-c12.internal`. It never changes, by ADR-0005 and ADR-0011.
@@ -31,3 +31,7 @@ On 2026-10-09 a probe ran two Composes on a throwaway external network. Each had
 - **Traefik's file provider** can no longer reach a Service by name unless that Service opts in.
 - **The readable alias follows renames.** After a Project, Environment or Compose rename it changes on the next deploy, and it can briefly duplicate another until both redeploy. Config should use the stable alias.
 - **`network_mode` Services are no longer given networks.** This fixes the known issue recorded in ADR-0013.
+
+## Amendment (2026-11-06): `networks: [relist-network]` keeps `default`
+
+Opting in with `networks: [relist-network]` used to drop the Service off its Compose's `default` network, because an explicit list was kept as written. The Service then could not reach its siblings by bare name, which is never what the opt-in meant. A Service whose `networks:` names only `relist-network` (list or map form) now gets `default` beside it, as a Service with no `networks:` key does. A list naming any other network is still kept as written.
