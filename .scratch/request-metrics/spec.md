@@ -235,8 +235,12 @@ Response:
 - `hosts` only on the Compose endpoint: its current Domain hosts, for the selector.
 - The server computes every percentile; the browser never sees a histogram.
 - `summary` percentiles come from merging every bucket of the window.
-- A bucket with no requests has `null` percentiles: a gap, never zero.
-- A bucket with no row at all (panel down) is absent; `partial` is true when the window
+- Every closed minute has a `total` row, zero when quiet (amended in review: rows were
+  first written only for minutes with requests, which made a chart bridge a quiet hour).
+  A bucket with a `total` row but no row for the asked series is zero requests.
+- A bucket with no requests has `null` percentiles: a gap in the Latency chart, 0 in the
+  Status chart.
+- A bucket with no `total` row (panel down) is absent; `partial` is true when the window
   has fewer buckets than its length, as the existing metric endpoints do.
 
 ### UI
@@ -272,6 +276,7 @@ Both charts use the existing `MetricChart`, with two new units: `requestsPerMinu
 | Access log off, or Traefik not updated | `accessLogEnabled: false`; views show the Alert |
 | `access.log` missing | Ingester retries every 10 s |
 | Bad line, unknown router, unknown Domain ID | counts in what it can (or nothing), skipped, counted, logged ≤ once a minute |
+| Line stamped more than 5 minutes ahead of the clock (amended in review) | refused, counted, logged ≤ once a minute |
 | Line for an already-closed minute | dropped, counted |
 | SQLite write fails | logged; the minutes are dropped and show as a gap; the cursor is not advanced, so a restart re-reads them |
 | Unknown or too-long `window`, unknown `host` | 400 |

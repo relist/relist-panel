@@ -150,7 +150,9 @@ func TestCursorNothingOpen(t *testing.T) {
 	}
 	a.Add(line(at(0, 10), "", 200), 0, at(0, 11))
 	a.CloseReady(at(5, 0))
-	if off, through := a.Cursor(77); off != 77 || !through.Equal(at(1, 0)) {
+	// Idle since 10:00:11: 10:00 closes, and the quiet minutes after it up to
+	// the last one 30 seconds past its end (10:03) close as zero rows.
+	if off, through := a.Cursor(77); off != 77 || !through.Equal(at(4, 0)) {
 		t.Fatalf("after close = %d, %v", off, through)
 	}
 }
@@ -165,5 +167,90 @@ func TestCursorAfterNewFile(t *testing.T) {
 	a.Add(line(at(1, 6), "", 200), 0, at(1, 6))
 	if off, _ := a.Cursor(50); off != 0 {
 		t.Fatalf("with new-file line = %d", off)
+	}
+}
+
+// A minute without requests still gets a zero total row, so a chart reads 0
+// there instead of bridging the line, and the API can tell a quiet minute
+// from one the panel was not collecting.
+func TestQuietMinutesGetZeroTotalRows(t *testing.T) {
+	a := newAgg()
+	a.Add(line(at(0, 10), "panel@docker", 200), 0, at(0, 10))
+	a.Add(line(at(5, 10), "", 200), 100, at(5, 10))
+	a.Add(line(at(6, 31), "", 200), 200, at(6, 31))
+	rows := a.CloseReady(at(6, 31))
+	totals := map[time.Time]uint64{}
+	panels := 0
+	for _, r := range rows {
+		switch r.Key.Scope {
+		case ScopeTotal:
+			totals[r.BucketAt] = r.Counts.Requests()
+		case ScopePanel:
+			panels++
+		}
+	}
+	want := map[time.Time]uint64{at(0, 0): 1, at(1, 0): 0, at(2, 0): 0, at(3, 0): 0, at(4, 0): 0, at(5, 0): 1}
+	if len(totals) != len(want) {
+		t.Fatalf("total rows = %v, want %v", totals, want)
+	}
+	for m, n := range want {
+		if got, ok := totals[m]; !ok || got != n {
+			t.Errorf("total at %s = %d (present %v), want %d", m.Format("15:04"), got, ok, n)
+		}
+	}
+	if panels != 1 {
+		t.Errorf("panel rows = %d, want 1 (quiet minutes write total only)", panels)
+	}
+}
+
+// With no traffic at all, minutes still close by the clock once the log has
+// been idle for 2 minutes and the minute is 30 seconds past its end.
+func TestIdleAdvancesWithoutTraffic(t *testing.T) {
+	a := newAgg()
+	if rows := a.CloseReady(at(0, 0)); len(rows) != 0 {
+		t.Fatalf("first call closed %d rows", len(rows))
+	}
+	rows := a.CloseReady(at(3, 0))
+	if len(rows) != 2 || rows[0].BucketAt != at(0, 0) || rows[1].BucketAt != at(1, 0) {
+		t.Fatalf("rows = %+v, want zero totals at 10:00 and 10:01", rows)
+	}
+	for _, r := range rows {
+		if r.Key.Scope != ScopeTotal || r.Counts.Requests() != 0 {
+			t.Errorf("row %+v, want a zero total", r)
+		}
+	}
+	if _, through := a.Cursor(0); !through.Equal(at(2, 0)) {
+		t.Errorf("flushedThrough = %s, want 10:02", through)
+	}
+}
+
+// A start with no cursor history never fills more than the minute table keeps.
+func TestZeroFillStaysWithinMinuteKeep(t *testing.T) {
+	a := NewAggregator(time.Unix(0, 0), lookup)
+	a.CloseReady(t0)
+	rows := a.CloseReady(t0.Add(3 * time.Minute))
+	if len(rows) == 0 || len(rows) > 25*60+5 {
+		t.Fatalf("rows = %d, want at most 25h of minutes", len(rows))
+	}
+	if oldest := rows[0].BucketAt; oldest.Before(t0.Add(-25 * time.Hour)) {
+		t.Errorf("oldest row %s is older than 25h", oldest)
+	}
+}
+
+// A line stamped far in the future must not push the watermark there: it
+// would close every minute up to it and drop all real traffic after.
+func TestFutureLineRejected(t *testing.T) {
+	a := newAgg()
+	if a.Add(line(at(10, 0), "", 200), 0, at(0, 0)) {
+		t.Fatal("a line 10 minutes ahead of the clock was counted")
+	}
+	if a.Future() != 1 {
+		t.Errorf("Future() = %d, want 1", a.Future())
+	}
+	if !a.Add(line(at(0, 10), "", 200), 10, at(0, 10)) {
+		t.Fatal("a normal line after it was not counted")
+	}
+	if rows := a.CloseReady(at(0, 20)); len(rows) != 0 {
+		t.Errorf("closed %d rows; the future line moved the watermark", len(rows))
 	}
 }

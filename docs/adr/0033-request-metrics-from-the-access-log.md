@@ -6,7 +6,7 @@ The panel showed CPU, memory, disk and network for the host and each Service, bu
 
 - The panel tails `<data dir>/.traefik/access/access.log` and turns it into **request metrics**: counts by status class (1xx to 5xx, and other) and latency p50, p90 and p99, per minute. A goroutine, the Ingester, started with the other housekeeping jobs, polls the file once a second. It follows a rotation by reading the old file to its end, then opening the new one.
 - **Series are keyed by `RouterName`, never by `RequestHost`.** The client chooses `Host`; the panel chooses router names. Every line counts in `total`. `panel@docker` also counts in `panel`. `relist-c<C>-d<D>@docker` also counts in the host series of Compose C, the host of Domain D being read from the database. Redirect routers (`-http`), hand-written Traefik labels and unmatched requests count in `total` only. The number of stored series is therefore fixed by the number of Domains, not by the traffic.
-- A line goes into the minute of its own `StartUTC`. A minute closes when the watermark (the latest `StartUTC` read) passes it by 90 seconds, or by the wall clock after 2 minutes without a new line. Reading late only delays the charts; it loses nothing.
+- A line goes into the minute of its own `StartUTC`. A minute closes when the watermark (the latest `StartUTC` read) passes it by 90 seconds, or by the wall clock (also 90 seconds past its start) after 2 minutes without a new line. Reading late only delays the charts; it loses nothing. **Every closed minute gets a `total` row, zero when it had no request**, so a quiet minute reads as 0 and a minute without a `total` row means the panel was not collecting. A line stamped more than 5 minutes ahead of the clock is refused, so a clock jump cannot push the watermark forward and drop the traffic after it.
 - Latency is a stored log-scale histogram (ratio 1.2, 1 ms to 60 s, plus underflow and overflow), kept as a sparse BLOB. Histograms add, so a window's percentile is computed from merged histograms and is within about 10% of the exact value. Percentiles are never averaged.
 - Minute rows are kept 25 hours. Each complete hour is compacted into an hourly row kept for 1 to 90 days, set by an admin (default 1). Both live in `panel.db` and move with a Migration.
 - A cursor (inode, resume offset, flushed-through time) is written in the same transaction as the minute rows it accounts for, so a restart resumes without counting a line twice or losing one. Only a panel outage across the midnight rotation, or a first start, leaves a gap.
@@ -22,6 +22,8 @@ The panel showed CPU, memory, disk and network for the host and each Service, bu
 **Keying by `RequestHost`.** Rejected: the client controls it, so any visitor could create series without limit and grow storage. `RouterName` is written by the panel.
 
 **Counting a line in the minute it was read.** Rejected: a burst or a slow read would pile its lines into the wrong minutes. The line's own `StartUTC` is the truth.
+
+**Writing rows only for minutes with requests.** Rejected: a chart would draw a line across a quiet hour at the last busy minute's level, and a quiet minute could not be told from one the panel missed.
 
 **Averaging the percentiles of each minute for a longer window.** Rejected: an average of percentiles is not a percentile. Merging histograms is.
 

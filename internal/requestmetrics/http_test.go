@@ -297,3 +297,44 @@ func TestSettingsPut(t *testing.T) {
 		t.Errorf("a refused put changed the setting: %d %v", code, body)
 	}
 }
+
+// A minute the panel collected (it has a total row) but in which the series
+// had no request is a zero bucket, not a missing one; a minute without a
+// total row (the panel was down) stays absent.
+func TestQuietBucketsAreZero(t *testing.T) {
+	r := newHTTPRig(t)
+	r.seedCompose(1, 1, "a.test")
+	host := Key{Scope: ScopeHost, ComposeID: 1, Host: "a.test"}
+	r.write(
+		mkRow(total, at(20, 0), 5, time.Millisecond),
+		mkRow(host, at(20, 0), 5, time.Millisecond),
+		mkRow(total, at(21, 0), 0),
+		mkRow(total, at(22, 0), 3, time.Millisecond),
+		// 10:23 not collected: no total row.
+		mkRow(total, at(24, 0), 0),
+	)
+	for _, path := range []string{
+		"/api/requests/panel/metrics?window=1h",
+		"/api/projects/1/environments/1/composes/1/requests/metrics?window=1h",
+	} {
+		_, body := r.get(path)
+		buckets := body["buckets"].([]any)
+		var ats []float64
+		for _, b := range buckets {
+			ats = append(ats, num(b.(map[string]any)["at"]))
+		}
+		want := []float64{float64(at(20, 0).UnixMilli()), float64(at(21, 0).UnixMilli()), float64(at(22, 0).UnixMilli()), float64(at(24, 0).UnixMilli())}
+		if len(ats) != len(want) {
+			t.Fatalf("%s: bucket times = %v, want %v", path, ats, want)
+		}
+		for i := range want {
+			if ats[i] != want[i] {
+				t.Fatalf("%s: bucket times = %v, want %v", path, ats, want)
+			}
+		}
+		quiet := buckets[1].(map[string]any)
+		if num(quiet["c2xx"]) != 0 || quiet["p50Ms"] != nil {
+			t.Errorf("%s: quiet bucket = %v", path, quiet)
+		}
+	}
+}

@@ -20,6 +20,13 @@ const (
 	// idleClose closes minutes by the wall clock once no line has arrived
 	// for this long, so a quiet site still gets its rows.
 	idleClose = 2 * time.Minute
+	// maxAhead is how far past the wall clock a line's StartUTC may be. A
+	// line further ahead (a clock that jumped) would push the watermark
+	// there, close every minute up to it and drop all real traffic after.
+	maxAhead = 5 * time.Minute
+	// fillKeep bounds the zero rows written for quiet minutes to what the
+	// minute table keeps.
+	fillKeep = 25 * time.Hour
 )
 
 // Key identifies one series. ComposeID and Host are zero values unless Scope
@@ -106,11 +113,12 @@ type Aggregator struct {
 	hosts       HostLookup
 	open        map[int64]*openMinute // unix seconds of the minute start
 	watermark   time.Time
-	lastAddAt   time.Time
-	closedUntil int64 // unix seconds: every minute before this is closed
-	floor       int64 // unix seconds: minutes before this were written by an earlier run
+	lastAddAt   time.Time // last line counted, or the first CloseReady with none yet
+	closedUntil int64     // unix seconds: every minute before this is closed
+	floor       int64     // unix seconds: minutes before this were written by an earlier run
 	gen         int
 	dropped     uint64
+	future      uint64
 }
 
 // NewAggregator starts an aggregator that treats every minute before
@@ -128,6 +136,10 @@ func NewAggregator(flushedThrough time.Time, hosts HostLookup) *Aggregator {
 // closing. It returns false when the line was not counted: its minute was
 // written before a restart (skipped), or closed since (dropped and counted).
 func (a *Aggregator) Add(l Line, offset int64, now time.Time) bool {
+	if l.Start.After(now.Add(maxAhead)) {
+		a.future++
+		return false
+	}
 	minute := l.Start.Unix() - l.Start.Unix()%60
 	if minute < a.floor {
 		return false // already written before a restart; not a late line
@@ -173,37 +185,61 @@ func (a *Aggregator) count(m *openMinute, k Key, l Line) {
 }
 
 // CloseReady closes every minute that is ready at now, oldest first, and
-// returns its rows sorted by minute, then key. It always closes a prefix: an
-// older open minute is never left behind a closed newer one.
+// returns its rows sorted by minute, then key. A minute is ready once the
+// watermark is 30 seconds past its end, or, after 2 minutes without a line,
+// once the clock is. Closing walks minute by minute from where the last call
+// stopped, so it always closes a prefix, and every closed minute gets a total
+// row: zero for a minute without requests. A total row therefore means "the
+// panel was collecting this minute"; no row means it was not.
 func (a *Aggregator) CloseReady(now time.Time) []Row {
-	minutes := make([]int64, 0, len(a.open))
-	for m := range a.open {
-		minutes = append(minutes, m)
+	if a.lastAddAt.IsZero() {
+		a.lastAddAt = now // idle is measured from the first look at the log
 	}
-	sort.Slice(minutes, func(i, j int) bool { return minutes[i] < minutes[j] })
+	idle := now.Sub(a.lastAddAt) >= idleClose
+	ready := func(m int64) bool {
+		end := time.Unix(m, 0).Add(time.Minute + closeGrace)
+		return !a.watermark.Before(end) || (idle && !now.Before(end))
+	}
 
-	idle := !a.lastAddAt.IsZero() && now.Sub(a.lastAddAt) >= idleClose
+	fillFrom := now.Add(-fillKeep).Truncate(time.Minute).Unix()
 	var rows []Row
-	for _, m := range minutes {
-		start := time.Unix(m, 0).UTC()
-		end := start.Add(time.Minute)
-		byWatermark := !a.watermark.Before(end.Add(closeGrace))
-		byClock := idle && !now.Before(end)
-		if !byWatermark && !byClock {
+	m := a.closedUntil
+	for {
+		if m < fillFrom {
+			// Far behind (no history, or a long outage): close the old open
+			// minutes that remain, but write no zero rows that old.
+			next := fillFrom
+			for om := range a.open {
+				if om >= m && om < next {
+					next = om
+				}
+			}
+			m = next
+		}
+		if !ready(m) {
 			break
 		}
-		keys := make([]Key, 0, len(a.open[m].series))
-		for k := range a.open[m].series {
+		start := time.Unix(m, 0).UTC()
+		series := map[Key]*Counts{}
+		if om := a.open[m]; om != nil {
+			series = om.series
+			delete(a.open, m)
+		}
+		if series[Key{Scope: ScopeTotal}] == nil {
+			series[Key{Scope: ScopeTotal}] = &Counts{}
+		}
+		keys := make([]Key, 0, len(series))
+		for k := range series {
 			keys = append(keys, k)
 		}
 		sort.Slice(keys, func(i, j int) bool { return keys[i].less(keys[j]) })
 		for _, k := range keys {
-			rows = append(rows, Row{Key: k, BucketAt: start, Counts: *a.open[m].series[k]})
+			rows = append(rows, Row{Key: k, BucketAt: start, Counts: *series[k]})
 		}
-		delete(a.open, m)
-		if e := end.Unix(); e > a.closedUntil {
-			a.closedUntil = e
-		}
+		m += 60
+	}
+	if m > a.closedUntil {
+		a.closedUntil = m
 	}
 	return rows
 }
@@ -235,6 +271,10 @@ func (a *Aggregator) Cursor(readOffset int64) (int64, time.Time) {
 	}
 	return resume, time.Unix(oldest, 0).UTC()
 }
+
+// Future is the number of lines refused because their StartUTC was more
+// than 5 minutes ahead of the clock.
+func (a *Aggregator) Future() uint64 { return a.future }
 
 // Dropped is the number of lines dropped because their minute had closed.
 func (a *Aggregator) Dropped() uint64 { return a.dropped }

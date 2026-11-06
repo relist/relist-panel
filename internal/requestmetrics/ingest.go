@@ -38,14 +38,15 @@ type Ingester struct {
 	buf      []byte
 	chunk    []byte
 
-	sawMissing bool
-	missing    bool
-	lastMaint  time.Time
-	badLines   uint64
-	loggedBad  uint64
-	loggedLate uint64
-	lastBadLog time.Time
-	lastErrLog time.Time
+	sawMissing  bool
+	missing     bool
+	lastMaint   time.Time
+	badLines    uint64
+	loggedBad   uint64
+	loggedLate  uint64
+	loggedAhead uint64
+	lastBadLog  time.Time
+	lastErrLog  time.Time
 }
 
 func (in *Ingester) now() time.Time {
@@ -298,14 +299,14 @@ func (in *Ingester) maintain(ctx context.Context, through, now time.Time) {
 
 // logCounters reports skipped and dropped lines, at most once a minute.
 func (in *Ingester) logCounters(now time.Time) {
-	late := in.agg.Dropped()
-	if in.badLines == in.loggedBad && late == in.loggedLate {
+	late, ahead := in.agg.Dropped(), in.agg.Future()
+	if in.badLines == in.loggedBad && late == in.loggedLate && ahead == in.loggedAhead {
 		return
 	}
 	if now.Sub(in.lastBadLog) < time.Minute {
 		return
 	}
-	log.Printf("requestmetrics: skipped %d unreadable and dropped %d late access log lines since the last report",
-		in.badLines-in.loggedBad, late-in.loggedLate)
-	in.loggedBad, in.loggedLate, in.lastBadLog = in.badLines, late, now
+	log.Printf("requestmetrics: skipped %d unreadable, dropped %d late and refused %d future-dated access log lines since the last report",
+		in.badLines-in.loggedBad, late-in.loggedLate, ahead-in.loggedAhead)
+	in.loggedBad, in.loggedLate, in.loggedAhead, in.lastBadLog = in.badLines, late, ahead, now
 }

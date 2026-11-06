@@ -224,7 +224,20 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request, keys []Key, host
 		return
 	}
 	from := s.now().Add(-win.length).Truncate(win.bucket())
-	rows, err := s.store.Rows(ctx, win.res, keys, from)
+	// The total row of a bucket says the panel was collecting then (the
+	// Ingester writes one for every minute, zero when quiet), so it is read
+	// with the asked series: a collected bucket without a series row is zero
+	// requests, and only a bucket without a total row is missing.
+	total := Key{Scope: ScopeTotal}
+	wanted := map[Key]bool{}
+	for _, k := range keys {
+		wanted[k] = true
+	}
+	query := keys
+	if !wanted[total] {
+		query = append(append([]Key{}, keys...), total)
+	}
+	rows, err := s.store.Rows(ctx, win.res, query, from)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load request metrics")
 		return
@@ -239,6 +252,9 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request, keys []Key, host
 		if c == nil {
 			c = &Counts{}
 			merged[at] = c
+		}
+		if !wanted[rows[i].Key] {
+			continue // coverage only
 		}
 		c.Merge(&rows[i].Counts)
 		all.Merge(&rows[i].Counts)

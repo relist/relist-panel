@@ -298,3 +298,26 @@ func BenchmarkIngest(b *testing.B) {
 	}
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/n, "ns/line")
 }
+
+// With the log open and no traffic, the Ingester still writes a zero total
+// row for each minute it watched, and advances the cursor past them.
+func TestIngesterWritesQuietMinutes(t *testing.T) {
+	r := newRig(t)
+	r.append(r.path(), "")
+	r.step(at(0, 0))
+	r.step(at(5, 0))
+	got := r.totals()
+	for m := 0; m <= 3; m++ {
+		n, ok := got[at(m, 0).Unix()]
+		if !ok || n != 0 {
+			t.Errorf("minute 10:0%d: present %v, requests %d; want a zero row", m, ok, n)
+		}
+	}
+	if _, ok := got[at(4, 0).Unix()]; ok {
+		t.Error("10:04 closed before it was 30 seconds past its end")
+	}
+	cur, ok, err := r.store.Cursor(context.Background())
+	if err != nil || !ok || !cur.FlushedThrough.Equal(at(4, 0)) {
+		t.Fatalf("cursor = %+v, %v, %v; want flushed through 10:04", cur, ok, err)
+	}
+}
