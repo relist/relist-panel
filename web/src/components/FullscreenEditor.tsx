@@ -8,7 +8,7 @@ import {
   SaveOutlined,
   UndoOutlined,
 } from '@ant-design/icons';
-import { App, Button, Flex, Input, Modal, Tag, Tooltip, Typography, theme } from 'antd';
+import { Alert, App, Button, Flex, Input, Modal, Tag, Tooltip, Typography, theme } from 'antd';
 import { useMemo, useRef, useState } from 'react';
 import type { editor as MonacoEditorApi } from 'monaco-editor';
 import { useNavigate } from 'react-router';
@@ -20,6 +20,8 @@ import { isSecret, maskedValue, railVariables, type RailVariable } from './varia
 import type { Compose, ComposeVariable, Environment, Project } from '../data/types';
 
 const { Text } = Typography;
+
+const NO_VARIABLES: readonly ComposeVariable[] = [];
 
 /** The one way a Compose refers to an Environment Variable. Values are injected at deploy time. */
 const reference = (key: string) => `\${${key}}`;
@@ -139,8 +141,8 @@ function VariableRow({
 }
 
 /**
- * The Compose editor, full screen: toolbar, the YAML file, and the Environment
- * variables beside it so a reference can be dropped in without leaving the file.
+ * The Compose editor, full screen: toolbar, the YAML file, and the variables a
+ * deploy writes (the Environment's, this Compose's own laid over them) beside it so a reference can be dropped in without leaving the file.
  *
  * The page stays the owner of the draft — this component hands every edit back
  * through `onChange`. Both editors are mounted with the same Monaco `path`, so
@@ -150,7 +152,8 @@ function VariableRow({
  */
 export function FullscreenEditor({
   compose,
-  composeVariables = [],
+  composeVariables,
+  composeVariablesError,
   dirty,
   draft,
   environment,
@@ -164,8 +167,10 @@ export function FullscreenEditor({
   saving,
 }: {
   compose: Compose;
-  /** This Compose's own variables; each overrides an Environment Variable of the same key. */
+  /** This Compose's own variables; each overrides an Environment Variable of the same key. `undefined` until loaded. */
   composeVariables?: readonly ComposeVariable[];
+  /** Why they could not load: the rail then cannot say which Environment values a Compose Variable overrides. */
+  composeVariablesError?: string;
   dirty: boolean;
   draft: string;
   environment: Environment;
@@ -183,9 +188,10 @@ export function FullscreenEditor({
   const navigate = useNavigate();
   const editorRef = useRef<MonacoEditorApi.IStandaloneCodeEditor | null>(null);
   const [query, setQuery] = useState('');
+  const composeVariablesPending = composeVariables === undefined && !composeVariablesError;
 
   const all = useMemo(
-    () => railVariables(environment.variables, composeVariables),
+    () => railVariables(environment.variables, composeVariables ?? NO_VARIABLES),
     [environment.variables, composeVariables],
   );
   const variables = useMemo(() => {
@@ -304,13 +310,23 @@ export function FullscreenEditor({
             width: 340,
           }}
         >
-          <Text strong>Environment variables</Text>
+          <Text strong>Variables</Text>
           <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
-            {environment.name} · {all.length} variable{all.length === 1 ? '' : 's'} ·
-            changes apply on next deploy
+            {environment.name} ·{' '}
+            {composeVariablesPending ? 'loading…' : `${all.length} variable${all.length === 1 ? '' : 's'}`} · changes
+            apply on next deploy
           </Text>
+          {composeVariablesError && (
+            <Alert
+              description={`${composeVariablesError}. Values below are the Environment's and may be overridden by this Compose.`}
+              message="Compose Variables could not be loaded"
+              showIcon
+              style={{ marginTop: 12 }}
+              type="warning"
+            />
+          )}
 
-          {all.length === 0 ? (
+          {composeVariablesPending && all.length === 0 ? null : all.length === 0 ? (
             <EmptyState
               action={
                 <Button

@@ -225,10 +225,15 @@ describe('railVariables', () => {
         { key: 'C', secret: false, value: 'compose-c' },
       ],
     );
-    expect(rows.map((row) => [row.key, row.source, row.value])).toEqual([
-      ['A', 'environment', 'env-a'],
-      ['B', 'compose', 'compose-b'],
-      ['C', 'compose', 'compose-c'],
+    expect(rows.map((row) => [row.key, row.source, row.value, row.secret])).toEqual([
+      ['A', 'environment', 'env-a', false],
+      ['B', 'compose', 'compose-b', true],
+      ['C', 'compose', 'compose-c', false],
     ]);
+  });
+
+  it('takes secret from the winning layer when Compose is the plain one', () => {
+    const rows = railVariables([{ key: 'X', secret: true, value: 'e' }], [{ key: 'X', secret: false, value: 'c' }]);
+    expect(rows[0]).toMatchObject({ secret: false, source: 'compose', value: 'c' });
   });
 });

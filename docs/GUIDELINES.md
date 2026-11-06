@@ -253,14 +253,15 @@ has deployed before and `domainsChangedAt >= lastDeployedAt`. Above the tabs, a 
   true full screen modal. A 56px toolbar carries the filename, the `project / environment / compose`
   trail, the status tag, `Modified`, `Discard`, `Save` and a close button, plus the standing line that
   edits are shared with the page and closing does not discard them. The YAML fills the rest; the right
-  rail (340px, hairline divider) lists the Environment's variables with the same masking, reveal, copy
+  rail (340px, hairline divider) lists the variables a deploy writes — the Environment's, with this Compose's own laid over them (a Compose Variable wins its key and carries a `compose` tag) — with the same masking, reveal, copy
   and `secret` / `plain` treatment as §4.5. Whitespace matters here more than anywhere else, so the
   variables panel is the shortest path from "I need a value" to "the file references it": the filter
   narrows by key, and **clicking a row or `Insert` drops the literal `${KEY}` at the cursor**,
   replacing the selection if there is one — the reference, never the value, because variables are
   injected at deploy time. The insertion is its own feedback (no toast per insert), a row already
-  referenced in the draft carries a small success-coloured check, and an Environment with no variables
-  gets the `EmptyState` with a `Manage` link to the Variables tab. Esc and the close button close the
+  referenced in the draft carries a small success-coloured check, and with none at either layer the rail
+  gets the `EmptyState` with a `Manage` link to the Environment's Variables tab; while the Compose Variables
+  load, or if they fail (a warning), it does not claim an empty or complete list. Esc and the close button close the
   modal; the draft survives both, and the modal closes itself if the Compose changes underneath it.
 - **Status rail**: overall tag + "Checked 3 minutes ago"; per-service rows (name, health dot, state
   tag, image, ports); a warning alert when something is down; `Deploy now` when nothing has ever run.

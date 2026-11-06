@@ -1398,6 +1398,7 @@ export function ComposePage() {
       <FullscreenEditor
         compose={compose}
         composeVariables={composeVariablesForCompose?.list}
+        composeVariablesError={composeVariablesForCompose?.error}
         dirty={dirty}
         draft={draft}
         environment={environment}
