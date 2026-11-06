@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  railVariables,
   duplicateKeys,
   invalidKeys,
   isSecret,
@@ -209,5 +210,25 @@ describe('effectiveVariableCount', () => {
     expect(effectiveVariableCount([{ key: 'A' }, { key: 'B' }], [{ key: 'B' }, { key: 'C' }])).toBe(3);
     expect(effectiveVariableCount([], [])).toBe(0);
     expect(effectiveVariableCount([{ key: 'A' }], [])).toBe(1);
+  });
+});
+
+describe('railVariables', () => {
+  it('lets a Compose Variable win its key and sorts by key', () => {
+    const rows = railVariables(
+      [
+        { key: 'B', secret: false, value: 'env-b' },
+        { key: 'A', secret: false, value: 'env-a' },
+      ],
+      [
+        { key: 'B', secret: true, value: 'compose-b' },
+        { key: 'C', secret: false, value: 'compose-c' },
+      ],
+    );
+    expect(rows.map((row) => [row.key, row.source, row.value])).toEqual([
+      ['A', 'environment', 'env-a'],
+      ['B', 'compose', 'compose-b'],
+      ['C', 'compose', 'compose-c'],
+    ]);
   });
 });

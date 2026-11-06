@@ -16,8 +16,8 @@ import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { paths } from '../app/paths';
 import { ComposeStatusTag, EmptyState } from './primitives';
 import { YamlEditor } from './YamlEditor';
-import { isSecret, maskedValue } from './variables-view';
-import type { Compose, Environment, EnvironmentVariable, Project } from '../data/types';
+import { isSecret, maskedValue, railVariables, type RailVariable } from './variables-view';
+import type { Compose, ComposeVariable, Environment, Project } from '../data/types';
 
 const { Text } = Typography;
 
@@ -41,7 +41,7 @@ function VariableRow({
 }: {
   draft: string;
   onInsert: (key: string) => void;
-  variable: EnvironmentVariable;
+  variable: RailVariable;
 }) {
   const { token } = theme.useToken();
   const { message } = App.useApp();
@@ -78,6 +78,7 @@ function VariableRow({
           ) : (
             <Tag variant="outlined">plain</Tag>
           )}
+          {variable.source === 'compose' && <Tag color="blue">compose</Tag>}
         </Flex>
         <Flex align="center" gap={2} style={{ minWidth: 0 }}>
           <Text ellipsis style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }} type="secondary">
@@ -149,6 +150,7 @@ function VariableRow({
  */
 export function FullscreenEditor({
   compose,
+  composeVariables = [],
   dirty,
   draft,
   environment,
@@ -162,6 +164,8 @@ export function FullscreenEditor({
   saving,
 }: {
   compose: Compose;
+  /** This Compose's own variables; each overrides an Environment Variable of the same key. */
+  composeVariables?: readonly ComposeVariable[];
   dirty: boolean;
   draft: string;
   environment: Environment;
@@ -180,11 +184,14 @@ export function FullscreenEditor({
   const editorRef = useRef<MonacoEditorApi.IStandaloneCodeEditor | null>(null);
   const [query, setQuery] = useState('');
 
+  const all = useMemo(
+    () => railVariables(environment.variables, composeVariables),
+    [environment.variables, composeVariables],
+  );
   const variables = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const sorted = [...environment.variables].sort((a, b) => a.key.localeCompare(b.key));
-    return needle ? sorted.filter((variable) => variable.key.toLowerCase().includes(needle)) : sorted;
-  }, [environment.variables, query]);
+    return needle ? all.filter((variable) => variable.key.toLowerCase().includes(needle)) : all;
+  }, [all, query]);
 
   /**
    * Insert the reference, never the value: the file only ever holds `${KEY}`.
@@ -299,11 +306,11 @@ export function FullscreenEditor({
         >
           <Text strong>Environment variables</Text>
           <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
-            {environment.name} · {environment.variables.length} variable{environment.variables.length === 1 ? '' : 's'} ·
+            {environment.name} · {all.length} variable{all.length === 1 ? '' : 's'} ·
             changes apply on next deploy
           </Text>
 
-          {environment.variables.length === 0 ? (
+          {all.length === 0 ? (
             <EmptyState
               action={
                 <Button
@@ -316,8 +323,8 @@ export function FullscreenEditor({
                   Manage variables
                 </Button>
               }
-              description="Anything shared by every Compose in this Environment: database URLs, secrets, log level, timezone."
-              title="No Environment Variables yet"
+              description="Environment Variables are shared by every Compose here; a Compose Variable overrides one for this Compose only."
+              title="No variables yet"
             />
           ) : (
             <>
@@ -335,7 +342,7 @@ export function FullscreenEditor({
               ) : (
                 <Flex gap={8} vertical>
                   {variables.map((variable) => (
-                    <VariableRow draft={draft} key={variable.id} onInsert={insert} variable={variable} />
+                    <VariableRow draft={draft} key={variable.key} onInsert={insert} variable={variable} />
                   ))}
                 </Flex>
               )}
