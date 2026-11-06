@@ -215,10 +215,32 @@ func TestReadFormWarnsWhenReadTimeoutsDiffer(t *testing.T) {
 	}
 }
 
-func TestReadFormNoWarningWhenOnlyWebsecureSet(t *testing.T) {
-	_, warnings := readForm(t, "entryPoints:\n  websecure:\n    transport:\n      respondingTimeouts:\n        readTimeout: 5m\n")
-	if len(warnings) != 0 {
-		t.Fatalf("warnings = %+v", warnings)
+func hasTimeoutWarning(warnings []Problem) bool {
+	return slices.ContainsFunc(warnings, func(p Problem) bool {
+		return p.Key == "entryPoints.web.transport.respondingTimeouts.readTimeout"
+	})
+}
+
+// A key on one entrypoint differs from base's 3600s on the other: saving the
+// form would copy it across, so the form says so.
+func TestReadFormWarnsWhenOnlyOneEntryPointHasReadTimeout(t *testing.T) {
+	for _, ep := range []string{"web", "websecure"} {
+		f, warnings := readForm(t, "entryPoints:\n  "+ep+":\n    transport:\n      respondingTimeouts:\n        readTimeout: 5m\n")
+		if f.ReadTimeout != "5m" || !hasTimeoutWarning(warnings) {
+			t.Errorf("only %s: ReadTimeout = %q, warnings = %+v", ep, f.ReadTimeout, warnings)
+		}
+	}
+}
+
+func TestReadFormNoWarningWhenReadTimeoutsMeanTheSame(t *testing.T) {
+	for _, in := range []string{
+		"entryPoints:\n  web:\n    transport:\n      respondingTimeouts:\n        readTimeout: 1h\n" +
+			"  websecure:\n    transport:\n      respondingTimeouts:\n        readTimeout: 3600s\n",
+		"entryPoints:\n  websecure:\n    transport:\n      respondingTimeouts:\n        readTimeout: 60m\n",
+	} {
+		if _, warnings := readForm(t, in); hasTimeoutWarning(warnings) {
+			t.Errorf("warnings = %+v for\n%s", warnings, in)
+		}
 	}
 }
 

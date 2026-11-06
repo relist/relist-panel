@@ -20,6 +20,11 @@ const EMPTY_FORM: TraefikForm = { accessLog: false, acmeEmail: '', logLevel: 'IN
 
 const READ_TIMEOUT_KEY = 'entryPoints.websecure.transport.respondingTimeouts.readTimeout';
 
+/** A cleared read timeout means base's value; the server reads an empty one as "leave it". */
+function withDefaultTimeout(form: TraefikForm): TraefikForm {
+  return form.readTimeout.trim() === '' ? { ...form, readTimeout: EMPTY_FORM.readTimeout } : form;
+}
+
 type View = 'settings' | 'advanced' | 'history';
 type FileView = 'override' | 'base' | 'effective';
 
@@ -92,7 +97,7 @@ export function TraefikConfigTab({
     setPreviewing(true);
     timer.current = setTimeout(() => {
       api
-        .previewTraefikConfig(edited ? { form: edited, override } : { override })
+        .previewTraefikConfig(edited ? { form: withDefaultTimeout(edited), override } : { override })
         .then((resp) => {
           if (id !== sequence.current) return;
           if (edited) setDraft(resp.override);

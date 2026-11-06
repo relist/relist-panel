@@ -97,6 +97,17 @@ describe('TraefikConfigTab', () => {
     expect(screen.queryByText('Large image uploads and registry pushes may be cut off.')).toBeNull();
   });
 
+  it("saves base's read timeout when the field is cleared", async () => {
+    api.previewTraefikConfig.mockResolvedValue(preview({ form: { ...form, readTimeout: '5m' } }));
+    show(config({ form: { ...form, readTimeout: '5m' } }));
+    const field = screen.getByRole('textbox', { name: 'Request read timeout' });
+    fireEvent.change(field, { target: { value: '' } });
+    await waitFor(() =>
+      expect(api.previewTraefikConfig).toHaveBeenCalledWith({ form: { ...form, readTimeout: '3600s' }, override: '# mine\n' }),
+    );
+    expect((field as HTMLInputElement).value).toBe('');
+  });
+
   it('warns about a read timeout under ten minutes', () => {
     show();
     fireEvent.change(screen.getByRole('textbox', { name: 'Request read timeout' }), { target: { value: '5m' } });

@@ -81,7 +81,9 @@ func ReadForm(override []byte) (Form, []Problem, error) {
 	} else if webTimeoutOK {
 		f.ReadTimeout = webTimeout
 	}
-	if webTimeoutOK && secureTimeoutOK && webTimeout != secureTimeout {
+	// A missing key is base's value: one entrypoint set by hand still differs
+	// from the other, and saving the form would copy it across.
+	if !sameTimeout(webTimeout, webTimeoutOK, secureTimeout, secureTimeoutOK) {
 		warnings = append(warnings, Problem{Key: "entryPoints.web." + strings.Join(timeoutTail, "."), Message: listsDiffer})
 	}
 	f.TrustCloudflare = len(list) > 0 && containsAll(list, CloudflareRanges)
@@ -229,6 +231,24 @@ func readTimeout(m *yaml.Node, ep string) (string, bool) {
 		return "", false
 	}
 	return v.Value, true
+}
+
+// sameTimeout reports whether web's and websecure's read timeouts mean the
+// same duration, a missing key standing for DefaultReadTimeout. Values that
+// do not parse compare as text.
+func sameTimeout(web string, webOK bool, secure string, secureOK bool) bool {
+	if !webOK {
+		web = DefaultReadTimeout
+	}
+	if !secureOK {
+		secure = DefaultReadTimeout
+	}
+	w, _, wOK := parseReadTimeout(strings.TrimSpace(web))
+	s, _, sOK := parseReadTimeout(strings.TrimSpace(secure))
+	if wOK && sOK {
+		return w == s
+	}
+	return web == secure
 }
 
 // parseReadTimeout reads a Traefik duration: bare digits are seconds,
