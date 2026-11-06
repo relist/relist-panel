@@ -661,6 +661,23 @@ export interface SourceInput {
   sshKeyId: number | null;
 }
 
+/** Credentials for a registry the panel does not run (ADR-0034). The secret never comes back. */
+export interface ExternalRegistry {
+  id: number;
+  host: string;
+  username: string;
+  lastTestAt: string | null;
+  lastTestOk: boolean;
+  lastTestError: string;
+}
+
+/** Add or edit an External registry; an empty secret on edit keeps the stored one. */
+export interface ExternalRegistryInput {
+  host: string;
+  username: string;
+  secret: string;
+}
+
 export interface SshKeyUse {
   projectId: number;
   projectName: string;
