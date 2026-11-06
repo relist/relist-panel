@@ -371,11 +371,11 @@ and in the existing MetricChart test file (or a new one), `formatMetricValue(12.
 
 **Files:** none committed, unless the check finds a bug (then fix it with a test in the owning task's files).
 
-- [ ] **Step 1:** Run the panel with a real `traefik:v3.7` (the setup `task probe:traefik-config` uses), Access log on, two Domains on one Compose (`a.test/`, `a.test/api`) plus the panel host.
-- [ ] **Step 2:** Send a known mix with `curl`/`hey`: 500 × 200 to `a.test/`, 50 × 404 to `a.test/api`, 20 to the panel, 30 with a random `Host`. Wait 2 minutes.
-- [ ] **Step 3:** Check via the API: total = 600; panel = 20; Compose `host=""` = 550 with c2xx 500, c4xx 50; `a.test` the same.
-- [ ] **Step 4:** Burst ~50k requests, restart the panel container mid-burst, wait 2 minutes: total for the burst minutes equals the number sent.
-- [ ] **Step 5:** Report the measured CPU (`docker stats` during the burst) and ns/line from Task 5. Browser check of the three views: do it if headless Chrome works in this environment; otherwise say it was not done.
+- [x] **Step 1:** Run the panel with a real `traefik:v3.7` (the setup `task probe:traefik-config` uses), Access log on, two Domains on one Compose (`a.test/`, `a.test/api`) plus the panel host.
+- [x] **Step 2:** Send a known mix with `curl`/`hey`: 500 × 200 to `a.test/`, 50 × 404 to `a.test/api`, 20 to the panel, 30 with a random `Host`. Wait 2 minutes.
+- [x] **Step 3:** Check via the API: total = 600; panel = 20; Compose `host=""` = 550 with c2xx 500, c4xx 50; `a.test` the same.
+- [x] **Step 4:** Burst ~50k requests, restart the panel container mid-burst, wait 2 minutes: total for the burst minutes equals the number sent.
+- [x] **Step 5:** Report the measured CPU (`docker stats` during the burst) and ns/line from Task 5. Browser check of the three views: do it if headless Chrome works in this environment; otherwise say it was not done.
 
 ---
 
