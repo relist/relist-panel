@@ -124,6 +124,18 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = id
+	// A kept secret stays with the host it was given for.
+	if in.Secret == "" {
+		old, err := s.store.Get(r.Context(), id)
+		if err != nil {
+			writeStoreError(w, err, "could not read the External registry")
+			return
+		}
+		if old.Host != in.Host {
+			writeError(w, http.StatusUnprocessableEntity, "enter the token or password again when changing the host")
+			return
+		}
+	}
 	if err := s.store.Update(r.Context(), in, s.now()); err != nil {
 		writeStoreError(w, err, "could not save the External registry")
 		return

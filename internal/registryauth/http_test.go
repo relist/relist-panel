@@ -122,3 +122,50 @@ func TestTestRecordsResult(t *testing.T) {
 		t.Fatalf("after pass %+v", stored)
 	}
 }
+
+func TestUpdateHostNeedsSecretAgain(t *testing.T) {
+	mux, store := newMux(t, &fakeTester{})
+	do(mux, "POST", "/api/registry/external", `{"host":"ghcr.io","username":"u","secret":"s"}`)
+	list, _ := store.List(context.Background())
+	path := "/api/registry/external/" + itoa(list[0].ID)
+	if rec := do(mux, "PUT", path, `{"host":"registry.example.com","username":"u","secret":""}`); rec.Code != 422 ||
+		!strings.Contains(rec.Body.String(), "enter the token or password again when changing the host") {
+		t.Fatalf("host change, blank secret = %d %s", rec.Code, rec.Body)
+	}
+	if got, _ := store.Get(context.Background(), list[0].ID); got.Host != "ghcr.io" {
+		t.Fatalf("host = %q after a refused edit", got.Host)
+	}
+	if rec := do(mux, "PUT", path, `{"host":"registry.example.com","username":"u","secret":"new"}`); rec.Code != 200 {
+		t.Fatalf("host change with secret = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestUpdateClearsLastTestWhenLoginChanges(t *testing.T) {
+	mux, store := newMux(t, &fakeTester{})
+	ctx := context.Background()
+	do(mux, "POST", "/api/registry/external", `{"host":"ghcr.io","username":"u","secret":"s"}`)
+	list, _ := store.List(ctx)
+	id := list[0].ID
+	path := "/api/registry/external/" + itoa(id)
+	for _, body := range []string{
+		`{"host":"ghcr.io","username":"v","secret":""}`,
+		`{"host":"ghcr.io","username":"v","secret":"new"}`,
+	} {
+		if err := store.SetTestResult(ctx, id, false, "denied", t0); err != nil {
+			t.Fatal(err)
+		}
+		if rec := do(mux, "PUT", path, body); rec.Code != 200 {
+			t.Fatalf("%s = %d %s", body, rec.Code, rec.Body)
+		}
+		if got, _ := store.Get(ctx, id); got.LastTestAt != nil || got.LastTestError != "" {
+			t.Fatalf("%s left last test %+v", body, got)
+		}
+	}
+	if err := store.SetTestResult(ctx, id, true, "", t0); err != nil {
+		t.Fatal(err)
+	}
+	do(mux, "PUT", path, `{"host":"ghcr.io","username":"v","secret":""}`)
+	if got, _ := store.Get(ctx, id); got.LastTestAt == nil || !got.LastTestOK {
+		t.Fatalf("unchanged login lost its result: %+v", got)
+	}
+}
