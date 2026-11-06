@@ -334,6 +334,9 @@ var authRefused = regexp.MustCompile(`unauthorized|authentication required|pull 
 // External registry login for one of the images' hosts, that login was
 // refused; without one, the image may need one. Other failures get none.
 func (s *Service) pullHint(ctx context.Context, err error, images []string) string {
+	if hint := s.hairpinHint(ctx, err); hint != "" {
+		return hint
+	}
 	if !authRefused.MatchString(strings.ToLower(err.Error())) {
 		return ""
 	}
@@ -352,6 +355,23 @@ func (s *Service) pullHint(ctx context.Context, err error, images []string) stri
 		return ". Registry refused the stored login for " + strings.Join(stored, ", ") + ". Check it with Test on Registry → External registries."
 	}
 	return ". If the image is private, add its registry's credentials on Registry → External registries."
+}
+
+// unreachable matches a pull that never reached a registry.
+var unreachable = regexp.MustCompile(`dial tcp|no such host|connection refused|i/o timeout|x509|tls:`)
+
+// hairpinHint explains a pull of the Panel registry's own hostname that
+// could not reach it: the host must resolve and reach itself (ADR-0033).
+func (s *Service) hairpinHint(ctx context.Context, err error) string {
+	if s.registryHost == nil {
+		return ""
+	}
+	host, ok := s.registryHost(ctx)
+	msg := strings.ToLower(err.Error())
+	if !ok || !strings.Contains(msg, host) || !unreachable.MatchString(msg) {
+		return ""
+	}
+	return ". This host could not reach its own Registry at " + host + ". Check that the hostname resolves to this host from the host itself."
 }
 
 // imageHost is the registry host of an image reference, as Docker reads it:
