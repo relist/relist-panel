@@ -116,11 +116,15 @@ func (s *Store) Create(ctx context.Context, e External, now time.Time) (External
 }
 
 // Update changes host, username and, when e.Secret is not empty, the secret.
+// A changed login forgets its last Test result: it was not this login's.
 func (s *Store) Update(ctx context.Context, e External, now time.Time) error {
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE external_registries
-		SET host = ?, username = ?, secret = CASE WHEN ? = '' THEN secret ELSE ? END, updated_at = ?
-		WHERE id = ?`, e.Host, e.Username, e.Secret, e.Secret, now.Unix(), e.ID)
+		SET last_test_at = CASE WHEN host <> ?1 OR username <> ?2 OR ?3 <> '' THEN NULL ELSE last_test_at END,
+		    last_test_ok = CASE WHEN host <> ?1 OR username <> ?2 OR ?3 <> '' THEN 0 ELSE last_test_ok END,
+		    last_test_error = CASE WHEN host <> ?1 OR username <> ?2 OR ?3 <> '' THEN '' ELSE last_test_error END,
+		    host = ?1, username = ?2, secret = CASE WHEN ?3 = '' THEN secret ELSE ?3 END, updated_at = ?4
+		WHERE id = ?5`, e.Host, e.Username, e.Secret, now.Unix(), e.ID)
 	if err != nil {
 		return duplicate(err)
 	}
