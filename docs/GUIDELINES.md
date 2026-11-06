@@ -181,10 +181,14 @@ trouble?" without ssh'ing in — and be honest about what the panel can and cann
 - Values are **masked by default** (`••••••••`) with reveal and copy buttons; a `secret` / `plain`
   tag marks intent.
 - Key filter, `New Variable` modal (key validation: `[A-Za-z_][A-Za-z0-9_]*`).
-- **Paste a `.env` file**: textarea, live parse preview, duplicate-key error, and an explicit
-  "replace N variables with M" confirm — because operators have the file already. A `.env` carries
-  no secret flag, so a key the list already has keeps its own, and a new key takes the create
-  form's guess from its name: a re-paste never unmasks a secret.
+- **Paste a `.env` file**: textarea, live parse preview (each row tagged `new` / `changed` /
+  unchanged), duplicate-key error — because operators have the file already. By default a paste
+  **merges**: new keys are added, changed values updated, unchanged rows not written, and keys the
+  paste drops are kept; the OK button says "Apply N changes" and is disabled at zero. A **Replace
+  all** checkbox, off each time the modal opens, also removes the keys the paste drops; the confirm
+  then reads "Replace N variables with M" (danger when it removes something). A `.env` carries no
+  secret flag, so a key the list already has keeps its own, and a new key takes the create form's
+  guess from its name: a re-paste never unmasks a secret.
 - Standing note: changes apply on the next deploy of each Compose in the Environment.
 - No Variable Sets card: sets belong to a Compose and are managed only on the Compose's Variables tab (ADR-0015).
 

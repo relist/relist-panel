@@ -211,9 +211,9 @@ export function VariableSetsCard({
                     await reload();
                   }}
                   onError={onError}
-                  onReplace={async (rows) => {
+                  onReplace={async (rows, mode) => {
                     try {
-                      await replaceSetEntries(composeId, set.id, rows);
+                      await replaceSetEntries(composeId, set.id, rows, mode);
                     } finally {
                       // A replace that failed partway still wrote some rows: show what the server has.
                       await reload();

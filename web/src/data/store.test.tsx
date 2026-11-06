@@ -138,7 +138,7 @@ describe('.env replace', () => {
     ] as never);
     const hook = await loadedPanel();
     await act(async () => {
-      await hook.result.current.replaceComposeVariables(7, rows);
+      await hook.result.current.replaceComposeVariables(7, rows, { prune: true });
     });
     expect(mocked.deleteComposeVariable).toHaveBeenCalledWith(location, 2);
     expect(mocked.updateComposeVariable).toHaveBeenCalledWith(location, 1, rows[0]);
@@ -146,20 +146,34 @@ describe('.env replace', () => {
     expect(mocked.getCompose).toHaveBeenCalledTimes(1);
   });
 
+  it('merges a paste into the Compose variables: keeps what it drops and skips what did not change', async () => {
+    mocked.listComposeVariables.mockResolvedValue([
+      { composeId: 7, id: 1, key: 'KEEP', secret: true, value: 'new' },
+      { composeId: 7, id: 2, key: 'DROPPED', secret: false, value: 'x' },
+    ] as never);
+    const hook = await loadedPanel();
+    await act(async () => {
+      await hook.result.current.replaceComposeVariables(7, rows, { prune: false });
+    });
+    expect(mocked.deleteComposeVariable).not.toHaveBeenCalled();
+    expect(mocked.updateComposeVariable).not.toHaveBeenCalled();
+    expect(mocked.createComposeVariable).toHaveBeenCalledWith(location, rows[1]);
+  });
+
   it("replaces one set's entries and leaves the other sets alone", async () => {
     mocked.listVariableSets.mockResolvedValue([
       { entries: [{ id: 9, key: 'OTHER' }], id: 4 },
       {
         entries: [
-          { id: 1, key: 'KEEP' },
-          { id: 2, key: 'DROPPED' },
+          { id: 1, key: 'KEEP', secret: true, value: 'old' },
+          { id: 2, key: 'DROPPED', secret: false, value: 'x' },
         ],
         id: 5,
       },
     ] as never);
     const hook = await loadedPanel();
     await act(async () => {
-      await hook.result.current.replaceSetEntries(7, 5, rows);
+      await hook.result.current.replaceSetEntries(7, 5, rows, { prune: true });
     });
     expect(mocked.deleteSetEntry).toHaveBeenCalledTimes(1);
     expect(mocked.deleteSetEntry).toHaveBeenCalledWith(location, 5, 2);

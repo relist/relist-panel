@@ -1,11 +1,12 @@
 import { DeleteOutlined, EditOutlined, EyeInvisibleOutlined, EyeOutlined, PlusOutlined, SearchOutlined, SnippetsOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Flex, Form, Input, Modal, Popconfirm, Space, Spin, Switch, Table, Tag, Tooltip, Typography, theme } from 'antd';
+import { Alert, App, Button, Card, Checkbox, Flex, Form, Input, Modal, Popconfirm, Space, Spin, Switch, Table, Tag, Tooltip, Typography, theme } from 'antd';
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { CODE_FONT_STACK } from '../app/theme';
 import { needsRole } from './RoleHint';
 import { usePanel, type NewVariable } from '../data/store';
 import type { Environment } from '../data/types';
+import type { PasteMode } from '../data/paste-writes';
 import { EmptyState, RelativeTime } from './primitives';
 import {
   duplicateKeys,
@@ -93,8 +94,12 @@ export type VariablesEditorProps = {
   onSave: (values: NewVariable, id?: number) => Promise<void>;
   onDelete: (variable: VariableRow) => Promise<void>;
   onError?: (reason: unknown) => void;
-  /** Present: the Paste .env editor is offered, and confirming replaces the whole list. */
-  onReplace?: (rows: NewVariable[]) => Promise<void>;
+  /**
+   * Present: the Paste .env editor is offered. Confirming merges the paste
+   * (new and changed keys only), or with Replace all ticked also removes the
+   * keys the paste drops.
+   */
+  onReplace?: (rows: NewVariable[], mode: PasteMode) => Promise<void>;
   replacing?: boolean;
   /** Present: the stored-in-SQLite notice above the table. */
   notice?: string;
@@ -156,6 +161,9 @@ export function VariablesEditor({
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState('');
   const [bulkError, setBulkError] = useState<string>();
+  // Off each time the modal opens: a paste merges unless the user asks for the
+  // list to become exactly the paste.
+  const [replaceAllKeys, setReplaceAllKeys] = useState(false);
   // Whether the user has answered the secret toggle themselves this modal
   // session — until then, while creating, the toggle follows the heuristic's
   // answer for the typed key.
@@ -168,6 +176,13 @@ export function VariablesEditor({
   const invalid = useMemo(() => invalidKeys(parsed), [parsed]);
   const plan = useMemo(() => replacePlan(variables, parsed), [variables, parsed]);
   const bulkBlocked = parsed.length === 0 || duplicated.length > 0 || invalid.length > 0;
+  const changeCount = plan.added.length + plan.changed.length + (replaceAllKeys ? plan.missing.length : 0);
+  const bulkOkText =
+    !bulkBlocked && changeCount === 0
+      ? 'No changes'
+      : replaceAllKeys
+        ? `Replace ${variables.length} variable${variables.length === 1 ? '' : 's'} with ${parsed.length}`
+        : `Apply ${changeCount} change${changeCount === 1 ? '' : 's'}`;
 
   const openCreate = () => {
     setEditing(undefined);
@@ -207,6 +222,7 @@ export function VariablesEditor({
   const openBulk = () => {
     setBulkText('');
     setBulkError(undefined);
+    setReplaceAllKeys(false);
     setBulkOpen(true);
   };
 
@@ -215,12 +231,16 @@ export function VariablesEditor({
     setBulkError(undefined);
     // A keyed notification (GUIDELINES §8): the waiting line is replaced by the
     // outcome rather than stacked on top of it.
-    message.open({ content: `Replacing ${noun}…`, key: 'bulk-variables', type: 'loading' });
-    onReplace(pasteSecretFlags(variables, parsed))
+    const prune = replaceAllKeys;
+    const count = changeCount;
+    message.open({ content: prune ? `Replacing ${noun}…` : `Updating ${noun}…`, key: 'bulk-variables', type: 'loading' });
+    onReplace(pasteSecretFlags(variables, parsed), { prune })
       .then(() => {
         setBulkOpen(false);
         message.open({
-          content: `Replaced ${noun} with ${parsed.length} key${parsed.length === 1 ? '' : 's'}`,
+          content: prune
+            ? `Replaced ${noun} with ${parsed.length} key${parsed.length === 1 ? '' : 's'}`
+            : `Applied ${count} change${count === 1 ? '' : 's'} to ${noun}`,
           key: 'bulk-variables',
           type: 'success',
         });
@@ -392,8 +412,8 @@ export function VariablesEditor({
   <Modal
     confirmLoading={replacing}
     destroyOnHidden
-    okButtonProps={{ disabled: bulkBlocked }}
-    okText={`Replace ${variables.length} variable${variables.length === 1 ? '' : 's'} with ${parsed.length}`}
+    okButtonProps={{ danger: replaceAllKeys && plan.missing.length > 0, disabled: bulkBlocked || changeCount === 0 }}
+    okText={bulkOkText}
     onCancel={() => setBulkOpen(false)}
     onOk={replaceAll}
     open={bulkOpen}
@@ -401,8 +421,14 @@ export function VariablesEditor({
     width={720}
   >
     <Paragraph type="secondary">
-      One <Text code>KEY=value</Text> per line. Comments and blank lines are ignored, quotes are stripped. This
-      <strong> replaces</strong> the existing variables — keys missing from the paste are removed.
+      One <Text code>KEY=value</Text> per line. Comments and blank lines are ignored, quotes are stripped.{' '}
+      {replaceAllKeys ? (
+        <>
+          This <strong>replaces</strong> the existing variables — keys missing from the paste are removed.
+        </>
+      ) : (
+        <>New keys are added and changed values updated; keys missing from the paste stay as they are.</>
+      )}
     </Paragraph>
     <Input.TextArea
       onChange={(event) => setBulkText(event.target.value)}
@@ -411,6 +437,9 @@ export function VariablesEditor({
       style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }}
       value={bulkText}
     />
+    <Checkbox checked={replaceAllKeys} onChange={(event) => setReplaceAllKeys(event.target.checked)} style={{ marginTop: 12 }}>
+      Replace all — remove keys missing from the paste
+    </Checkbox>
     {duplicated.length > 0 && (
       <Alert
         title={`Duplicate keys: ${duplicated.join(', ')}`}
@@ -433,21 +462,37 @@ export function VariablesEditor({
     )}
     {parsed.length > 0 && !bulkBlocked && (
       <div style={{ marginTop: 12 }}>
-        <Text strong>Will write {parsed.length} variables</Text>
-        {(plan.added.length > 0 || plan.removed.length > 0) && (
-          <Text style={{ display: 'block', fontSize: 12 }} type="secondary">
-            {plan.added.length > 0 && `${plan.added.length} added`}
-            {plan.added.length > 0 && plan.removed.length > 0 && ' · '}
-            {plan.removed.length > 0 && (
-              <>
-                removes {plan.removed.join(', ')}
-              </>
-            )}
-          </Text>
-        )}
+        <Text strong>
+          {changeCount === 0 ? 'Nothing to write' : `Will write ${changeCount} change${changeCount === 1 ? '' : 's'}`}
+        </Text>
+        <Text style={{ display: 'block', fontSize: 12 }} type="secondary">
+          {[
+            plan.added.length > 0 && `${plan.added.length} added`,
+            plan.changed.length > 0 && `${plan.changed.length} changed`,
+            plan.unchanged.length > 0 && `${plan.unchanged.length} unchanged`,
+            plan.missing.length > 0 && `${replaceAllKeys ? 'removes' : 'keeps'} ${plan.missing.join(', ')}`,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        </Text>
         <Table
           columns={[
             { dataIndex: 'key', key: 'key', render: (key: string) => <Text style={{ fontFamily: CODE_FONT_STACK, fontSize: 12 }}>{key}</Text>, title: 'Key', width: 240 },
+            {
+              key: 'change',
+              render: (_: unknown, row: { key: string }) =>
+                plan.added.includes(row.key) ? (
+                  <Tag color="success">new</Tag>
+                ) : plan.changed.includes(row.key) ? (
+                  <Tag color="processing">changed</Tag>
+                ) : (
+                  <Text style={{ fontSize: 12 }} type="secondary">
+                    unchanged
+                  </Text>
+                ),
+              title: 'Change',
+              width: 100,
+            },
             {
               dataIndex: 'value',
               key: 'value',
@@ -593,7 +638,7 @@ export function VariablesPanel({ environment, onError }: { environment: Environm
       notice="Values are stored in the panel's SQLite database and written to a mode-600 env file on deploy."
       onDelete={(variable) => deleteVariable(environment.id, variable.id)}
       onError={onError}
-      onReplace={(rows) => replaceVariables(environment.id, rows)}
+      onReplace={(rows, mode) => replaceVariables(environment.id, rows, mode)}
       onSave={(values, id) => saveVariable(environment.id, values, id)}
       replacing={isPending(`bulk-variables:${environment.id}`)}
       saving={isPending(`save-variable:${environment.id}`)}

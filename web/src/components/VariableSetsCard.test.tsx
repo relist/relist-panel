@@ -163,12 +163,18 @@ describe('VariableSetsCard', () => {
     const { onReload } = renderCard();
     await user.click(await screen.findByRole('button', { name: /Paste .env/ }));
     fireEvent.change(screen.getByPlaceholderText(/DATABASE_URL=/), { target: { value: 'DB_PASSWORD=new\nDB_PORT=5432' } });
+    await user.click(screen.getByRole('checkbox', { name: /Replace all/ }));
     await user.click(screen.getByRole('button', { name: /Replace 2 variables with 2/ }));
     await waitFor(() =>
-      expect(panel.replaceSetEntries).toHaveBeenCalledWith(7, 1, [
-        { key: 'DB_PASSWORD', secret: true, value: 'new' },
-        { key: 'DB_PORT', secret: false, value: '5432' },
-      ]),
+      expect(panel.replaceSetEntries).toHaveBeenCalledWith(
+        7,
+        1,
+        [
+          { key: 'DB_PASSWORD', secret: true, value: 'new' },
+          { key: 'DB_PORT', secret: false, value: '5432' },
+        ],
+        { prune: true },
+      ),
     );
     await waitFor(() => expect(onReload).toHaveBeenCalled());
   });
