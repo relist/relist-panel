@@ -32,6 +32,7 @@ import (
 	"relist-panel/internal/panelupdate"
 	"relist-panel/internal/policy"
 	"relist-panel/internal/projects"
+	"relist-panel/internal/registryauth"
 	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
 	"relist-panel/internal/sshkeys"
@@ -106,6 +107,9 @@ type Deps struct {
 	PolicyRoots    []string
 	// Version is the build version, shown by GET /api/auth/status.
 	Version string
+	// RegistryAuth is the Runner's source of registry logins; the handler
+	// sets it once its stores exist. Nil (tests) leaves pulls without logins.
+	RegistryAuth *registryauth.Switch
 }
 
 // NewHandler builds the top-level HTTP handler for the panel.
