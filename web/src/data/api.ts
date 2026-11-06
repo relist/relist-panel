@@ -30,6 +30,12 @@ import type {
   SshKey,
   ExternalRegistry,
   ExternalRegistryInput,
+  PushCredential,
+  RegistryCheck,
+  RegistryRepository,
+  RegistryState,
+  RegistryTag,
+  RegistryTLS,
   AccessLogList,
   AccessLogSettings,
   AccessLogSettingsInput,
@@ -548,6 +554,26 @@ export const api = {
   deleteExternalRegistry: (id: number) => request<void>(`/api/registry/external/${id}`, { method: 'DELETE' }),
   testExternalRegistry: (id: number) =>
     request<{ ok: boolean; error: string }>(`/api/registry/external/${id}/test`, { method: 'POST' }),
+  // Panel registry (ADR-0033).
+  getRegistry: () => request<RegistryState>('/api/registry'),
+  saveRegistry: (input: { hostname: string; tls: RegistryTLS }) =>
+    request<RegistryState>('/api/registry', jsonInit('PUT', input)),
+  enableRegistry: () => request<RegistryState>('/api/registry/enable', { method: 'POST' }),
+  disableRegistry: () => request<{ warnings: string[] }>('/api/registry/disable', { method: 'POST' }),
+  repairRegistry: () => request<RegistryState>('/api/registry/repair', { method: 'POST' }),
+  checkRegistry: () => request<RegistryCheck>('/api/registry/check', { method: 'POST' }),
+  deleteRegistryData: (confirm: string) => request<void>('/api/registry/data', jsonInit('DELETE', { confirm })),
+  listPushCredentials: () => request<PushCredential[]>('/api/registry/credentials'),
+  createPushCredential: (name: string) =>
+    request<{ credential: PushCredential; token: string }>('/api/registry/credentials', jsonInit('POST', { name })),
+  deletePushCredential: (id: number) => request<void>(`/api/registry/credentials/${id}`, { method: 'DELETE' }),
+  listRegistryRepositories: () => request<RegistryRepository[]>('/api/registry/repositories'),
+  listRegistryTags: (repo: string) => request<RegistryTag[]>(`/api/registry/tags?repo=${encodeURIComponent(repo)}`),
+  deleteRegistryTag: (repo: string, tag: string, confirm?: string) =>
+    request<{ deleted: string[] }>(
+      `/api/registry/tags?repo=${encodeURIComponent(repo)}&tag=${encodeURIComponent(tag)}`,
+      confirm === undefined ? { method: 'DELETE' } : jsonInit('DELETE', { confirm }),
+    ),
   // Builders: resource-limited buildx builders, and the BuildKit image they run.
   listBuilders: () => request<BuildersResponse>('/api/builders'),
   setBuildKitImage: (buildkitImage: string) =>

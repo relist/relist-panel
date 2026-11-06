@@ -8,10 +8,23 @@ import { SWRConfig } from 'swr';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../data/api';
-import type { ExternalRegistry } from '../data/types';
+import type { ExternalRegistry, RegistryState, RegistryTag } from '../data/types';
 import { RegistryPage } from './RegistryPage';
 
 const api = vi.hoisted(() => ({
+  checkRegistry: vi.fn(),
+  createPushCredential: vi.fn(),
+  deletePushCredential: vi.fn(),
+  deleteRegistryData: vi.fn(),
+  deleteRegistryTag: vi.fn(),
+  disableRegistry: vi.fn(),
+  enableRegistry: vi.fn(),
+  getRegistry: vi.fn(),
+  listPushCredentials: vi.fn(),
+  listRegistryRepositories: vi.fn(),
+  listRegistryTags: vi.fn(),
+  repairRegistry: vi.fn(),
+  saveRegistry: vi.fn(),
   createExternalRegistry: vi.fn(),
   deleteExternalRegistry: vi.fn(),
   listExternalRegistries: vi.fn(),
@@ -41,7 +54,17 @@ const hub: ExternalRegistry = {
   username: 'me',
 };
 
-function show(path = '/registry') {
+const off: RegistryState = {
+  composesUsing: [],
+  diskBytes: 0,
+  lastError: '',
+  readTimeout: '3600s',
+  settings: { enabled: false, hostname: 'registry.example.com', tls: 'letsencrypt' },
+  status: 'off',
+};
+const on: RegistryState = { ...off, diskBytes: 3 * 1024 * 1024, settings: { ...off.settings, enabled: true }, status: 'running' };
+
+function show(path = '/registry?tab=external') {
   return render(
     <SWRConfig value={{ provider: () => new Map(), revalidateOnFocus: false, shouldRetryOnError: false }}>
       <MemoryRouter initialEntries={[path]}>
@@ -54,6 +77,9 @@ function show(path = '/registry') {
 beforeEach(() => {
   vi.resetAllMocks();
   api.listExternalRegistries.mockResolvedValue([ghcr, hub]);
+  api.getRegistry.mockResolvedValue(on);
+  api.listPushCredentials.mockResolvedValue([]);
+  api.listRegistryRepositories.mockResolvedValue([]);
 });
 
 describe('RegistryPage External registries', () => {
@@ -134,5 +160,153 @@ describe('RegistryPage External registries', () => {
     show();
     expect(await screen.findByText('No External registries yet')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: /Add registry/ }).length).toBe(2);
+  });
+});
+
+describe('RegistryPage when the Registry is off', () => {
+  it.each(['/registry', '/registry?tab=credentials'])('%s says so and links to Settings', async (path) => {
+    api.getRegistry.mockResolvedValue(off);
+    show(path);
+    expect(await screen.findByText('Registry is off')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe('/registry?tab=settings');
+    expect(api.listRegistryRepositories).not.toHaveBeenCalled();
+    expect(api.listPushCredentials).not.toHaveBeenCalled();
+  });
+});
+
+describe('RegistryPage Push credentials', () => {
+  it('shows a new token once with the login command and the login-action snippet', async () => {
+    api.createPushCredential.mockResolvedValue({
+      credential: { createdAt: '2026-11-07T00:00:00Z', createdBy: 'admin', id: 3, name: 'github-ci' },
+      token: 'tok-secret-123',
+    });
+    const user = userEvent.setup();
+    show('/registry?tab=credentials');
+    await user.click((await screen.findAllByRole('button', { name: /Create credential/ }))[0]);
+    await user.type(screen.getByLabelText('Name'), 'github-ci');
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(api.createPushCredential).toHaveBeenCalledWith('github-ci'));
+    expect(await screen.findByText('tok-secret-123')).toBeTruthy();
+    expect(screen.getByText('docker login registry.example.com -u github-ci')).toBeTruthy();
+    expect(screen.getByText(/docker\/login-action@v3/)).toBeTruthy();
+    expect(screen.getByText(/shown only once/)).toBeTruthy();
+  });
+});
+
+describe('RegistryPage Repositories', () => {
+  const tags: RegistryTag[] = [
+    { created: '2026-11-06T00:00:00Z', digest: 'sha256:aaaaaaaaaaaaaaaa', inUseBy: [], kept: false, size: 2048, tag: 'v1' },
+    { created: '2026-11-06T00:00:00Z', digest: 'sha256:aaaaaaaaaaaaaaaa', inUseBy: [], kept: false, size: 2048, tag: 'latest' },
+    { created: '2026-11-05T00:00:00Z', digest: 'sha256:bbbbbbbbbbbbbbbb', inUseBy: [], kept: false, size: 1024, tag: 'v0' },
+  ];
+
+  async function openTags(user: ReturnType<typeof userEvent.setup>) {
+    show('/registry');
+    await user.click(await screen.findByRole('button', { name: 'Show tags of app' }));
+    await screen.findByText('v0');
+  }
+
+  beforeEach(() => {
+    api.listRegistryRepositories.mockResolvedValue([{ name: 'app', tagCount: 3 }]);
+    api.listRegistryTags.mockResolvedValue(tags);
+    api.deleteRegistryTag.mockResolvedValue({ deleted: ['latest', 'v1'] });
+  });
+
+  it('shows Disk used and the tags with the full image reference to copy', async () => {
+    const user = userEvent.setup();
+    await openTags(user);
+    expect(screen.getByText('3.0 MB')).toBeTruthy();
+    expect(api.listRegistryTags).toHaveBeenCalledWith('app');
+    expect(screen.getAllByText('aaaaaaaaaaaa').length).toBe(2);
+  });
+
+  it('confirms a delete by listing the tags that share the digest', async () => {
+    const user = userEvent.setup();
+    await openTags(user);
+    await user.click(screen.getByRole('button', { name: 'Delete app:v1' }));
+    expect(await screen.findByText(/Also deletes latest/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Delete tag' }));
+    await waitFor(() => expect(api.deleteRegistryTag).toHaveBeenCalledWith('app', 'v1', undefined));
+  });
+
+  it('needs the tag typed when a Compose uses it', async () => {
+    const user_ = { composeId: 7, composeName: 'web', environmentId: 2, environmentName: 'prod', projectId: 1, projectName: 'shop' };
+    api.listRegistryTags.mockResolvedValue([{ ...tags[0], inUseBy: [user_] }, tags[1], tags[2]]);
+    const user = userEvent.setup();
+    await openTags(user);
+    expect(screen.getByRole('link', { name: 'web' }).getAttribute('href')).toBe('/projects/1/env/2/compose/7');
+    await user.click(screen.getByRole('button', { name: 'Delete app:v1' }));
+    const ok = await screen.findByRole('button', { name: 'Delete tag' });
+    expect(ok.hasAttribute('disabled')).toBe(true);
+    await user.type(screen.getByLabelText('Type v1 to confirm'), 'v1');
+    expect(ok.hasAttribute('disabled')).toBe(false);
+    await user.click(ok);
+    await waitFor(() => expect(api.deleteRegistryTag).toHaveBeenCalledWith('app', 'v1', 'v1'));
+  });
+});
+
+describe('RegistryPage Settings', () => {
+  it('shows the status, Repair only on Drift, and the read timeout with a Traefik link', async () => {
+    show('/registry?tab=settings');
+    expect(await screen.findByText('Running')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Repair/ })).toBeNull();
+    expect(screen.getByText('3600s')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Traefik settings' }).getAttribute('href')).toBe('/traefik');
+  });
+
+  it('offers Repair on Drift', async () => {
+    api.getRegistry.mockResolvedValue({ ...on, status: 'drift' });
+    api.repairRegistry.mockResolvedValue(on);
+    const user = userEvent.setup();
+    show('/registry?tab=settings');
+    await user.click(await screen.findByRole('button', { name: /Repair/ }));
+    await waitFor(() => expect(api.repairRegistry).toHaveBeenCalled());
+  });
+
+  it('names the failing step of Check endpoint', async () => {
+    api.checkRegistry.mockResolvedValue({ error: 'x509: certificate is valid for traefik.default', ok: false, step: 'tls' });
+    const user = userEvent.setup();
+    show('/registry?tab=settings');
+    await user.click(await screen.findByRole('button', { name: /Check endpoint/ }));
+    expect(await screen.findByText('TLS failed')).toBeTruthy();
+    expect(screen.getByText('x509: certificate is valid for traefik.default')).toBeTruthy();
+  });
+
+  it('keeps the danger zone disabled while the Registry is on', async () => {
+    show('/registry?tab=settings');
+    const button = await screen.findByRole('button', { name: /Delete all registry data/ });
+    expect(button.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('deletes the data after the hostname is typed when off', async () => {
+    api.getRegistry.mockResolvedValue(off);
+    api.deleteRegistryData.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    show('/registry?tab=settings');
+    await user.click(await screen.findByRole('button', { name: /Delete all registry data/ }));
+    await user.type(screen.getByLabelText('Type registry.example.com to confirm'), 'registry.example.com');
+    await user.click(screen.getByRole('button', { name: 'Delete data' }));
+    await waitFor(() => expect(api.deleteRegistryData).toHaveBeenCalledWith('registry.example.com'));
+  });
+
+  it('warns which Composes will fail to pull before Disable', async () => {
+    api.getRegistry.mockResolvedValue({ ...on, composesUsing: ['web', 'worker'] });
+    api.disableRegistry.mockResolvedValue({ warnings: ['web', 'worker'] });
+    const user = userEvent.setup();
+    show('/registry?tab=settings');
+    await user.click(await screen.findByRole('button', { name: 'Disable' }));
+    expect(await screen.findByText(/web, worker/)).toBeTruthy();
+    expect(screen.getByText(/next deploy will fail to pull/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Disable Registry' }));
+    await waitFor(() => expect(api.disableRegistry).toHaveBeenCalled());
+  });
+
+  it('enables with the saved hostname', async () => {
+    api.getRegistry.mockResolvedValue(off);
+    api.enableRegistry.mockResolvedValue(on);
+    const user = userEvent.setup();
+    show('/registry?tab=settings');
+    await user.click(await screen.findByRole('button', { name: 'Enable' }));
+    await waitFor(() => expect(api.enableRegistry).toHaveBeenCalled());
   });
 });
