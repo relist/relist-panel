@@ -108,6 +108,7 @@ type Aggregator struct {
 	watermark   time.Time
 	lastAddAt   time.Time
 	closedUntil int64 // unix seconds: every minute before this is closed
+	floor       int64 // unix seconds: minutes before this were written by an earlier run
 	gen         int
 	dropped     uint64
 }
@@ -119,14 +120,18 @@ func NewAggregator(flushedThrough time.Time, hosts HostLookup) *Aggregator {
 		hosts:       hosts,
 		open:        map[int64]*openMinute{},
 		closedUntil: flushedThrough.Unix(),
+		floor:       flushedThrough.Unix(),
 	}
 }
 
 // Add counts a line read at offset. now is the wall clock, used for idle
-// closing. It returns false when the line's minute is already closed and the
-// line was dropped.
+// closing. It returns false when the line was not counted: its minute was
+// written before a restart (skipped), or closed since (dropped and counted).
 func (a *Aggregator) Add(l Line, offset int64, now time.Time) bool {
 	minute := l.Start.Unix() - l.Start.Unix()%60
+	if minute < a.floor {
+		return false // already written before a restart; not a late line
+	}
 	if minute < a.closedUntil {
 		a.dropped++
 		return false

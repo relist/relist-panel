@@ -225,7 +225,7 @@ Behaviour (spec: Ingester, Resuming after a restart):
 - After `CloseReady`, if rows were closed: `WriteMinutes(rows, Cursor{inode of the open file, resumeOffset, flushedThrough})`. On error: log, keep going.
 - Hourly maintenance when `FlushedThrough` crosses an hour: compact each complete hour after `LatestHour` (or from `FlushedThrough − 25h` when none), then `DeleteBefore(now − 25h, now − retentionDays×24h)`.
 
-- [ ] **Step 1: Write the failing tests** (temp dir, migrated DB, fake clock)
+- [x] **Step 1: Write the failing tests** (temp dir, migrated DB, fake clock)
 
 ```go
 func TestDomainHostsReload(t *testing.T)            // miss → reload; second miss within 10s → no reload; after 30s → reload; host "A.Test" → "a.test"
@@ -238,11 +238,11 @@ func TestIngesterResumeIsExact(t *testing.T)        // write 1000 lines over 5 m
 func TestIngesterHourlyMaintenance(t *testing.T)    // lines across 10:59–11:01, cross 11:01:30 → hourly 10:00 exists; old rows past cutoffs deleted
 ```
 
-- [ ] **Step 2: Run** `go test ./internal/requestmetrics/ -run 'DomainHosts|Ingester'` — Expected: FAIL.
-- [ ] **Step 3: Implement** `hosts.go` and `ingest.go`. Inode from `fi.Sys().(*syscall.Stat_t).Ino`.
-- [ ] **Step 4: Run** `go test ./internal/requestmetrics/...` — Expected: PASS.
-- [ ] **Step 5: Measure** with a throwaway benchmark (`BenchmarkIngest` in `ingest_test.go`, 100k generated lines): report ns/line in the commit body. Keep the benchmark.
-- [ ] **Step 6: Commit** `feat: ingest the access log into request metrics`
+- [x] **Step 2: Run** `go test ./internal/requestmetrics/ -run 'DomainHosts|Ingester'` — Expected: FAIL.
+- [x] **Step 3: Implement** `hosts.go` and `ingest.go`. Inode from `fi.Sys().(*syscall.Stat_t).Ino`.
+- [x] **Step 4: Run** `go test ./internal/requestmetrics/...` — Expected: PASS.
+- [x] **Step 5: Measure** with a throwaway benchmark (`BenchmarkIngest` in `ingest_test.go`, 100k generated lines): report ns/line in the commit body. Keep the benchmark.
+- [x] **Step 6: Commit** `feat: ingest the access log into request metrics`
 
 ---
 

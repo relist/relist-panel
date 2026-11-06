@@ -148,3 +148,13 @@ func TestRowsFiltersKeys(t *testing.T) {
 		t.Fatal("no keys, no rows")
 	}
 }
+
+func openDBB(b *testing.B) *sql.DB {
+	b.Helper()
+	db, err := database.OpenAndMigrate(filepath.Join(b.TempDir(), "panel.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { db.Close() })
+	return db
+}
