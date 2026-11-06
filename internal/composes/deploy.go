@@ -290,7 +290,8 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 			fmt.Fprintf(opts.Out, "warning: %s\n", w)
 		}
 	}
-	if err := s.prepareImages(ctx, req, opts.Build, opts.Out); err != nil {
+	imageRefs, err := s.prepareImages(ctx, req, opts.Build, opts.Out)
+	if err != nil {
 		var f *DeployFailure
 		if errors.As(err, &f) {
 			f.Message += suffix + volumesAdvice(removed)
@@ -302,6 +303,9 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 	if len(opts.Exclude) > 0 {
 		if err := s.deploySubset(ctx, req, files.composeYAML, opts); err != nil {
 			return nil, failure(FailureRunner, "deploy failed: "+err.Error(), err)
+		}
+		if err := s.repository.setImageRefs(ctx, t.Compose.ID, imageRefs); err != nil {
+			return nil, failure(FailureInternal, "could not record the deployed images", err)
 		}
 		return files.warnings, nil
 	}
@@ -315,6 +319,9 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 	deployedAt := s.now().UTC().Truncate(time.Second)
 	if err := s.repository.markDeployed(ctx, t.Compose.EnvironmentID, t.Compose.ID, deployedAt); err != nil {
 		return nil, failure(FailureInternal, "could not record deploy time", err)
+	}
+	if err := s.repository.setImageRefs(ctx, t.Compose.ID, imageRefs); err != nil {
+		return nil, failure(FailureInternal, "could not record the deployed images", err)
 	}
 	return files.warnings, nil
 }
@@ -655,11 +662,12 @@ func (s *Service) deploySubset(ctx context.Context, req RunRequest, yamlContent 
 // runs, then refuses one that brings its own Traefik labels onto a container
 // Traefik reads (policy.ImageLabels, ADR-0032): the Compose policy only sees
 // the Compose's labels. Every up after it runs with --no-build and --pull
-// never, so the images it checked are the images that start.
-func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool, out io.Writer) error {
+// never, so the images it checked are the images that start. It returns
+// those images, sorted, for compose_image_refs.
+func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool, out io.Writer) ([]string, error) {
 	raw, err := s.runner.Config(ctx, req)
 	if err != nil {
-		return failure(FailureRunner, "could not read compose config: "+err.Error(), err)
+		return nil, failure(FailureRunner, "could not read compose config: "+err.Error(), err)
 	}
 	var config struct {
 		Name     string `json:"name"`
@@ -672,7 +680,7 @@ func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool,
 		} `json:"services"`
 	}
 	if err := json.Unmarshal(raw, &config); err != nil {
-		return failure(FailureInternal, "could not read compose config", err)
+		return nil, failure(FailureInternal, "could not read compose config", err)
 	}
 	project := config.Name
 	if project == "" {
@@ -701,7 +709,7 @@ func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool,
 	}
 	if build && builds {
 		if err := s.runner.Build(ctx, req, BuildOptions{Out: out}); err != nil {
-			return failure(FailureRunner, "build failed: "+err.Error(), err)
+			return nil, failure(FailureRunner, "build failed: "+err.Error(), err)
 		}
 	}
 	for _, pull := range []PullOptions{{Missing: true, Services: missing, Out: out}, {Services: refresh, Out: out}} {
@@ -713,28 +721,29 @@ func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool,
 			for _, name := range pull.Services {
 				images = append(images, config.Services[name].Image)
 			}
-			return failure(FailureRunner, "pull failed: "+err.Error()+s.pullHint(ctx, err, images), err)
+			return nil, failure(FailureRunner, "pull failed: "+err.Error()+s.pullHint(ctx, err, images), err)
 		}
 	}
-	var refused []string
+	var refused, refs []string
 	for _, name := range names {
 		service := config.Services[name]
 		image := service.Image
 		if image == "" {
 			image = project + "-" + name // Compose's name for a built image
 		}
+		refs = append(refs, image)
 		// One tag can hold another image per platform: read the one this
 		// Service runs.
 		labels, err := s.runner.ImageLabels(ctx, image, service.Platform)
 		if err != nil {
-			return failure(FailureRunner, "could not inspect image "+image+": "+err.Error(), err)
+			return nil, failure(FailureRunner, "could not inspect image "+image+": "+err.Error(), err)
 		}
 		for _, v := range policy.ImageLabels(name, image, labels, service.Labels) {
 			refused = append(refused, v.Service+": "+v.Message)
 		}
 	}
 	if len(refused) > 0 {
-		return failure(FailureInvalid, "policy: "+strings.Join(refused, "; "), nil)
+		return nil, failure(FailureInvalid, "policy: "+strings.Join(refused, "; "), nil)
 	}
-	return nil
+	return sortedUnique(refs), nil
 }
