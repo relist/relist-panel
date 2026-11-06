@@ -171,3 +171,111 @@ func TestWriteFormCommentOnlyWithoutTrailingNewline(t *testing.T) {
 		t.Fatalf("comment not kept on its own line: %q", out)
 	}
 }
+
+var readTimeoutPath = []string{"entryPoints", "websecure", "transport", "respondingTimeouts", "readTimeout"}
+
+func readTimeoutAt(t *testing.T, out, ep string) (string, bool) {
+	t.Helper()
+	m, err := parseMap([]byte(out))
+	if err != nil {
+		t.Fatalf("parse %q: %v", out, err)
+	}
+	_, v := lookup(m, "entryPoints", ep, "transport", "respondingTimeouts", "readTimeout")
+	if v == nil {
+		return "", false
+	}
+	return v.Value, true
+}
+
+func TestReadFormReadTimeoutDefaultsToBase(t *testing.T) {
+	f, _ := readForm(t, "")
+	if f.ReadTimeout != DefaultReadTimeout || DefaultReadTimeout != "3600s" {
+		t.Fatalf("ReadTimeout = %q, DefaultReadTimeout = %q", f.ReadTimeout, DefaultReadTimeout)
+	}
+}
+
+func TestReadFormReadTimeoutFromWebsecure(t *testing.T) {
+	f, _ := readForm(t, "entryPoints:\n  websecure:\n    transport:\n      respondingTimeouts:\n        readTimeout: 5m\n")
+	if f.ReadTimeout != "5m" {
+		t.Fatalf("ReadTimeout = %q, want 5m", f.ReadTimeout)
+	}
+}
+
+func TestReadFormWarnsWhenReadTimeoutsDiffer(t *testing.T) {
+	in := "entryPoints:\n  web:\n    transport:\n      respondingTimeouts:\n        readTimeout: 1h\n" +
+		"  websecure:\n    transport:\n      respondingTimeouts:\n        readTimeout: 5m\n"
+	f, warnings := readForm(t, in)
+	if f.ReadTimeout != "5m" {
+		t.Fatalf("ReadTimeout = %q, want websecure's 5m", f.ReadTimeout)
+	}
+	if !slices.ContainsFunc(warnings, func(p Problem) bool {
+		return p.Key == "entryPoints.web.transport.respondingTimeouts.readTimeout"
+	}) {
+		t.Fatalf("warnings = %+v", warnings)
+	}
+}
+
+func TestReadFormNoWarningWhenOnlyWebsecureSet(t *testing.T) {
+	_, warnings := readForm(t, "entryPoints:\n  websecure:\n    transport:\n      respondingTimeouts:\n        readTimeout: 5m\n")
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %+v", warnings)
+	}
+}
+
+func TestWriteFormReadTimeoutBothEntryPoints(t *testing.T) {
+	out := writeForm(t, "", Form{LogLevel: "INFO", ReadTimeout: "10m"})
+	for _, ep := range []string{"web", "websecure"} {
+		if v, ok := readTimeoutAt(t, out, ep); !ok || v != "10m" {
+			t.Errorf("%s readTimeout = %q, %v in\n%s", ep, v, ok, out)
+		}
+	}
+}
+
+func TestWriteFormReadTimeoutDefaultRemovesKey(t *testing.T) {
+	set := writeForm(t, "", Form{LogLevel: "INFO", ReadTimeout: "10m"})
+	for _, def := range []string{"3600s", "1h", "3600"} {
+		out := writeForm(t, set, Form{LogLevel: "INFO", ReadTimeout: def})
+		if strings.Contains(out, "readTimeout") || strings.Contains(out, "respondingTimeouts") || strings.Contains(out, "transport") {
+			t.Errorf("%s left the key or its empty parents:\n%s", def, out)
+		}
+	}
+}
+
+func TestWriteFormEmptyReadTimeoutKeepsOverride(t *testing.T) {
+	set := writeForm(t, "", Form{LogLevel: "INFO", ReadTimeout: "10m"})
+	out := writeForm(t, set, Form{LogLevel: "INFO"})
+	if v, ok := readTimeoutAt(t, out, "websecure"); !ok || v != "10m" {
+		t.Fatalf("readTimeout = %q, %v in\n%s", v, ok, out)
+	}
+}
+
+func TestWriteFormRejectsShortReadTimeout(t *testing.T) {
+	for _, bad := range []string{"29s", "0", "0s", "abc", "-5m"} {
+		_, problems, err := WriteForm(nil, Form{LogLevel: "INFO", ReadTimeout: bad})
+		if err != nil {
+			t.Fatalf("%s: err = %v", bad, err)
+		}
+		want := Problem{Key: strings.Join(readTimeoutPath, "."), Message: "read timeout must be a duration of at least 30s, like 90s, 5m or 1h"}
+		if len(problems) != 1 || problems[0] != want {
+			t.Errorf("%s: problems = %+v", bad, problems)
+		}
+	}
+}
+
+func TestWriteFormAcceptsBareSeconds(t *testing.T) {
+	out := writeForm(t, "", Form{LogLevel: "INFO", ReadTimeout: " 120 "})
+	if v, ok := readTimeoutAt(t, out, "websecure"); !ok || v != "120s" {
+		t.Fatalf("readTimeout = %q, %v in\n%s", v, ok, out)
+	}
+}
+
+func TestWriteFormReadTimeoutReachesGenerated(t *testing.T) {
+	out := writeForm(t, "", Form{LogLevel: "INFO", ReadTimeout: "5m"})
+	eff, problems, err := Generate([]byte(out))
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("Generate: %v %+v", err, problems)
+	}
+	if v, ok := readTimeoutAt(t, string(eff), "web"); !ok || v != "5m" {
+		t.Fatalf("generated web readTimeout = %q, %v", v, ok)
+	}
+}

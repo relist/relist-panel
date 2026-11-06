@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
-// Form is the Settings form: five fields, each one place in the Traefik
+// Form is the Settings form: six fields, each one place in the Traefik
 // override.
 type Form struct {
 	ACMEEmail       string   `json:"acmeEmail"`
@@ -17,7 +19,16 @@ type Form struct {
 	TrustCloudflare bool     `json:"trustCloudflare"`
 	LogLevel        string   `json:"logLevel"`
 	AccessLog       bool     `json:"accessLog"`
+	// ReadTimeout is web's and websecure's request read timeout. Empty on
+	// write leaves the override's value as it is.
+	ReadTimeout string `json:"readTimeout"`
 }
+
+// DefaultReadTimeout is base.yml's read timeout: an override that sets the
+// same duration has no key.
+const DefaultReadTimeout = "3600s"
+
+const readTimeoutProblem = "read timeout must be a duration of at least 30s, like 90s, 5m or 1h"
 
 // LogLevels are the levels the form offers.
 var LogLevels = []string{"ERROR", "WARN", "INFO", "DEBUG"}
@@ -26,6 +37,7 @@ var (
 	emailPath   = []string{"certificatesResolvers", "letsencrypt", "acme", "email"}
 	levelPath   = []string{"log", "level"}
 	trustedTail = []string{"forwardedHeaders", "trustedIPs"}
+	timeoutTail = []string{"transport", "respondingTimeouts", "readTimeout"}
 	entryPoints = []string{"web", "websecure"}
 )
 
@@ -61,6 +73,17 @@ func ReadForm(override []byte) (Form, []Problem, error) {
 	if webOK && secureOK && !slices.Equal(web, secure) {
 		warnings = append(warnings, Problem{Key: "entryPoints.web.forwardedHeaders.trustedIPs", Message: listsDiffer})
 	}
+	f.ReadTimeout = DefaultReadTimeout
+	webTimeout, webTimeoutOK := readTimeout(m, "web")
+	secureTimeout, secureTimeoutOK := readTimeout(m, "websecure")
+	if secureTimeoutOK {
+		f.ReadTimeout = secureTimeout
+	} else if webTimeoutOK {
+		f.ReadTimeout = webTimeout
+	}
+	if webTimeoutOK && secureTimeoutOK && webTimeout != secureTimeout {
+		warnings = append(warnings, Problem{Key: "entryPoints.web." + strings.Join(timeoutTail, "."), Message: listsDiffer})
+	}
 	f.TrustCloudflare = len(list) > 0 && containsAll(list, CloudflareRanges)
 	for _, ip := range list {
 		if !f.TrustCloudflare || !slices.Contains(CloudflareRanges, ip) {
@@ -81,6 +104,13 @@ func WriteForm(override []byte, f Form) ([]byte, []Problem, error) {
 		if !ValidIP(strings.TrimSpace(ip)) {
 			problems = append(problems, Problem{Key: "entryPoints.websecure.forwardedHeaders.trustedIPs",
 				Message: fmt.Sprintf("%q is not an IP address or CIDR", ip)})
+		}
+	}
+	timeout, timeoutText := time.Duration(0), ""
+	if raw := strings.TrimSpace(f.ReadTimeout); raw != "" {
+		var ok bool
+		if timeout, timeoutText, ok = parseReadTimeout(raw); !ok {
+			problems = append(problems, Problem{Key: "entryPoints.websecure." + strings.Join(timeoutTail, "."), Message: readTimeoutProblem})
 		}
 	}
 	if len(problems) > 0 {
@@ -139,6 +169,17 @@ func WriteForm(override []byte, f Form) ([]byte, []Problem, error) {
 		setPath(m, path, seq)
 	}
 
+	if timeoutText != "" {
+		for _, ep := range entryPoints {
+			path := append([]string{"entryPoints", ep}, timeoutTail...)
+			if timeout == time.Hour {
+				removePath(m, path)
+			} else {
+				setPath(m, path, scalar(timeoutText))
+			}
+		}
+	}
+
 	level := strings.ToUpper(f.LogLevel)
 	if _, v := lookup(m, levelPath...); v != nil || level != "INFO" {
 		setPath(m, levelPath, scalar(level))
@@ -178,6 +219,33 @@ func ipList(m *yaml.Node, ep string) ([]string, bool) {
 		out = append(out, item.Value)
 	}
 	return out, true
+}
+
+// readTimeout is an entrypoint's read timeout in the override, and whether
+// the key is there.
+func readTimeout(m *yaml.Node, ep string) (string, bool) {
+	_, v := lookup(m, append([]string{"entryPoints", ep}, timeoutTail...)...)
+	if v == nil || v.Kind != yaml.ScalarNode {
+		return "", false
+	}
+	return v.Value, true
+}
+
+// parseReadTimeout reads a Traefik duration: bare digits are seconds,
+// anything else a Go duration. It returns the text to write ("120" becomes
+// "120s") and false below 30 seconds.
+func parseReadTimeout(s string) (time.Duration, string, bool) {
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		if n < 30 || n > int64(time.Duration(1<<62)/time.Second) {
+			return 0, "", false
+		}
+		return time.Duration(n) * time.Second, s + "s", true
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 30*time.Second {
+		return 0, "", false
+	}
+	return d, s, true
 }
 
 func containsAll(list, want []string) bool {
