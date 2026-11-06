@@ -358,7 +358,7 @@ export function FullscreenEditor({
               ) : (
                 <Flex gap={8} vertical>
                   {variables.map((variable) => (
-                    <VariableRow draft={draft} key={variable.key} onInsert={insert} variable={variable} />
+                    <VariableRow draft={draft} key={`${variable.source}:${variable.key}`} onInsert={insert} variable={variable} />
                   ))}
                 </Flex>
               )}

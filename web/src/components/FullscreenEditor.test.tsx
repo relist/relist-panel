@@ -103,6 +103,26 @@ describe('FullscreenEditor variables rail', () => {
     expect(screen.getByText('secret')).toBeTruthy();
   });
 
+  it('does not carry a revealed secret over to the Compose Variable that replaces it', () => {
+    const secretEnv = { ...envVar('TOKEN', 'env-secret'), secret: true };
+    const view = (composeVariables: ComposeVariable[]) => (
+      <MemoryRouter>
+        <FullscreenEditor
+          compose={compose} composeVariables={composeVariables} dirty={false} draft=""
+          environment={{ ...environment, variables: [secretEnv] }} onChange={() => {}} onClose={() => {}}
+          onDiscard={() => {}} onSave={() => {}} open project={project} readOnly={false} saving={false}
+        />
+      </MemoryRouter>
+    );
+    const { rerender } = render(view([]));
+    fireEvent.click(screen.getByLabelText('Reveal value'));
+    expect(screen.getByText('env-secret')).toBeTruthy();
+
+    rerender(view([{ ...composeVar('TOKEN', 'compose-secret'), secret: true }]));
+    expect(screen.queryByText('compose-secret')).toBeNull();
+    expect(screen.queryByText('env-secret')).toBeNull();
+  });
+
   it('does not claim an empty list while the Compose Variables load', () => {
     renderEditor(false, { composeVariables: undefined });
     expect(screen.queryByText('No variables yet')).toBeNull();
