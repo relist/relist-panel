@@ -87,7 +87,7 @@ func TestUnmarshalRejectsBadIndex(t *testing.T)       // index ≥ NumBuckets �
   - `type Route struct { Kind RouteKind; ComposeID, DomainID int64 }`
   - `func ClassifyRouter(name string) Route`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func TestParseLine(t *testing.T)
@@ -104,13 +104,13 @@ func TestClassifyRouter(t *testing.T) // table:
 // "relist-c-d3@docker", "relist-c1-dx@docker", "myapp@docker", "" → RouteOther
 ```
 
-- [ ] **Step 2: Run** `go test ./internal/requestmetrics/ -run 'ParseLine|ClassifyRouter'` — Expected: FAIL.
+- [x] **Step 2: Run** `go test ./internal/requestmetrics/ -run 'ParseLine|ClassifyRouter'` — Expected: FAIL.
 
-- [ ] **Step 3: Implement.** `ParseLine` unmarshals into a private struct (`StartUTC time.Time`, `RouterName string`, `DownstreamStatus int`, `Duration int64`). `ClassifyRouter` cuts the `@provider` suffix, then matches `panel` or `^relist-c(\d+)-d(\d+)$`.
+- [x] **Step 3: Implement.** `ParseLine` unmarshals into a private struct (`StartUTC time.Time`, `RouterName string`, `DownstreamStatus int`, `Duration int64`). `ClassifyRouter` cuts the `@provider` suffix, then matches `panel` or `^relist-c(\d+)-d(\d+)$`.
 
-- [ ] **Step 4: Run** — Expected: PASS.
+- [x] **Step 4: Run** — Expected: PASS.
 
-- [ ] **Step 5: Commit** `feat: parse access log lines and classify their routers`
+- [x] **Step 5: Commit** `feat: parse access log lines and classify their routers`
 
 ---
 
