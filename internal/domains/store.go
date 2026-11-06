@@ -275,6 +275,8 @@ func boolInt(v bool) int {
 type Service struct {
 	store     *Store
 	panelHost string
+	// reserved is the Registry's hostname (ADR-0033), which no Domain may take.
+	reserved func(ctx context.Context) (string, bool)
 }
 
 // New returns the domains HTTP service over the migrated database.
@@ -287,6 +289,13 @@ func New(db *sql.DB) *Service {
 // empty host means unknown and refuses nothing.
 func (s *Service) WithPanelHost(host string) *Service {
 	s.panelHost = strings.ToLower(strings.TrimSpace(host))
+	return s
+}
+
+// WithReservedHost makes the service refuse a Domain on the host reserved
+// returns: the Registry's hostname.
+func (s *Service) WithReservedHost(reserved func(ctx context.Context) (string, bool)) *Service {
+	s.reserved = reserved
 	return s
 }
 
@@ -416,6 +425,12 @@ func (s *Service) readInput(w http.ResponseWriter, r *http.Request, rt route) (I
 	if s.panelHost != "" && in.Host == s.panelHost {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host is the panel's own domain; pick another host", "field": "host"})
 		return Input{}, false
+	}
+	if s.reserved != nil {
+		if host, ok := s.reserved(r.Context()); ok && in.Host == host {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": host + " is the Registry's hostname", "field": "host"})
+			return Input{}, false
+		}
 	}
 	return in, true
 }

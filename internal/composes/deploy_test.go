@@ -766,6 +766,34 @@ func TestPullUnauthorizedAddsHint(t *testing.T) {
 	}
 }
 
+// A pull from the Registry's own hostname that cannot reach it names the
+// hostname: the host may not resolve or reach itself (hairpin NAT).
+func TestPullHairpinHint(t *testing.T) {
+	const want = "This host could not reach its own Registry at registry.example.com. Check that the hostname resolves to this host from the host itself."
+	for _, c := range []struct {
+		err  string
+		hint bool
+	}{
+		{"Get \"https://registry.example.com/v2/\": dial tcp 203.0.113.5:443: connect: connection refused", true},
+		{"Get \"https://registry.example.com/v2/\": tls: failed to verify certificate: x509: certificate is valid for traefik.default", true},
+		{"Get \"https://registry.example.com/v2/\": dial tcp: lookup registry.example.com: no such host", true},
+		{"Get \"https://ghcr.io/v2/\": dial tcp: lookup ghcr.io: no such host", false},
+	} {
+		svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+		svc.WithRegistryHost(func(context.Context) (string, bool) { return "registry.example.com", true })
+		runner.config = []byte(`{"name":"relist-c1","services":{"web":{"image":"registry.example.com/app:1"}}}`)
+		runner.pullErr = errors.New(c.err)
+		_, err := svc.RunDeploy(context.Background(), target, DeployOptions{})
+		var f *DeployFailure
+		if !errors.As(err, &f) {
+			t.Fatalf("err = %v", err)
+		}
+		if strings.HasSuffix(f.Message, want) != c.hint {
+			t.Errorf("%s: message = %q, want hint = %v", c.err, f.Message, c.hint)
+		}
+	}
+}
+
 func TestImageHost(t *testing.T) {
 	for ref, want := range map[string]string{
 		"nginx":                             "docker.io",
