@@ -76,6 +76,10 @@ _Avoid_: Repo (a zip Source has none), App, Application
 An SSH key pair the panel generates and keeps in the host-wide SSH keys library. A Git Source chooses one; one key may serve many Composes. The operator adds its public half to each repository as a read-only deploy key (ADR-0020).
 _Avoid_: Credential, Deploy key (the per-Compose key of ADR-0016)
 
+**External registry**:
+The login (host, username, token or password) for a registry the panel does not run, such as GHCR or Docker Hub, kept host-wide on the Registry page. Every pull and build the panel runs logs in with every External registry, through a Docker config made for that one call (ADR-0034).
+_Avoid_: Registry credential, Docker login
+
 **Deployment**:
 One queued run that brings a Compose's Containers up to date: fetch the Source, build each Service that has `build:` one at a time on the Compose's Builder, then `up`. A newly queued Deployment keeps the configuration selected when it was queued, independently of later edits. Numbered per Compose, with status, steps and a log. All Deployments on the host share one queue and run one at a time.
 _Avoid_: Build (the build is one step of a Deployment), Job, Release
