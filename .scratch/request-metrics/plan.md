@@ -359,11 +359,11 @@ and in the existing MetricChart test file (or a new one), `formatMetricValue(12.
 **Interfaces:**
 - Consumes: `RequestMetricsPanel`, `api.composeRequestMetrics`.
 
-- [ ] **Step 1: Write the failing tests**: with `hosts: []` the Requests section is absent; with two hosts a `Select` lists "All hosts", then each host; choosing one calls `composeRequestMetrics(location, window, 'a.test')`.
-- [ ] **Step 2: Run** `cd web && npm test -- ServiceMonitor` — Expected: FAIL.
-- [ ] **Step 3: Implement** a "Requests" section under the Service charts: `Select` of hosts as `extra` on `RequestMetricsPanel`; hidden while the response's `hosts` is empty.
-- [ ] **Step 4: Run** `cd web && npm run typecheck && npm test`, then `task build-web` and `go test ./...` — Expected: PASS.
-- [ ] **Step 5: Commit** the feature as `feat: show request metrics per host on the Compose Monitor tab`, then the regenerated assets as `chore: rebuild the embedded frontend`.
+- [x] **Step 1: Write the failing tests**: with `hosts: []` the Requests section is absent; with two hosts a `Select` lists "All hosts", then each host; choosing one calls `composeRequestMetrics(location, window, 'a.test')`.
+- [x] **Step 2: Run** `cd web && npm test -- ServiceMonitor` — Expected: FAIL.
+- [x] **Step 3: Implement** a "Requests" section under the Service charts: `Select` of hosts as `extra` on `RequestMetricsPanel`; hidden while the response's `hosts` is empty.
+- [x] **Step 4: Run** `cd web && npm run typecheck && npm test`, then `task build-web` and `go test ./...` — Expected: PASS.
+- [x] **Step 5: Commit** the feature as `feat: show request metrics per host on the Compose Monitor tab`, then the regenerated assets as `chore: rebuild the embedded frontend`.
 
 ---
 
