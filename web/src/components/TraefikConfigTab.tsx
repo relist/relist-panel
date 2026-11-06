@@ -7,7 +7,7 @@ import useSWR from 'swr';
 import { ApiError, api } from '../data/api';
 import type { ConfigProblem, ConfigTestResult, TraefikConfig, TraefikForm, TraefikHistoryEntry, TraefikLogLevel } from '../data/types';
 import { RESTART_DROP } from '../pages/traefik-apply-view';
-import { ipsFromText, isDirty } from '../pages/traefik-config-view';
+import { ipsFromText, isDirty, readTimeoutWarning } from '../pages/traefik-config-view';
 import { YamlEditor } from './YamlEditor';
 
 const { Text } = Typography;
@@ -16,7 +16,9 @@ const PREVIEW_DELAY_MS = 400;
 
 const LOG_LEVELS: TraefikLogLevel[] = ['ERROR', 'WARN', 'INFO', 'DEBUG'];
 
-const EMPTY_FORM: TraefikForm = { accessLog: false, acmeEmail: '', logLevel: 'INFO', trustCloudflare: false, trustedIps: [] };
+const EMPTY_FORM: TraefikForm = { accessLog: false, acmeEmail: '', logLevel: 'INFO', readTimeout: '3600s', trustCloudflare: false, trustedIps: [] };
+
+const READ_TIMEOUT_KEY = 'entryPoints.websecure.transport.respondingTimeouts.readTimeout';
 
 type View = 'settings' | 'advanced' | 'history';
 type FileView = 'override' | 'base' | 'effective';
@@ -95,7 +97,8 @@ export function TraefikConfigTab({
           if (id !== sequence.current) return;
           if (edited) setDraft(resp.override);
           if (resp.form) {
-            setForm(resp.form);
+            // A form edit keeps the read timeout as typed, even one preview rejected.
+            setForm(edited ? { ...resp.form, readTimeout: edited.readTimeout } : resp.form);
             // A form edit keeps the text as typed; an Advanced edit rewrites it.
             if (!edited) setIpsText(resp.form.trustedIps.join('\n'));
           }
@@ -198,6 +201,7 @@ export function TraefikConfigTab({
           form={form}
           ipsText={ipsText}
           onChange={editForm}
+          readTimeoutError={errors.find((problem) => problem.key === READ_TIMEOUT_KEY)?.message}
           onIpsText={(text) => {
             setIpsText(text);
             editForm({ trustedIps: ipsFromText(text) });
@@ -305,13 +309,17 @@ function SettingsForm({
   ipsText,
   onChange,
   onIpsText,
+  readTimeoutError,
 }: {
   disabled: boolean;
   form: TraefikForm;
   ipsText: string;
   onChange: (patch: Partial<TraefikForm>) => void;
   onIpsText: (text: string) => void;
+  /** Preview's problem with the read timeout, shown on the field. */
+  readTimeoutError?: string;
 }) {
+  const timeoutWarning = readTimeoutError === undefined && readTimeoutWarning(form.readTimeout);
   return (
     <Flex gap={8} vertical>
       {disabled && <Alert showIcon title="Fix the YAML in Advanced first" type="warning" />}
@@ -353,6 +361,22 @@ function SettingsForm({
         </Form.Item>
         <Form.Item extra="Writes every request to the Access log files, rotated daily." label="Access log">
           <Switch aria-label="Access log" checked={form.accessLog} onChange={(on) => onChange({ accessLog: on })} />
+        </Form.Item>
+        <Form.Item
+          extra="Longest time to receive one request, body included. Image uploads on the Images page and pushes to the Registry need minutes per large layer."
+          help={readTimeoutError ?? (timeoutWarning ? 'Large image uploads and registry pushes may be cut off.' : undefined)}
+          htmlFor="traefik-read-timeout"
+          label="Request read timeout"
+          validateStatus={readTimeoutError !== undefined ? 'error' : timeoutWarning ? 'warning' : undefined}
+        >
+          <Input
+            aria-label="Request read timeout"
+            id="traefik-read-timeout"
+            onChange={(e) => onChange({ readTimeout: e.target.value })}
+            placeholder="3600s"
+            style={{ width: 160 }}
+            value={form.readTimeout}
+          />
         </Form.Item>
       </Form>
     </Flex>

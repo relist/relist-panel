@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ipsFromText, isDirty, problemsByLine } from './traefik-config-view';
+import { ipsFromText, isDirty, problemsByLine, readTimeoutWarning } from './traefik-config-view';
 
 describe('isDirty', () => {
   it('compares the draft with the saved override', () => {
@@ -23,5 +23,21 @@ describe('problemsByLine', () => {
 describe('ipsFromText', () => {
   it('takes one IP or CIDR per line, trimmed, skipping blanks', () => {
     expect(ipsFromText(' 1.2.3.4 \n\n10.0.0.0/8\n')).toEqual(['1.2.3.4', '10.0.0.0/8']);
+  });
+});
+
+describe('readTimeoutWarning', () => {
+  it('warns below ten minutes', () => {
+    expect(readTimeoutWarning('5m')).toBe(true);
+    expect(readTimeoutWarning('90s')).toBe(true);
+    expect(readTimeoutWarning('599')).toBe(true);
+  });
+  it('stays quiet from ten minutes up and on text it cannot read', () => {
+    expect(readTimeoutWarning('10m')).toBe(false);
+    expect(readTimeoutWarning('3600')).toBe(false);
+    expect(readTimeoutWarning('1h')).toBe(false);
+    expect(readTimeoutWarning('1h30m')).toBe(false);
+    expect(readTimeoutWarning('junk')).toBe(false);
+    expect(readTimeoutWarning('')).toBe(false);
   });
 });
