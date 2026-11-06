@@ -141,7 +141,7 @@ Semantics (from the spec, pinned by the tests):
 - `flushedThrough` = start of the oldest open minute; with none open, the end of the newest closed minute (unchanged if nothing ever closed).
 - `resumeOffset` = smallest offset of a line added since the last `NewFile` that sits in a still-open minute; with none, `readOffset`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func TestSeriesMapping(t *testing.T)      // one line each: panel, domain (lookup ok), domain (lookup miss), -http, unknown → total=5, panel=1, host{12,"a.test"}=1
@@ -154,13 +154,13 @@ func TestCursor(t *testing.T)             // offsets 0,100,200 in 10:00, 300 in 
 func TestCursorAfterNewFile(t *testing.T) // line offset 500 in open 10:01, NewFile(), line offset 0 in 10:01 → Cursor(50) = (0, 10:01); with no new-file line → (50, 10:01)
 ```
 
-- [ ] **Step 2: Run** `go test ./internal/requestmetrics/ -run 'Series|Status|Watermark|OutOfOrder|Late|Idle|Cursor'` — Expected: FAIL.
+- [x] **Step 2: Run** `go test ./internal/requestmetrics/ -run 'Series|Status|Watermark|OutOfOrder|Late|Idle|Cursor'` — Expected: FAIL.
 
-- [ ] **Step 3: Implement** `aggregate.go`: open minutes in a `map[int64]*openMinute` (unix minute → `{series map[Key]*Counts; minOffset int64; gen int}`); `NewFile` increments the current gen.
+- [x] **Step 3: Implement** `aggregate.go`: open minutes in a `map[int64]*openMinute` (unix minute → `{series map[Key]*Counts; minOffset int64; gen int}`); `NewFile` increments the current gen.
 
-- [ ] **Step 4: Run** — Expected: PASS.
+- [x] **Step 4: Run** — Expected: PASS.
 
-- [ ] **Step 5: Commit** `feat: aggregate access log lines into minute buckets`
+- [x] **Step 5: Commit** `feat: aggregate access log lines into minute buckets`
 
 ---
 
