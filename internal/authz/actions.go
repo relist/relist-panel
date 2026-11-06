@@ -109,4 +109,5 @@ var Actions = map[string]string{
 	"PUT /api/vulnerabilities/settings":               "vulnerability.settings_update",
 	"DELETE /api/vulnerabilities/cache":               "vulnerability.cache_delete",
 	"PUT /api/audit/settings":                         "audit_settings.update",
+	"PUT /api/requests/settings":                      "request_metrics.settings_update",
 }

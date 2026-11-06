@@ -268,7 +268,7 @@ func TestIngesterHourlyMaintenance(t *testing.T)    // lines across 10:59–11:0
 
 Window handling: map `15m,1h,6h,24h` → `Minute`, `7d,30d,90d` → `Hour` with required retention 7/30/90; else 400 with message `unknown window "x": must be one of …` or `window "30d" needs a retention of at least 30 days`. `partial` = bucket count < window length / bucket size. Compose ownership: 404 `compose not found` unless the Compose belongs to the Environment and Project in the path (same SQL shape as `metrics.Store.ComposeProjectName`). Unknown `host` → 400. Settings PUT body `{ "retentionDays": n }`, 400 on `ErrInvalidRetention`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func TestAccessLogFiltered(t *testing.T)       // base accesslog.yml → false; + filters.statusCodes → true; + fields.names.RouterName: drop → true; headers drop only → false
@@ -283,10 +283,10 @@ func TestSettingsPut(t *testing.T)             // 30 → 200 and GET returns 30;
 
 Plus extend the authz matrix: a Viewer of the Project gets 200 on the Compose route, a member of another Project the existing refusal, a non-admin 403 on `/api/requests/metrics`.
 
-- [ ] **Step 2: Run** `go test ./internal/requestmetrics/ ./internal/traefikconfig/ ./internal/authz/` — Expected: FAIL.
-- [ ] **Step 3: Implement** `AccessLogFiltered`, `http.go`, the authz entries, the wiring, and write the ADR.
-- [ ] **Step 4: Run** `go test ./...` — Expected: PASS (including `TestEveryRouteIsClassified`).
-- [ ] **Step 5: Commit** `feat: serve request metrics to admins and Project viewers` (ADR in the same commit)
+- [x] **Step 2: Run** `go test ./internal/requestmetrics/ ./internal/traefikconfig/ ./internal/authz/` — Expected: FAIL.
+- [x] **Step 3: Implement** `AccessLogFiltered`, `http.go`, the authz entries, the wiring, and write the ADR.
+- [x] **Step 4: Run** `go test ./...` — Expected: PASS (including `TestEveryRouteIsClassified`).
+- [x] **Step 5: Commit** `feat: serve request metrics to admins and Project viewers` (ADR in the same commit)
 
 ---
 

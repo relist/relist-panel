@@ -317,6 +317,38 @@ func AccessLogOn(effective []byte) bool {
 	return v != nil
 }
 
+// metricFields are the Access log fields request metrics read (ADR-0033).
+var metricFields = []string{"StartUTC", "RouterName", "DownstreamStatus", "Duration"}
+
+// AccessLogFiltered reports whether the Access log leaves out requests or the
+// fields request metrics need: an accessLog.filters section, an
+// accessLog.fields.defaultMode of drop, or one of the metric fields dropped by
+// name. The numbers then cover only the logged requests.
+func AccessLogFiltered(effective []byte) bool {
+	m, err := parseMap(effective)
+	if err != nil {
+		return false
+	}
+	if _, v := lookup(m, "accessLog", "filters"); v != nil {
+		return true
+	}
+	if _, v := lookup(m, "accessLog", "fields", "defaultMode"); v != nil && strings.EqualFold(v.Value, "drop") {
+		return true
+	}
+	_, names := lookup(m, "accessLog", "fields", "names")
+	if names == nil || names.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i+1 < len(names.Content); i += 2 {
+		for _, f := range metricFields {
+			if strings.EqualFold(names.Content[i].Value, f) && strings.EqualFold(names.Content[i+1].Value, "drop") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // TrustedIPs is the websecure entrypoint's trusted IPs in a traefik.yml.
 func TrustedIPs(effective []byte) []string {
 	m, err := parseMap(effective)
