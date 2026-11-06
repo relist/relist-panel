@@ -6,6 +6,7 @@ import { CODE_FONT_STACK, SERVICE_STATE_META } from '../app/theme';
 import { usePanel } from '../data/store';
 import type { Compose, MetricWindow, ServiceMetrics } from '../data/types';
 import { shortContainerId } from '../data/types';
+import { ComposeRequests } from './ComposeRequests';
 import { MetricChart } from './MetricChart';
 import { latestPids, serviceChartSpecs } from '../pages/monitor-view';
 import { CodeValue, EmptyState, HealthBadge, RelativeTime, ServiceStateTag } from './primitives';
@@ -227,6 +228,8 @@ export function ServiceMonitor({ compose, onOpenEditor }: { compose: Compose; on
               </Col>
             ))}
       </Row>
+
+      <ComposeRequests compose={compose} />
     </>
   );
 }

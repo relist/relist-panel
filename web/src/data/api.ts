@@ -65,6 +65,8 @@ import type {
   EffectiveVariable,
   ServiceFacts,
   ServiceMetrics,
+  RequestMetrics,
+  RequestWindow,
   TerminalServices,
   VolumeAccess,
   VolumeListing,
@@ -666,6 +668,15 @@ export const api = {
   terminalServices: (location: ComposePath) =>
     request<TerminalServices>(`${composePath(location)}/terminal/services`),
 
+  requestMetrics: (window: RequestWindow) => request<RequestMetrics>(`/api/requests/metrics?window=${window}`),
+  panelRequestMetrics: (window: RequestWindow) => request<RequestMetrics>(`/api/requests/panel/metrics?window=${window}`),
+  composeRequestMetrics: (location: ComposePath, window: RequestWindow, host?: string) =>
+    request<RequestMetrics>(
+      `${composePath(location)}/requests/metrics?window=${window}${host ? `&host=${encodeURIComponent(host)}` : ''}`,
+    ),
+  requestMetricSettings: () => request<{ retentionDays: number }>('/api/requests/settings'),
+  saveRequestMetricSettings: (input: { retentionDays: number }) =>
+    request<{ retentionDays: number }>('/api/requests/settings', jsonInit('PUT', input)),
   hostMetrics: (window: MetricWindow) => request<HostMetrics>(`/api/host/metrics?window=${window}`),
   /** The Compose's Services, from the container collector's cache. */
   listServices: (location: ComposePath) => request<ServiceFacts[]>(`${composePath(location)}/services`),
