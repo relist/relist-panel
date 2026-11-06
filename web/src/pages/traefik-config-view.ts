@@ -22,3 +22,22 @@ export function ipsFromText(text: string): string[] {
     .map((line) => line.trim())
     .filter((line) => line !== '');
 }
+
+const DURATION_PART = /(\d+(?:\.\d+)?)(ms|h|m|s)/g;
+const UNIT_SECONDS: Record<string, number> = { h: 3600, m: 60, ms: 0.001, s: 1 };
+
+/** Seconds in a Traefik duration ("90s", "5m", "1h30m", bare "3600"), or undefined. */
+function durationSeconds(text: string): number | undefined {
+  const value = text.trim();
+  if (/^\d+$/.test(value)) return Number(value);
+  if (!/^(\d+(?:\.\d+)?(ms|h|m|s))+$/.test(value)) return undefined;
+  let total = 0;
+  for (const [, amount, unit] of value.matchAll(DURATION_PART)) total += Number(amount) * UNIT_SECONDS[unit];
+  return total;
+}
+
+/** Whether a read timeout is short enough to cut off large uploads and pushes (under ten minutes). */
+export function readTimeoutWarning(text: string): boolean {
+  const seconds = durationSeconds(text);
+  return seconds !== undefined && seconds < 600;
+}

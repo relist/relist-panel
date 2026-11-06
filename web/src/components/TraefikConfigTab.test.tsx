@@ -29,7 +29,7 @@ vi.mock('./YamlEditor', () => ({
   ),
 }));
 
-const form = { accessLog: false, acmeEmail: 'ops@example.com', logLevel: 'INFO' as const, trustCloudflare: false, trustedIps: [] };
+const form = { accessLog: false, acmeEmail: 'ops@example.com', logLevel: 'INFO' as const, readTimeout: '3600s', trustCloudflare: false, trustedIps: [] };
 
 function config(overrides: Partial<TraefikConfig> = {}): TraefikConfig {
   return {
@@ -80,6 +80,53 @@ describe('TraefikConfigTab', () => {
       }),
     );
     expect(await screen.findByText('Unsaved changes')).toBeTruthy();
+  });
+
+  it('explains the read timeout and sends it through preview', async () => {
+    api.previewTraefikConfig.mockResolvedValue(preview({ form: { ...form, readTimeout: '10m' } }));
+    show();
+    expect(
+      screen.getByText(
+        'Longest time to receive one request, body included. Image uploads on the Images page and pushes to the Registry need minutes per large layer.',
+      ),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Request read timeout' }), { target: { value: '10m' } });
+    await waitFor(() =>
+      expect(api.previewTraefikConfig).toHaveBeenCalledWith({ form: { ...form, readTimeout: '10m' }, override: '# mine\n' }),
+    );
+    expect(screen.queryByText('Large image uploads and registry pushes may be cut off.')).toBeNull();
+  });
+
+  it("saves base's read timeout when the field is cleared", async () => {
+    api.previewTraefikConfig.mockResolvedValue(preview({ form: { ...form, readTimeout: '5m' } }));
+    show(config({ form: { ...form, readTimeout: '5m' } }));
+    const field = screen.getByRole('textbox', { name: 'Request read timeout' });
+    fireEvent.change(field, { target: { value: '' } });
+    await waitFor(() =>
+      expect(api.previewTraefikConfig).toHaveBeenCalledWith({ form: { ...form, readTimeout: '3600s' }, override: '# mine\n' }),
+    );
+    expect((field as HTMLInputElement).value).toBe('');
+  });
+
+  it('warns about a read timeout under ten minutes', () => {
+    show();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Request read timeout' }), { target: { value: '5m' } });
+    expect(screen.getByText('Large image uploads and registry pushes may be cut off.')).toBeTruthy();
+  });
+
+  it('keeps the read timeout as typed when preview rejects it', async () => {
+    api.previewTraefikConfig.mockResolvedValue(
+      preview({
+        errors: [{ key: 'entryPoints.websecure.transport.respondingTimeouts.readTimeout', line: 0, message: 'read timeout must be a duration of at least 30s, like 90s, 5m or 1h' }],
+        form,
+      }),
+    );
+    show();
+    const field = screen.getByRole('textbox', { name: 'Request read timeout' });
+    fireEvent.change(field, { target: { value: '1' } });
+    await waitFor(() => expect(api.previewTraefikConfig).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText('read timeout must be a duration of at least 30s, like 90s, 5m or 1h')).toBeTruthy());
+    expect((field as HTMLInputElement).value).toBe('1');
   });
 
   it('disables Settings while the YAML does not parse', async () => {
