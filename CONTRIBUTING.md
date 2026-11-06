@@ -42,6 +42,11 @@ task typecheck    # the frontend types
 pnpm --dir web test
 ```
 
+The built frontend in `internal/webassets/dist/` is not committed: every checkout (and
+every worktree) builds its own with `task build-web`, and the Dockerfile builds it for
+images. Do not commit it; a binary built without it answers every page with a 503 that
+says to run `task build-web`.
+
 Run the binary with its own data directory, never the one of a real install:
 
 ```sh
