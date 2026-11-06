@@ -53,7 +53,7 @@
   - `func (h *Histogram) Quantile(q float64) (ms float64, ok bool)` — `ok` false when empty
   - `func (h *Histogram) MarshalBinary() []byte` / `func UnmarshalHistogram(b []byte) (Histogram, error)`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func TestQuantileWithinTenPercent(t *testing.T)       // 100k log-uniform samples 1ms..60s, seed 1: |est-exact|/exact ≤ 0.10 for q in {0.5, 0.9, 0.99}
@@ -63,13 +63,13 @@ func TestBinaryRoundTrip(t *testing.T)                // Marshal → Unmarshal e
 func TestUnmarshalRejectsBadIndex(t *testing.T)       // index ≥ NumBuckets → error
 ```
 
-- [ ] **Step 2: Run** `go test ./internal/requestmetrics/ -run 'Quantile|Merge|Binary|Unmarshal'` — Expected: FAIL (package does not compile).
+- [x] **Step 2: Run** `go test ./internal/requestmetrics/ -run 'Quantile|Merge|Binary|Unmarshal'` — Expected: FAIL (package does not compile).
 
-- [ ] **Step 3: Implement** in `histogram.go`. Bucket of `d` (ms = d/1e6 as float): `ms < 1` → 0; `ms ≥ 60000` → 62; else `1 + floor(log(ms)/log(1.2))`, clamped to 61. Quantile: `rank = ceil(q * total)`, walk cumulative counts; bucket `i` in 1..61 reports `1.2^(i-1) * sqrt(1.2)` ms. Encoding: for each non-zero bucket, `uvarint(index)` then `uvarint(count)`.
+- [x] **Step 3: Implement** in `histogram.go`. Bucket of `d` (ms = d/1e6 as float): `ms < 1` → 0; `ms ≥ 60000` → 62; else `1 + floor(log(ms)/log(1.2))`, clamped to 61. Quantile: `rank = ceil(q * total)`, walk cumulative counts; bucket `i` in 1..61 reports `1.2^(i-1) * sqrt(1.2)` ms. Encoding: for each non-zero bucket, `uvarint(index)` then `uvarint(count)`.
 
-- [ ] **Step 4: Run** the same command — Expected: PASS.
+- [x] **Step 4: Run** the same command — Expected: PASS.
 
-- [ ] **Step 5: Commit** `feat: add a log-scale latency histogram for request metrics`
+- [x] **Step 5: Commit** `feat: add a log-scale latency histogram for request metrics`
 
 ---
 
