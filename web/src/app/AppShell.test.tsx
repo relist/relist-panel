@@ -125,6 +125,7 @@ describe('Users and non-admins', () => {
         { path: '/projects', element: <h1>Projects screen</h1> },
         { path: '/docker', element: <h1>Docker screen</h1> },
         { path: '/audit', element: <h1>Audit screen</h1> },
+        { path: '/registry', element: <h1>Registry screen</h1> },
       ] }],
       { initialEntries: [path] },
     );
@@ -187,6 +188,13 @@ describe('Users and non-admins', () => {
     renderShell('/');
     expect(await screen.findByRole('menuitem', { name: /Users/ })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: /Audit log/ })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: /Registry/ })).toBeTruthy();
+  });
+
+  it('shows a member the 403 result on the Registry page', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member, access: { projects: [] } });
+    renderShell('/registry');
+    expect(await screen.findByText("You don't have permission")).toBeTruthy();
   });
 
   it('shows a member the 403 result on the audit log page', async () => {

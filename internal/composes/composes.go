@@ -131,6 +131,9 @@ type Service struct {
 	domains    *domains.Store
 	switches   zeroDowntimeSwitches
 	builders   builderChoices
+	// registryLogins lists the hosts with a stored External registry login;
+	// nil means none.
+	registryLogins func(ctx context.Context) ([]string, error)
 	// policyRoots and panelDomain are what the Compose policy checks a
 	// config against (SetPolicyRules).
 	policyRoots []string
@@ -207,6 +210,13 @@ func New(db *sql.DB, runner ComposeRunner, dataDir string) *Service {
 // Deployment builds on, and the builder routes serve the choice.
 func (s *Service) WithBuilders(b builderChoices) *Service {
 	s.builders = b
+	return s
+}
+
+// WithRegistryLogins lists the hosts that have a stored External registry
+// login, so a refused pull can say whether a login was tried (ADR-0034).
+func (s *Service) WithRegistryLogins(hosts func(ctx context.Context) ([]string, error)) *Service {
+	s.registryLogins = hosts
 	return s
 }
 

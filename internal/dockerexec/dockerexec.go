@@ -21,14 +21,19 @@ import (
 	"time"
 
 	"relist-panel/internal/composes"
+	"relist-panel/internal/registryauth"
 )
 
 // Runner shells out to the docker compose CLI plugin.
-type Runner struct{}
+type Runner struct {
+	// auths gives every call that may pull or build its registry logins
+	// (ADR-0034); nil gives them none.
+	auths registryauth.Source
+}
 
-// New constructs a Runner.
-func New() Runner {
-	return Runner{}
+// New constructs a Runner whose pulls and builds log in with auths.
+func New(auths registryauth.Source) Runner {
+	return Runner{auths: auths}
 }
 
 // upArgs is the argv for a deploy. Build chooses --build or --no-build (a
@@ -91,13 +96,13 @@ func buildArgs(service string, noCache bool) []string {
 	return append(args, service)
 }
 
-func (Runner) Up(ctx context.Context, req composes.RunRequest, opts composes.UpOptions) error {
-	_, err := runOn(ctx, req, opts.Out, builderFor(req, opts.Build), upArgs(opts)...)
+func (r Runner) Up(ctx context.Context, req composes.RunRequest, opts composes.UpOptions) error {
+	_, err := r.runAuthed(ctx, req, opts.Out, builderFor(req, opts.Build), !opts.NoPull || opts.Build, upArgs(opts)...)
 	return err
 }
 
-func (Runner) Scale(ctx context.Context, req composes.RunRequest, opts composes.ScaleOptions) error {
-	_, err := runOn(ctx, req, opts.Out, builderFor(req, opts.Build), scaleArgs(opts)...)
+func (r Runner) Scale(ctx context.Context, req composes.RunRequest, opts composes.ScaleOptions) error {
+	_, err := r.runAuthed(ctx, req, opts.Out, builderFor(req, opts.Build), !opts.NoPull || opts.Build, scaleArgs(opts)...)
 	return err
 }
 
@@ -117,8 +122,8 @@ func (Runner) PolicyConfig(ctx context.Context, req composes.RunRequest) ([]byte
 	return []byte(content), err
 }
 
-func (Runner) Pull(ctx context.Context, req composes.RunRequest, opts composes.PullOptions) error {
-	_, err := run(ctx, req, opts.Out, composePullArgs(opts)...)
+func (r Runner) Pull(ctx context.Context, req composes.RunRequest, opts composes.PullOptions) error {
+	_, err := r.runAuthed(ctx, req, opts.Out, "", true, composePullArgs(opts)...)
 	return err
 }
 
@@ -182,8 +187,8 @@ func parseLabels(image, out string) (map[string]string, error) {
 	return labels, nil
 }
 
-func (Runner) Build(ctx context.Context, req composes.RunRequest, opts composes.BuildOptions) error {
-	_, err := runOn(ctx, req, opts.Out, req.Builder, buildArgs(opts.Service, opts.NoCache)...)
+func (r Runner) Build(ctx context.Context, req composes.RunRequest, opts composes.BuildOptions) error {
+	_, err := r.runAuthed(ctx, req, opts.Out, req.Builder, true, buildArgs(opts.Service, opts.NoCache)...)
 	return err
 }
 
@@ -268,9 +273,28 @@ func builderFor(req composes.RunRequest, build bool) string {
 	return ""
 }
 
+// runAuthed is runOn with the Runner's registry logins when withAuth: a
+// fresh DOCKER_CONFIG for this call only, removed when it returns.
+func (r Runner) runAuthed(ctx context.Context, req composes.RunRequest, out io.Writer, builder string, withAuth bool, args ...string) (string, error) {
+	if !withAuth || r.auths == nil {
+		return runOn(ctx, req, out, builder, args...)
+	}
+	env, cleanup, err := authEnv(ctx, r.auths, cliEnv(os.Environ()))
+	if err != nil {
+		return "", fmt.Errorf("registry logins: %w", err)
+	}
+	defer cleanup()
+	return runWithEnv(ctx, req, out, builder, env, args...)
+}
+
 // runOn is run on a buildx Builder: BUILDX_BUILDER picks it, and an empty
 // builder leaves Docker default.
 func runOn(ctx context.Context, req composes.RunRequest, out io.Writer, builder string, args ...string) (string, error) {
+	return runWithEnv(ctx, req, out, builder, nil, args...)
+}
+
+// runWithEnv is runOn with env, when not nil, as the CLI's environment.
+func runWithEnv(ctx context.Context, req composes.RunRequest, out io.Writer, builder string, env []string, args ...string) (string, error) {
 	fullArgs := append([]string{
 		"compose",
 		"-p", req.ProjectName,
@@ -282,6 +306,9 @@ func runOn(ctx context.Context, req composes.RunRequest, out io.Writer, builder 
 	// A killed docker CLI can leave a grandchild holding the output pipes;
 	// without a WaitDelay, Wait would block on them and hang Cancel and Delete.
 	cmd.WaitDelay = waitDelay
+	if env != nil {
+		cmd.Env = env
+	}
 	if builder != "" {
 		cmd.Env = append(cmd.Env, "BUILDX_BUILDER="+builder)
 	}

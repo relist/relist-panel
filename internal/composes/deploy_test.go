@@ -42,11 +42,12 @@ type recordingRunner struct {
 	pulls       []PullOptions
 	inspected   []string
 	imageLabels map[string]map[string]string
+	pullErr     error
 }
 
 func (r *recordingRunner) Pull(_ context.Context, _ RunRequest, opts PullOptions) error {
 	r.pulls = append(r.pulls, opts)
-	return nil
+	return r.pullErr
 }
 
 // ImageLabels records image@platform, or image when no platform is asked.
@@ -722,6 +723,66 @@ const imageConfig = `{"name":"relist-c1","services":{
 	"cache":{"image":"redis:7","pull_policy":"always"},
 	"local":{"image":"local:1","pull_policy":"never"},
 	"built":{"build":{"context":"."}}}}`
+
+// A pull refused for credentials points at External registries when no
+// login covers the image's host, and at the stored login when one does; any
+// other pull failure gets no hint.
+func TestPullUnauthorizedAddsHint(t *testing.T) {
+	const noLogin = "If the image is private, add its registry's credentials on Registry → External registries."
+	const unauthorized = "Error response from daemon: Head \"https://registry-1.docker.io/v2/library/redis/manifests/7\": unauthorized: authentication required"
+	for _, c := range []struct {
+		name   string
+		err    string
+		stored []string
+		want   string
+	}{
+		{"no login", unauthorized, nil, noLogin},
+		{"pull access denied", "pull access denied for app, repository does not exist or may require 'docker login': denied: requested access to the resource is denied", nil, noLogin},
+		{"login stored for docker.io", unauthorized, []string{"docker.io"}, "Registry refused the stored login for docker.io. Check it with Test on Registry → External registries."},
+		{"login for another host", unauthorized, []string{"ghcr.io"}, noLogin},
+		{"permission denied is not auth", "open /var/lib/docker/x: permission denied", nil, ""},
+		{"dns", "dial tcp: lookup ghcr.io: no such host", nil, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+			svc.WithRegistryLogins(func(context.Context) ([]string, error) { return c.stored, nil })
+			runner.config = []byte(imageConfig)
+			runner.pullErr = errors.New(c.err)
+			_, err := svc.RunDeploy(context.Background(), target, DeployOptions{})
+			var f *DeployFailure
+			if !errors.As(err, &f) {
+				t.Fatalf("err = %v, want a DeployFailure", err)
+			}
+			if c.want == "" {
+				if strings.Contains(f.Message, "Registry") {
+					t.Fatalf("message = %q, want no hint", f.Message)
+				}
+				return
+			}
+			if !strings.HasSuffix(f.Message, c.want) {
+				t.Fatalf("message = %q, want suffix %q", f.Message, c.want)
+			}
+		})
+	}
+}
+
+func TestImageHost(t *testing.T) {
+	for ref, want := range map[string]string{
+		"nginx":                             "docker.io",
+		"library/redis:7":                   "docker.io",
+		"me/app:1":                          "docker.io",
+		"ghcr.io/me/app:1":                  "ghcr.io",
+		"localhost:5000/app":                "localhost:5000",
+		"localhost/app":                     "localhost",
+		"reg.example.com:5443/a/b@sha256:x": "reg.example.com:5443",
+		"docker.io/library/nginx":           "docker.io",
+		"index.docker.io/me/app":            "docker.io",
+	} {
+		if got := imageHost(ref); got != want {
+			t.Errorf("imageHost(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}
 
 // A deploy builds and pulls every image first, checks the labels each
 // image carries, and starts them without building or pulling again.
