@@ -134,6 +134,8 @@ type Service struct {
 	// registryLogins lists the hosts with a stored External registry login;
 	// nil means none.
 	registryLogins func(ctx context.Context) ([]string, error)
+	// registryHost is the Panel registry's hostname while it is enabled.
+	registryHost func(ctx context.Context) (string, bool)
 	// policyRoots and panelDomain are what the Compose policy checks a
 	// config against (SetPolicyRules).
 	policyRoots []string
@@ -217,6 +219,13 @@ func (s *Service) WithBuilders(b builderChoices) *Service {
 // login, so a refused pull can say whether a login was tried (ADR-0034).
 func (s *Service) WithRegistryLogins(hosts func(ctx context.Context) ([]string, error)) *Service {
 	s.registryLogins = hosts
+	return s
+}
+
+// WithRegistryHost names the Panel registry's hostname while it is enabled,
+// so a pull that cannot reach it can say why (ADR-0033).
+func (s *Service) WithRegistryHost(host func(ctx context.Context) (string, bool)) *Service {
+	s.registryHost = host
 	return s
 }
 

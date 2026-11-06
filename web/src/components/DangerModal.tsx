@@ -59,6 +59,7 @@ export function DangerModal({
           Type {confirmWord} to confirm
         </Text>
         <Input
+          aria-label={`Type ${confirmWord} to confirm`}
           autoComplete="off"
           onChange={(event) => setTyped(event.target.value)}
           placeholder={confirmWord}

@@ -1005,3 +1005,58 @@ export interface ComposeBuilderChoice {
   mode: 'default' | 'docker' | 'builder';
   builderId: number;
 }
+
+/** The Panel registry's state (ADR-0033). */
+export type RegistryStatus = 'off' | 'running' | 'read-only' | 'stopped' | 'drift' | 'error';
+export type RegistryTLS = 'letsencrypt' | 'certificate';
+
+export interface RegistryState {
+  settings: { enabled: boolean; hostname: string; tls: RegistryTLS };
+  status: RegistryStatus;
+  lastError: string;
+  /** The relist-registry volume's real usage. */
+  diskBytes: number;
+  /** Traefik's request read timeout; one push layer must arrive within it. */
+  readTimeout: string;
+  /** Composes whose last deploy pulled from the Registry's hostname. */
+  composesUsing: string[];
+}
+
+/** A named htpasswd login to the Registry; the token is shown once on create. */
+export interface PushCredential {
+  id: number;
+  name: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface RegistryRepository {
+  name: string;
+  tagCount: number;
+}
+
+export interface RegistryUser {
+  composeId: number;
+  composeName: string;
+  projectId: number;
+  projectName: string;
+  environmentId: number;
+  environmentName: string;
+}
+
+export interface RegistryTag {
+  tag: string;
+  digest: string;
+  size: number;
+  created: string;
+  inUseBy: RegistryUser[];
+  kept: boolean;
+}
+
+export type RegistryCheckStep = 'dns' | 'connect' | 'tls' | 'auth' | 'http';
+
+export interface RegistryCheck {
+  ok: boolean;
+  step: RegistryCheckStep | '';
+  error: string;
+}
