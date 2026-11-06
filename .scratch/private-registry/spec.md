@@ -79,9 +79,20 @@ Today the panel cannot do either half:
   the operator asks.
 - **External registry credentials reach Docker through a per-call
   `DOCKER_CONFIG`.** Nothing stays logged in. See Behaviour.
-- **Secrets are stored like SSH keys**: in the database, plaintext, never returned
-  by the API. The data directory's permissions protect them. Encrypting secrets
-  at rest is a separate, panel-wide question.
+- **No encryption at rest** (decided 2026-11-06). External registry secrets are
+  stored like SSH keys: in the database, plaintext, never returned by the API.
+  - A key that decrypts them would live on the same host, and the panel holds
+    the Docker socket. Anyone who can read the database can also read the key.
+  - Environment Variables, SSH keys and Certificate keys are plaintext too.
+    Encrypting only these secrets would add no protection.
+  - What limits the damage instead:
+    - **Push credentials are stored only as bcrypt hashes.** The token is shown
+      once and never stored, so a leaked database yields no push token.
+    - **The External registry form asks for a pull-only token.** For GHCR, a PAT
+      with `read:packages` only. A leaked token can then pull but not push.
+  - The system credential is the one plaintext Panel registry secret.
+  - Encrypting secrets at rest, with a key kept outside the data directory,
+    would be a separate project covering the whole panel.
 
 ## Behaviour
 
@@ -105,6 +116,8 @@ Today the panel cannot do either half:
   last **Test** result (pass/fail, time).
 - Add and edit take host, username and token/password. The API never returns
   the secret. Leaving it empty on edit keeps the stored one.
+- The form recommends a pull-only token, for example a GHCR PAT with
+  `read:packages` only.
 - **Test** runs `docker login` against a throwaway `DOCKER_CONFIG` and reports
   the result.
 - Before every `docker compose pull`, `build`, `up --build` and `scale --build`,
@@ -151,6 +164,7 @@ Today the panel cannot do either half:
 **Push credentials**
 
 - Each has a name (e.g. `github-ci`), created-at and created-by.
+- The database stores only the bcrypt hash, which is what goes into `htpasswd`.
 - Creating one generates a random token and shows it **once**, with copyable
   `docker login <hostname> -u <name>` and a GitHub Actions `docker/login-action`
   snippet.
@@ -190,7 +204,11 @@ Today the panel cannot do either half:
 
 - Automatic cleanup on/off, default on once the registry is enabled.
 - Keep last N tags per repository, default 10, minimum 1.
-- Daily run time in host time, default `03:00`.
+- **Schedule**: frequency and time, in host time. Frequency is **Daily** or
+  **Weekly** with one or more weekdays. Default Daily at `03:00`. Not a cron
+  expression.
+- Each run deletes tags and then runs GC, one after the other. There is no
+  separate schedule for GC.
 - **Run cleanup now** shows a preview first: the tags it will delete per
   repository.
 
@@ -338,3 +356,7 @@ Four PRs, in order. Each is shippable alone.
 - Registry data in a volume; Migration moves it only on request (2026-11-06).
 - Shared 443, no dedicated entry point; read timeout stays as is and becomes a
   Traefik page setting (2026-11-06).
+- Cleanup deletes tags and runs GC together. The schedule is daily or chosen
+  weekdays at a set time (2026-11-06).
+- No encryption at rest. Push credentials are hash-only; the External registry
+  form recommends pull-only tokens (2026-11-06).
