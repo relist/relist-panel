@@ -186,7 +186,7 @@ func TestCursorAfterNewFile(t *testing.T) // line offset 500 in open 10:01, NewF
   - `func (s *Store) Rows(ctx, res Resolution, keys []Key, from time.Time) ([]Row, error)` — ordered by `bucket_at`
   - `func (s *Store) RetentionDays(ctx) (int, error)` / `func (s *Store) SaveRetention(ctx, days int) error`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func TestWriteMinutesAndCursorAreOneTransaction(t *testing.T) // rows + cursor written; Cursor() returns it; Rows(Minute,…) returns rows with Latency decoded equal
@@ -196,10 +196,10 @@ func TestRetention(t *testing.T)      // default 1; Save 90 ok; Save 0 and 91 �
 func TestRowsFiltersKeys(t *testing.T) // two host keys + total stored; Rows with one host key returns only it
 ```
 
-- [ ] **Step 2: Run** `go test ./internal/requestmetrics/ -run 'WriteMinutes|Compact|DeleteBefore|Retention|RowsFilters'` — Expected: FAIL.
-- [ ] **Step 3: Implement** the migration and `store.go`.
-- [ ] **Step 4: Run** the same, then `go test ./internal/migrations/... ./internal/database/...` — Expected: PASS.
-- [ ] **Step 5: Commit** `feat: store request metrics in minute and hourly tables`
+- [x] **Step 2: Run** `go test ./internal/requestmetrics/ -run 'WriteMinutes|Compact|DeleteBefore|Retention|RowsFilters'` — Expected: FAIL.
+- [x] **Step 3: Implement** the migration and `store.go`.
+- [x] **Step 4: Run** the same, then `go test ./internal/migrations/... ./internal/database/...` — Expected: PASS.
+- [x] **Step 5: Commit** `feat: store request metrics in minute and hourly tables`
 
 ---
 
