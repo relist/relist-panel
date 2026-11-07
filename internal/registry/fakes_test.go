@@ -24,6 +24,7 @@ type fakeHost struct {
 	// readOnlyAtGC is whether config.yml was read-only when RunGC ran.
 	readOnlyAtGC bool
 	gcPolls      int
+	restartErrs  []error
 	gcExit       int
 	gcLogs       string
 }
@@ -47,8 +48,16 @@ func (f *fakeHost) Create(_ context.Context, spec ContainerSpec) error {
 	return nil
 }
 
+// Restart fails with the next entry of restartErrs, if any.
 func (f *fakeHost) Restart(context.Context) error {
 	f.calls = append(f.calls, "Restart")
+	if len(f.restartErrs) > 0 {
+		err := f.restartErrs[0]
+		f.restartErrs = f.restartErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
 	f.state.Running = true
 	return nil
 }

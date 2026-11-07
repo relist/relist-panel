@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 )
@@ -68,6 +69,23 @@ func (s *Store) SaveCleanupSettings(ctx context.Context, c CleanupSettings) erro
 		SET cleanup_enabled = ?, cleanup_keep = ?, cleanup_days = ?, cleanup_minute = ?, cleanup_last_run_at = ?
 		WHERE id = 1`, c.Enabled, c.Keep, strings.Join(c.Days, ","), c.Minute, last)
 	return err
+}
+
+// SetLastRunAt writes only when cleanup last ran (or was armed), so a
+// scheduler tick never overwrites settings saved meanwhile.
+func (s *Store) SetLastRunAt(ctx context.Context, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE registry_settings SET cleanup_last_run_at = ? WHERE id = 1`, at.Unix())
+	return err
+}
+
+// RunResult is one run's result.
+func (s *Store) RunResult(ctx context.Context, id int64) (string, error) {
+	var result string
+	err := s.db.QueryRowContext(ctx, `SELECT result FROM registry_cleanup_runs WHERE id = ?`, id).Scan(&result)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return result, err
 }
 
 // SetGCRunning records the run whose GC is in progress; 0 clears it.

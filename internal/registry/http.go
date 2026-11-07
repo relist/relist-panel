@@ -617,6 +617,11 @@ func (a *API) putCleanup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not read the cleanup settings")
 		return
 	}
+	if in.Enabled && !settings.Enabled {
+		// Switched on: the schedule starts from now, not with a run at once.
+		now := a.d.Cleaner.d.Now()
+		settings.LastRunAt = &now
+	}
 	settings.Enabled, settings.Keep, settings.Days, settings.Minute = in.Enabled, in.Keep, days, in.Minute
 	if err := a.d.Service.d.Store.SaveCleanupSettings(ctx, settings); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not save the cleanup settings")

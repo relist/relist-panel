@@ -33,7 +33,7 @@ type fakeSourceServer struct {
 	starts        int
 	startBodies   []map[string]any
 	registry      *Item // the Registry volume preflight reports
-	failStart     int // the first n start calls answer 502, like Traefik while the old panel restarts
+	failStart     int   // the first n start calls answer 502, like Traefik while the old panel restarts
 	aborted       bool
 	finished      string
 	failFinish    bool // finish answers 502 every time
@@ -867,5 +867,27 @@ func TestStartWithRegistrySendsIt(t *testing.T) {
 	}
 	if body := firstStartBody(t, f.src); body["includeRegistry"] != true {
 		t.Fatalf("start body = %v", body)
+	}
+}
+
+// I2: a Registry that would collide on this host blocks Start once ticked.
+func TestStartWithRegistryRunsItsChecks(t *testing.T) {
+	f := newTargetFixture(t)
+	f.src.registry = &Item{ID: "volume-" + RegistryVolume, Kind: KindVolume, Size: 1 << 20, Volume: &VolumeInfo{Name: RegistryVolume, Driver: "local"}}
+	f.deps.Local.Docker.(*FakeDocker).Volumes[RegistryVolume] = VolumeInfo{Name: RegistryVolume}
+	if _, err := f.target.Connect(context.Background(), f.src.srv.URL, "tok", "https://new.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.target.RecheckWith(context.Background(), []string{"/srv/up"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.IncludeRegistry || !slices.ContainsFunc(p.Checks, func(c Check) bool { return c.Blocking && strings.Contains(c.Message, RegistryVolume) }) {
+		t.Fatalf("recheck with Registry data: includeRegistry %v, checks %+v", p.IncludeRegistry, p.Checks)
+	}
+	err = f.target.StartWith(context.Background(), []string{"/srv/up"}, true)
+	var blocked *BlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("start = %v, want blocked", err)
 	}
 }

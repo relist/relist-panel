@@ -181,6 +181,16 @@ func (c *Client) TagInfo(ctx context.Context, repo, tag string) (TagInfo, error)
 	return info, nil
 }
 
+// Digest reads which manifest a tag points at, with one HEAD request.
+func (c *Client) Digest(ctx context.Context, repo, tag string) (string, error) {
+	resp, err := c.do(ctx, http.MethodHead, "/v2/"+repo+"/manifests/"+tag, manifestAccept)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+	return resp.Header.Get("Docker-Content-Digest"), nil
+}
+
 // Delete removes a manifest by digest, and with it every tag pointing at it.
 func (c *Client) Delete(ctx context.Context, repo, digest string) error {
 	resp, err := c.do(ctx, http.MethodDelete, "/v2/"+repo+"/manifests/"+digest, "")

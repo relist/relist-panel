@@ -181,7 +181,7 @@ func (m *pullModel) setProgress(p migration.Progress) {
 	case p.Phase == migration.PhaseConnected && p.Info != nil && (m.selected == nil || m.selectedFor != p.SourceURL):
 		// The panel picked the default (no system paths, nothing in its
 		// data directory) or kept the operator's choice: take it as it is.
-		m.selected, m.selectedFor, m.includeRegistry = map[string]bool{}, p.SourceURL, false
+		m.selected, m.selectedFor, m.includeRegistry = map[string]bool{}, p.SourceURL, p.IncludeRegistry
 		for _, path := range p.Selected {
 			m.selected[path] = true
 		}
@@ -222,9 +222,9 @@ func (m *pullModel) act(what string) tea.Cmd {
 	case "retry":
 		return func() tea.Msg { return ActionDoneMsg{Err: c.Retry(context.Background())} }
 	case "recheck":
-		paths := m.selectedPaths()
+		paths, registry := m.selectedPaths(), m.includeRegistry && m.registryOffered()
 		return func() tea.Msg {
-			p, err := c.Recheck(context.Background(), paths)
+			p, err := c.Recheck(context.Background(), paths, registry)
 			if err != nil {
 				return ActionDoneMsg{Err: err}
 			}
@@ -402,6 +402,7 @@ func (m *pullModel) onPreviewKey(k string) (tea.Model, tea.Cmd) {
 			}
 			if m.cursor == len(paths) && m.registryOffered() && m.pending == "" {
 				m.includeRegistry = !m.includeRegistry
+				return m, m.act("recheck") // its size and a Registry already here are checks
 			}
 		case up && m.cursor > 0 && m.cursorShown():
 			m.cursor, m.follow = m.cursor-1, true

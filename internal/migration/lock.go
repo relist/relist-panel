@@ -81,6 +81,13 @@ type OldHostDeps struct {
 	// UpdateLocked, when set, reports that the update lock is on, and Start
 	// then refuses to take the Migration lock.
 	UpdateLocked func() bool
+	// RegistryCleanup, when set, is waited for with the Deployment queue: a
+	// run past its Gate deletes manifests and collects blobs, which must not
+	// happen while the Registry volume is copied (ADR-0033). Its Gate stops a
+	// run that has not started once this lock is on.
+	RegistryCleanup interface {
+		WaitIdle(ctx context.Context) error
+	}
 }
 
 // TerminalCloser ends every open Terminal Session; *terminal.Service is one.
@@ -214,6 +221,11 @@ func (s *OldHost) start(ctx context.Context, hostPaths []string, includeRegistry
 	if step == StepStopping {
 		if err := s.d.Queue.WaitIdle(ctx); err != nil {
 			return Manifest{}, err
+		}
+		if s.d.RegistryCleanup != nil {
+			if err := s.d.RegistryCleanup.WaitIdle(ctx); err != nil {
+				return Manifest{}, err
+			}
 		}
 		if st.RunningComposeIDs == nil {
 			running, err := s.runningComposes(ctx)

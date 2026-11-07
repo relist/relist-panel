@@ -67,3 +67,12 @@ func TestKeepLargerThanTags(t *testing.T) {
 		t.Fatalf("keep 0 must keep at least one, deleted %v", d)
 	}
 }
+
+// I4: a tag whose created time could not be read is never deleted.
+func TestUnknownCreatedIsKept(t *testing.T) {
+	tags := []TagInfo{{Tag: "mystery", Digest: "d0"}, tagAt("a", "d1", 1), tagAt("b", "d2", 2)}
+	digests, deleted := SelectDeletions(tags, nil, 1)
+	if !slices.Equal(digests, []string{"d1"}) || !slices.Equal(deleted, []string{"a"}) {
+		t.Fatalf("digests = %v, deleted = %v", digests, deleted)
+	}
+}

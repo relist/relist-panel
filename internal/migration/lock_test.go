@@ -454,3 +454,28 @@ func TestInfoReportsRegistryApart(t *testing.T) {
 		t.Fatal("the Registry volume is listed with the Compose volumes")
 	}
 }
+
+type cleanupWaiter struct {
+	waited      int
+	stopsBefore int
+	docker      *FakeDocker
+}
+
+func (w *cleanupWaiter) WaitIdle(context.Context) error {
+	w.waited++
+	w.stopsBefore = len(w.docker.CallsOf("compose-stop"))
+	return nil
+}
+
+// I5: a Registry cleanup past its Gate finishes before anything is copied.
+func TestStartWaitsForRegistryCleanup(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	w := &cleanupWaiter{docker: f.docker}
+	f.src.d.RegistryCleanup = w
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if w.waited != 1 || w.stopsBefore != 0 {
+		t.Fatalf("waited %d times, %d stops before it", w.waited, w.stopsBefore)
+	}
+}
