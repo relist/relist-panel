@@ -84,6 +84,7 @@ const cleanup: RegistryCleanupState = {
     },
   ],
   settings: { days: ['daily'], enabled: true, keep: 10, lastRunAt: null, minute: 180 },
+  timeZone: 'Asia/Bangkok (UTC+07:00)',
 };
 
 function show(path = '/registry?tab=external') {
@@ -399,6 +400,27 @@ describe('RegistryPage cleanup', () => {
     expect(await screen.findByText('5.0 MB')).toBeTruthy();
     expect(screen.getByText('Schedule')).toBeTruthy();
     expect(screen.getByText('2 tags')).toBeTruthy();
+  });
+});
+
+describe('RegistryPage cleanup polish', () => {
+  it('names the time zone the schedule runs in', async () => {
+    show('/registry?tab=settings');
+    expect(await screen.findByText('Panel time zone: Asia/Bangkok (UTC+07:00)')).toBeTruthy();
+  });
+
+  it('shows no next run while the Registry is off', async () => {
+    api.getRegistry.mockResolvedValue(off);
+    show('/registry?tab=settings');
+    await screen.findByText('Registry cleanup');
+    expect(screen.queryByText(/Next run/)).toBeNull();
+  });
+
+  it('shows an unknown size freed as a dash', async () => {
+    api.getRegistryCleanup.mockResolvedValue({ ...cleanup, runs: [{ ...cleanup.runs[0], freedBytes: null }] });
+    show('/registry?tab=settings');
+    const row = (await screen.findByText('2 tags')).closest('tr')!;
+    expect(within(row).getByText('—')).toBeTruthy();
   });
 });
 

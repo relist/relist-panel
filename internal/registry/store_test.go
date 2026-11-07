@@ -139,7 +139,7 @@ func TestRunsKeepsLastTen(t *testing.T) {
 		t.Fatalf("runs = %d, first %d, want 10 newest first", len(runs), runs[0].ID)
 	}
 	r := runs[0]
-	if r.Result != RunOK || r.FreedBytes != 4096 || !slices.Equal(r.Deleted, []string{"app:1"}) || r.Log != "gc log" || r.FinishedAt == nil {
+	if r.Result != RunOK || r.FreedBytes == nil || *r.FreedBytes != 4096 || !slices.Equal(r.Deleted, []string{"app:1"}) || r.Log != "gc log" || r.FinishedAt == nil {
 		t.Fatalf("finished run = %+v", r)
 	}
 	if runs[1].Result != RunRunning || runs[1].FinishedAt != nil || runs[1].Deleted == nil {

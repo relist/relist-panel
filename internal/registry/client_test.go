@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -144,5 +145,12 @@ func TestClientWrongLoginErrors(t *testing.T) {
 	c.Secret = "wrong"
 	if _, err := c.Repositories(context.Background()); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("err = %v, want a 401", err)
+	}
+}
+
+func TestMissingManifestIsNotFound(t *testing.T) {
+	c, _ := fakeRegistry(t)
+	if _, err := c.TagInfo(context.Background(), "app", "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
