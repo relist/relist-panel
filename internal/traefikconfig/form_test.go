@@ -335,7 +335,8 @@ func TestWriteFormLeavesUnchangedReadTimeoutAlone(t *testing.T) {
 	}
 }
 
-func TestReadTimeoutThatIsNotADurationIsKept(t *testing.T) {
+// It is warned about, and saving replaces it, as the warning says.
+func TestReadTimeoutThatIsNotADurationIsWarnedAndReplaced(t *testing.T) {
 	override := "entryPoints:\n  websecure:\n    transport:\n      respondingTimeouts:\n        readTimeout: [1h]\n"
 	f, warnings, err := ReadForm([]byte(override))
 	if err != nil {
@@ -349,8 +350,8 @@ func TestReadTimeoutThatIsNotADurationIsKept(t *testing.T) {
 	if err != nil || len(problems) != 0 {
 		t.Fatalf("problems = %+v, err = %v", problems, err)
 	}
-	if !strings.Contains(string(out), "readTimeout: [1h]") {
-		t.Fatalf("a list read timeout was dropped:\n%s", out)
+	if strings.Contains(string(out), "[1h]") || strings.Contains(string(out), "readTimeout") {
+		t.Fatalf("a list read timeout survived a save of base's 3600s:\n%s", out)
 	}
 }
 
@@ -376,5 +377,26 @@ func TestRemovingReadTimeoutKeepsSiblings(t *testing.T) {
 	out := writeForm(t, override, Form{LogLevel: "INFO", ReadTimeout: "1h"})
 	if strings.Contains(out, "readTimeout") || strings.Count(out, "writeTimeout: 5m") != 2 {
 		t.Fatalf("out:\n%s", out)
+	}
+}
+
+// Review: when web and websecure differ, saving what Settings shows makes
+// them the same, as its warning says.
+func TestSavingShownReadTimeoutAlignsDifferingEntryPoints(t *testing.T) {
+	for name, override := range map[string]string{
+		"both set": "entryPoints:\n  web:\n    transport:\n      respondingTimeouts:\n        readTimeout: 10s\n  websecure:\n    transport:\n      respondingTimeouts:\n        readTimeout: 90s\n",
+		"one set":  "entryPoints:\n  web:\n    transport:\n      respondingTimeouts:\n        readTimeout: 90s\n",
+		"one list": "entryPoints:\n  web:\n    transport:\n      respondingTimeouts:\n        readTimeout: 90s\n  websecure:\n    transport:\n      respondingTimeouts:\n        readTimeout: [1h]\n",
+	} {
+		f, _, err := ReadForm([]byte(override))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := writeForm(t, override, f)
+		for _, ep := range []string{"web", "websecure"} {
+			if v, ok := readTimeoutAt(t, out, ep); !ok || v != "90s" {
+				t.Errorf("%s: %s readTimeout = %q, %v in\n%s", name, ep, v, ok, out)
+			}
+		}
 	}
 }

@@ -10,13 +10,21 @@ import (
 )
 
 // authEnv is environ with DOCKER_CONFIG pointing at a fresh 0700 dir whose
-// config.json holds src's logins (ADR-0034). buildx keeps its builders under
-// the Docker config dir, so BUILDX_CONFIG is pinned to the original one, or
-// every Builder would vanish for this call. cleanup removes the dir.
+// config.json is the original one plus src's logins, without credsStore and
+// without credHelpers for those hosts (ADR-0034). The original's contexts and
+// cli-plugins dirs are linked in. buildx keeps its builders under the Docker
+// config dir, so BUILDX_CONFIG is pinned to the original one, or every
+// Builder would vanish for this call. With no logins, environ comes back
+// unchanged. cleanup removes the dir, not what the links point at.
 func authEnv(ctx context.Context, src registryauth.Source, environ []string) ([]string, func(), error) {
 	auths, err := src.Auths(ctx)
 	if err != nil {
 		return nil, nil, err
+	}
+	if len(auths) == 0 {
+		// Nothing to add: the call keeps its own config, credential store
+		// included.
+		return environ, func() {}, nil
 	}
 	dir, err := os.MkdirTemp("", "relist-auth-")
 	if err != nil {

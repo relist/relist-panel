@@ -176,12 +176,16 @@ func TestCreateRefusesColonInUsernameAndTrimsSecret(t *testing.T) {
 	if rec.Code != 422 || !strings.Contains(rec.Body.String(), `"field":"username"`) {
 		t.Fatalf("colon = %d %s", rec.Code, rec.Body)
 	}
-	if rec := do(mux, "POST", "/api/registry/external", `{"host":"ghcr.io","username":"ci","secret":"  tok\n"}`); rec.Code != 201 {
+	// A pasted line ending goes; spaces may be part of a password.
+	if rec := do(mux, "POST", "/api/registry/external", `{"host":"ghcr.io","username":"ci","secret":"tok\r\n"}`); rec.Code != 201 {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(mux, "POST", "/api/registry/external", `{"host":"quay.io","username":"ci","secret":" pass word "}`); rec.Code != 201 {
 		t.Fatalf("create = %d %s", rec.Code, rec.Body)
 	}
 	list, _ := store.List(context.Background())
-	if list[0].Secret != "tok" {
-		t.Fatalf("secret = %q, want trimmed", list[0].Secret)
+	if list[0].Secret != "tok" || list[1].Secret != " pass word " {
+		t.Fatalf("secrets = %q, %q", list[0].Secret, list[1].Secret)
 	}
 }
 

@@ -33,7 +33,7 @@ const readTimeoutProblem = "read timeout must be a duration of at least 30s, lik
 // What Settings says about a read timeout it cannot show.
 const (
 	readTimeoutNull        = "read timeout is null here, which passes over base's 3600s; saving Settings removes it"
-	readTimeoutNotDuration = "read timeout is not a duration; Settings leaves it as it is until you set one"
+	readTimeoutNotDuration = "read timeout is not a duration; saving Settings replaces it with the value shown"
 )
 
 // LogLevels are the levels the form offers.
@@ -248,10 +248,16 @@ func ipList(m *yaml.Node, ep string) ([]string, bool) {
 }
 
 // sameAsShown reports whether raw is the read timeout Settings shows for
-// override, by text or by duration.
+// override, by text or by duration, and both entrypoints already hold it.
+// While they differ (or one holds null or a non-duration), saving writes the
+// value to both, as Settings' warning says.
 func sameAsShown(override []byte, raw string) bool {
-	shown, _, err := ReadForm(override)
+	shown, warnings, err := ReadForm(override)
 	if err != nil {
+		return false
+	}
+	tail := "." + strings.Join(timeoutTail, ".")
+	if slices.ContainsFunc(warnings, func(p Problem) bool { return strings.HasSuffix(p.Key, tail) }) {
 		return false
 	}
 	if raw == shown.ReadTimeout {

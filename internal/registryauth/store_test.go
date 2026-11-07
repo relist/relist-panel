@@ -38,6 +38,7 @@ func TestNormalizeHost(t *testing.T) {
 		{"", "", false},
 		{"ghcr.io/owner", "", false},
 		{"reg.example.com:123456", "", false},
+		{"reg.example.com:05000", "reg.example.com:5000", true},
 	}
 	for _, c := range cases {
 		got, err := NormalizeHost(c.in)
