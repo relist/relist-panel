@@ -162,3 +162,12 @@ func registryAPI(d Deps, dataDir string, svc *registry.Service, composesService 
 		},
 	})
 }
+
+// ownRegistry marks the Registry's image and volume as the Registry's, so the
+// Docker page never offers them to a cleanup.
+func ownRegistry(images, volumes map[string]string) {
+	for _, r := range registry.OwnedImageRefs(registry.DefaultImage) {
+		images[r] = registry.OwnerName
+	}
+	volumes[registry.VolumeName] = registry.OwnerName
+}

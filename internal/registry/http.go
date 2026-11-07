@@ -5,12 +5,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"golang.org/x/sync/errgroup"
 	"net"
 	"net/http"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"relist-panel/internal/audit"
@@ -45,7 +48,113 @@ type APIDeps struct {
 
 // API serves /api/registry. Every route is admin-only (authz leaves them
 // out of Routes).
-type API struct{ d APIDeps }
+type API struct {
+	d APIDeps
+
+	// infos caches tag info by repo@manifest-digest: a manifest never
+	// changes, so a later load only HEADs each tag for its digest.
+	infoMu sync.Mutex
+	infos  map[string]TagInfo
+}
+
+// maxCachedInfos bounds the tag info cache; past it the cache starts over.
+const maxCachedInfos = 10000
+
+// The registry's name grammar (distribution/reference): lowercase path
+// components joined by "/", and tags of up to 128 word characters, "." or
+// "-", not starting with "." or "-".
+var (
+	repoName = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$`)
+	tagName  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
+)
+
+// checkRepoTag answers 400 and false when repo, or tag when wantTag, does
+// not follow the registry's grammar.
+func checkRepoTag(w http.ResponseWriter, repo, tag string, wantTag bool) bool {
+	if !repoName.MatchString(repo) || len(repo) > 255 {
+		writeError(w, http.StatusBadRequest, "repo must be a repository name such as app or team/web")
+		return false
+	}
+	if wantTag && !tagName.MatchString(tag) {
+		writeError(w, http.StatusBadRequest, "tag must be up to 128 letters, digits, _, . or -, not starting with . or -")
+		return false
+	}
+	return true
+}
+
+// tagInfo reads a tag, from the cache when its manifest digest was read
+// before.
+func (a *API) tagInfo(ctx context.Context, c *Client, repo, tag string) (TagInfo, error) {
+	digest, err := c.Digest(ctx, repo, tag)
+	if err != nil {
+		return TagInfo{}, err
+	}
+	if digest == "" { // no Docker-Content-Digest: nothing to key the cache by
+		return c.TagInfo(ctx, repo, tag)
+	}
+	key := repo + "@" + digest
+	a.infoMu.Lock()
+	info, ok := a.infos[key]
+	a.infoMu.Unlock()
+	if ok {
+		info.Tag = tag
+		return info, nil
+	}
+	if info, err = c.TagInfo(ctx, repo, tag); err != nil {
+		return TagInfo{}, err
+	}
+	// A created time that could not be read (its config blob failed) is
+	// read again next time instead of shown as unknown for good.
+	if info.Created.IsZero() || info.Digest == "" {
+		return info, nil
+	}
+	a.infoMu.Lock()
+	if a.infos == nil || len(a.infos) >= maxCachedInfos {
+		a.infos = map[string]TagInfo{}
+	}
+	a.infos[repo+"@"+info.Digest] = info
+	a.infoMu.Unlock()
+	return info, nil
+}
+
+// tagInfos reads every tag of repo, eight at a time, in tags' order.
+func (a *API) tagInfos(ctx context.Context, c *Client, repo string, tags []string) ([]TagInfo, error) {
+	out := make([]TagInfo, len(tags))
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
+	for i, tag := range tags {
+		g.Go(func() error {
+			info, err := a.tagInfo(ctx, c, repo, tag)
+			out[i] = info
+			return err
+		})
+	}
+	return out, g.Wait()
+}
+
+// newest is the latest created time among repo's tags, or nil when none can
+// be read. A tag that fails is left out: it only decides a date.
+func (a *API) newest(ctx context.Context, c *Client, repo string, tags []string) *time.Time {
+	times := make([]time.Time, len(tags))
+	var g errgroup.Group
+	g.SetLimit(8)
+	for i, tag := range tags {
+		g.Go(func() error {
+			if info, err := a.tagInfo(ctx, c, repo, tag); err == nil {
+				times[i] = info.Created
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
+	var newest *time.Time
+	for _, at := range times {
+		if !at.IsZero() && (newest == nil || at.After(*newest)) {
+			newest = &at
+		}
+	}
+	return newest
+}
 
 func NewAPI(d APIDeps) *API {
 	if d.RegistryBase == "" {
@@ -90,7 +199,7 @@ func (a *API) get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status = StatusError
 	}
-	disk, _ := a.d.Service.d.Host.VolumeBytes(ctx)
+	disk := a.d.Service.cachedVolumeBytes(ctx)
 	timeout := ""
 	if a.d.ReadTimeout != nil {
 		timeout, _ = a.d.ReadTimeout(ctx)
@@ -336,25 +445,47 @@ func (a *API) repositories(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "could not reach the Registry: "+err.Error())
 		return
 	}
-	out := make([]map[string]any, 0, len(repos))
+	type repoResponse struct {
+		Name     string     `json:"name"`
+		TagCount int        `json:"tagCount"`
+		Newest   *time.Time `json:"newest"`
+	}
+	out := make([]repoResponse, 0, len(repos))
 	for _, repo := range repos {
 		tags, err := c.Tags(r.Context(), repo)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "could not reach the Registry: "+err.Error())
 			return
 		}
-		out = append(out, map[string]any{"name": repo, "tagCount": len(tags)})
+		out = append(out, repoResponse{Name: repo, TagCount: len(tags), Newest: a.newest(r.Context(), c, repo, tags)})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 type tagResponse struct {
-	Tag     string    `json:"tag"`
-	Digest  string    `json:"digest"`
-	Size    int64     `json:"size"`
-	Created time.Time `json:"created"`
-	InUseBy []User    `json:"inUseBy"`
-	Kept    bool      `json:"kept"`
+	Tag    string `json:"tag"`
+	Digest string `json:"digest"`
+	Size   int64  `json:"size"`
+	// Created is null when the image config could not be read.
+	Created *time.Time `json:"created"`
+	InUseBy []User     `json:"inUseBy"`
+	Kept    bool       `json:"kept"`
+}
+
+func toTagResponse(info TagInfo, users []User) tagResponse {
+	r := tagResponse{Tag: info.Tag, Digest: info.Digest, Size: info.Size, InUseBy: users}
+	if !info.Created.IsZero() {
+		created := info.Created
+		r.Created = &created
+	}
+	return r
+}
+
+func createdOf(t tagResponse) time.Time {
+	if t.Created == nil {
+		return time.Time{}
+	}
+	return *t.Created
 }
 
 // repoTags reads every tag of repo with its users, newest first.
@@ -367,22 +498,26 @@ func (a *API) repoTags(ctx context.Context, c *Client, hostname, repo string) ([
 	if err != nil {
 		return nil, err
 	}
-	out := make([]tagResponse, 0, len(tags))
-	for _, tag := range tags {
-		info, err := c.TagInfo(ctx, repo, tag)
-		if err != nil {
-			return nil, err
-		}
-		base := hostname + "/" + repo
-		in := mergeUsers(users[base+":"+tag], users[base+"@"+info.Digest])
-		out = append(out, tagResponse{Tag: tag, Digest: info.Digest, Size: info.Size, Created: info.Created, InUseBy: in})
+	infos, err := a.tagInfos(ctx, c, repo, tags)
+	if err != nil {
+		return nil, err
 	}
+	out := make([]tagResponse, 0, len(infos))
+	base := hostname + "/" + repo
+	for _, info := range infos {
+		out = append(out, toTagResponse(info, mergeUsers(users[base+":"+info.Tag], users[base+"@"+info.Digest])))
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ci, cj := createdOf(out[i]), createdOf(out[j])
+		if !ci.Equal(cj) {
+			return ci.After(cj)
+		}
+		return out[i].Tag > out[j].Tag
+	})
 	// Kept: what cleanup would keep with today's settings.
 	if settings, err := a.d.Service.d.Store.CleanupSettings(ctx); err == nil {
-		infos := make([]TagInfo, 0, len(out))
 		used := map[string]bool{}
 		for _, t := range out {
-			infos = append(infos, TagInfo{Tag: t.Tag, Digest: t.Digest, Created: t.Created})
 			used[t.Tag] = len(t.InUseBy) > 0
 		}
 		_, gone := SelectDeletions(infos, used, settings.Keep)
@@ -390,12 +525,6 @@ func (a *API) repoTags(ctx context.Context, c *Client, hostname, repo string) ([
 			out[i].Kept = !slices.Contains(gone, out[i].Tag)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if !out[i].Created.Equal(out[j].Created) {
-			return out[i].Created.After(out[j].Created)
-		}
-		return out[i].Tag > out[j].Tag
-	})
 	return out, nil
 }
 
@@ -439,8 +568,7 @@ func (a *API) tags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo := r.URL.Query().Get("repo")
-	if repo == "" {
-		writeError(w, http.StatusBadRequest, "repo is required")
+	if !checkRepoTag(w, repo, "", false) {
 		return
 	}
 	out, err := a.repoTags(r.Context(), c, st.Hostname, repo)
@@ -459,6 +587,9 @@ func (a *API) deleteTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo, tag := r.URL.Query().Get("repo"), r.URL.Query().Get("tag")
+	if !checkRepoTag(w, repo, tag, true) {
+		return
+	}
 	var in struct {
 		Confirm string `json:"confirm"`
 	}

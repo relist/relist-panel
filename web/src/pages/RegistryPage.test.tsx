@@ -454,3 +454,30 @@ describe('RegistryPage External registries polish', () => {
     expect(error.style.overflowWrap).toBe('anywhere');
   });
 });
+
+describe('RegistryPage Repositories polish', () => {
+  it('shows each repository newest tag time, and a dash for an unknown created time', async () => {
+    api.listRegistryRepositories.mockResolvedValue([
+      { name: 'app', newest: '2026-11-06T00:00:00Z', tagCount: 2 },
+      { name: 'empty', newest: null, tagCount: 0 },
+    ]);
+    api.listRegistryTags.mockResolvedValue([
+      {
+        created: null,
+        digest: 'sha256:cccccccccccccccc',
+        inUseBy: [{ composeId: 7, composeName: 'web', environmentId: 2, environmentName: 'prod', projectId: 1, projectName: 'shop' }],
+        kept: true,
+        size: 1,
+        tag: 'odd',
+      },
+    ]);
+    const user = userEvent.setup();
+    show('/registry');
+    expect((await screen.findAllByText('Newest')).length).toBeGreaterThan(0);
+    const empty = screen.getByText('empty').closest('tr')!;
+    expect(within(empty).getByText('—')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Show tags of app' }));
+    const odd = (await screen.findByText('odd')).closest('tr')!;
+    expect(within(odd).getByText('—')).toBeTruthy();
+  });
+});

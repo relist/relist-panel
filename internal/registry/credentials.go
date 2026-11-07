@@ -28,7 +28,14 @@ func (s *Service) CreateCredential(ctx context.Context, name, createdBy string) 
 	if err != nil {
 		return Credential{}, "", err
 	}
-	return c, token, s.rewriteLogins(ctx)
+	if err := s.rewriteLogins(ctx); err != nil {
+		// Its token is never shown, so a kept row could never log in.
+		if _, derr := s.d.Store.DeleteCredential(ctx, c.ID); derr != nil {
+			return Credential{}, "", errors.Join(err, derr)
+		}
+		return Credential{}, "", err
+	}
+	return c, token, nil
 }
 
 // DeleteCredential revokes a Push credential at once.

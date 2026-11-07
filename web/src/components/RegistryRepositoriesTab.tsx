@@ -35,6 +35,12 @@ export function RegistryRepositoriesTab() {
   const columns: TableColumnsType<RegistryRepository> = [
     { dataIndex: 'name', key: 'name', render: (name: string) => <Text strong>{name}</Text>, title: 'Repository' },
     { dataIndex: 'tagCount', key: 'tagCount', title: 'Tags' },
+    {
+      dataIndex: 'newest',
+      key: 'newest',
+      render: (newest: string | null) => (newest ? <RelativeTime value={newest} /> : <Text type="secondary">—</Text>),
+      title: 'Newest',
+    },
   ];
 
   return (
@@ -133,7 +139,12 @@ function RepositoryTags({ hostname, repo }: { hostname: string; repo: string }) 
     },
     { dataIndex: 'digest', key: 'digest', render: (digest: string) => <Text code>{shortDigest(digest)}</Text>, title: 'Digest' },
     { dataIndex: 'size', key: 'size', render: (size: number) => formatBytes(size), title: 'Size' },
-    { dataIndex: 'created', key: 'created', render: (created: string) => <RelativeTime value={created} />, title: 'Created' },
+    {
+      dataIndex: 'created',
+      key: 'created',
+      render: (created: string | null) => (created ? <RelativeTime value={created} /> : <Text type="secondary">—</Text>),
+      title: 'Created',
+    },
     {
       key: 'inUseBy',
       render: (_, row) =>

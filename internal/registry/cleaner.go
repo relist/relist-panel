@@ -177,6 +177,7 @@ func (c *Cleaner) run(ctx context.Context, id int64, trigger string) {
 	var logs strings.Builder
 	logf := func(format string, args ...any) { fmt.Fprintf(&logs, format+"\n", args...) }
 	finish := func(result string, deleted []string, freed int64) {
+		c.d.Service.forgetDisk() // garbage collection changed the usage
 		if err := c.store().FinishRun(ctx, id, c.d.Now(), result, deleted, freed, logs.String()); err != nil {
 			log.Printf("registry cleanup: record run %d: %v", id, err)
 		}
