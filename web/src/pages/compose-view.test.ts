@@ -149,7 +149,7 @@ describe('composeLinkIsStale', () => {
 
 describe('freshDeployView', () => {
   const volume = (source: string, kind: 'volume' | 'bind' = 'volume') => ({ source, kind }) as ComposeVolumes['volumes'][number];
-  const payload = (volumes: ComposeVolumes['volumes'], available = true): ComposeVolumes => ({ available, volumes, services: [] });
+  const payload = (volumes: ComposeVolumes['volumes'], available = true, deployed = true): ComposeVolumes => ({ available, deployed, volumes, services: [] });
 
   it('lists the named volumes of the deployed file and allows the deploy', () => {
     const view = freshDeployView(payload([volume('demo_data'), volume('/srv/bind', 'bind'), volume('demo_cache')]), undefined);
@@ -164,6 +164,13 @@ describe('freshDeployView', () => {
     const view = freshDeployView(undefined, "volume resolution failed: couldn't find env file: /data/.env");
     expect(view.refusal).toMatch(/has not been deployed yet/);
     expect(view.volumes).toEqual([]);
+  });
+
+  it('says the Compose has not been deployed when the API reports no deploy yet', () => {
+    expect(freshDeployView(payload([], true, false), undefined)).toEqual({
+      volumes: [],
+      refusal: 'This Compose has not been deployed yet, so it has no volumes to replace.',
+    });
   });
 
   it('reports any other resolution failure as unresolved, with its message', () => {

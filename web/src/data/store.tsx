@@ -5,6 +5,8 @@ import { api } from './api';
 import type { AccessView, LoginResult, ProjectInput, SignedInUser } from './api';
 import type { Compose, ComposeDomains, DeploymentRequest, ComposeVariable, ComposePreview, EffectiveVariable, ServiceBindings, VariableSet, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeListing, VolumeAccess, ZeroDowntimeService } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
+import { pasteWrites } from './paste-writes';
+import type { PasteMode } from './paste-writes';
 
 /**
  * The panel's data layer: the prototype's store shape (the retired design mock, tag `design-mock`)
@@ -89,8 +91,8 @@ type PanelValue = {
   loadComposeVariables: (composeId: number) => Promise<ComposeVariable[]>;
   saveComposeVariable: (composeId: number, variable: NewVariable, variableId?: number) => Promise<void>;
   deleteComposeVariable: (composeId: number, variableId: number) => Promise<void>;
-  /** A pasted `.env` replaces the Compose's variables: keys the paste drops are deleted. */
-  replaceComposeVariables: (composeId: number, rows: NewVariable[]) => Promise<void>;
+  /** A pasted `.env` merges into the Compose's variables; with `prune`, keys the paste drops are deleted. */
+  replaceComposeVariables: (composeId: number, rows: NewVariable[], mode: PasteMode) => Promise<void>;
   /** The Compose's Variable Sets with their entries and bound Services. Sets live on the API, not in the tree; each write refreshes the Compose. */
   loadVariableSets: (composeId: number) => Promise<VariableSet[]>;
   createVariableSet: (composeId: number, name: string) => Promise<void>;
@@ -98,8 +100,8 @@ type PanelValue = {
   deleteVariableSet: (composeId: number, setId: number) => Promise<void>;
   saveSetEntry: (composeId: number, setId: number, entry: NewVariable, entryId?: number) => Promise<void>;
   deleteSetEntry: (composeId: number, setId: number, entryId: number) => Promise<void>;
-  /** A pasted `.env` replaces a set's entries: keys the paste drops are deleted. */
-  replaceSetEntries: (composeId: number, setId: number, rows: NewVariable[]) => Promise<void>;
+  /** A pasted `.env` merges into a set's entries; with `prune`, keys the paste drops are deleted. */
+  replaceSetEntries: (composeId: number, setId: number, rows: NewVariable[], mode: PasteMode) => Promise<void>;
   /** The Compose's Service bindings. Saving refreshes the Compose, so `variablesChangedAt` reaches the page. */
   loadBindings: (composeId: number) => Promise<ServiceBindings[]>;
   saveBindings: (composeId: number, service: string, setIds: number[]) => Promise<void>;
@@ -133,7 +135,8 @@ type PanelValue = {
   saveCompose: (composeId: number, yamlContent: string) => Promise<void>;
   saveVariable: (environmentId: number, variable: NewVariable, variableId?: number) => Promise<void>;
   deleteVariable: (environmentId: number, variableId: number) => Promise<void>;
-  replaceVariables: (environmentId: number, rows: NewVariable[]) => Promise<void>;
+  /** A pasted `.env` merges into the Environment's variables; with `prune`, keys the paste drops are deleted. */
+  replaceVariables: (environmentId: number, rows: NewVariable[], mode: PasteMode) => Promise<void>;
   signIn: (email: string, password: string, code?: string) => Promise<LoginResult>;
   signOut: () => Promise<void>;
   stopCompose: (composeId: number) => Promise<void>;
@@ -406,31 +409,22 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [loadVariablesInto, track],
   );
 
-  // No bulk endpoint exists, so a `.env` replace is composed from the existing
-  // per-variable calls: remove what the paste drops, upsert what it brings,
-  // then read the list back.
+  // No bulk endpoint exists, so a `.env` paste is composed from the existing
+  // per-variable calls (`pasteWrites` picks them) against the list as the
+  // server has it now — a merge skips rows it thinks unchanged, so a stale
+  // tree would drop a write — then the list is read back.
   const replaceVariables = useCallback(
-    async (environmentId: number, rows: NewVariable[]) => {
+    async (environmentId: number, rows: NewVariable[], mode: PasteMode) => {
       await track(`bulk-variables:${environmentId}`, async () => {
         const location = findEnvironmentLocation(projectsRef.current, environmentId);
         if (!location) {
           throw new Error('Environment not found');
         }
         const { project } = location;
-        const current = location.environment.variables;
-        for (const existing of current) {
-          if (!rows.some((row) => row.key === existing.key)) {
-            await api.deleteVariable(project.id, environmentId, existing.id);
-          }
-        }
-        for (const row of rows) {
-          const existing = current.find((candidate) => candidate.key === row.key);
-          if (existing) {
-            await api.updateVariable(project.id, environmentId, existing.id, row);
-          } else {
-            await api.createVariable(project.id, environmentId, row);
-          }
-        }
+        const writes = pasteWrites(await api.listVariables(project.id, environmentId), rows, mode);
+        for (const id of writes.deletes) await api.deleteVariable(project.id, environmentId, id);
+        for (const { id, row } of writes.updates) await api.updateVariable(project.id, environmentId, id, row);
+        for (const row of writes.creates) await api.createVariable(project.id, environmentId, row);
         await loadVariablesInto(project.id, environmentId);
       });
     },
@@ -793,18 +787,13 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   // No bulk endpoint, as for the Environment: a paste is composed from the
   // per-row calls against the list as the server has it now, then one refresh.
   const replaceComposeVariables = useCallback(
-    (composeId: number, rows: NewVariable[]) =>
+    (composeId: number, rows: NewVariable[], mode: PasteMode) =>
       track(`bulk-compose-variables:${composeId}`, async () => {
         const location = domainLocation(composeId);
-        const current = await api.listComposeVariables(location);
-        for (const existing of current) {
-          if (!rows.some((row) => row.key === existing.key)) await api.deleteComposeVariable(location, existing.id);
-        }
-        for (const row of rows) {
-          const existing = current.find((candidate) => candidate.key === row.key);
-          if (existing) await api.updateComposeVariable(location, existing.id, row);
-          else await api.createComposeVariable(location, row);
-        }
+        const writes = pasteWrites(await api.listComposeVariables(location), rows, mode);
+        for (const id of writes.deletes) await api.deleteComposeVariable(location, id);
+        for (const { id, row } of writes.updates) await api.updateComposeVariable(location, id, row);
+        for (const row of writes.creates) await api.createComposeVariable(location, row);
         await refreshStatus(composeId);
       }),
     [domainLocation, refreshStatus, track],
@@ -881,19 +870,14 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   );
 
   const replaceSetEntries = useCallback(
-    (composeId: number, setId: number, rows: NewVariable[]) =>
+    (composeId: number, setId: number, rows: NewVariable[], mode: PasteMode) =>
       track(`bulk-set-entries:${setId}`, async () => {
         const location = domainLocation(composeId);
         const sets = await api.listVariableSets(location);
-        const current = sets.find((set) => set.id === setId)?.entries ?? [];
-        for (const existing of current) {
-          if (!rows.some((row) => row.key === existing.key)) await api.deleteSetEntry(location, setId, existing.id);
-        }
-        for (const row of rows) {
-          const existing = current.find((candidate) => candidate.key === row.key);
-          if (existing) await api.updateSetEntry(location, setId, existing.id, row);
-          else await api.createSetEntry(location, setId, row);
-        }
+        const writes = pasteWrites(sets.find((set) => set.id === setId)?.entries ?? [], rows, mode);
+        for (const id of writes.deletes) await api.deleteSetEntry(location, setId, id);
+        for (const { id, row } of writes.updates) await api.updateSetEntry(location, setId, id, row);
+        for (const row of writes.creates) await api.createSetEntry(location, setId, row);
         await refreshQuietly(composeId);
       }),
     [domainLocation, refreshQuietly, track],

@@ -29,8 +29,11 @@ export type VolumesView =
   | { status: 'loading' }
   /** The feature cannot run at all (`available: false`); the page hides the tab. */
   | { status: 'hidden'; reason: string }
-  /** The Compose CLI could not resolve because no deploy has written the env file yet. */
-  | { status: 'not-deployed'; message: string }
+  /**
+   * No deploy has written the env file yet. The API says so (`deployed: false`);
+   * `message` is the CLI's own words only when the CLI was asked and refused.
+   */
+  | { status: 'not-deployed'; message?: string }
   /** Any other resolution failure: stays on the tab as an Alert with Retry. */
   | { status: 'error'; message: string }
   /** The Compose declares no Volumes — a fact about the file, not a failure. */
@@ -59,6 +62,9 @@ export function volumesView(payload: ComposeVolumes | undefined, error: string |
   }
   if (!payload.available) {
     return { status: 'hidden', reason: payload.reason ?? '' };
+  }
+  if (!payload.deployed) {
+    return { status: 'not-deployed' };
   }
   if (payload.volumes.length === 0) {
     return { status: 'empty' };

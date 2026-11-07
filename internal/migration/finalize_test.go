@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -265,5 +267,40 @@ func TestBeginRestartsAfterTheMarker(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("Restart called %d times, want 1", calls)
+	}
+}
+
+// A Compose may pull from the panel's own Registry: the services the panel
+// runs itself come up before any Deployment is queued, and one that fails to
+// is a warning, not a stopped Migration.
+func TestCompleteStartsPanelServicesBeforeDeploying(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+	}{{"up", nil}, {"failed", errors.New("registry: no image")}} {
+		t.Run(c.name, func(t *testing.T) {
+			queue := &fakeEnqueuer{calls: map[int64]deployments.Mode{}}
+			queuedBefore := -1
+			f := NewFinalizer(FinalizeDeps{Local: LocalHost{Docker: NewFakeDocker(), DataDir: t.TempDir()}, Queue: queue, Sources: sourceSet{}, Domains: fakeDomains{},
+				BeforeDeploy: func(context.Context) error {
+					queue.mu.Lock()
+					queuedBefore = len(queue.calls)
+					queue.mu.Unlock()
+					return c.err
+				}})
+			summary, err := f.Complete(context.Background(), Manifest{RunningComposeIDs: []int64{1}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if queuedBefore != 0 {
+				t.Fatalf("Deployments queued before the panel's services started: %d", queuedBefore)
+			}
+			if len(queue.calls) != 1 {
+				t.Fatalf("enqueued = %v", queue.calls)
+			}
+			if warned := slices.ContainsFunc(summary.Warnings, func(w string) bool { return strings.Contains(w, "registry: no image") }); warned != (c.err != nil) {
+				t.Fatalf("warnings = %q", summary.Warnings)
+			}
+		})
 	}
 }

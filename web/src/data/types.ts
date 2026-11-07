@@ -470,6 +470,8 @@ export type VolumeServiceUser = {
  */
 export type ComposeVolumes = {
   available: boolean;
+  /** False before the first deploy: no env file yet, so the API did not ask the Compose CLI. */
+  deployed: boolean;
   reason?: string;
   volumes: ComposeVolume[];
   services: VolumeServiceUser[];
@@ -661,6 +663,23 @@ export interface SourceInput {
   sshKeyId: number | null;
 }
 
+/** Credentials for a registry the panel does not run (ADR-0034). The secret never comes back. */
+export interface ExternalRegistry {
+  id: number;
+  host: string;
+  username: string;
+  lastTestAt: string | null;
+  lastTestOk: boolean;
+  lastTestError: string;
+}
+
+/** Add or edit an External registry; an empty secret on edit keeps the stored one. */
+export interface ExternalRegistryInput {
+  host: string;
+  username: string;
+  secret: string;
+}
+
 export interface SshKeyUse {
   projectId: number;
   projectName: string;
@@ -733,6 +752,8 @@ export interface TraefikForm {
   trustCloudflare: boolean;
   logLevel: TraefikLogLevel;
   accessLog: boolean;
+  /** web's and websecure's request read timeout, a Traefik duration; base.yml's is 3600s. */
+  readTimeout: string;
 }
 
 /** Why a Traefik override cannot be used; `line` is 0 when unknown. */
@@ -985,4 +1006,96 @@ export interface BuildersResponse {
 export interface ComposeBuilderChoice {
   mode: 'default' | 'docker' | 'builder';
   builderId: number;
+}
+
+/** The Panel registry's state (ADR-0033). */
+export type RegistryStatus = 'off' | 'running' | 'read-only' | 'stopped' | 'drift' | 'error';
+export type RegistryTLS = 'letsencrypt' | 'certificate';
+
+export interface RegistryState {
+  settings: { enabled: boolean; hostname: string; tls: RegistryTLS };
+  status: RegistryStatus;
+  lastError: string;
+  /** The relist-registry volume's real usage. */
+  diskBytes: number;
+  /** Traefik's request read timeout; one push layer must arrive within it. */
+  readTimeout: string;
+  /** Composes whose last deploy pulled from the Registry's hostname. */
+  composesUsing: string[];
+}
+
+/** A named htpasswd login to the Registry; the token is shown once on create. */
+export interface PushCredential {
+  id: number;
+  name: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface RegistryRepository {
+  name: string;
+  tagCount: number;
+  /** Created time of its newest tag; null when it has none that could be read. */
+  newest: string | null;
+}
+
+export interface RegistryUser {
+  composeId: number;
+  composeName: string;
+  projectId: number;
+  projectName: string;
+  environmentId: number;
+  environmentName: string;
+}
+
+export interface RegistryTag {
+  tag: string;
+  digest: string;
+  size: number;
+  /** The image config's created time; null when it could not be read. */
+  created: string | null;
+  inUseBy: RegistryUser[];
+  kept: boolean;
+}
+
+export type RegistryCheckStep = 'dns' | 'connect' | 'tls' | 'auth' | 'http';
+
+export interface RegistryCheck {
+  ok: boolean;
+  step: RegistryCheckStep | '';
+  error: string;
+}
+
+/** When Registry cleanup runs: days is ['daily'] or weekdays 'mon'..'sun'; minute is host time. */
+export interface RegistryCleanupSettings {
+  enabled: boolean;
+  keep: number;
+  days: string[];
+  minute: number;
+  lastRunAt: string | null;
+}
+
+export type RegistryCleanupResult = 'running' | 'ok' | 'failed' | 'interrupted';
+
+export interface RegistryCleanupRun {
+  id: number;
+  startedAt: string;
+  finishedAt: string | null;
+  /** "schedule" or "user:<email>". */
+  trigger: string;
+  /** repo:tag */
+  deleted: string[];
+  /** Null when the volume's usage could not be read. */
+  freedBytes: number | null;
+  result: RegistryCleanupResult;
+  log: string;
+}
+
+export interface RegistryCleanupState {
+  settings: RegistryCleanupSettings;
+  next: string | null;
+  running: boolean;
+  runs: RegistryCleanupRun[];
+  /** The zone the schedule's time is in, e.g. "UTC (UTC+00:00)". */
+  timeZone: string;
 }

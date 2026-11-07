@@ -42,11 +42,12 @@ type recordingRunner struct {
 	pulls       []PullOptions
 	inspected   []string
 	imageLabels map[string]map[string]string
+	pullErr     error
 }
 
 func (r *recordingRunner) Pull(_ context.Context, _ RunRequest, opts PullOptions) error {
 	r.pulls = append(r.pulls, opts)
-	return nil
+	return r.pullErr
 }
 
 // ImageLabels records image@platform, or image when no platform is asked.
@@ -723,6 +724,98 @@ const imageConfig = `{"name":"relist-c1","services":{
 	"local":{"image":"local:1","pull_policy":"never"},
 	"built":{"build":{"context":"."}}}}`
 
+// A pull refused for credentials points at External registries when no
+// login covers the image's host, and at the stored login when one does; any
+// other pull failure gets no hint.
+func TestPullUnauthorizedAddsHint(t *testing.T) {
+	const noLogin = "If the image is private, add its registry's credentials on Registry → External registries."
+	const unauthorized = "Error response from daemon: Head \"https://registry-1.docker.io/v2/library/redis/manifests/7\": unauthorized: authentication required"
+	for _, c := range []struct {
+		name   string
+		err    string
+		stored []string
+		want   string
+	}{
+		{"no login", unauthorized, nil, noLogin},
+		{"pull access denied", "pull access denied for app, repository does not exist or may require 'docker login': denied: requested access to the resource is denied", nil, noLogin},
+		{"login stored for docker.io", unauthorized, []string{"docker.io"}, "Registry refused the stored login for docker.io. Check it with Test on Registry → External registries."},
+		{"login for another host", unauthorized, []string{"ghcr.io"}, noLogin},
+		{"permission denied is not auth", "open /var/lib/docker/x: permission denied", nil, ""},
+		{"dns", "dial tcp: lookup ghcr.io: no such host", nil, ""},
+		// docker compose prints progress first; the refusal comes lines later.
+		{"compose output", "docker compose -p relist-c1 pull app: exit status 1: Image localhost:5001/private/app:1 Pulling\nImage localhost:5001/private/app:1 Error unknown: failed to resolve reference: 401 Unauthorized", []string{"docker.io"}, "Registry refused the stored login for docker.io. Check it with Test on Registry → External registries."},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+			svc.WithRegistryLogins(func(context.Context) ([]string, error) { return c.stored, nil })
+			runner.config = []byte(imageConfig)
+			runner.pullErr = errors.New(c.err)
+			_, err := svc.RunDeploy(context.Background(), target, DeployOptions{})
+			var f *DeployFailure
+			if !errors.As(err, &f) {
+				t.Fatalf("err = %v, want a DeployFailure", err)
+			}
+			if c.want == "" {
+				if strings.Contains(f.Message, "Registry") {
+					t.Fatalf("message = %q, want no hint", f.Message)
+				}
+				return
+			}
+			// A Deployment's reason is the message's first line: the hint
+			// must be on it.
+			if first, _, _ := strings.Cut(f.Message, "\n"); !strings.Contains(first, c.want) {
+				t.Fatalf("first line = %q, want it to hold %q", first, c.want)
+			}
+		})
+	}
+}
+
+// A pull from the Registry's own hostname that cannot reach it names the
+// hostname: the host may not resolve or reach itself (hairpin NAT).
+func TestPullHairpinHint(t *testing.T) {
+	const want = "This host could not reach its own Registry at registry.example.com. Check that the hostname resolves to this host from the host itself."
+	for _, c := range []struct {
+		err  string
+		hint bool
+	}{
+		{"Get \"https://registry.example.com/v2/\": dial tcp 203.0.113.5:443: connect: connection refused", true},
+		{"Get \"https://registry.example.com/v2/\": tls: failed to verify certificate: x509: certificate is valid for traefik.default", true},
+		{"Get \"https://registry.example.com/v2/\": dial tcp: lookup registry.example.com: no such host", true},
+		{"Get \"https://ghcr.io/v2/\": dial tcp: lookup ghcr.io: no such host", false},
+	} {
+		svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+		svc.WithRegistryHost(func(context.Context) (string, bool) { return "registry.example.com", true })
+		runner.config = []byte(`{"name":"relist-c1","services":{"web":{"image":"registry.example.com/app:1"}}}`)
+		runner.pullErr = errors.New(c.err)
+		_, err := svc.RunDeploy(context.Background(), target, DeployOptions{})
+		var f *DeployFailure
+		if !errors.As(err, &f) {
+			t.Fatalf("err = %v", err)
+		}
+		if first, _, _ := strings.Cut(f.Message, "\n"); strings.Contains(first, want) != c.hint {
+			t.Errorf("%s: message = %q, want hint = %v", c.err, f.Message, c.hint)
+		}
+	}
+}
+
+func TestImageHost(t *testing.T) {
+	for ref, want := range map[string]string{
+		"nginx":                             "docker.io",
+		"library/redis:7":                   "docker.io",
+		"me/app:1":                          "docker.io",
+		"ghcr.io/me/app:1":                  "ghcr.io",
+		"localhost:5000/app":                "localhost:5000",
+		"localhost/app":                     "localhost",
+		"reg.example.com:5443/a/b@sha256:x": "reg.example.com:5443",
+		"docker.io/library/nginx":           "docker.io",
+		"index.docker.io/me/app":            "docker.io",
+	} {
+		if got := imageHost(ref); got != want {
+			t.Errorf("imageHost(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}
+
 // A deploy builds and pulls every image first, checks the labels each
 // image carries, and starts them without building or pulling again.
 func TestDeployStartsTheImagesItChecked(t *testing.T) {
@@ -788,5 +881,37 @@ func TestDeployChecksTheImageOfTheServicesPlatform(t *testing.T) {
 	sort.Strings(runner.inspected)
 	if want := []string{"app:1", "app:1@linux/386"}; !reflect.DeepEqual(runner.inspected, want) {
 		t.Fatalf("inspected = %v, want %v", runner.inspected, want)
+	}
+}
+
+// docker compose prints progress before the error, and a Deployment's reason
+// is the message's first line: it must carry the error line, not "Pulling".
+func TestFailureReasonCarriesTheErrorLine(t *testing.T) {
+	const pullOut = "docker compose -p relist-c1 pull app: exit status 1: Image app:1 Pulling\nImage app:1 Pulling\nError response from daemon: manifest for app:1 not found: manifest unknown"
+	const upOut = "docker compose -p relist-c1 up -d: exit status 1: Container relist-c1-web-1 Creating\nContainer relist-c1-web-1 Created\nError response from daemon: driver failed programming external connectivity: port is already allocated"
+	for _, c := range []struct {
+		name, want, not string
+		set             func(*recordingRunner)
+	}{
+		{"pull", "manifest unknown", "Pulling", func(r *recordingRunner) { r.pullErr = errors.New(pullOut) }},
+		{"up", "port is already allocated", "Creating", func(r *recordingRunner) { r.upErr = errors.New(upOut) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+			runner.config = []byte(imageConfig)
+			c.set(runner)
+			_, err := svc.RunDeploy(context.Background(), target, DeployOptions{})
+			var f *DeployFailure
+			if !errors.As(err, &f) {
+				t.Fatalf("err = %v", err)
+			}
+			first, rest, _ := strings.Cut(f.Message, "\n")
+			if !strings.Contains(first, c.want) || strings.Contains(first, c.not) {
+				t.Fatalf("first line = %q, want the error line", first)
+			}
+			if !strings.Contains(rest, "exit status 1") {
+				t.Fatalf("the full output was dropped: %q", f.Message)
+			}
+		})
 	}
 }

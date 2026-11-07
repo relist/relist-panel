@@ -13,7 +13,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
 
 	"relist-panel/internal/composes"
@@ -60,10 +62,12 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 // list answers one Compose's resolved Volumes and every Service's operation
 // identity. Availability comes first: without a containerized panel there is
 // nothing the UI can do, so the reason is the answer rather than a failed
-// resolution. The resolution itself is the Compose CLI's — the panel never
-// parses YAML for paths — and a resolution failure, `couldn't find env file`
-// before the first deploy included, surfaces the CLI's own message with a Bad
-// Gateway status, like every other runner failure.
+// resolution. Before the first deploy there is no env file for the Compose
+// CLI to read, so it is not asked: the answer is `deployed: false`, a state
+// rather than a failed request. The resolution itself is the Compose CLI's —
+// the panel never parses YAML for paths — and a resolution failure surfaces
+// the CLI's own message with a Bad Gateway status, like every other runner
+// failure.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	req, ok := s.composeRequest(w, r)
 	if !ok {
@@ -74,6 +78,14 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, response{
 			Available: false,
 			Reason:    err.Error(),
+			Volumes:   []volumeResponse{},
+			Services:  []serviceResponse{},
+		})
+		return
+	}
+	if !deployed(req.EnvFilePath) {
+		writeJSON(w, http.StatusOK, response{
+			Available: true,
 			Volumes:   []volumeResponse{},
 			Services:  []serviceResponse{},
 		})
@@ -111,9 +123,19 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, response{
 		Available: true,
+		Deployed:  true,
 		Volumes:   resolvedVolumes,
 		Services:  services,
 	})
+}
+
+// deployed reports whether a deploy has written the Compose's env file. The
+// Compose CLI refuses to resolve without it (`couldn't find env file`), so
+// before the first deploy there is nothing to ask. Any error other than "not
+// there" counts as deployed, so the CLI's own message reports it.
+func deployed(envFilePath string) bool {
+	_, err := os.Stat(envFilePath)
+	return !errors.Is(err, fs.ErrNotExist)
 }
 
 // composeRequest parses the three route ids and loads the Compose's deploy
@@ -144,11 +166,13 @@ func (s *Service) composeRequest(w http.ResponseWriter, r *http.Request) (compos
 	return req, true
 }
 
-// response is the wire shape: the feature flag, and when available the
-// Compose's resolved Volumes and Services. Reason is present only when the
-// feature is unavailable.
+// response is the wire shape: the feature flag, whether a deploy has written
+// the env file the resolution needs, and when both hold the Compose's
+// resolved Volumes and Services. Reason is present only when the feature is
+// unavailable.
 type response struct {
 	Available bool              `json:"available"`
+	Deployed  bool              `json:"deployed"`
 	Reason    string            `json:"reason,omitempty"`
 	Volumes   []volumeResponse  `json:"volumes"`
 	Services  []serviceResponse `json:"services"`

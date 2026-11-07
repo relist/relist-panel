@@ -12,6 +12,7 @@ require (
 	github.com/pquerna/otp v1.5.0
 	github.com/pressly/goose/v3 v3.24.3
 	golang.org/x/crypto v0.58.0
+	golang.org/x/sync v0.24.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.62.0
 )
@@ -39,7 +40,6 @@ require (
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

@@ -133,7 +133,8 @@ func (s *OldHost) preflight(w http.ResponseWriter, r *http.Request) {
 // the lock sequence runs in the background, detached from the request.
 func (s *OldHost) startRoute(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		HostPaths []string `json:"hostPaths"`
+		HostPaths       []string `json:"hostPaths"`
+		IncludeRegistry bool     `json:"includeRegistry"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -153,7 +154,7 @@ func (s *OldHost) startRoute(w http.ResponseWriter, r *http.Request) {
 		s.starting, s.startErr = true, nil
 		go func() {
 			err := safely.Call("migration lock", func() error {
-				_, err := s.Start(context.WithoutCancel(r.Context()), in.HostPaths)
+				_, err := s.StartWith(context.WithoutCancel(r.Context()), in.HostPaths, in.IncludeRegistry)
 				return err
 			})
 			if err != nil {

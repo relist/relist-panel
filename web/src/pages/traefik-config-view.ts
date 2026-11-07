@@ -22,3 +22,23 @@ export function ipsFromText(text: string): string[] {
     .map((line) => line.trim())
     .filter((line) => line !== '');
 }
+
+const DURATION_PART = /(\d+(?:\.\d+)?)(ns|us|µs|μs|ms|h|m|s)/g;
+const UNIT_SECONDS: Record<string, number> = { h: 3600, m: 60, ms: 1e-3, ns: 1e-9, s: 1, us: 1e-6, µs: 1e-6, μs: 1e-6 };
+
+/** Seconds in a Traefik duration ("90s", "5m", "1h30m", bare "3600"), or undefined. */
+function durationSeconds(text: string): number | undefined {
+  // Go's time.ParseDuration: an optional "+", then number-unit pairs.
+  const value = text.trim().replace(/^\+/, '');
+  if (/^\d+$/.test(value)) return Number(value);
+  if (!/^(\d+(?:\.\d+)?(ns|us|µs|μs|ms|h|m|s))+$/.test(value)) return undefined;
+  let total = 0;
+  for (const [, amount, unit] of value.matchAll(DURATION_PART)) total += Number(amount) * UNIT_SECONDS[unit];
+  return total;
+}
+
+/** Whether a read timeout is short enough to cut off large uploads and pushes (under ten minutes). */
+export function readTimeoutWarning(text: string): boolean {
+  const seconds = durationSeconds(text);
+  return seconds !== undefined && seconds < 600;
+}

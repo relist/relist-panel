@@ -51,7 +51,7 @@ beforeEach(() => {
   api.traefikConfig.mockResolvedValue({
     base: '',
     effective: '',
-    form: { accessLog: false, acmeEmail: '', logLevel: 'INFO', trustCloudflare: false, trustedIps: [] },
+    form: { accessLog: false, acmeEmail: '', logLevel: 'INFO', readTimeout: '3600s', trustCloudflare: false, trustedIps: [] },
     lastApply: null,
     override: '',
     pendingRestart: false,

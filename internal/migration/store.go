@@ -35,6 +35,7 @@ const (
 type LockState struct {
 	RunningComposeIDs []int64   `json:"runningComposeIds"`
 	HostPaths         []string  `json:"hostPaths"`
+	IncludeRegistry   bool      `json:"includeRegistry,omitempty"`
 	Manifest          *Manifest `json:"manifest,omitempty"`
 	ClaimedBy         string    `json:"claimedBy"`
 	TargetURL         string    `json:"targetUrl"`

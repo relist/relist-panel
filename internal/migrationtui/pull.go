@@ -57,7 +57,9 @@ type pullModel struct {
 
 	selected    map[string]bool
 	selectedFor string
-	cursor      int
+	// includeRegistry is the Include registry data tick, off by default.
+	includeRegistry bool
+	cursor          int
 
 	confirm string // "", "start" or "abort"
 	pending string
@@ -175,14 +177,24 @@ func (m *pullModel) setProgress(p migration.Progress) {
 	}
 	switch {
 	case p.Phase == migration.PhaseIdle:
-		m.selected, m.selectedFor = nil, ""
+		m.selected, m.selectedFor, m.includeRegistry = nil, "", false
 	case p.Phase == migration.PhaseConnected && p.Info != nil && (m.selected == nil || m.selectedFor != p.SourceURL):
 		// The panel picked the default (no system paths, nothing in its
 		// data directory) or kept the operator's choice: take it as it is.
-		m.selected, m.selectedFor = map[string]bool{}, p.SourceURL
+		m.selected, m.selectedFor, m.includeRegistry = map[string]bool{}, p.SourceURL, p.IncludeRegistry
 		for _, path := range p.Selected {
 			m.selected[path] = true
 		}
+	}
+	// A recheck can drop rows (Registry data no longer offered): keep the
+	// cursor on one that is still there. Without info (still reading) the
+	// rows are unknown, so the cursor stays put.
+	if p.Info != nil {
+		rows := len(p.Info.HostPaths)
+		if m.registryOffered() {
+			rows++
+		}
+		m.cursor = max(min(m.cursor, rows-1), 0)
 	}
 }
 
@@ -197,6 +209,12 @@ func (m *pullModel) selectedPaths() []string {
 	return out
 }
 
+// registryOffered reports whether the old server has Registry data to move:
+// the Include registry data row follows the host paths only then.
+func (m *pullModel) registryOffered() bool {
+	return m.p.Info != nil && m.p.Info.Registry != nil
+}
+
 func (m *pullModel) blocked() bool {
 	return m.p.Info == nil || slices.ContainsFunc(m.p.Checks, func(c migration.Check) bool { return c.Blocking })
 }
@@ -207,16 +225,16 @@ func (m *pullModel) act(what string) tea.Cmd {
 	c := m.c
 	switch what {
 	case "start":
-		paths := m.selectedPaths()
-		return func() tea.Msg { return ActionDoneMsg{Err: c.Start(context.Background(), paths)} }
+		paths, registry := m.selectedPaths(), m.includeRegistry && m.registryOffered()
+		return func() tea.Msg { return ActionDoneMsg{Err: c.Start(context.Background(), paths, registry)} }
 	case "abort":
 		return func() tea.Msg { return ActionDoneMsg{Err: c.Abort(context.Background())} }
 	case "retry":
 		return func() tea.Msg { return ActionDoneMsg{Err: c.Retry(context.Background())} }
 	case "recheck":
-		paths := m.selectedPaths()
+		paths, registry := m.selectedPaths(), m.includeRegistry && m.registryOffered()
 		return func() tea.Msg {
-			p, err := c.Recheck(context.Background(), paths)
+			p, err := c.Recheck(context.Background(), paths, registry)
 			if err != nil {
 				return ActionDoneMsg{Err: err}
 			}
@@ -367,6 +385,10 @@ func (m *pullModel) onPreviewKey(k string) (tea.Model, tea.Cmd) {
 	if m.p.Info != nil {
 		paths = m.p.Info.HostPaths
 	}
+	rowCount := len(paths)
+	if m.registryOffered() {
+		rowCount++ // Include registry data
+	}
 	switch k {
 	case "q", "esc":
 		return m, tea.Quit
@@ -377,7 +399,7 @@ func (m *pullModel) onPreviewKey(k string) (tea.Model, tea.Cmd) {
 	case "up", "k", "down", "j", "space":
 		up := k == "up" || k == "k"
 		above, below := m.cursorLine < m.offset, m.cursorLine >= m.offset+m.rows
-		if len(paths) > 0 && !m.cursorShown() && (k == "space" || (up && above) || (!up && below)) {
+		if rowCount > 0 && !m.cursorShown() && (k == "space" || (up && above) || (!up && below)) {
 			m.follow = true
 			break
 		}
@@ -388,11 +410,15 @@ func (m *pullModel) onPreviewKey(k string) (tea.Model, tea.Cmd) {
 				m.selected[path] = !m.selected[path]
 				return m, m.act("recheck")
 			}
+			if m.cursor == len(paths) && m.registryOffered() && m.pending == "" {
+				m.includeRegistry = !m.includeRegistry
+				return m, m.act("recheck") // its size and a Registry already here are checks
+			}
 		case up && m.cursor > 0 && m.cursorShown():
 			m.cursor, m.follow = m.cursor-1, true
 		case up:
 			m.offset, m.follow = m.offset-1, false
-		case m.cursor < len(paths)-1 && m.cursorShown():
+		case m.cursor < rowCount-1 && m.cursorShown():
 			m.cursor, m.follow = m.cursor+1, true
 		default:
 			m.offset, m.follow = m.offset+1, false
@@ -527,7 +553,10 @@ func (m *pullModel) previewLines() ([]string, int) {
 		return append(out, dangerStyle.Render(p.Error), "", "r retries on the same session"), -1
 	}
 	info := p.Info
-	var volumes, images, paths int64
+	var volumes, images, paths, registryBytes int64
+	if info.Registry != nil && m.includeRegistry {
+		registryBytes = info.Registry.Size
+	}
 	for _, v := range info.Volumes {
 		volumes += v.Size
 	}
@@ -606,6 +635,17 @@ func (m *pullModel) previewLines() ([]string, int) {
 	if len(info.HostPaths) == 0 {
 		out = append(out, dimStyle.Render("  none outside the data directory"))
 	}
+	if info.Registry != nil {
+		mark, box := "  ", "[ ]"
+		if m.cursor == len(info.HostPaths) {
+			mark, cursorLine = "> ", len(out)
+		}
+		if m.includeRegistry {
+			box = "[x]"
+		}
+		out = append(out, fmt.Sprintf("%s%s Include registry data (%s)", mark, box, migration.HumanBytes(info.Registry.Size))+
+			dimStyle.Render("  CI can push again instead"))
+	}
 	out = append(out, "", titleStyle.Render("Sizes"))
 	for _, s := range []struct {
 		label string
@@ -615,6 +655,7 @@ func (m *pullModel) previewLines() ([]string, int) {
 		{"database", info.DatabaseSize},
 		{"Volumes", volumes},
 		{"host paths", paths},
+		{"Registry data", registryBytes},
 		{"Images", images},
 	} {
 		out = append(out, fmt.Sprintf("  %-16s %s", s.label, migration.HumanBytes(s.size)))

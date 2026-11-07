@@ -48,7 +48,7 @@ func TestClientReturnsAPIError(t *testing.T) {
 		w.WriteHeader(http.StatusConflict)
 		w.Write([]byte(`{"error":"busy"}`))
 	})
-	err := c.Start(context.Background(), []string{"/srv"})
+	err := c.Start(context.Background(), []string{"/srv"}, false)
 	var api *APIError
 	if !errors.As(err, &api) || api.Status != http.StatusConflict || api.Message != "busy" {
 		t.Fatalf("err = %v, want APIError 409 busy", err)

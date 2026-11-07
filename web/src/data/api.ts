@@ -28,6 +28,15 @@ import type {
   SourceInput,
   SourceTestResult,
   SshKey,
+  ExternalRegistry,
+  ExternalRegistryInput,
+  PushCredential,
+  RegistryCheck,
+  RegistryCleanupState,
+  RegistryRepository,
+  RegistryState,
+  RegistryTag,
+  RegistryTLS,
   AccessLogList,
   AccessLogSettings,
   AccessLogSettingsInput,
@@ -537,6 +546,40 @@ export const api = {
   createSshKey: (name: string) => request<SshKey>('/api/ssh-keys', jsonInit('POST', { name })),
   renameSshKey: (id: number, name: string) => request<SshKey>(`/api/ssh-keys/${id}`, jsonInit('PATCH', { name })),
   deleteSshKey: (id: number) => request<void>(`/api/ssh-keys/${id}`, { method: 'DELETE' }),
+  // External registries: logins every pull and build gets (ADR-0034).
+  listExternalRegistries: () => request<ExternalRegistry[]>('/api/registry/external'),
+  createExternalRegistry: (input: ExternalRegistryInput) =>
+    request<ExternalRegistry>('/api/registry/external', jsonInit('POST', input)),
+  updateExternalRegistry: (id: number, input: ExternalRegistryInput) =>
+    request<ExternalRegistry>(`/api/registry/external/${id}`, jsonInit('PUT', input)),
+  deleteExternalRegistry: (id: number) => request<void>(`/api/registry/external/${id}`, { method: 'DELETE' }),
+  testExternalRegistry: (id: number) =>
+    request<{ ok: boolean; error: string }>(`/api/registry/external/${id}/test`, { method: 'POST' }),
+  // Panel registry (ADR-0033).
+  getRegistry: () => request<RegistryState>('/api/registry'),
+  saveRegistry: (input: { hostname: string; tls: RegistryTLS }) =>
+    request<RegistryState>('/api/registry', jsonInit('PUT', input)),
+  enableRegistry: () => request<RegistryState>('/api/registry/enable', { method: 'POST' }),
+  disableRegistry: () => request<{ warnings: string[] }>('/api/registry/disable', { method: 'POST' }),
+  repairRegistry: () => request<RegistryState>('/api/registry/repair', { method: 'POST' }),
+  checkRegistry: () => request<RegistryCheck>('/api/registry/check', { method: 'POST' }),
+  deleteRegistryData: (confirm: string) => request<void>('/api/registry/data', jsonInit('DELETE', { confirm })),
+  listPushCredentials: () => request<PushCredential[]>('/api/registry/credentials'),
+  createPushCredential: (name: string) =>
+    request<{ credential: PushCredential; token: string }>('/api/registry/credentials', jsonInit('POST', { name })),
+  deletePushCredential: (id: number) => request<void>(`/api/registry/credentials/${id}`, { method: 'DELETE' }),
+  getRegistryCleanup: () => request<RegistryCleanupState>('/api/registry/cleanup'),
+  saveRegistryCleanup: (input: { enabled: boolean; keep: number; days: string[]; minute: number }) =>
+    request<RegistryCleanupState>('/api/registry/cleanup', jsonInit('PUT', input)),
+  previewRegistryCleanup: () => request<Record<string, string[]>>('/api/registry/cleanup/preview'),
+  runRegistryCleanup: () => request<{ runId: number }>('/api/registry/cleanup/run', { method: 'POST' }),
+  listRegistryRepositories: () => request<RegistryRepository[]>('/api/registry/repositories'),
+  listRegistryTags: (repo: string) => request<RegistryTag[]>(`/api/registry/tags?repo=${encodeURIComponent(repo)}`),
+  deleteRegistryTag: (repo: string, tag: string, confirm?: string) =>
+    request<{ deleted: string[] }>(
+      `/api/registry/tags?repo=${encodeURIComponent(repo)}&tag=${encodeURIComponent(tag)}`,
+      confirm === undefined ? { method: 'DELETE' } : jsonInit('DELETE', { confirm }),
+    ),
   // Builders: resource-limited buildx builders, and the BuildKit image they run.
   listBuilders: () => request<BuildersResponse>('/api/builders'),
   setBuildKitImage: (buildkitImage: string) =>
@@ -672,8 +715,8 @@ export const api = {
   /**
    * The Compose's resolved Volumes, each one's pre-flight status, and every
    * Service's operation identity. `available: false` carries the reason the
-   * feature cannot run; before the first deploy the API answers 502 with the
-   * CLI's own `couldn't find env file`.
+   * feature cannot run; `deployed: false` says no deploy has written the env
+   * file yet, so the CLI was not asked (and the orphan list is empty).
    */
   listVolumes: (location: ComposePath) => request<ComposeVolumes>(`${composePath(location)}/volumes`),
   listOrphanVolumes: (location: ComposePath) =>

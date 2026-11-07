@@ -32,25 +32,73 @@ describe('VariablesPanel', () => {
     panel.replaceVariables.mockResolvedValue(undefined);
   });
 
-  it('keeps an existing secret secret on a paste and guesses a new key from its name', async () => {
-    const user = userEvent.setup();
-    render(
+  const withSecondVariable: Environment = {
+    ...environment,
+    variables: [
+      ...environment.variables,
+      { environmentId: 1, id: 2, key: 'TZ', secret: false, updatedAt: '2026-10-01T00:00:00Z', value: 'UTC' },
+    ],
+  };
+
+  function renderPanel(env: Environment = environment) {
+    return render(
       <App>
-        <VariablesPanel environment={environment} />
+        <VariablesPanel environment={env} />
       </App>,
     );
+  }
+
+  it('keeps an existing secret secret on a paste and guesses a new key from its name', async () => {
+    const user = userEvent.setup();
+    renderPanel();
 
     await user.click(screen.getByRole('button', { name: /Paste .env/ }));
     fireEvent.change(screen.getByPlaceholderText(/DATABASE_URL=/), { target: { value: 'SIGNING=new\nDB_PASSWORD=pw\nTZ=UTC' } });
+    await user.click(screen.getByRole('checkbox', { name: /Replace all/ }));
     await user.click(screen.getByRole('button', { name: /Replace 1 variable with 3/ }));
 
     await waitFor(() =>
-      expect(panel.replaceVariables).toHaveBeenCalledWith(1, [
-        { key: 'SIGNING', secret: true, value: 'new' },
-        { key: 'DB_PASSWORD', secret: true, value: 'pw' },
-        { key: 'TZ', secret: false, value: 'UTC' },
-      ]),
+      expect(panel.replaceVariables).toHaveBeenCalledWith(
+        1,
+        [
+          { key: 'SIGNING', secret: true, value: 'new' },
+          { key: 'DB_PASSWORD', secret: true, value: 'pw' },
+          { key: 'TZ', secret: false, value: 'UTC' },
+        ],
+        { prune: true },
+      ),
     );
+  });
+
+  it('merges by default: counts only new and changed keys and keeps the ones the paste drops', async () => {
+    const user = userEvent.setup();
+    renderPanel(withSecondVariable);
+
+    await user.click(screen.getByRole('button', { name: /Paste .env/ }));
+    expect((screen.getByRole('checkbox', { name: /Replace all/ }) as HTMLInputElement).checked).toBe(false);
+    fireEvent.change(screen.getByPlaceholderText(/DATABASE_URL=/), { target: { value: 'TZ=UTC\nLOG_LEVEL=info' } });
+    expect(screen.getByText(/keeps SIGNING/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Apply 1 change' }));
+
+    await waitFor(() =>
+      expect(panel.replaceVariables).toHaveBeenCalledWith(
+        1,
+        [
+          { key: 'TZ', secret: false, value: 'UTC' },
+          { key: 'LOG_LEVEL', secret: false, value: 'info' },
+        ],
+        { prune: false },
+      ),
+    );
+  });
+
+  it('offers nothing to apply when a merge changes no value', async () => {
+    const user = userEvent.setup();
+    renderPanel(withSecondVariable);
+
+    await user.click(screen.getByRole('button', { name: /Paste .env/ }));
+    fireEvent.change(screen.getByPlaceholderText(/DATABASE_URL=/), { target: { value: 'TZ=UTC' } });
+    expect(screen.getByRole('button', { name: 'No changes' }).hasAttribute('disabled')).toBe(true);
   });
 });
 

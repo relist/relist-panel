@@ -81,6 +81,13 @@ type OldHostDeps struct {
 	// UpdateLocked, when set, reports that the update lock is on, and Start
 	// then refuses to take the Migration lock.
 	UpdateLocked func() bool
+	// RegistryCleanup, when set, is waited for with the Deployment queue: a
+	// run past its Gate deletes manifests and collects blobs, which must not
+	// happen while the Registry volume is copied (ADR-0033). Its Gate stops a
+	// run that has not started once this lock is on.
+	RegistryCleanup interface {
+		WaitIdle(ctx context.Context) error
+	}
 }
 
 // TerminalCloser ends every open Terminal Session; *terminal.Service is one.
@@ -156,6 +163,12 @@ func (s *OldHost) cached(ctx context.Context) (Step, string, error) {
 // before it acts, so a second call, or ResumeLock after a restart, carries on
 // from where the last one stopped. hostPaths is used by the first call only.
 func (s *OldHost) Start(ctx context.Context, hostPaths []string) (Manifest, error) {
+	return s.StartWith(ctx, hostPaths, false)
+}
+
+// StartWith is Start; includeRegistry also moves the Registry's volume. Like
+// hostPaths, it is used by the first call only and kept in the lock state.
+func (s *OldHost) StartWith(ctx context.Context, hostPaths []string, includeRegistry bool) (Manifest, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	s.mu.Lock()
@@ -166,10 +179,10 @@ func (s *OldHost) Start(ctx context.Context, hostPaths []string) (Manifest, erro
 	if err := ctx.Err(); err != nil {
 		return Manifest{}, err
 	}
-	return s.start(ctx, hostPaths)
+	return s.start(ctx, hostPaths, includeRegistry)
 }
 
-func (s *OldHost) start(ctx context.Context, hostPaths []string) (Manifest, error) {
+func (s *OldHost) start(ctx context.Context, hostPaths []string, includeRegistry bool) (Manifest, error) {
 	step, st, err := s.d.Store.Lock(ctx)
 	if err != nil {
 		return Manifest{}, err
@@ -183,7 +196,7 @@ func (s *OldHost) start(ctx context.Context, hostPaths []string) (Manifest, erro
 		if err != nil {
 			return Manifest{}, err
 		}
-		st = LockState{HostPaths: hostPaths, ClaimedBy: claimedBy, LockedAt: s.d.Now().UTC().Unix()}
+		st = LockState{HostPaths: hostPaths, IncludeRegistry: includeRegistry, ClaimedBy: claimedBy, LockedAt: s.d.Now().UTC().Unix()}
 		if st.HostPaths == nil {
 			st.HostPaths = []string{}
 		}
@@ -209,6 +222,11 @@ func (s *OldHost) start(ctx context.Context, hostPaths []string) (Manifest, erro
 		if err := s.d.Queue.WaitIdle(ctx); err != nil {
 			return Manifest{}, err
 		}
+		if s.d.RegistryCleanup != nil {
+			if err := s.d.RegistryCleanup.WaitIdle(ctx); err != nil {
+				return Manifest{}, err
+			}
+		}
 		if st.RunningComposeIDs == nil {
 			running, err := s.runningComposes(ctx)
 			if err != nil {
@@ -231,7 +249,7 @@ func (s *OldHost) start(ctx context.Context, hostPaths []string) (Manifest, erro
 		if err := s.ensureMaintenance(ctx, true); err != nil {
 			return Manifest{}, err
 		}
-		m, err := s.d.Manifests.Build(ctx, st.RunningComposeIDs, st.HostPaths)
+		m, err := s.d.Manifests.BuildWith(ctx, st.RunningComposeIDs, st.HostPaths, st.IncludeRegistry)
 		if err != nil {
 			return Manifest{}, fmt.Errorf("build manifest: %w", err)
 		}
@@ -327,7 +345,7 @@ func (s *OldHost) ResumeLock(ctx context.Context) error {
 	s.d.Queue.Hold()
 	switch step {
 	case StepLocked, StepStopping, StepMaintenance:
-		_, err := s.start(ctx, st.HostPaths)
+		_, err := s.start(ctx, st.HostPaths, st.IncludeRegistry)
 		return err
 	}
 	if err := s.ensureMaintenance(ctx, false); err != nil {

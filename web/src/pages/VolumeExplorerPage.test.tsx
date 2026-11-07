@@ -44,6 +44,7 @@ vi.mock('../data/store', () => {
 
 const volumes: ComposeVolumes = {
   available: true,
+  deployed: true,
   services: [{ service: 'web', user: '1000:1000', source: 'compose', warning: '' }],
   volumes: [
     {

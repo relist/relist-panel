@@ -88,7 +88,7 @@ beforeEach(() => {
   vi.spyOn(api, 'listVariables').mockResolvedValue([]);
   vi.spyOn(api, 'listComposeVariables').mockResolvedValue([]);
   vi.spyOn(api, 'listServices').mockResolvedValue([]);
-  vi.spyOn(api, 'listVolumes').mockResolvedValue({ available: false, services: [], volumes: [] });
+  vi.spyOn(api, 'listVolumes').mockResolvedValue({ available: false, deployed: false, services: [], volumes: [] });
   vi.spyOn(api, 'listOrphanVolumes').mockResolvedValue({ orphans: [] });
   vi.spyOn(api, 'listDeployments').mockResolvedValue([]);
   vi.spyOn(api, 'listZeroDowntime').mockResolvedValue([]);
@@ -140,7 +140,7 @@ describe('Source card key warning', () => {
 describe('Fresh volumes confirmation', () => {
   it('warns before submitting that deletion survives failure and requires a backup', async () => {
     vi.spyOn(api, 'getSource').mockResolvedValue(null);
-    vi.mocked(api.listVolumes).mockResolvedValue({ available: true, services: [], volumes: [] });
+    vi.mocked(api.listVolumes).mockResolvedValue({ available: true, deployed: true, services: [], volumes: [] });
     const enqueue = vi.spyOn(api, 'enqueueDeployment');
     const user = userEvent.setup();
     renderPage();
@@ -153,6 +153,16 @@ describe('Fresh volumes confirmation', () => {
     expect(within(dialog).getByText(/Back up the volumes before continuing/)).toBeTruthy();
     expect(enqueue).not.toHaveBeenCalled();
     expect((within(dialog).getByRole('button', { name: 'Deploy with fresh volumes' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('Volumes before the first deploy', () => {
+  it('says the Compose is not deployed yet, with no CLI output to quote', async () => {
+    vi.spyOn(api, 'getSource').mockResolvedValue(null);
+    vi.mocked(api.listVolumes).mockResolvedValue({ available: true, deployed: false, services: [], volumes: [] });
+    renderPage(7, 'volumes');
+    expect(await screen.findByText('Not resolvable until this Compose is deployed')).toBeTruthy();
+    expect(screen.queryByText('docker compose:')).toBeNull();
   });
 });
 
@@ -226,7 +236,7 @@ describe('Zero-downtime switches', () => {
 describe('Fresh volumes and zero-downtime', () => {
   async function openFresh() {
     vi.spyOn(api, 'getSource').mockResolvedValue(null);
-    vi.mocked(api.listVolumes).mockResolvedValue({ available: true, services: [], volumes: [] });
+    vi.mocked(api.listVolumes).mockResolvedValue({ available: true, deployed: true, services: [], volumes: [] });
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole('heading', { name: 'Compose 7' });

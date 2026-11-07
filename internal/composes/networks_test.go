@@ -148,6 +148,44 @@ networks:
 	}
 }
 
+func TestListingOnlyTheSharedNetworkKeepsTheDefaultNetwork(t *testing.T) {
+	yamlContent := `services:
+  listed:
+    image: a
+    networks: [relist-network]
+  mapped:
+    image: b
+    networks:
+      relist-network:
+        aliases: [legacy-name]
+  custom:
+    image: c
+    networks: [backend, relist-network]
+networks:
+  backend: {}
+`
+	services, _ := resolveServices(t, yamlContent, nil, testIdentity)
+
+	for _, name := range []string{"listed", "mapped"} {
+		networks := services[name]["networks"].(map[string]any)
+		if _, ok := networks["default"]; !ok {
+			t.Fatalf("%s networks = %v, want default added beside relist-network", name, networks)
+		}
+		if len(networks) != 2 {
+			t.Fatalf("%s networks = %v, want only default and relist-network", name, networks)
+		}
+		sharedAliases(t, services[name])
+	}
+	if got := sharedAliases(t, services["mapped"]); got[0] != "legacy-name" {
+		t.Fatalf("mapped aliases = %v, want the operator's alias kept first", got)
+	}
+
+	custom := services["custom"]["networks"].(map[string]any)
+	if _, ok := custom["default"]; ok {
+		t.Fatalf("custom networks = %v, want no default beside another network the operator chose", custom)
+	}
+}
+
 func TestLegacyComposeStableAliasUsesItsFrozenName(t *testing.T) {
 	id := networkIdentity{DeployName: "hello-production-test", Compose: "renamed", Environment: "production", Project: "hello"}
 	services, _ := resolveServices(t, "services:\n  web: {image: nginx}\n", []domains.Domain{webDomain()}, id)

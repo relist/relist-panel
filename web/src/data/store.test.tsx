@@ -29,6 +29,10 @@ vi.mock('./api', async (importOriginal) => {
       listEnvironments: vi.fn(),
       listProjects: vi.fn(),
       listVariableSets: vi.fn(),
+      listVariables: vi.fn(),
+      createVariable: vi.fn(),
+      updateVariable: vi.fn(),
+      deleteVariable: vi.fn(),
       renameVariableSet: vi.fn(),
       updateSetEntry: vi.fn(),
     },
@@ -138,7 +142,7 @@ describe('.env replace', () => {
     ] as never);
     const hook = await loadedPanel();
     await act(async () => {
-      await hook.result.current.replaceComposeVariables(7, rows);
+      await hook.result.current.replaceComposeVariables(7, rows, { prune: true });
     });
     expect(mocked.deleteComposeVariable).toHaveBeenCalledWith(location, 2);
     expect(mocked.updateComposeVariable).toHaveBeenCalledWith(location, 1, rows[0]);
@@ -146,20 +150,57 @@ describe('.env replace', () => {
     expect(mocked.getCompose).toHaveBeenCalledTimes(1);
   });
 
+  it('merges a paste into the Compose variables: keeps what it drops and skips what did not change', async () => {
+    mocked.listComposeVariables.mockResolvedValue([
+      { composeId: 7, id: 1, key: 'KEEP', secret: true, value: 'new' },
+      { composeId: 7, id: 2, key: 'DROPPED', secret: false, value: 'x' },
+    ] as never);
+    const hook = await loadedPanel();
+    await act(async () => {
+      await hook.result.current.replaceComposeVariables(7, rows, { prune: false });
+    });
+    expect(mocked.deleteComposeVariable).not.toHaveBeenCalled();
+    expect(mocked.updateComposeVariable).not.toHaveBeenCalled();
+    expect(mocked.createComposeVariable).toHaveBeenCalledWith(location, rows[1]);
+  });
+
+  it('merges a paste into the Environment against the server list, not the cached tree', async () => {
+    // The tree holds no variables yet; the server already has TZ (with another value) and KEEP.
+    mocked.listVariables.mockResolvedValue([
+      { environmentId: 2, id: 1, key: 'TZ', secret: false, updatedAt: '', value: 'Asia/Bangkok' },
+      { environmentId: 2, id: 2, key: 'KEEP', secret: true, updatedAt: '', value: 'new' },
+    ] as never);
+    const hook = await loadedPanel();
+    await act(async () => {
+      await hook.result.current.replaceVariables(
+        2,
+        [
+          { key: 'TZ', secret: false, value: 'UTC' },
+          { key: 'KEEP', secret: true, value: 'new' },
+        ],
+        { prune: false },
+      );
+    });
+    expect(mocked.updateVariable).toHaveBeenCalledTimes(1);
+    expect(mocked.updateVariable).toHaveBeenCalledWith(1, 2, 1, { key: 'TZ', secret: false, value: 'UTC' });
+    expect(mocked.createVariable).not.toHaveBeenCalled();
+    expect(mocked.deleteVariable).not.toHaveBeenCalled();
+  });
+
   it("replaces one set's entries and leaves the other sets alone", async () => {
     mocked.listVariableSets.mockResolvedValue([
       { entries: [{ id: 9, key: 'OTHER' }], id: 4 },
       {
         entries: [
-          { id: 1, key: 'KEEP' },
-          { id: 2, key: 'DROPPED' },
+          { id: 1, key: 'KEEP', secret: true, value: 'old' },
+          { id: 2, key: 'DROPPED', secret: false, value: 'x' },
         ],
         id: 5,
       },
     ] as never);
     const hook = await loadedPanel();
     await act(async () => {
-      await hook.result.current.replaceSetEntries(7, 5, rows);
+      await hook.result.current.replaceSetEntries(7, 5, rows, { prune: true });
     });
     expect(mocked.deleteSetEntry).toHaveBeenCalledTimes(1);
     expect(mocked.deleteSetEntry).toHaveBeenCalledWith(location, 5, 2);
