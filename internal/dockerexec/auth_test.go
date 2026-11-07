@@ -225,3 +225,17 @@ func TestAuthEnvIgnoresAnUnreadableOriginalConfig(t *testing.T) {
 		t.Fatalf("config = %s", raw)
 	}
 }
+
+// Review: with no logins to add, the call keeps its own Docker config, so a
+// credential store's logins still work.
+func TestAuthEnvWithoutLoginsLeavesTheConfigAlone(t *testing.T) {
+	environ := []string{"HOME=/h", "DOCKER_CONFIG=/c"}
+	env, cleanup, err := authEnv(context.Background(), fixedAuths{}, environ)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if !slices.Equal(env, environ) {
+		t.Fatalf("env = %v, want it unchanged", env)
+	}
+}

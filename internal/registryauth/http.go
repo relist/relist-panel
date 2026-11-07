@@ -98,9 +98,10 @@ func readInput(w http.ResponseWriter, r *http.Request, requireSecret bool) (Exte
 		writeFieldError(w, http.StatusUnprocessableEntity, "username", `username cannot contain ":"`)
 		return External{}, false
 	}
-	// A pasted token often brings a newline; no token or password starts or
-	// ends with whitespace.
-	secret := strings.TrimSpace(in.Secret)
+	// A pasted token often brings a line ending; spaces may belong to a
+	// password, so they stay (docker login --password-stdin drops only the
+	// line ending too).
+	secret := strings.Trim(in.Secret, "\r\n")
 	if requireSecret && secret == "" {
 		writeFieldError(w, http.StatusUnprocessableEntity, "secret", "token or password is required")
 		return External{}, false

@@ -74,6 +74,11 @@ func NormalizeHost(s string) (string, error) {
 	if !hostPattern.MatchString(h) || !validHostPort(h) {
 		return "", ErrBadHost
 	}
+	// Docker matches hosts as text: 05000 and 5000 are one port, so store one.
+	if name, port, ok := strings.Cut(h, ":"); ok {
+		n, _ := strconv.Atoi(port)
+		h = name + ":" + strconv.Itoa(n)
+	}
 	switch h {
 	case "index.docker.io", "registry-1.docker.io":
 		h = DockerHub
