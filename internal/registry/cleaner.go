@@ -203,14 +203,7 @@ func (c *Cleaner) retain(ctx context.Context, st Settings, keep int, logf func(s
 		if err != nil {
 			return deleted, err
 		}
-		used := map[string]bool{}
-		base := st.Hostname + "/" + repo
-		for _, info := range infos {
-			if inUse[base+":"+info.Tag] || inUse[base+"@"+info.Digest] {
-				used[info.Tag] = true
-			}
-		}
-		digests, tags := SelectDeletions(infos, used, keep)
+		digests, tags := SelectDeletions(infos, repoInUse(inUse, st.Hostname, repo, infos), keep)
 		if len(digests) == 0 {
 			continue
 		}
@@ -394,4 +387,49 @@ func (c *Cleaner) tick(ctx context.Context) {
 	if _, err := c.RunNow(ctx, "schedule"); err != nil && !errors.Is(err, ErrCleanupBusy) {
 		log.Printf("registry cleanup: %v", err)
 	}
+}
+
+// preview is what a run would delete now: repo → tags, only repositories
+// with something to delete.
+func (c *Cleaner) preview(ctx context.Context, inUse func(context.Context) (map[string]bool, error)) (map[string][]string, error) {
+	st, err := c.store().Settings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	settings, err := c.store().CleanupSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	used, err := inUse(ctx)
+	if err != nil {
+		return nil, err
+	}
+	reg := c.d.Registry(st)
+	repos, err := reg.Repositories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, repo := range repos {
+		infos, err := tagInfos(ctx, reg, repo)
+		if err != nil {
+			return nil, err
+		}
+		if _, tags := SelectDeletions(infos, repoInUse(used, st.Hostname, repo, infos), settings.Keep); len(tags) > 0 {
+			out[repo] = tags
+		}
+	}
+	return out, nil
+}
+
+// repoInUse marks the tags of repo that inUse names by tag or by digest.
+func repoInUse(inUse map[string]bool, hostname, repo string, infos []TagInfo) map[string]bool {
+	used := map[string]bool{}
+	base := hostname + "/" + repo
+	for _, info := range infos {
+		if inUse[base+":"+info.Tag] || inUse[base+"@"+info.Digest] {
+			used[info.Tag] = true
+		}
+	}
+	return used
 }

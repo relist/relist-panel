@@ -70,8 +70,10 @@ func domainHosts(ctx context.Context, db *sql.DB) (map[string]string, error) {
 	return out, rows.Err()
 }
 
-func registryAPI(d Deps, dataDir string, svc *registry.Service, composesService *composes.Service) *registry.API {
-	deployed := func(ctx context.Context) (map[string][]registry.User, error) {
+// registryRefs are the in-use sources the tags view and cleanup share: each
+// Compose's latest successful deploy, and what running containers hold.
+func registryRefs(d Deps, composesService *composes.Service) (deployed, running func(ctx context.Context) (map[string][]registry.User, error)) {
+	deployed = func(ctx context.Context) (map[string][]registry.User, error) {
 		refs, err := composesService.ImageRefs(ctx)
 		if err != nil {
 			return nil, err
@@ -85,7 +87,6 @@ func registryAPI(d Deps, dataDir string, svc *registry.Service, composesService 
 		}
 		return out, nil
 	}
-	var running func(ctx context.Context) (map[string][]registry.User, error)
 	if d.VulnInUse != nil {
 		running = func(ctx context.Context) (map[string][]registry.User, error) {
 			images, err := d.VulnInUse.Images(ctx)
@@ -106,8 +107,46 @@ func registryAPI(d Deps, dataDir string, svc *registry.Service, composesService 
 			return out, nil
 		}
 	}
+	return deployed, running
+}
+
+// inUseRefs flattens the in-use sources for cleanup's retention.
+func inUseRefs(sources ...func(ctx context.Context) (map[string][]registry.User, error)) func(ctx context.Context) (map[string]bool, error) {
+	return func(ctx context.Context) (map[string]bool, error) {
+		out := map[string]bool{}
+		for _, source := range sources {
+			if source == nil {
+				continue
+			}
+			refs, err := source(ctx)
+			if err != nil {
+				return nil, err
+			}
+			for ref, users := range refs {
+				if len(users) > 0 {
+					out[ref] = true
+				}
+			}
+		}
+		return out, nil
+	}
+}
+
+// registryGate holds cleanup off while a Deployment runs, and while a Panel
+// update or a Migration holds the lock. A lock it cannot read counts as held.
+type registryGate struct {
+	busy   func() bool
+	locked func() bool
+}
+
+func (g registryGate) Busy() bool   { return g.busy() }
+func (g registryGate) Locked() bool { return g.locked() }
+
+func registryAPI(d Deps, dataDir string, svc *registry.Service, composesService *composes.Service, cleaner *registry.Cleaner) *registry.API {
+	deployed, running := registryRefs(d, composesService)
 	return registry.NewAPI(registry.APIDeps{
 		Service:      svc,
+		Cleaner:      cleaner,
 		DeployedRefs: deployed,
 		RunningRefs:  running,
 		ReadTimeout: func(context.Context) (string, error) {

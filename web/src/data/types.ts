@@ -1060,3 +1060,34 @@ export interface RegistryCheck {
   step: RegistryCheckStep | '';
   error: string;
 }
+
+/** When Registry cleanup runs: days is ['daily'] or weekdays 'mon'..'sun'; minute is host time. */
+export interface RegistryCleanupSettings {
+  enabled: boolean;
+  keep: number;
+  days: string[];
+  minute: number;
+  lastRunAt: string | null;
+}
+
+export type RegistryCleanupResult = 'running' | 'ok' | 'failed' | 'interrupted';
+
+export interface RegistryCleanupRun {
+  id: number;
+  startedAt: string;
+  finishedAt: string | null;
+  /** "schedule" or "user:<email>". */
+  trigger: string;
+  /** repo:tag */
+  deleted: string[];
+  freedBytes: number;
+  result: RegistryCleanupResult;
+  log: string;
+}
+
+export interface RegistryCleanupState {
+  settings: RegistryCleanupSettings;
+  next: string | null;
+  running: boolean;
+  runs: RegistryCleanupRun[];
+}

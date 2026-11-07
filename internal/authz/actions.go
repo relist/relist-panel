@@ -91,6 +91,8 @@ var Actions = map[string]string{
 	"POST /api/registry/credentials":                  "registry.credential_create",
 	"DELETE /api/registry/credentials/{id}":           "registry.credential_delete",
 	"DELETE /api/registry/tags":                       "registry.tag_delete",
+	"PUT /api/registry/cleanup":                       "registry.cleanup_update",
+	"POST /api/registry/cleanup/run":                  "registry.cleanup_run",
 	"POST /api/registry/external":                     "registry.external_create",
 	"PUT /api/registry/external/{id}":                 "registry.external_update",
 	"DELETE /api/registry/external/{id}":              "registry.external_delete",
