@@ -90,9 +90,9 @@ func (c *client) preflight(ctx context.Context) (OldHostInfo, error) {
 
 // start asks the source to lock. It returns the manifest once ready, or the
 // lock step and any error of the last attempt while it is still running.
-func (c *client) start(ctx context.Context, hostPaths []string) (m *Manifest, step Step, lastErr string, err error) {
+func (c *client) start(ctx context.Context, hostPaths []string, includeRegistry bool) (m *Manifest, step Step, lastErr string, err error) {
 	var raw json.RawMessage
-	status, err := c.do(ctx, http.MethodPost, "/api/migration/start", map[string]any{"hostPaths": hostPaths}, &raw)
+	status, err := c.do(ctx, http.MethodPost, "/api/migration/start", map[string]any{"hostPaths": hostPaths, "includeRegistry": includeRegistry}, &raw)
 	if err != nil {
 		return nil, "", "", err
 	}

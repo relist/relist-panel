@@ -139,14 +139,19 @@ func (c *Client) Connect(ctx context.Context, oldHostURL, token, selfURL string)
 	return p, err
 }
 
-func (c *Client) Recheck(ctx context.Context, hostPaths []string) (migration.Progress, error) {
+// Recheck re-runs preflight; includeRegistry adds the Registry's data.
+func (c *Client) Recheck(ctx context.Context, hostPaths []string, includeRegistry bool) (migration.Progress, error) {
 	var p migration.Progress
-	err := c.call(ctx, requestTimeout, http.MethodPost, "/api/migration/pull/recheck", map[string]any{"hostPaths": nonNil(hostPaths)}, &p)
+	err := c.call(ctx, requestTimeout, http.MethodPost, "/api/migration/pull/recheck",
+		map[string]any{"hostPaths": nonNil(hostPaths), "includeRegistry": includeRegistry}, &p)
 	return p, err
 }
 
-func (c *Client) Start(ctx context.Context, hostPaths []string) error {
-	return c.call(ctx, 0, http.MethodPost, "/api/migration/pull/start", map[string]any{"hostPaths": nonNil(hostPaths)}, nil)
+// Start locks the old server and pulls; includeRegistry also moves the
+// Registry's data (off by default, ADR-0033).
+func (c *Client) Start(ctx context.Context, hostPaths []string, includeRegistry bool) error {
+	return c.call(ctx, 0, http.MethodPost, "/api/migration/pull/start",
+		map[string]any{"hostPaths": nonNil(hostPaths), "includeRegistry": includeRegistry}, nil)
 }
 
 func (c *Client) Retry(ctx context.Context) error {

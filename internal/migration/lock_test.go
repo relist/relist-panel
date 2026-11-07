@@ -423,3 +423,59 @@ func TestStartRefusedWhileUpdateLockIsOn(t *testing.T) {
 		t.Fatalf("Start after the update = %v", err)
 	}
 }
+
+func TestStartWithIncludeRegistryRecordsIt(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	f.docker.Volumes[RegistryVolume] = VolumeInfo{Name: RegistryVolume, Driver: "local"}
+	m, err := f.src.StartWith(context.Background(), nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(itemIDs(m), "volume-"+RegistryVolume) {
+		t.Fatalf("manifest %q lacks the Registry volume", itemIDs(m))
+	}
+	if _, st, _ := f.store.Lock(context.Background()); !st.IncludeRegistry {
+		t.Fatal("lock state forgot includeRegistry, so a resumed start would drop it")
+	}
+}
+
+func TestInfoReportsRegistryApart(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	f.docker.Volumes[RegistryVolume] = VolumeInfo{Name: RegistryVolume, Driver: "local"}
+	f.src.d.DB = f.db // Info reads the schema version
+	info, err := f.src.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Registry == nil || info.Registry.Volume == nil || info.Registry.Volume.Name != RegistryVolume {
+		t.Fatalf("registry = %+v", info.Registry)
+	}
+	if slices.ContainsFunc(info.Volumes, func(it Item) bool { return it.Volume != nil && it.Volume.Name == RegistryVolume }) {
+		t.Fatal("the Registry volume is listed with the Compose volumes")
+	}
+}
+
+type cleanupWaiter struct {
+	waited      int
+	stopsBefore int
+	docker      *FakeDocker
+}
+
+func (w *cleanupWaiter) WaitIdle(context.Context) error {
+	w.waited++
+	w.stopsBefore = len(w.docker.CallsOf("compose-stop"))
+	return nil
+}
+
+// I5: a Registry cleanup past its Gate finishes before anything is copied.
+func TestStartWaitsForRegistryCleanup(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	w := &cleanupWaiter{docker: f.docker}
+	f.src.d.RegistryCleanup = w
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if w.waited != 1 || w.stopsBefore != 0 {
+		t.Fatalf("waited %d times, %d stops before it", w.waited, w.stopsBefore)
+	}
+}

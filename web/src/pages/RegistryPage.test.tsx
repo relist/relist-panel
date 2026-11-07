@@ -8,11 +8,15 @@ import { SWRConfig } from 'swr';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../data/api';
-import type { ExternalRegistry, RegistryState, RegistryTag } from '../data/types';
+import type { ExternalRegistry, RegistryCleanupState, RegistryState, RegistryTag } from '../data/types';
 import { RegistryPage } from './RegistryPage';
 
 const api = vi.hoisted(() => ({
   checkRegistry: vi.fn(),
+  getRegistryCleanup: vi.fn(),
+  previewRegistryCleanup: vi.fn(),
+  runRegistryCleanup: vi.fn(),
+  saveRegistryCleanup: vi.fn(),
   createPushCredential: vi.fn(),
   deletePushCredential: vi.fn(),
   deleteRegistryData: vi.fn(),
@@ -64,6 +68,24 @@ const off: RegistryState = {
 };
 const on: RegistryState = { ...off, diskBytes: 3 * 1024 * 1024, settings: { ...off.settings, enabled: true }, status: 'running' };
 
+const cleanup: RegistryCleanupState = {
+  next: '2026-11-08T03:00:00Z',
+  running: false,
+  runs: [
+    {
+      deleted: ['app:v0', 'app:v0.1'],
+      finishedAt: '2026-11-07T03:02:00Z',
+      freedBytes: 5 * 1024 * 1024,
+      id: 4,
+      log: 'app: deleted sha256:bbbb (v0, v0.1)',
+      result: 'ok',
+      startedAt: '2026-11-07T03:00:00Z',
+      trigger: 'schedule',
+    },
+  ],
+  settings: { days: ['daily'], enabled: true, keep: 10, lastRunAt: null, minute: 180 },
+};
+
 function show(path = '/registry?tab=external') {
   return render(
     <SWRConfig value={{ provider: () => new Map(), revalidateOnFocus: false, shouldRetryOnError: false }}>
@@ -80,6 +102,7 @@ beforeEach(() => {
   api.getRegistry.mockResolvedValue(on);
   api.listPushCredentials.mockResolvedValue([]);
   api.listRegistryRepositories.mockResolvedValue([]);
+  api.getRegistryCleanup.mockResolvedValue(cleanup);
 });
 
 describe('RegistryPage External registries', () => {
@@ -338,5 +361,58 @@ describe('RegistryPage Settings', () => {
     show('/registry?tab=settings');
     await user.click(await screen.findByRole('button', { name: 'Enable' }));
     await waitFor(() => expect(api.enableRegistry).toHaveBeenCalled());
+  });
+});
+
+describe('RegistryPage cleanup', () => {
+  it('offers Daily or Weekly with weekdays, and saves the schedule', async () => {
+    api.saveRegistryCleanup.mockResolvedValue({ ...cleanup, settings: { ...cleanup.settings, days: ['mon', 'thu'], keep: 5 } });
+    const user = userEvent.setup();
+    show('/registry?tab=settings');
+    await screen.findByText('Registry cleanup');
+    expect(screen.queryByRole('checkbox', { name: 'Mon' })).toBeNull();
+    await user.click(screen.getByRole('radio', { name: 'Weekly' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Mon' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Thu' }));
+    const keep = screen.getByLabelText('Keep newest tags per repository');
+    await user.clear(keep);
+    await user.type(keep, '5');
+    await user.click(screen.getByRole('button', { name: 'Save cleanup' }));
+    await waitFor(() =>
+      expect(api.saveRegistryCleanup).toHaveBeenCalledWith({ days: ['mon', 'thu'], enabled: true, keep: 5, minute: 180 }),
+    );
+  });
+
+  it('previews what Run cleanup now deletes, then runs it', async () => {
+    api.previewRegistryCleanup.mockResolvedValue({ app: ['v1', 'v2'] });
+    api.runRegistryCleanup.mockResolvedValue({ runId: 5 });
+    const user = userEvent.setup();
+    show('/registry?tab=settings');
+    await user.click(await screen.findByRole('button', { name: 'Run cleanup now' }));
+    expect(await screen.findByText('v1, v2')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Run cleanup' }));
+    await waitFor(() => expect(api.runRegistryCleanup).toHaveBeenCalled());
+  });
+
+  it('lists the last runs with the size freed', async () => {
+    show('/registry?tab=settings');
+    expect(await screen.findByText('5.0 MB')).toBeTruthy();
+    expect(screen.getByText('Schedule')).toBeTruthy();
+    expect(screen.getByText('2 tags')).toBeTruthy();
+  });
+});
+
+describe('RegistryPage Kept tags', () => {
+  it('badges the tags cleanup keeps', async () => {
+    api.listRegistryRepositories.mockResolvedValue([{ name: 'app', tagCount: 2 }]);
+    api.listRegistryTags.mockResolvedValue([
+      { created: '2026-11-06T00:00:00Z', digest: 'sha256:aaaa', inUseBy: [], kept: true, size: 1, tag: 'v2' },
+      { created: '2026-11-05T00:00:00Z', digest: 'sha256:bbbb', inUseBy: [], kept: false, size: 1, tag: 'v1' },
+    ]);
+    const user = userEvent.setup();
+    show('/registry');
+    await user.click(await screen.findByRole('button', { name: 'Show tags of app' }));
+    await screen.findByText('v1');
+    expect(screen.getAllByText('Kept').length).toBe(1);
   });
 });

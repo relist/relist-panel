@@ -140,3 +140,35 @@ func TestEvaluate(t *testing.T) {
 		}
 	})
 }
+
+// I2: ticked Registry data counts toward free space and must not collide with
+// a Registry this host already has; unticked it changes nothing.
+func TestEvaluateCountsRegistryOnlyWhenIncluded(t *testing.T) {
+	src := OldHostInfo{Protocol: ProtocolVersion, SchemaVersion: 18, DataDir: "/var/lib/relist-panel",
+		Install: config.InstallSettings{Domain: "panel.example.com"}, HostPaths: []HostPathCandidate{}, Volumes: []Item{}, Images: []Item{},
+		Warnings: []string{}, Registry: &Item{ID: "volume-" + RegistryVolume, Kind: KindVolume, Size: 5000, Volume: &VolumeInfo{Name: RegistryVolume}}}
+	docker := NewFakeDocker()
+	docker.Volumes[RegistryVolume] = VolumeInfo{Name: RegistryVolume}
+	docker.FreeB["/var/lib/docker"] = 1000
+	local := LocalHost{DB: openDB(t), Docker: docker, DataDir: "/var/lib/relist-panel",
+		Install: config.InstallSettings{Domain: "panel.example.com"}, FreeBytes: func(string) (int64, error) { return 1 << 40, nil }}
+	checks, err := EvaluateWith(context.Background(), local, src, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(checks, func(c Check) bool { return c.Blocking }) {
+		t.Fatalf("unticked Registry data blocked: %+v", checks)
+	}
+	checks, err = EvaluateWith(context.Background(), local, src, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []Check{
+		{true, "Volume " + RegistryVolume + " already exists on this host"},
+		{true, "Not enough free space in /var/lib/docker: need 5.4 KiB, have 1000 B"},
+	} {
+		if !slices.Contains(checks, want) {
+			t.Fatalf("checks = %+v\nwant %+v", checks, want)
+		}
+	}
+}

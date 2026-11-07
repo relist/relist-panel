@@ -27,7 +27,10 @@ type OldHostInfo struct {
 	DatabaseSize      int64                  `json:"databaseSize"`
 	ActiveDeployment  string                 `json:"activeDeployment,omitempty"`
 	QueuedDeployments int                    `json:"queuedDeployments"`
-	Warnings          []string               `json:"warnings"`
+	// Registry is the Panel registry's volume, offered as Include registry
+	// data (off by default); nil when this host has none.
+	Registry *Item    `json:"registry,omitempty"`
+	Warnings []string `json:"warnings"`
 }
 
 // Info resolves every Compose the way Start will, so a resolution error
@@ -41,7 +44,7 @@ func (s *OldHost) Info(ctx context.Context) (OldHostInfo, error) {
 	if err != nil {
 		return OldHostInfo{}, err
 	}
-	m, err := s.d.Manifests.Build(ctx, nil, nil)
+	m, err := s.d.Manifests.BuildWith(ctx, nil, nil, true)
 	if err != nil {
 		return OldHostInfo{}, err
 	}
@@ -59,6 +62,11 @@ func (s *OldHost) Info(ctx context.Context) (OldHostInfo, error) {
 		case KindDataDir:
 			info.DataDirSize = it.Size
 		case KindVolume:
+			if it.Volume != nil && it.Volume.Name == RegistryVolume {
+				registryItem := it
+				info.Registry = &registryItem
+				continue
+			}
 			info.Volumes = append(info.Volumes, it)
 		case KindImage:
 			info.Images = append(info.Images, it)
@@ -112,8 +120,17 @@ func (l LocalHost) free(path string) (int64, error) {
 }
 
 // Evaluate checks the new host against what the source reported, for the
-// host paths the operator selected.
+// host paths the operator selected, without the Registry's data.
 func Evaluate(ctx context.Context, local LocalHost, src OldHostInfo, selected []string) ([]Check, error) {
+	return EvaluateWith(ctx, local, src, selected, false)
+}
+
+// EvaluateWith is Evaluate; includeRegistry checks the Registry volume like
+// any other volume: its size, and that this host has none already.
+func EvaluateWith(ctx context.Context, local LocalHost, src OldHostInfo, selected []string, includeRegistry bool) ([]Check, error) {
+	if includeRegistry && src.Registry != nil && src.Registry.Volume != nil {
+		src.Volumes = append(slices.Clone(src.Volumes), *src.Registry)
+	}
 	var checks []Check
 	block := func(msg string) { checks = append(checks, Check{Blocking: true, Message: msg}) }
 	warn := func(msg string) { checks = append(checks, Check{Message: msg}) }
