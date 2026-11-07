@@ -4,21 +4,28 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
 // fakeHost records the calls the service makes and holds one container.
 type fakeHost struct {
-	t        *testing.T
-	calls    []string
-	state    ContainerState
-	gc       GCState
-	pullErr  error
-	created  []ContainerSpec
-	volume   int64
-	filesDir string
+	t             *testing.T
+	calls         []string
+	state         ContainerState
+	gc            GCState
+	pullErr       error
+	created       []ContainerSpec
+	volume        int64
+	volumeAfterGC int64
+	filesDir      string
 	// filesAtCreate is whether config.yml existed when Create ran.
 	filesAtCreate bool
+	// readOnlyAtGC is whether config.yml was read-only when RunGC ran.
+	readOnlyAtGC bool
+	gcPolls      int
+	gcExit       int
+	gcLogs       string
 }
 
 func (f *fakeHost) EnsureImage(_ context.Context, ref string) error {
@@ -57,15 +64,33 @@ func (f *fakeHost) RemoveVolume(context.Context) error {
 	return nil
 }
 
-func (f *fakeHost) VolumeBytes(context.Context) (int64, error) { return f.volume, nil }
+// VolumeBytes reports volume, then volumeAfterGC once GC has run.
+func (f *fakeHost) VolumeBytes(context.Context) (int64, error) {
+	if f.volumeAfterGC != 0 && slices.Contains(f.calls, "RunGC") {
+		return f.volumeAfterGC, nil
+	}
+	return f.volume, nil
+}
 
 func (f *fakeHost) RunGC(_ context.Context, image, filesDir string) error {
 	f.calls = append(f.calls, "RunGC")
+	f.readOnlyAtGC, _ = Files{Dir: filesDir}.ReadOnly()
 	f.gc = GCState{Exists: true, Running: true}
 	return nil
 }
 
-func (f *fakeHost) GCState(context.Context) (GCState, error) { return f.gc, nil }
+// GCState reports the GC container running for gcPolls more polls, then
+// exited with gcExit and gcLogs.
+func (f *fakeHost) GCState(context.Context) (GCState, error) {
+	if f.gc.Running {
+		if f.gcPolls > 0 {
+			f.gcPolls--
+		} else {
+			f.gc = GCState{Exists: true, ExitCode: f.gcExit, Logs: f.gcLogs}
+		}
+	}
+	return f.gc, nil
+}
 
 func (f *fakeHost) RemoveGC(context.Context) error {
 	f.calls = append(f.calls, "RemoveGC")
