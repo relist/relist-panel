@@ -18,6 +18,7 @@ type fakeHost struct {
 	created       []ContainerSpec
 	volume        int64
 	volumeAfterGC int64
+	volumeReads   int
 	filesDir      string
 	// filesAtCreate is whether config.yml existed when Create ran.
 	filesAtCreate bool
@@ -75,6 +76,7 @@ func (f *fakeHost) RemoveVolume(context.Context) error {
 
 // VolumeBytes reports volume, then volumeAfterGC once GC has run.
 func (f *fakeHost) VolumeBytes(context.Context) (int64, error) {
+	f.volumeReads++
 	if f.volumeAfterGC != 0 && slices.Contains(f.calls, "RunGC") {
 		return f.volumeAfterGC, nil
 	}
