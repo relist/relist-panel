@@ -89,20 +89,24 @@ describe('ComposeVariablesTab', () => {
     expect(screen.getAllByRole('button', { name: /Paste .env/ })).toHaveLength(1);
   });
 
-  it('replaces the Compose variables from a pasted .env, keeping a secret secret, then refetches', async () => {
+  it('merges a pasted .env into the Compose variables, keeping a secret secret, then refetches', async () => {
     panel.replaceComposeVariables.mockResolvedValue(undefined);
     const user = userEvent.setup();
     const { onChanged } = renderTab({ variables: [composeVar(1, 'SIGNING', 'old', true)] });
 
     await user.click(screen.getByRole('button', { name: /Paste .env/ }));
     fireEvent.change(screen.getByPlaceholderText(/DATABASE_URL=/), { target: { value: 'SIGNING=new\nLOG_LEVEL=debug' } });
-    await user.click(screen.getByRole('button', { name: /Replace 1 variable with 2/ }));
+    await user.click(screen.getByRole('button', { name: 'Apply 2 changes' }));
 
     await waitFor(() =>
-      expect(panel.replaceComposeVariables).toHaveBeenCalledWith(7, [
-        { key: 'SIGNING', secret: true, value: 'new' },
-        { key: 'LOG_LEVEL', secret: false, value: 'debug' },
-      ]),
+      expect(panel.replaceComposeVariables).toHaveBeenCalledWith(
+        7,
+        [
+          { key: 'SIGNING', secret: true, value: 'new' },
+          { key: 'LOG_LEVEL', secret: false, value: 'debug' },
+        ],
+        { prune: false },
+      ),
     );
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
   });

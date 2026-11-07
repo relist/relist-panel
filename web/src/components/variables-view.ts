@@ -97,23 +97,28 @@ export function visibleVariables<T extends { key: string }>(variables: T[], quer
 }
 
 export type ReplacePlan = {
-  /** Keys the paste brings that the Environment does not have yet. */
+  /** Keys the paste brings that the list does not have yet. */
   added: string[];
-  /** Keys the Environment holds that the paste drops — replacing removes them. */
-  removed: string[];
-  /** Keys both hold; replacing overwrites their values. */
-  updated: string[];
+  /** Keys both hold with a different value; the paste overwrites them. */
+  changed: string[];
+  /** Keys both hold with the same value; nothing is written for them. */
+  unchanged: string[];
+  /** Keys the list holds that the paste drops — kept by a merge, removed by Replace all. */
+  missing: string[];
 };
 
-/** What a bulk replace would do to the Environment's variables, before it does it. */
-export function replacePlan(current: readonly { key: string }[], rows: readonly DotEnvRow[]): ReplacePlan {
+/** What a pasted `.env` would do to a variable list, before it does it. */
+export function replacePlan(current: readonly { key: string; value: string }[], rows: readonly DotEnvRow[]): ReplacePlan {
   const nextKeys = new Set(rows.map((row) => row.key));
-  const currentKeys = new Set(current.map((variable) => variable.key));
-  return {
-    added: rows.filter((row) => !currentKeys.has(row.key)).map((row) => row.key),
-    removed: current.filter((variable) => !nextKeys.has(variable.key)).map((variable) => variable.key),
-    updated: rows.filter((row) => currentKeys.has(row.key)).map((row) => row.key),
-  };
+  const plan: ReplacePlan = { added: [], changed: [], missing: [], unchanged: [] };
+  for (const row of rows) {
+    const existing = current.find((variable) => variable.key === row.key);
+    if (!existing) plan.added.push(row.key);
+    else if (existing.value === row.value) plan.unchanged.push(row.key);
+    else plan.changed.push(row.key);
+  }
+  plan.missing = current.filter((variable) => !nextKeys.has(variable.key)).map((variable) => variable.key);
+  return plan;
 }
 
 /**

@@ -136,19 +136,24 @@ describe('visibleVariables', () => {
 });
 
 describe('replacePlan', () => {
-  it('splits the paste into added, updated and removed keys', () => {
-    const current = [{ key: 'KEEP' }, { key: 'OVERWRITE' }, { key: 'DROPPED' }];
+  it('splits the paste into added, changed and unchanged keys, and lists the keys it drops', () => {
+    const current = [
+      { key: 'KEEP', value: 'same' },
+      { key: 'OVERWRITE', value: 'old' },
+      { key: 'DROPPED', value: 'x' },
+    ];
     const rows = parseDotEnv('OVERWRITE=new\nADDED=1\nKEEP=same');
     expect(replacePlan(current, rows)).toEqual({
       added: ['ADDED'],
-      removed: ['DROPPED'],
-      updated: ['OVERWRITE', 'KEEP'],
+      changed: ['OVERWRITE'],
+      missing: ['DROPPED'],
+      unchanged: ['KEEP'],
     });
   });
 
-  it('replaces everything when the Environment is empty, and empties it when the paste is', () => {
-    expect(replacePlan([], parseDotEnv('A=1'))).toEqual({ added: ['A'], removed: [], updated: [] });
-    expect(replacePlan([{ key: 'A' }], [])).toEqual({ added: [], removed: ['A'], updated: [] });
+  it('adds everything when the list is empty, and misses everything when the paste is', () => {
+    expect(replacePlan([], parseDotEnv('A=1'))).toEqual({ added: ['A'], changed: [], missing: [], unchanged: [] });
+    expect(replacePlan([{ key: 'A', value: '1' }], [])).toEqual({ added: [], changed: [], missing: ['A'], unchanged: [] });
   });
 });
 
