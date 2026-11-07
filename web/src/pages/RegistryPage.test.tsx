@@ -424,6 +424,26 @@ describe('RegistryPage cleanup polish', () => {
   });
 });
 
+describe('RegistryPage stays current', () => {
+  it('reads repositories again when their tab is opened again', async () => {
+    const user = userEvent.setup();
+    show('/registry');
+    await waitFor(() => expect(api.listRegistryRepositories).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+    await user.click(screen.getByRole('tab', { name: 'Repositories' }));
+    await waitFor(() => expect(api.listRegistryRepositories).toHaveBeenCalledTimes(2));
+  });
+
+  it('reads the Registry again when a cleanup run ends', async () => {
+    api.getRegistryCleanup.mockResolvedValueOnce({ ...cleanup, running: true }).mockResolvedValue(cleanup);
+    show('/registry?tab=settings');
+    await waitFor(() => expect(api.getRegistry).toHaveBeenCalled());
+    const before = api.getRegistry.mock.calls.length;
+    // The card polls every 3 s while a run is going.
+    await waitFor(() => expect(api.getRegistry.mock.calls.length).toBeGreaterThan(before), { timeout: 5000 });
+  });
+});
+
 describe('RegistryPage Kept tags', () => {
   it('badges the tags cleanup keeps', async () => {
     api.listRegistryRepositories.mockResolvedValue([{ name: 'app', tagCount: 2 }]);
