@@ -82,20 +82,26 @@ export function ServiceMonitor({ compose, onOpenEditor }: { compose: Compose; on
 
   // "Never deployed" and "fully stopped" both arrive as an empty Services list
   // — the collector only caches containers it can see. Either way, deploying
-  // is what starts collection, so both get the same empty state.
+  // is what starts collection, so both get the same empty state. Request
+  // metrics come from Traefik's Access log, not from the containers, so they
+  // stay below it: right after a deploy or a panel restart the list is empty
+  // for a moment while the requests are already there.
   if (!service) {
     return (
-      <Card variant="outlined">
-        <EmptyState
-          action={
-            <Button icon={<RocketOutlined />} onClick={onOpenEditor}>
-              Open the Editor tab
-            </Button>
-          }
-          description="Per-service metrics begin with the first deploy — the panel reads the containers a Compose created, and a Compose with no containers on the host has none. Deploying starts collection."
-          title="Nothing to monitor yet"
-        />
-      </Card>
+      <>
+        <Card variant="outlined">
+          <EmptyState
+            action={
+              <Button icon={<RocketOutlined />} onClick={onOpenEditor}>
+                Open the Editor tab
+              </Button>
+            }
+            description="Per-service metrics begin with the first deploy — the panel reads the containers a Compose created, and a Compose with no containers on the host has none. Deploying starts collection."
+            title="Nothing to monitor yet"
+          />
+        </Card>
+        <ComposeRequests compose={compose} />
+      </>
     );
   }
 
