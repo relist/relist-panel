@@ -30,12 +30,13 @@ A `gc_running` flag lets start-up reconcile finish an interrupted run. A full st
 
 **Token auth (a JWT issuer) instead of htpasswd.** Rejected: per-repository scopes are not needed yet, since every Push credential is full access by decision, and htpasswd is native to `registry:3`.
 
-**Registry data under the data directory.** Rejected: it would make every Migration and backup carry images that CI can rebuild. The volume moves only when a Migration ticks **Include registry data** (PR 3).
+**Registry data under the data directory.** Rejected: it would make every Migration and backup carry images that CI can rebuild. The volume moves only when a Migration ticks **Include registry data**, which the pull TUI offers with the volume's size, off by default. Settings and Push credentials always move with the database.
 
 ## Consequences
 
 - **The Registry outlives the panel.** It is an ordinary container with `restart: unless-stopped`, so it keeps serving if the panel stops. It can be run by hand with the Docker CLI using the files in `<data dir>/.registry/`.
 - **Hairpin access.** A Compose pulls `<hostname>/<repo>:<tag>` through the public hostname, so the host must reach its own hostname. When it cannot, the Deployment log names this (Task 15).
+- **Migration.** Without Include registry data, the new host starts with an empty Registry, and CI must push again before Composes using it can deploy. The old host's Registry keeps serving while its volume is copied, so a push landing during the copy may arrive incomplete; its layers are unreferenced and the next cleanup collects them.
 - **Delete all registry data** removes the volume. It needs the Registry disabled and the hostname typed.
 - **Probes** (2026-11-06 and 2026-11-07, Docker 29.8, registry 3.1.2):
   - The config path is `/etc/distribution/config.yml`, and the image runs as root, so it reads a `0600` htpasswd.

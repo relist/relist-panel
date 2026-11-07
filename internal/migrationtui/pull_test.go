@@ -23,6 +23,7 @@ type fakeController struct {
 	connected [][]string
 	rechecked [][]string
 	started   [][]string
+	registry  []bool // includeRegistry of each start
 	retried   int
 	aborted   int
 	startErr  error
@@ -58,10 +59,11 @@ func (f *fakeController) Recheck(_ context.Context, paths []string) (migration.P
 	return f.progress, nil
 }
 
-func (f *fakeController) Start(_ context.Context, paths []string) error {
+func (f *fakeController) Start(_ context.Context, paths []string, includeRegistry bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.started = append(f.started, slices.Clone(paths))
+	f.registry = append(f.registry, includeRegistry)
 	return f.startErr
 }
 
@@ -312,6 +314,33 @@ func TestPullStartNeedsY(t *testing.T) {
 	m = send(t, m, key("y"))
 	if len(c.started) != 1 || !slices.Equal(c.started[0], []string{"/srv/up"}) {
 		t.Fatalf("start calls = %q", c.started)
+	}
+	if c.registry[0] {
+		t.Fatal("Registry data included without being ticked")
+	}
+}
+
+func TestPullRegistryCheckbox(t *testing.T) {
+	c := &fakeController{}
+	m := pull(c, connected())
+	if strings.Contains(screen(m), "Include registry data") {
+		t.Fatal("offered Registry data the old server does not have")
+	}
+	p := connected()
+	p.Info.Registry = &migration.Item{ID: "volume-relist-registry", Kind: migration.KindVolume, Size: 3 << 20}
+	m = pull(c, p)
+	mustContain(t, m, "[ ] Include registry data ("+migration.HumanBytes(3<<20)+")")
+	m = send(t, m, key("down"))
+	m = send(t, m, key("down"))
+	m = send(t, m, key("space"))
+	mustContain(t, m, "[x] Include registry data")
+	if len(c.rechecked) != 0 {
+		t.Fatalf("ticking Registry data rechecked host paths: %q", c.rechecked)
+	}
+	m = send(t, m, key("enter"))
+	m = send(t, m, key("y"))
+	if len(c.registry) != 1 || !c.registry[0] {
+		t.Fatalf("includeRegistry on start = %v", c.registry)
 	}
 }
 
