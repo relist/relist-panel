@@ -118,19 +118,35 @@ func (a *API) tagInfo(ctx context.Context, c *Client, repo, tag string) (TagInfo
 	return info, nil
 }
 
-// tagInfos reads every tag of repo, eight at a time, in tags' order.
+// tagInfos reads every tag of repo, eight at a time, in tags' order. A tag
+// whose manifest is gone (listed, then deleted) is left out, as the cleaner
+// does.
 func (a *API) tagInfos(ctx context.Context, c *Client, repo string, tags []string) ([]TagInfo, error) {
 	out := make([]TagInfo, len(tags))
+	gone := make([]bool, len(tags))
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(8)
 	for i, tag := range tags {
 		g.Go(func() error {
 			info, err := a.tagInfo(ctx, c, repo, tag)
+			if errors.Is(err, ErrNotFound) {
+				gone[i] = true
+				return nil
+			}
 			out[i] = info
 			return err
 		})
 	}
-	return out, g.Wait()
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	kept := out[:0]
+	for i, info := range out {
+		if !gone[i] {
+			kept = append(kept, info)
+		}
+	}
+	return kept, nil
 }
 
 // newest is the latest created time among repo's tags, or nil when none can

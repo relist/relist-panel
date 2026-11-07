@@ -17,12 +17,12 @@ import (
 // ErrCleanupBusy is a second cleanup while one runs.
 var ErrCleanupBusy = errors.New("a Registry cleanup is already running")
 
-// errLocked stops a run that a Panel update or Migration lock meets: the
-// update's quiesce waits for cleanup to be idle, so waiting here would hold
-// it for good.
 // errInUseUnreadable is a preview that could not tell which images are in use.
 var errInUseUnreadable = errors.New("could not read which images are in use")
 
+// errLocked stops a run that a Panel update or Migration lock meets: the
+// update's quiesce waits for cleanup to be idle, so waiting here would hold
+// it for good.
 var errLocked = errors.New("a Panel update or Migration holds the panel; cleanup stopped")
 
 // emptyRegistryGC is what garbage-collect prints, exiting 1, on a registry
@@ -229,10 +229,18 @@ func (c *Cleaner) run(ctx context.Context, id int64, trigger string) {
 
 // auditScheduled writes a scheduled run to the audit log; a user's run is
 // written by the authz middleware on its POST.
+// freedDetail is bytes freed for the audit detail: null when unknown.
+func freedDetail(freed int64) any {
+	if freed < 0 {
+		return nil
+	}
+	return freed
+}
+
 func (c *Cleaner) auditScheduled(ctx context.Context, result string, deleted []string, freed int64) {
 	err := audit.Record(ctx, c.store().db, audit.Event{
 		At: c.d.Now(), Actor: "schedule", Action: "registry.cleanup_run", Outcome: audit.OutcomeOK, Target: "Registry",
-		Detail: map[string]any{"result": result, "deleted": len(deleted), "freedBytes": freed},
+		Detail: map[string]any{"result": result, "deleted": len(deleted), "freedBytes": freedDetail(freed)},
 	})
 	if err != nil {
 		log.Printf("registry cleanup: audit: %v", err)
@@ -305,14 +313,19 @@ func (c *Cleaner) retain(ctx context.Context, st Settings, keep int, logf func(s
 				logf("%s: kept %s, now also tagged %s", repo, digest, strings.Join(raced, ", "))
 				continue
 			}
-			if err := reg.Delete(ctx, repo, digest); err != nil {
+			err = reg.Delete(ctx, repo, digest)
+			if err != nil && !errors.Is(err, ErrNotFound) {
 				return deleted, fmt.Errorf("delete %s@%s: %w", repo, digest, err)
 			}
 			slices.Sort(gone)
 			for _, t := range gone {
 				deleted = append(deleted, repo+":"+t)
 			}
-			logf("%s: deleted %s (%s)", repo, digest, strings.Join(gone, ", "))
+			if err != nil { // someone deleted it first: gone as wanted
+				logf("%s: %s (%s) was already gone", repo, digest, strings.Join(gone, ", "))
+			} else {
+				logf("%s: deleted %s (%s)", repo, digest, strings.Join(gone, ", "))
+			}
 		}
 	}
 	return deleted, nil

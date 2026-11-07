@@ -96,7 +96,7 @@ const freedUnknown = -1
 // at start, nothing runs yet, so they are runs the panel stopped in.
 func (s *Store) InterruptRunning(ctx context.Context, at time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE registry_cleanup_runs SET result = 'interrupted', finished_at = ?,
+		UPDATE registry_cleanup_runs SET result = 'interrupted', finished_at = ?, freed_bytes = -1,
 			log = log || 'the panel stopped before this run finished' || char(10)
 		WHERE result = 'running'`, at.Unix())
 	return err
