@@ -83,12 +83,13 @@ func (t *Target) recheckRoute(w http.ResponseWriter, r *http.Request) {
 
 func (t *Target) startRoute(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		HostPaths []string `json:"hostPaths"`
+		HostPaths       []string `json:"hostPaths"`
+		IncludeRegistry bool     `json:"includeRegistry"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	if err := t.Start(r.Context(), in.HostPaths); err != nil {
+	if err := t.StartWith(r.Context(), in.HostPaths, in.IncludeRegistry); err != nil {
 		writeJSONError(w, http.StatusConflict, err.Error())
 		return
 	}
