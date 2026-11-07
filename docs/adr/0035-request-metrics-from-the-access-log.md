@@ -33,6 +33,6 @@ The panel showed CPU, memory, disk and network for the host and each Service, bu
 - **Rows of a deleted Domain or Compose expire; they are not removed early.** The Compose view reads the Compose's current hosts only.
 - **Requests the panel cannot place are in `total` only.** Hand-written Traefik routers, unmatched requests and a deleted Domain's route show up there and nowhere else. To investigate, download the Access log.
 - **Filters make the numbers wrong.** The panel reads the Traefik override and says so; it does not stop the filter.
-- **The 7d, 30d and 90d windows read hourly rows**, so the current hour is missing from them until it is complete, and they exist only up to the retention an admin set.
+- **The 7d, 30d and 90d windows read hourly rows**, plus the minute rows of the hours not compacted yet (the current hour, and any hour since the newest hourly row), folded into hour buckets. They exist only up to the retention an admin set.
 - **A restart within about 90 seconds after the Access log is rotated can lose the lines of the minutes that were still open**, because the cursor can only point into the new file. A Panel update or crash at midnight UTC is the case.
 - Spec: `.scratch/request-metrics/spec.md`. Builds on ADR-0027 and ADR-0030.

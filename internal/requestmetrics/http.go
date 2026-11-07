@@ -1,6 +1,7 @@
 package requestmetrics
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -242,6 +243,14 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request, keys []Key, host
 		writeError(w, http.StatusInternalServerError, "could not load request metrics")
 		return
 	}
+	if win.res == Hour {
+		tail, err := s.uncompactedHours(ctx, query, from)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not load request metrics")
+			return
+		}
+		rows = append(rows, tail...)
+	}
 
 	// One bucket per time, the series merged: histograms add, never average.
 	merged := map[int64]*Counts{}
@@ -291,6 +300,29 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request, keys []Key, host
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// uncompactedHours reads the minute rows after the newest hourly row, from
+// `from` at the earliest, each moved to the start of its hour. Those hours
+// are not compacted yet (the current one never is), so an hourly window
+// would otherwise miss them. Hours already compacted are not read again.
+func (s *Service) uncompactedHours(ctx context.Context, keys []Key, from time.Time) ([]Row, error) {
+	start := from
+	latest, ok, err := s.store.LatestHour(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if next := latest.Add(time.Hour); ok && next.After(start) {
+		start = next
+	}
+	rows, err := s.store.Rows(ctx, Minute, keys, start)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		rows[i].BucketAt = rows[i].BucketAt.Truncate(time.Hour)
+	}
+	return rows, nil
 }
 
 func (s *Service) getSettings(w http.ResponseWriter, r *http.Request) {

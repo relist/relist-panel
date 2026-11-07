@@ -160,9 +160,9 @@ func TestHourlyWindowReadsHourlyRows(t *testing.T) {
 		t.Fatal(code)
 	}
 	r.now = t0.Add(48 * time.Hour)
-	// Minute rows exist too; the 7d window must ignore them.
-	r.write(mkRow(total, r.now.Add(-10*time.Minute), 1))
 	hour := r.now.Add(-3 * time.Hour).Truncate(time.Hour)
+	// A minute row inside the compacted hour is already in its hourly row.
+	r.write(mkRow(total, hour.Add(5*time.Minute), 7))
 	tx, _ := r.db.Begin()
 	if err := execRow(context.Background(), tx, Hour.table(), mkRow(total, hour, 600, 20*time.Millisecond)); err != nil {
 		t.Fatal(err)
@@ -175,6 +175,51 @@ func TestHourlyWindowReadsHourlyRows(t *testing.T) {
 	buckets := body["buckets"].([]any)
 	if len(buckets) != 1 || num(buckets[0].(map[string]any)["c2xx"]) != 600 {
 		t.Fatalf("buckets = %v", buckets)
+	}
+}
+
+// The hours after the newest hourly row are not compacted yet (the current
+// one never is): an hourly window reads them from the minute rows, folded
+// into hour buckets, so the last hour is never missing from 7d.
+func TestHourlyWindowAddsTheHoursNotYetCompacted(t *testing.T) {
+	r := newHTTPRig(t)
+	if code, _ := r.put("/api/requests/settings", `{"retentionDays":7}`); code != 200 {
+		t.Fatal(code)
+	}
+	r.now = t0.Add(48*time.Hour + 30*time.Minute)
+	compacted := r.now.Add(-3 * time.Hour).Truncate(time.Hour)
+	tx, _ := r.db.Begin()
+	if err := execRow(context.Background(), tx, Hour.table(), mkRow(total, compacted, 600, 20*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	tx.Commit()
+	current := r.now.Truncate(time.Hour)
+	r.write(
+		mkRow(total, current.Add(-50*time.Minute), 4),
+		mkRow(total, current.Add(2*time.Minute), 10, 5*time.Millisecond),
+		mkRow(total, current.Add(9*time.Minute), 5),
+	)
+	_, body := r.get("/api/requests/metrics?window=7d")
+	buckets := body["buckets"].([]any)
+	if len(buckets) != 3 {
+		t.Fatalf("buckets = %v", buckets)
+	}
+	last := buckets[2].(map[string]any)
+	if num(last["at"]) != float64(current.UnixMilli()) || num(last["c2xx"]) != 15 {
+		t.Fatalf("current hour = %v", last)
+	}
+	if num(buckets[1].(map[string]any)["c2xx"]) != 4 {
+		t.Fatalf("previous hour = %v", buckets[1])
+	}
+	if num(body["summary"].(map[string]any)["requests"]) != 619 {
+		t.Fatalf("summary = %v", body["summary"])
+	}
+
+	// With no hourly row yet, the whole window comes from the minute rows.
+	r.exec("DELETE FROM request_metric_hourly")
+	_, body = r.get("/api/requests/metrics?window=7d")
+	if num(body["summary"].(map[string]any)["requests"]) != 19 {
+		t.Fatalf("summary without hourly rows = %v", body["summary"])
 	}
 }
 
