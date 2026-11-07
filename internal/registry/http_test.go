@@ -27,19 +27,26 @@ type apiFixture struct {
 	requests *atomic.Int64 // requests the API sent the registry
 	// fail, when set, answers 500 to the requests it matches.
 	fail atomic.Pointer[func(*http.Request) bool]
+	// failCode is what fail answers with; 0 means 500.
+	failCode atomic.Int32
 }
 
 type countingTransport struct {
 	next http.RoundTripper
 	n    *atomic.Int64
 	fail *atomic.Pointer[func(*http.Request) bool]
+	code *atomic.Int32
 }
 
 func (c countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	c.n.Add(1)
 	if c.fail != nil {
 		if fail := c.fail.Load(); fail != nil && (*fail)(r) {
-			return &http.Response{StatusCode: 500, Body: http.NoBody, Header: http.Header{}, Request: r}, nil
+			code := 500
+			if c.code != nil && c.code.Load() != 0 {
+				code = int(c.code.Load())
+			}
+			return &http.Response{StatusCode: code, Body: http.NoBody, Header: http.Header{}, Request: r}, nil
 		}
 	}
 	return c.next.RoundTrip(r)
@@ -56,7 +63,7 @@ func newAPI(t *testing.T) *apiFixture {
 	client, deleted := fakeRegistry(t)
 	f.deleted = deleted
 	f.requests = &atomic.Int64{}
-	client.HTTP = &http.Client{Transport: countingTransport{next: client.HTTP.Transport, n: f.requests, fail: &f.fail}}
+	client.HTTP = &http.Client{Transport: countingTransport{next: client.HTTP.Transport, n: f.requests, fail: &f.fail, code: &f.failCode}}
 	f.mux = http.NewServeMux()
 	f.gate = &fakeGate{}
 	f.cleaner = NewCleaner(CleanerDeps{
@@ -558,5 +565,37 @@ func TestDiskUsageIsReadAgainAfterItChanges(t *testing.T) {
 	}
 	if n := reads(); n != 1 {
 		t.Fatalf("after deleting data: volume read %d times, want 1", n)
+	}
+}
+
+func TestPreviewSaysWhenInUseCannotBeRead(t *testing.T) {
+	f := newAPI(t)
+	f.mux = http.NewServeMux()
+	NewAPI(APIDeps{
+		Service: f.svc, Cleaner: f.cleaner,
+		DeployedRefs: func(context.Context) (map[string][]User, error) { return nil, errors.New("db locked") },
+	}).RegisterRoutes(f.mux)
+	rec := f.do("GET", "/api/registry/cleanup/preview", "")
+	if rec.Code != 500 || !strings.Contains(rec.Body.String(), "which images are in use") {
+		t.Fatalf("preview = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestCleanupAnswersTimeZone(t *testing.T) {
+	f := newAPI(t)
+	if rec := f.do("GET", "/api/registry/cleanup", ""); !strings.Contains(rec.Body.String(), `"timeZone":"`) {
+		t.Fatalf("cleanup = %s", rec.Body)
+	}
+}
+
+// A tag whose manifest is gone is left out of the tag list, not a 502.
+func TestTagListSkipsAGoneManifest(t *testing.T) {
+	f := newAPI(t)
+	fail := func(r *http.Request) bool { return r.URL.Path == "/v2/app/manifests/2" }
+	f.fail.Store(&fail)
+	f.failCode.Store(404)
+	rec := f.do("GET", "/api/registry/tags?repo=app", "")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"tag":"1"`) || strings.Contains(rec.Body.String(), `"tag":"2"`) {
+		t.Fatalf("tags = %d %s", rec.Code, rec.Body)
 	}
 }

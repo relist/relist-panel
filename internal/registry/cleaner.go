@@ -17,6 +17,9 @@ import (
 // ErrCleanupBusy is a second cleanup while one runs.
 var ErrCleanupBusy = errors.New("a Registry cleanup is already running")
 
+// errInUseUnreadable is a preview that could not tell which images are in use.
+var errInUseUnreadable = errors.New("could not read which images are in use")
+
 // errLocked stops a run that a Panel update or Migration lock meets: the
 // update's quiesce waits for cleanup to be idle, so waiting here would hold
 // it for good.
@@ -202,7 +205,7 @@ func (c *Cleaner) run(ctx context.Context, id int64, trigger string) {
 		finish(RunFailed, nil, 0)
 		return
 	}
-	before, _ := c.host().VolumeBytes(ctx)
+	before, beforeErr := c.host().VolumeBytes(ctx)
 	deleted, err := c.retain(ctx, st, settings.Keep, logf)
 	if err != nil {
 		logf("retention stopped: %v; garbage collection skipped this run", err)
@@ -214,16 +217,30 @@ func (c *Cleaner) run(ctx context.Context, id int64, trigger string) {
 		logf("garbage collection failed: %v", err)
 		result = RunFailed
 	}
-	after, _ := c.host().VolumeBytes(ctx)
-	finish(result, deleted, max(before-after, 0))
+	after, afterErr := c.host().VolumeBytes(ctx)
+	freed := int64(freedUnknown)
+	if err := errors.Join(beforeErr, afterErr); err != nil {
+		logf("could not read the volume's usage, so bytes freed is unknown: %v", err)
+	} else {
+		freed = max(before-after, 0)
+	}
+	finish(result, deleted, freed)
 }
 
 // auditScheduled writes a scheduled run to the audit log; a user's run is
 // written by the authz middleware on its POST.
+// freedDetail is bytes freed for the audit detail: null when unknown.
+func freedDetail(freed int64) any {
+	if freed < 0 {
+		return nil
+	}
+	return freed
+}
+
 func (c *Cleaner) auditScheduled(ctx context.Context, result string, deleted []string, freed int64) {
 	err := audit.Record(ctx, c.store().db, audit.Event{
 		At: c.d.Now(), Actor: "schedule", Action: "registry.cleanup_run", Outcome: audit.OutcomeOK, Target: "Registry",
-		Detail: map[string]any{"result": result, "deleted": len(deleted), "freedBytes": freed},
+		Detail: map[string]any{"result": result, "deleted": len(deleted), "freedBytes": freedDetail(freed)},
 	})
 	if err != nil {
 		log.Printf("registry cleanup: audit: %v", err)
@@ -254,7 +271,7 @@ func (c *Cleaner) retain(ctx context.Context, st Settings, keep int, logf func(s
 		if err := c.waitGate(ctx); err != nil {
 			return deleted, err
 		}
-		infos, err := tagInfos(ctx, reg, repo)
+		infos, err := tagInfos(ctx, reg, repo, logf)
 		if err != nil {
 			return deleted, err
 		}
@@ -282,6 +299,9 @@ func (c *Cleaner) retain(ctx context.Context, st Settings, keep int, logf func(s
 					continue
 				}
 				d, err := reg.Digest(ctx, repo, tag)
+				if errors.Is(err, ErrNotFound) {
+					continue // gone meanwhile: it points at nothing
+				}
 				if err != nil {
 					return deleted, err
 				}
@@ -293,20 +313,28 @@ func (c *Cleaner) retain(ctx context.Context, st Settings, keep int, logf func(s
 				logf("%s: kept %s, now also tagged %s", repo, digest, strings.Join(raced, ", "))
 				continue
 			}
-			if err := reg.Delete(ctx, repo, digest); err != nil {
+			err = reg.Delete(ctx, repo, digest)
+			if err != nil && !errors.Is(err, ErrNotFound) {
 				return deleted, fmt.Errorf("delete %s@%s: %w", repo, digest, err)
 			}
 			slices.Sort(gone)
 			for _, t := range gone {
 				deleted = append(deleted, repo+":"+t)
 			}
-			logf("%s: deleted %s (%s)", repo, digest, strings.Join(gone, ", "))
+			if err != nil { // someone deleted it first: gone as wanted
+				logf("%s: %s (%s) was already gone", repo, digest, strings.Join(gone, ", "))
+			} else {
+				logf("%s: deleted %s (%s)", repo, digest, strings.Join(gone, ", "))
+			}
 		}
 	}
 	return deleted, nil
 }
 
-func tagInfos(ctx context.Context, reg RegistryAPI, repo string) ([]TagInfo, error) {
+// tagInfos reads every tag of repo. A tag listed but whose manifest is gone
+// (404) is skipped, and said in logf when given: one such tag must not stop
+// every run.
+func tagInfos(ctx context.Context, reg RegistryAPI, repo string, logf func(string, ...any)) ([]TagInfo, error) {
 	tags, err := reg.Tags(ctx, repo)
 	if err != nil {
 		return nil, err
@@ -314,6 +342,12 @@ func tagInfos(ctx context.Context, reg RegistryAPI, repo string) ([]TagInfo, err
 	out := make([]TagInfo, 0, len(tags))
 	for _, tag := range tags {
 		info, err := reg.TagInfo(ctx, repo, tag)
+		if errors.Is(err, ErrNotFound) {
+			if logf != nil {
+				logf("%s: skipped %s, whose manifest is gone", repo, tag)
+			}
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -343,6 +377,9 @@ func (c *Cleaner) collect(ctx context.Context, id int64, logf func(string, ...an
 	state, err := c.waitGC(ctx)
 	if err != nil {
 		return err
+	}
+	if !state.Exists {
+		return errors.New("the garbage-collect container disappeared before it finished")
 	}
 	logf("%s", strings.TrimSpace(state.Logs))
 	if state.ExitCode != 0 && !strings.Contains(state.Logs, emptyRegistryGC) {
@@ -404,7 +441,10 @@ func (c *Cleaner) Startup(ctx context.Context) error {
 		return ErrCleanupBusy
 	}
 	defer c.end()
-	return c.recover(ctx)
+	if err := c.recover(ctx); err != nil {
+		return err
+	}
+	return c.store().InterruptRunning(ctx, c.d.Now())
 }
 
 // recover finishes an outstanding gc_running: after a panel restart, or a
@@ -425,7 +465,7 @@ func (c *Cleaner) recover(ctx context.Context) error {
 		return err
 	}
 	msg := "the panel stopped during garbage collection\n" + strings.TrimSpace(state.Logs)
-	return c.store().FinishRun(ctx, id, c.d.Now(), RunInterrupted, nil, 0, msg)
+	return c.store().FinishRun(ctx, id, c.d.Now(), RunInterrupted, nil, freedUnknown, msg)
 }
 
 // RunScheduler checks each minute whether a scheduled run is due, until ctx
@@ -493,7 +533,7 @@ func (c *Cleaner) preview(ctx context.Context, inUse func(context.Context) (map[
 	}
 	used, err := inUse(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", errInUseUnreadable, err)
 	}
 	reg := c.d.Registry(st)
 	repos, err := reg.Repositories(ctx)
@@ -502,7 +542,7 @@ func (c *Cleaner) preview(ctx context.Context, inUse func(context.Context) (map[
 	}
 	out := map[string][]string{}
 	for _, repo := range repos {
-		infos, err := tagInfos(ctx, reg, repo)
+		infos, err := tagInfos(ctx, reg, repo, nil)
 		if err != nil {
 			return nil, err
 		}

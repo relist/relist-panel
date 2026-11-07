@@ -904,3 +904,37 @@ func TestPullCountsWhileReadingTheOldPanel(t *testing.T) {
 	m.pending = ""
 	mustContain(t, m, "r reads it again")
 }
+
+// A recheck that no longer offers Registry data must not leave the cursor on
+// the row that went away.
+func TestPullCursorStaysOnARowWhenRegistryGoes(t *testing.T) {
+	c := &fakeController{}
+	p := connected()
+	p.Info.Registry = &migration.Item{ID: "volume-relist-registry", Kind: migration.KindVolume, Size: 3 << 20}
+	m := pull(c, p)
+	rows := len(p.Info.HostPaths) + 1
+	for range rows {
+		m = send(t, m, key("down"))
+	}
+	if got := m.(*pullModel).cursor; got != rows-1 {
+		t.Fatalf("cursor = %d, want the Registry row %d", got, rows-1)
+	}
+	gone := connected()
+	m = send(t, m, ProgressMsg{P: gone})
+	if got, last := m.(*pullModel).cursor, len(gone.Info.HostPaths)-1; got != last {
+		t.Fatalf("cursor = %d after Registry data went, want %d", got, last)
+	}
+}
+
+// While the old server's info is being read again, the cursor keeps its row.
+func TestPullCursorKeepsItsRowWhileReading(t *testing.T) {
+	c := &fakeController{}
+	m := pull(c, connected())
+	m = send(t, m, key("down"))
+	reading := connected()
+	reading.Info = nil
+	m = send(t, m, ProgressMsg{P: reading})
+	if got := m.(*pullModel).cursor; got != 1 {
+		t.Fatalf("cursor = %d while reading, want 1", got)
+	}
+}

@@ -39,9 +39,10 @@ type Run struct {
 	FinishedAt *time.Time `json:"finishedAt"`
 	Trigger    string     `json:"trigger"`
 	Deleted    []string   `json:"deleted"`
-	FreedBytes int64      `json:"freedBytes"`
-	Result     string     `json:"result"`
-	Log        string     `json:"log"`
+	// FreedBytes is nil when the volume's usage could not be read.
+	FreedBytes *int64 `json:"freedBytes"`
+	Result     string `json:"result"`
+	Log        string `json:"log"`
 }
 
 func (s *Store) CleanupSettings(ctx context.Context) (CleanupSettings, error) {
@@ -86,6 +87,19 @@ func (s *Store) RunResult(ctx context.Context, id int64) (string, error) {
 		return "", nil
 	}
 	return result, err
+}
+
+// freedUnknown is stored in freed_bytes when usage could not be read.
+const freedUnknown = -1
+
+// InterruptRunning marks every run still recorded running as interrupted:
+// at start, nothing runs yet, so they are runs the panel stopped in.
+func (s *Store) InterruptRunning(ctx context.Context, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE registry_cleanup_runs SET result = 'interrupted', finished_at = ?, freed_bytes = -1,
+			log = log || 'the panel stopped before this run finished' || char(10)
+		WHERE result = 'running'`, at.Unix())
+	return err
 }
 
 // SetGCRunning records the run whose GC is in progress; 0 clears it.
@@ -152,8 +166,12 @@ func (s *Store) Runs(ctx context.Context, limit int) ([]Run, error) {
 		var started int64
 		var finished sql.NullInt64
 		var deleted string
-		if err := rows.Scan(&r.ID, &started, &finished, &r.Trigger, &deleted, &r.FreedBytes, &r.Result, &r.Log); err != nil {
+		var freed int64
+		if err := rows.Scan(&r.ID, &started, &finished, &r.Trigger, &deleted, &freed, &r.Result, &r.Log); err != nil {
 			return nil, err
+		}
+		if freed >= 0 {
+			r.FreedBytes = &freed
 		}
 		r.StartedAt = time.Unix(started, 0)
 		if finished.Valid {
