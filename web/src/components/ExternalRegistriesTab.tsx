@@ -28,13 +28,14 @@ type Dialog = { kind: 'add' } | { kind: 'edit'; registry: ExternalRegistry } | u
 export function ExternalRegistriesTab() {
   const { data, error, isLoading, mutate } = useSWR(EXTERNAL_REGISTRIES_KEY, () => api.listExternalRegistries());
   const [dialog, setDialog] = useState<Dialog>();
-  const [testing, setTesting] = useState<number>();
+  // Each row's Test runs on its own, so several can run at once.
+  const [testing, setTesting] = useState<ReadonlySet<number>>(new Set());
   const [failure, setFailure] = useState<string>();
 
   const reload = () => void mutate();
 
   const test = async (registry: ExternalRegistry) => {
-    setTesting(registry.id);
+    setTesting((ids) => new Set(ids).add(registry.id));
     setFailure(undefined);
     try {
       const result = await api.testExternalRegistry(registry.id);
@@ -50,7 +51,11 @@ export function ExternalRegistriesTab() {
     } catch (reason: unknown) {
       setFailure(reason instanceof Error ? reason.message : 'Could not test the login');
     } finally {
-      setTesting(undefined);
+      setTesting((ids) => {
+        const next = new Set(ids);
+        next.delete(registry.id);
+        return next;
+      });
     }
   };
 
@@ -82,7 +87,7 @@ export function ExternalRegistriesTab() {
               )}
             </Flex>
             {registry.lastTestError && (
-              <Text style={{ fontSize: 12 }} type="danger">
+              <Text style={{ fontSize: 12, maxWidth: 360, overflowWrap: 'anywhere' }} type="danger">
                 {registry.lastTestError}
               </Text>
             )}
@@ -96,7 +101,7 @@ export function ExternalRegistriesTab() {
       key: 'actions',
       render: (_, registry) => (
         <Flex gap={4} justify="flex-end">
-          <Button aria-label={`Test ${registry.host}`} loading={testing === registry.id} onClick={() => void test(registry)}>
+          <Button aria-label={`Test ${registry.host}`} loading={testing.has(registry.id)} onClick={() => void test(registry)}>
             Test
           </Button>
           <Button
@@ -204,8 +209,9 @@ function RegistryModal({
       onSaved();
     } catch (reason: unknown) {
       const message = reason instanceof Error ? reason.message : 'Could not save the External registry';
-      if (reason instanceof ApiError && (reason.status === 409 || reason.status === 422) && !/username|token/.test(message)) {
-        form.setFields([{ errors: [message], name: 'host' }]);
+      const field = reason instanceof ApiError ? reason.field : undefined;
+      if (field === 'host' || field === 'username' || field === 'secret') {
+        form.setFields([{ errors: [message], name: field }]);
       } else {
         setFailure(message);
       }

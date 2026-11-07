@@ -2,6 +2,7 @@ package dockerexec
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -165,5 +166,62 @@ func TestNilSourceInjectsNothing(t *testing.T) {
 	})
 	if strings.Contains(got, "relist-auth-") {
 		t.Fatalf("nil source ran with %q", got)
+	}
+}
+
+// The per-call config keeps what the original one says besides logins, so a
+// native run with a context, proxies or plugins behaves the same.
+func TestAuthEnvKeepsTheOriginalConfig(t *testing.T) {
+	home := t.TempDir()
+	orig := filepath.Join(home, ".docker")
+	for _, d := range []string{"contexts/meta", "cli-plugins"} {
+		if err := os.MkdirAll(filepath.Join(orig, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(orig, "config.json"), []byte(`{"currentContext":"remote","proxies":{"default":{"httpProxy":"http://p:3128"}},
+		"credsStore":"desktop","credHelpers":{"ghcr.io":"gh","quay.io":"q"},"auths":{"old.example.com":{"auth":"eDp5"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env, cleanup, err := authEnv(context.Background(), fixedAuths{{Host: "ghcr.io", Username: "u", Secret: "s"}}, []string{"HOME=" + home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	dir, _ := envValue(env, "DOCKER_CONFIG")
+	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	auths, _ := cfg["auths"].(map[string]any)
+	helpers, _ := cfg["credHelpers"].(map[string]any)
+	if cfg["currentContext"] != "remote" || cfg["proxies"] == nil || cfg["credsStore"] != nil ||
+		auths["ghcr.io"] == nil || auths["old.example.com"] == nil || helpers["ghcr.io"] != nil || helpers["quay.io"] != "q" {
+		t.Fatalf("config = %s", raw)
+	}
+	for _, d := range []string{"contexts", "cli-plugins"} {
+		if target, err := os.Readlink(filepath.Join(dir, d)); err != nil || target != filepath.Join(orig, d) {
+			t.Errorf("%s link = %q, %v", d, target, err)
+		}
+	}
+}
+
+func TestAuthEnvIgnoresAnUnreadableOriginalConfig(t *testing.T) {
+	home := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(home, ".docker"), 0o700)
+	_ = os.WriteFile(filepath.Join(home, ".docker", "config.json"), []byte("\x00\x00"), 0o600)
+	env, cleanup, err := authEnv(context.Background(), fixedAuths{{Host: "ghcr.io", Username: "u", Secret: "s"}}, []string{"HOME=" + home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	dir, _ := envValue(env, "DOCKER_CONFIG")
+	raw, _ := os.ReadFile(filepath.Join(dir, "config.json"))
+	if !strings.Contains(string(raw), "ghcr.io") {
+		t.Fatalf("config = %s", raw)
 	}
 }

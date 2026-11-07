@@ -169,3 +169,35 @@ func TestUpdateClearsLastTestWhenLoginChanges(t *testing.T) {
 		t.Fatalf("unchanged login lost its result: %+v", got)
 	}
 }
+
+func TestCreateRefusesColonInUsernameAndTrimsSecret(t *testing.T) {
+	mux, store := newMux(t, &fakeTester{})
+	rec := do(mux, "POST", "/api/registry/external", `{"host":"ghcr.io","username":"a:b","secret":"s"}`)
+	if rec.Code != 422 || !strings.Contains(rec.Body.String(), `"field":"username"`) {
+		t.Fatalf("colon = %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(mux, "POST", "/api/registry/external", `{"host":"ghcr.io","username":"ci","secret":"  tok\n"}`); rec.Code != 201 {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body)
+	}
+	list, _ := store.List(context.Background())
+	if list[0].Secret != "tok" {
+		t.Fatalf("secret = %q, want trimmed", list[0].Secret)
+	}
+}
+
+func TestErrorsNameTheirField(t *testing.T) {
+	mux, _ := newMux(t, &fakeTester{})
+	for body, field := range map[string]string{
+		`{"host":"a b","username":"u","secret":"s"}`:    "host",
+		`{"host":"ghcr.io","username":"","secret":"s"}`: "username",
+		`{"host":"ghcr.io","username":"u","secret":""}`: "secret",
+	} {
+		if rec := do(mux, "POST", "/api/registry/external", body); !strings.Contains(rec.Body.String(), `"field":"`+field+`"`) {
+			t.Errorf("%s = %s, want field %s", body, rec.Body, field)
+		}
+	}
+	do(mux, "POST", "/api/registry/external", `{"host":"ghcr.io","username":"u","secret":"s"}`)
+	if rec := do(mux, "POST", "/api/registry/external", `{"host":"ghcr.io","username":"u","secret":"s"}`); !strings.Contains(rec.Body.String(), `"field":"host"`) {
+		t.Errorf("duplicate = %s, want field host", rec.Body)
+	}
+}
