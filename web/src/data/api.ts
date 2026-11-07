@@ -672,8 +672,8 @@ export const api = {
   /**
    * The Compose's resolved Volumes, each one's pre-flight status, and every
    * Service's operation identity. `available: false` carries the reason the
-   * feature cannot run; before the first deploy the API answers 502 with the
-   * CLI's own `couldn't find env file`.
+   * feature cannot run; `deployed: false` says no deploy has written the env
+   * file yet, so the CLI was not asked (and the orphan list is empty).
    */
   listVolumes: (location: ComposePath) => request<ComposeVolumes>(`${composePath(location)}/volumes`),
   listOrphanVolumes: (location: ComposePath) =>

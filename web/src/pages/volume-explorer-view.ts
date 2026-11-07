@@ -25,8 +25,8 @@ export type ExplorerView =
   | { status: 'loading' }
   /** The feature cannot run at all (`available: false`): a bare binary or no Docker socket. */
   | { status: 'unavailable'; reason: string }
-  /** The Compose CLI could not resolve: before the first deploy it is `couldn't find env file`. */
-  | { status: 'not-deployed'; message: string }
+  /** No deploy has written the env file yet; `message` is the CLI's words when it was asked and refused. */
+  | { status: 'not-deployed'; message?: string }
   /** Any other resolution failure: stays on the screen as an Alert with Retry. */
   | { status: 'resolution-error'; message: string }
   /** The URL names a source this Compose does not mount (any more). */
@@ -55,6 +55,9 @@ export function explorerView(
   }
   if (!payload.available) {
     return { status: 'unavailable', reason: payload.reason ?? '' };
+  }
+  if (!payload.deployed) {
+    return { status: 'not-deployed' };
   }
   const volume = payload.volumes.find((candidate) => candidate.source === source);
   if (volume === undefined) {

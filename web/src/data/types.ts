@@ -470,6 +470,8 @@ export type VolumeServiceUser = {
  */
 export type ComposeVolumes = {
   available: boolean;
+  /** False before the first deploy: no env file yet, so the API did not ask the Compose CLI. */
+  deployed: boolean;
   reason?: string;
   volumes: ComposeVolume[];
   services: VolumeServiceUser[];
