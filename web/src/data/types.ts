@@ -1033,6 +1033,8 @@ export interface PushCredential {
 export interface RegistryRepository {
   name: string;
   tagCount: number;
+  /** Created time of its newest tag; null when it has none that could be read. */
+  newest: string | null;
 }
 
 export interface RegistryUser {
@@ -1048,7 +1050,8 @@ export interface RegistryTag {
   tag: string;
   digest: string;
   size: number;
-  created: string;
+  /** The image config's created time; null when it could not be read. */
+  created: string | null;
   inUseBy: RegistryUser[];
   kept: boolean;
 }

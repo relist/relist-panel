@@ -5,7 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"strings"
+	"relist-panel/internal/imageref"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -286,15 +286,5 @@ func (s *Service) ScannerImage(ctx context.Context) (string, error) {
 // ScannerRefs spells ref the ways Docker lists it: repo:tag and repo@digest,
 // so a prune can recognise the Scanner image.
 func ScannerRefs(ref string) []string {
-	name, digest, _ := strings.Cut(ref, "@")
-	refs := []string{}
-	repo := name
-	if i := strings.LastIndex(name, ":"); i > strings.LastIndex(name, "/") {
-		repo = name[:i]
-		refs = append(refs, name)
-	}
-	if digest != "" {
-		refs = append(refs, repo+"@"+digest)
-	}
-	return refs
+	return imageref.Pinned(ref)
 }
