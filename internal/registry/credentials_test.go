@@ -78,3 +78,23 @@ func TestDeleteRewritesHtpasswd(t *testing.T) {
 		t.Fatalf("second delete: %v", err)
 	}
 }
+
+// A credential whose login could not be written is not kept: its token was
+// never shown, so it could never be used.
+func TestCreateCredentialRollsBackWhenFilesFail(t *testing.T) {
+	f := newService(t)
+	f.enable(t)
+	ctx := context.Background()
+	if err := os.RemoveAll(f.files.Dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.files.Dir, []byte("not a dir"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.svc.CreateCredential(ctx, "github-ci", "admin"); err == nil {
+		t.Fatal("create succeeded with an unwritable htpasswd")
+	}
+	if creds, _ := f.store.Credentials(ctx); len(creds) != 0 {
+		t.Fatalf("credentials = %+v, want none kept", creds)
+	}
+}
