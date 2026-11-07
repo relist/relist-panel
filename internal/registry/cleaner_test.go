@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ type memRegistry struct {
 	onTags       func(repo string, n int)
 	onDelete     func(repo string)
 	infoCalls    int
+	mu           sync.Mutex      // TagInfo and Digest are read concurrently
 	ghosts       map[string]bool // repo:tag listed, but its manifest is gone
 	goneOnDelete map[string]bool // digests someone else deleted first
 }
@@ -65,6 +67,8 @@ func (m *memRegistry) Tags(_ context.Context, repo string) ([]string, error) {
 }
 
 func (m *memRegistry) TagInfo(_ context.Context, repo, tag string) (TagInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.infoCalls++
 	if m.ghosts[repo+":"+tag] {
 		return TagInfo{}, fmt.Errorf("registry GET /v2/%s/manifests/%s: %w", repo, tag, ErrNotFound)
@@ -77,6 +81,8 @@ func (m *memRegistry) TagInfo(_ context.Context, repo, tag string) (TagInfo, err
 }
 
 func (m *memRegistry) Digest(_ context.Context, repo, tag string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.ghosts[repo+":"+tag] {
 		return "", fmt.Errorf("registry HEAD /v2/%s/manifests/%s: %w", repo, tag, ErrNotFound)
 	}
@@ -269,6 +275,9 @@ func TestStartupFinishesInterruptedGC(t *testing.T) {
 	runs, _ := f.store.Runs(context.Background(), 10)
 	if runs[0].ID != id || runs[0].Result != RunInterrupted || runs[0].FinishedAt == nil {
 		t.Fatalf("run = %+v", runs[0])
+	}
+	if !strings.Contains(runs[0].Log, "during garbage collection") || !strings.Contains(runs[0].Log, "marked 3 blobs") {
+		t.Fatalf("log lost the GC's own story: %q", runs[0].Log)
 	}
 	if ro, _ := f.files.ReadOnly(); ro {
 		t.Fatal("still read-only")
@@ -527,5 +536,77 @@ func TestInterruptedAtStartupFreedIsUnknown(t *testing.T) {
 	runs, _ := f.store.Runs(ctx, 10)
 	if len(runs) != 1 || runs[0].Result != RunInterrupted || runs[0].FreedBytes != nil {
 		t.Fatalf("runs = %+v", runs)
+	}
+}
+
+// A leftover 'running' row is marked interrupted even when the restore at
+// start fails.
+func TestStartupSweepsLeftoverRunsWhenRecoverFails(t *testing.T) {
+	f := newCleaner(t)
+	ctx := context.Background()
+	gcID, _ := f.store.StartRun(ctx, time.Now(), "schedule")
+	if err := f.store.SetGCRunning(ctx, gcID); err != nil {
+		t.Fatal(err)
+	}
+	f.host.restartErrs = []error{errors.New("daemon busy")}
+	other, _ := f.store.StartRun(ctx, time.Now(), "user:admin")
+	if err := f.cleaner.Startup(ctx); err == nil {
+		t.Fatal("Startup did not report the failed restore")
+	}
+	if r, _ := f.store.RunResult(ctx, other); r != RunInterrupted {
+		t.Fatalf("leftover run = %q, want interrupted", r)
+	}
+}
+
+// A run that starts before Startup (a user's Run now) sweeps leftover rows
+// itself, and is not swept.
+func TestRunNowSweepsLeftoverRuns(t *testing.T) {
+	f := newCleaner(t)
+	ctx := context.Background()
+	old, _ := f.store.StartRun(ctx, time.Now(), "schedule")
+	r := f.runOnce(t)
+	if res, _ := f.store.RunResult(ctx, old); res != RunInterrupted {
+		t.Fatalf("leftover run = %q, want interrupted", res)
+	}
+	if r.Result != RunOK {
+		t.Fatalf("new run = %+v", r)
+	}
+}
+
+// The preview and the Registry page read tags through one cache: a second
+// preview only asks each tag's digest.
+func TestPreviewReadsTagInfoOncePerDigest(t *testing.T) {
+	f := newCleaner(t)
+	f.reg.put("app", "v1", "d1", 1)
+	f.reg.put("app", "v2", "d2", 2)
+	inUse := func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil }
+	ctx := context.Background()
+	for range 2 {
+		if _, err := f.cleaner.preview(ctx, inUse); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.reg.infoCalls != 2 {
+		t.Fatalf("TagInfo calls = %d over two previews, want 2", f.reg.infoCalls)
+	}
+}
+
+// A repository deleted while cleanup works on it is said so, and nothing in
+// it is counted as deleted by cleanup.
+func TestRepositoryGoneMidCleanupIsSaidPlainly(t *testing.T) {
+	f := newCleaner(t)
+	f.reg.put("app", "v1", "d1", 1)
+	f.reg.put("app", "v2", "d2", 2)
+	f.reg.onTags = func(repo string, n int) {
+		if n == 2 { // the re-read before the delete
+			delete(f.reg.tags, repo)
+		}
+	}
+	r := f.runOnce(t)
+	if r.Result != RunOK || len(r.Deleted) != 0 || !strings.Contains(r.Log, "app: the repository is gone") || strings.Contains(r.Log, "()") {
+		t.Fatalf("run = %+v", r)
+	}
+	if len(f.reg.deleted) != 0 {
+		t.Fatalf("deleted from a gone repository: %v", f.reg.deleted)
 	}
 }

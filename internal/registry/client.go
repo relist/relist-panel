@@ -121,13 +121,19 @@ func (c *Client) Repositories(ctx context.Context) ([]string, error) {
 	})
 }
 
+// Tags lists repo's tags. A repository still in the catalog whose tags list
+// is gone (404) has none.
 func (c *Client) Tags(ctx context.Context, repo string) ([]string, error) {
-	return c.paged(ctx, "/v2/"+repo+"/tags/list?n=1000", func(raw json.RawMessage) ([]string, error) {
+	tags, err := c.paged(ctx, "/v2/"+repo+"/tags/list?n=1000", func(raw json.RawMessage) ([]string, error) {
 		var body struct {
 			Tags []string `json:"tags"`
 		}
 		return body.Tags, json.Unmarshal(raw, &body)
 	})
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	return tags, err
 }
 
 type manifest struct {

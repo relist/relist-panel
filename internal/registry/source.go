@@ -2,8 +2,8 @@ package registry
 
 import (
 	"context"
-	"relist-panel/internal/imageref"
 
+	"relist-panel/internal/imageref"
 	"relist-panel/internal/registryauth"
 )
 

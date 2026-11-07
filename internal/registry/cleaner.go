@@ -103,6 +103,11 @@ func (c *Cleaner) RunNow(ctx context.Context, trigger string) (int64, error) {
 	if !c.tryStart() {
 		return 0, ErrCleanupBusy
 	}
+	// A run can start before Startup does (a user's Run now right after the
+	// panel starts): with the flag held, any 'running' row is a leftover.
+	if err := c.store().InterruptRunning(ctx, c.d.Now()); err != nil {
+		log.Printf("registry cleanup: mark leftover runs interrupted: %v", err)
+	}
 	id, err := c.store().StartRun(ctx, c.d.Now(), trigger)
 	if err != nil {
 		c.end()
@@ -271,7 +276,7 @@ func (c *Cleaner) retain(ctx context.Context, st Settings, keep int, logf func(s
 		if err := c.waitGate(ctx); err != nil {
 			return deleted, err
 		}
-		infos, err := tagInfos(ctx, reg, repo, logf)
+		infos, err := c.tagInfos(ctx, reg, repo, logf)
 		if err != nil {
 			return deleted, err
 		}
@@ -289,6 +294,12 @@ func (c *Cleaner) retain(ctx context.Context, st Settings, keep int, logf func(s
 			current, err := reg.Tags(ctx, repo)
 			if err != nil {
 				return deleted, err
+			}
+			if len(current) == 0 {
+				// Deleted meanwhile (by hand or Delete all data): nothing
+				// left here for cleanup to delete.
+				logf("%s: the repository is gone; skipped it", repo)
+				break
 			}
 			var gone, raced []string
 			for _, tag := range current {
@@ -321,39 +332,27 @@ func (c *Cleaner) retain(ctx context.Context, st Settings, keep int, logf func(s
 			for _, t := range gone {
 				deleted = append(deleted, repo+":"+t)
 			}
+			what := digest + " (no tags left)"
+			if len(gone) > 0 {
+				what = digest + " (" + strings.Join(gone, ", ") + ")"
+			}
 			if err != nil { // someone deleted it first: gone as wanted
-				logf("%s: %s (%s) was already gone", repo, digest, strings.Join(gone, ", "))
+				logf("%s: %s was already gone", repo, what)
 			} else {
-				logf("%s: deleted %s (%s)", repo, digest, strings.Join(gone, ", "))
+				logf("%s: deleted %s", repo, what)
 			}
 		}
 	}
 	return deleted, nil
 }
 
-// tagInfos reads every tag of repo. A tag listed but whose manifest is gone
-// (404) is skipped, and said in logf when given: one such tag must not stop
-// every run.
-func tagInfos(ctx context.Context, reg RegistryAPI, repo string, logf func(string, ...any)) ([]TagInfo, error) {
+// tagInfos reads every tag of repo through the Service's cache.
+func (c *Cleaner) tagInfos(ctx context.Context, reg RegistryAPI, repo string, logf func(string, ...any)) ([]TagInfo, error) {
 	tags, err := reg.Tags(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]TagInfo, 0, len(tags))
-	for _, tag := range tags {
-		info, err := reg.TagInfo(ctx, repo, tag)
-		if errors.Is(err, ErrNotFound) {
-			if logf != nil {
-				logf("%s: skipped %s, whose manifest is gone", repo, tag)
-			}
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, info)
-	}
-	return out, nil
+	return readTagInfos(ctx, c.d.Service, reg, repo, tags, logf)
 }
 
 // collect runs garbage-collect with the registry read-only, and always puts
@@ -441,10 +440,10 @@ func (c *Cleaner) Startup(ctx context.Context) error {
 		return ErrCleanupBusy
 	}
 	defer c.end()
-	if err := c.recover(ctx); err != nil {
-		return err
-	}
-	return c.store().InterruptRunning(ctx, c.d.Now())
+	// Holding the flag, no run is live: every 'running' row is one the
+	// panel stopped in, whether or not the restore below succeeds.
+	sweepErr := c.store().InterruptRunning(ctx, c.d.Now())
+	return errors.Join(c.recover(ctx), sweepErr)
 }
 
 // recover finishes an outstanding gc_running: after a panel restart, or a
@@ -542,7 +541,7 @@ func (c *Cleaner) preview(ctx context.Context, inUse func(context.Context) (map[
 	}
 	out := map[string][]string{}
 	for _, repo := range repos {
-		infos, err := tagInfos(ctx, reg, repo, nil)
+		infos, err := c.tagInfos(ctx, reg, repo, nil)
 		if err != nil {
 			return nil, err
 		}
