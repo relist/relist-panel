@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -288,7 +290,8 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 			fmt.Fprintf(opts.Out, "warning: %s\n", w)
 		}
 	}
-	if err := s.prepareImages(ctx, req, opts.Build, opts.Out); err != nil {
+	imageRefs, err := s.prepareImages(ctx, req, opts.Build, opts.Out)
+	if err != nil {
 		var f *DeployFailure
 		if errors.As(err, &f) {
 			f.Message += suffix + volumesAdvice(removed)
@@ -301,10 +304,14 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 		if err := s.deploySubset(ctx, req, files.composeYAML, opts); err != nil {
 			return nil, failure(FailureRunner, "deploy failed: "+err.Error(), err)
 		}
+		if err := s.repository.setImageRefs(ctx, t.Compose.ID, imageRefs); err != nil {
+			return nil, failure(FailureInternal, "could not record the deployed images", err)
+		}
 		return files.warnings, nil
 	}
 	if err := s.runner.Up(ctx, req, UpOptions{NoPull: true, Out: opts.Out}); err != nil {
-		return nil, failure(FailureRunner, "deploy failed"+suffix+": "+err.Error()+volumesAdvice(removed), err)
+		line, more := errorLine(err)
+		return nil, failure(FailureRunner, "deploy failed"+suffix+": "+line+volumesAdvice(removed)+more, err)
 	}
 
 	// The deploy timestamp records success only (deploy-timestamps spec): it
@@ -314,7 +321,98 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 	if err := s.repository.markDeployed(ctx, t.Compose.EnvironmentID, t.Compose.ID, deployedAt); err != nil {
 		return nil, failure(FailureInternal, "could not record deploy time", err)
 	}
+	if err := s.repository.setImageRefs(ctx, t.Compose.ID, imageRefs); err != nil {
+		return nil, failure(FailureInternal, "could not record the deployed images", err)
+	}
 	return files.warnings, nil
+}
+
+// errorWords picks the line of compose output that says what went wrong.
+var errorWords = regexp.MustCompile(`(?i)error|denied|unauthorized|failed|refused|not found|no such|unknown|invalid|cannot|already allocated`)
+
+// errorLine splits a runner error for a Deployment's reason, which is the
+// message's first line: docker compose prints progress ("Pulling",
+// "Creating") before the error, so the first line is the last output line
+// that names an error, and more is the whole output on the lines after it.
+// A one-line error is returned as is.
+func errorLine(err error) (line, more string) {
+	full := err.Error()
+	if !strings.Contains(full, "\n") {
+		return full, ""
+	}
+	lines := strings.Split(full, "\n")
+	for i := len(lines) - 1; i > 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" && errorWords.MatchString(l) {
+			return l, "\n" + full
+		}
+	}
+	first, rest, _ := strings.Cut(full, "\n")
+	return first, "\n" + rest
+}
+
+// authRefused matches a registry refusing a pull's login, not a local
+// "permission denied".
+var authRefused = regexp.MustCompile(`unauthorized|authentication required|pull access denied|\bdenied: `)
+
+// pullHint explains a pull a registry refused (ADR-0034): with a stored
+// External registry login for one of the images' hosts, that login was
+// refused; without one, the image may need one. Other failures get none.
+func (s *Service) pullHint(ctx context.Context, err error, images []string) string {
+	if hint := s.hairpinHint(ctx, err); hint != "" {
+		return hint
+	}
+	if !authRefused.MatchString(strings.ToLower(err.Error())) {
+		return ""
+	}
+	var stored []string
+	if s.registryLogins != nil {
+		if hosts, lerr := s.registryLogins(ctx); lerr == nil {
+			for _, image := range images {
+				host := imageHost(image)
+				if slices.Contains(hosts, host) && !slices.Contains(stored, host) {
+					stored = append(stored, host)
+				}
+			}
+		}
+	}
+	if len(stored) > 0 {
+		return "Registry refused the stored login for " + strings.Join(stored, ", ") + ". Check it with Test on Registry → External registries."
+	}
+	return "If the image is private, add its registry's credentials on Registry → External registries."
+}
+
+// unreachable matches a pull that never reached a registry.
+var unreachable = regexp.MustCompile(`dial tcp|no such host|connection refused|i/o timeout|x509|tls:`)
+
+// hairpinHint explains a pull of the Panel registry's own hostname that
+// could not reach it: the host must resolve and reach itself (ADR-0033).
+func (s *Service) hairpinHint(ctx context.Context, err error) string {
+	if s.registryHost == nil {
+		return ""
+	}
+	host, ok := s.registryHost(ctx)
+	msg := strings.ToLower(err.Error())
+	if !ok || !strings.Contains(msg, host) || !unreachable.MatchString(msg) {
+		return ""
+	}
+	return "This host could not reach its own Registry at " + host + ". Check that the hostname resolves to this host from the host itself."
+}
+
+// imageHost is the registry host of an image reference, as Docker reads it:
+// a first path part with a dot or a port, or localhost, names the host;
+// anything else is Docker Hub.
+func imageHost(ref string) string {
+	ref, _, _ = strings.Cut(ref, "@")
+	first, _, found := strings.Cut(ref, "/")
+	if !found || !(strings.ContainsAny(first, ".:") || first == "localhost") {
+		return "docker.io"
+	}
+	switch host := strings.ToLower(first); host {
+	case "index.docker.io", "registry-1.docker.io":
+		return "docker.io"
+	default:
+		return host
+	}
 }
 
 const volumesRemovedAdvice = "The Compose is stopped; fix the cause and deploy again."
@@ -608,11 +706,12 @@ func (s *Service) deploySubset(ctx context.Context, req RunRequest, yamlContent 
 // runs, then refuses one that brings its own Traefik labels onto a container
 // Traefik reads (policy.ImageLabels, ADR-0032): the Compose policy only sees
 // the Compose's labels. Every up after it runs with --no-build and --pull
-// never, so the images it checked are the images that start.
-func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool, out io.Writer) error {
+// never, so the images it checked are the images that start. It returns
+// those images, sorted, for compose_image_refs.
+func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool, out io.Writer) ([]string, error) {
 	raw, err := s.runner.Config(ctx, req)
 	if err != nil {
-		return failure(FailureRunner, "could not read compose config: "+err.Error(), err)
+		return nil, failure(FailureRunner, "could not read compose config: "+err.Error(), err)
 	}
 	var config struct {
 		Name     string `json:"name"`
@@ -625,7 +724,7 @@ func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool,
 		} `json:"services"`
 	}
 	if err := json.Unmarshal(raw, &config); err != nil {
-		return failure(FailureInternal, "could not read compose config", err)
+		return nil, failure(FailureInternal, "could not read compose config", err)
 	}
 	project := config.Name
 	if project == "" {
@@ -654,7 +753,8 @@ func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool,
 	}
 	if build && builds {
 		if err := s.runner.Build(ctx, req, BuildOptions{Out: out}); err != nil {
-			return failure(FailureRunner, "build failed: "+err.Error(), err)
+			line, more := errorLine(err)
+			return nil, failure(FailureRunner, "build failed: "+line+more, err)
 		}
 	}
 	for _, pull := range []PullOptions{{Missing: true, Services: missing, Out: out}, {Services: refresh, Out: out}} {
@@ -662,28 +762,39 @@ func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool,
 			continue
 		}
 		if err := s.runner.Pull(ctx, req, pull); err != nil {
-			return failure(FailureRunner, "pull failed: "+err.Error(), err)
+			images := make([]string, 0, len(pull.Services))
+			for _, name := range pull.Services {
+				images = append(images, config.Services[name].Image)
+			}
+			// The hint goes first: a Deployment's reason is the message's
+			// first line, and compose prints the refusal lines later.
+			line, more := errorLine(err)
+			if hint := s.pullHint(ctx, err, images); hint != "" {
+				line = hint + " " + line
+			}
+			return nil, failure(FailureRunner, "pull failed: "+line+more, err)
 		}
 	}
-	var refused []string
+	var refused, refs []string
 	for _, name := range names {
 		service := config.Services[name]
 		image := service.Image
 		if image == "" {
 			image = project + "-" + name // Compose's name for a built image
 		}
+		refs = append(refs, image)
 		// One tag can hold another image per platform: read the one this
 		// Service runs.
 		labels, err := s.runner.ImageLabels(ctx, image, service.Platform)
 		if err != nil {
-			return failure(FailureRunner, "could not inspect image "+image+": "+err.Error(), err)
+			return nil, failure(FailureRunner, "could not inspect image "+image+": "+err.Error(), err)
 		}
 		for _, v := range policy.ImageLabels(name, image, labels, service.Labels) {
 			refused = append(refused, v.Service+": "+v.Message)
 		}
 	}
 	if len(refused) > 0 {
-		return failure(FailureInvalid, "policy: "+strings.Join(refused, "; "), nil)
+		return nil, failure(FailureInvalid, "policy: "+strings.Join(refused, "; "), nil)
 	}
-	return nil
+	return sortedUnique(refs), nil
 }

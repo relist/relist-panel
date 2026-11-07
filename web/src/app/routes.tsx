@@ -15,6 +15,7 @@ import { PanelUpdatePage } from '../pages/PanelUpdatePage';
 import { OverviewPage } from '../pages/OverviewPage';
 import { ProjectPage } from '../pages/ProjectPage';
 import { ProjectsPage } from '../pages/ProjectsPage';
+import { RegistryPage } from '../pages/RegistryPage';
 import { SshKeysPage } from '../pages/SshKeysPage';
 import { CertificatesPage } from '../pages/CertificatesPage';
 import { TraefikPage } from '../pages/TraefikPage';
@@ -42,6 +43,7 @@ const elements: Record<string, ReactElement> = {
   'account': <AccountPage />,
   'images': <ImagesPage />,
   'builders': <BuildersPage />,
+  'registry': <RegistryPage />,
   'ssh-keys': <SshKeysPage />,
   'certificates': <CertificatesPage />,
   'traefik': <TraefikPage />,

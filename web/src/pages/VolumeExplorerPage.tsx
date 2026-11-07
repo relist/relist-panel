@@ -967,7 +967,7 @@ export function VolumeExplorerPage() {
           subTitle="Opening a Volume goes through the same docker compose config resolution as the Volumes tab. That needs the environment file a deploy writes."
           title="This Compose’s Volumes are not resolvable yet"
         />
-        <CodeValue label="docker compose:" value={view.message} />
+        {view.message && <CodeValue label="docker compose:" value={view.message} />}
       </Card>
     );
   } else if (view.status === 'unavailable') {

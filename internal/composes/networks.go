@@ -181,8 +181,9 @@ func others(names []string, name string) []string {
 }
 
 // withSharedNetwork adds the shared network, with aliases, to a Service's
-// networks. A Service with no networks keeps the Compose's default network
-// beside it; a list becomes a map, because only the map form takes aliases.
+// networks. A Service with no networks, or with only the shared one, keeps the
+// Compose's default network beside it; a list becomes a map, because only the
+// map form takes aliases.
 func withSharedNetwork(existing any, networkName string, aliases []string) any {
 	networks := map[string]any{}
 	switch value := existing.(type) {
@@ -192,7 +193,16 @@ func withSharedNetwork(existing any, networkName string, aliases []string) any {
 		for _, item := range value {
 			networks[fmt.Sprint(item)] = nil
 		}
-	default:
+	}
+	// A Service listing no network but the shared one keeps its Compose's
+	// default network, so it still reaches its siblings by bare name.
+	onlyShared := true
+	for name := range networks {
+		if name != networkName {
+			onlyShared = false
+		}
+	}
+	if onlyShared {
 		networks["default"] = nil
 	}
 	if len(aliases) == 0 {

@@ -114,6 +114,12 @@ func (s *Service) waitIdle(ctx context.Context, q *quiesceState) {
 			return
 		}
 	}
+	if s.d.RegistryCleanup != nil {
+		if err := s.d.RegistryCleanup.WaitIdle(ctx); err != nil {
+			log.Printf("panelupdate: wait for the running Registry cleanup: %v", err)
+			return
+		}
+	}
 	q.idle.Store(true)
 }
 

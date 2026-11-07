@@ -579,3 +579,19 @@ func TestDomainsSharedBeforeTheRuleStayEditable(t *testing.T) {
 		t.Fatalf("a new path on the shared host = %d, want 409", response.StatusCode)
 	}
 }
+
+// The Registry's hostname is no Domain's: Traefik would route it to both.
+func TestDomainRefusesRegistryHost(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	f := newDomainsCompose(t, server, "shop", "web")
+	if _, err := server.db.Exec(`UPDATE registry_settings SET hostname = 'registry.example.com' WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	response, raw := f.send(t, http.MethodPost, "/domains", domainBody("Registry.Example.com", "/"))
+	var body struct{ Error, Field string }
+	_ = json.Unmarshal(raw, &body)
+	if response.StatusCode != http.StatusConflict || body.Field != "host" || body.Error != "registry.example.com is the Registry's hostname" {
+		t.Fatalf("status = %d, body %s", response.StatusCode, raw)
+	}
+}

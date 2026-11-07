@@ -419,3 +419,47 @@ func TestHandWrittenTraefikLabelPointsToDomains(t *testing.T) {
 		t.Errorf("message %q does not point to the Domains tab", violations[0].Message)
 	}
 }
+
+// The panel reaches its Registry as relist-registry on the shared network and
+// sends the system login there, so no Compose may answer to that name on it.
+func TestRegistryNameOnTheSharedNetworkIsRefused(t *testing.T) {
+	f := newFixture(t)
+	shared := func(extra map[string]any) map[string]any {
+		web := map[string]any{"networks": map[string]any{"relist-network": extra}}
+		return mergeImage(web)
+	}
+	for name, doc := range map[string]map[string]any{
+		"alias":          {"web": shared(map[string]any{"aliases": []any{"relist-registry"}})},
+		"alias any case": {"web": shared(map[string]any{"aliases": []any{"Relist-Registry."}})},
+		"container name": {"web": mergeImage(map[string]any{"container_name": "relist-registry", "networks": map[string]any{"relist-network": nil}})},
+		"service name":   {"relist-registry": shared(nil)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			top := ordinaryTop()
+			top["name"] = "relist-c1"
+			top["services"] = doc
+			raw, _ := json.Marshal(top)
+			violations, err := Check(raw, "", f.rules)
+			if err != nil || len(violations) == 0 {
+				t.Fatalf("violations = %+v, err = %v", violations, err)
+			}
+			if !strings.Contains(violations[0].Message, "relist-registry") {
+				t.Errorf("message %q does not name relist-registry", violations[0].Message)
+			}
+		})
+	}
+}
+
+// The name is the panel's only on the shared network: a Compose's own
+// network may use it.
+func TestRegistryNameOnAnOwnNetworkPasses(t *testing.T) {
+	f := newFixture(t)
+	doc := map[string]any{"name": "relist-c1",
+		"services": map[string]any{"relist-registry": map[string]any{"image": "registry:3", "networks": map[string]any{"default": map[string]any{"aliases": []any{"relist-registry"}}}}},
+		"networks": map[string]any{"default": map[string]any{"name": "relist-c1_default"}}}
+	raw, _ := json.Marshal(doc)
+	violations, err := Check(raw, "", f.rules)
+	if err != nil || len(violations) != 0 {
+		t.Fatalf("violations = %+v, err = %v", violations, err)
+	}
+}

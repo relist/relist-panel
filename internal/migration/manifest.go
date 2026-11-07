@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"relist-panel/internal/registry"
 	"slices"
 	"strings"
 
@@ -205,9 +206,19 @@ func (b ManifestBuilder) HostPathCandidates(ctx context.Context) ([]HostPathCand
 	return s.hostPaths, s.warnings, nil
 }
 
-// Build lists every item to move. running is recorded as is; hostPaths must
-// each be a candidate.
+// RegistryVolume is the Panel registry's data volume (ADR-0033). It moves only
+// when the operator ticks Include registry data.
+const RegistryVolume = registry.VolumeName
+
+// Build lists every item to move, without the Registry's data. running is
+// recorded as is; hostPaths must each be a candidate.
 func (b ManifestBuilder) Build(ctx context.Context, running []int64, hostPaths []string) (Manifest, error) {
+	return b.BuildWith(ctx, running, hostPaths, false)
+}
+
+// BuildWith is Build, adding the Registry volume when includeRegistry is set
+// and the volume exists on this host.
+func (b ManifestBuilder) BuildWith(ctx context.Context, running []int64, hostPaths []string, includeRegistry bool) (Manifest, error) {
 	s, err := b.scan(ctx)
 	if err != nil {
 		return Manifest{}, err
@@ -247,6 +258,21 @@ func (b ManifestBuilder) Build(ctx context.Context, running []int64, hostPaths [
 		}
 		vol := v
 		m.Items = append(m.Items, Item{ID: "volume-" + name, Kind: KindVolume, Size: size, Volume: &vol})
+	}
+
+	if includeRegistry && !slices.Contains(s.volumes, RegistryVolume) {
+		v, ok, err := b.Docker.InspectVolume(ctx, RegistryVolume)
+		if err != nil {
+			return Manifest{}, fmt.Errorf("inspect volume %s: %w", RegistryVolume, err)
+		}
+		if ok && UnrestorableVolume(v) == "" && (v.Driver == "" || v.Driver == "local") && len(v.Options) == 0 {
+			size, err := b.Docker.Size(ctx, RegistryVolume, ".")
+			if err != nil {
+				return Manifest{}, fmt.Errorf("size volume %s: %w", RegistryVolume, err)
+			}
+			vol := v
+			m.Items = append(m.Items, Item{ID: "volume-" + RegistryVolume, Kind: KindVolume, Size: size, Volume: &vol})
+		}
 	}
 
 	for _, p := range hostPaths {

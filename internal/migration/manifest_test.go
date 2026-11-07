@@ -363,3 +363,33 @@ func TestSkipInDataDirScanWork(t *testing.T) {
 		t.Fatal("projects skipped")
 	}
 }
+
+func TestManifestIncludesRegistryWhenAsked(t *testing.T) {
+	f := newManifestFixture(t)
+	f.docker.Volumes[RegistryVolume] = VolumeInfo{Name: RegistryVolume, Driver: "local"}
+	m, err := f.builder().BuildWith(context.Background(), nil, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(itemIDs(m), "volume-"+RegistryVolume) {
+		t.Fatalf("items %q lack the Registry volume", itemIDs(m))
+	}
+}
+
+func TestManifestOmitsRegistryByDefault(t *testing.T) {
+	f := newManifestFixture(t)
+	f.docker.Volumes[RegistryVolume] = VolumeInfo{Name: RegistryVolume, Driver: "local"}
+	m, err := f.builder().Build(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(itemIDs(m), "volume-"+RegistryVolume) {
+		t.Fatalf("items %q carry the Registry volume unasked", itemIDs(m))
+	}
+	// Asked, but there is no Registry volume: nothing, and no warning.
+	delete(f.docker.Volumes, RegistryVolume)
+	m, err = f.builder().BuildWith(context.Background(), nil, nil, true)
+	if err != nil || slices.Contains(itemIDs(m), "volume-"+RegistryVolume) || hasWarning(m.Warnings, RegistryVolume) {
+		t.Fatalf("no volume: items %q, warnings %q, err %v", itemIDs(m), m.Warnings, err)
+	}
+}

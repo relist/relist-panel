@@ -894,6 +894,7 @@ func TestComposeVolumesListsResolvedVolumesAndServices(t *testing.T) {
 	project := createProject(t, server, "Volume Co", "")
 	production := productionEnvironment(t, server, project)
 	compose := createCompose(t, server, project.ID, production.ID, "web")
+	writeDeployedEnvFile(t, server, compose.ID)
 
 	present := filepath.Join(server.dataDir, "app", "data")
 	if err := os.MkdirAll(present, 0o755); err != nil {
@@ -939,6 +940,7 @@ func TestComposeVolumesListsResolvedVolumesAndServices(t *testing.T) {
 
 	want := composeVolumesResponse{
 		Available: true,
+		Deployed:  true,
 		Volumes: []composeVolumeResponse{
 			{
 				Kind:        "volume",
@@ -1056,17 +1058,48 @@ func TestComposeVolumesReportsTheFeatureUnavailable(t *testing.T) {
 	}
 }
 
-// Before the first deploy the Compose CLI refuses with `couldn't find env
-// file`; the response must carry that message — the UI has nothing else to
-// tell the operator why the tab is dark.
-func TestComposeVolumesSurfacesTheCLIsNotDeployedError(t *testing.T) {
+// Before the first deploy there is no env file for the Compose CLI to read,
+// so the panel does not ask it: the answer is a 200 that says the Compose is
+// not deployed yet, never a failed request in the browser's console.
+func TestComposeVolumesSaysNotDeployedBeforeTheFirstDeploy(t *testing.T) {
 	server := newTestServer(t)
 	setupAndLogin(t, server)
 	project := createProject(t, server, "Volume Co", "")
 	production := productionEnvironment(t, server, project)
 	compose := createCompose(t, server, project.ID, production.ID, "web")
 
-	server.volumeCLI.ComposeConfigErr = errors.New("docker compose -p volume-co-production-web -f /data/volume-co/production/web/docker-compose.yml --env-file /data/volume-co/production/web/.env config --format json: exit status 1: couldn't find env file: /data/volume-co/production/web/.env")
+	response := server.request(t, http.MethodGet, composeVolumesPath(project.ID, production.ID, compose.ID), nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("volumes status = %d, want %d, body = %s", response.StatusCode, http.StatusOK, body)
+	}
+	var got composeVolumesResponse
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
+		t.Fatalf("decode volumes: %v", err)
+	}
+	if !got.Available || got.Deployed {
+		t.Errorf("available = %v, deployed = %v, want available and not deployed", got.Available, got.Deployed)
+	}
+	if got.Volumes == nil || len(got.Volumes) != 0 || got.Services == nil || len(got.Services) != 0 {
+		t.Errorf("volumes = %+v, services = %+v, want empty lists (never null)", got.Volumes, got.Services)
+	}
+	if len(server.volumeCLI.ComposeConfigRefs) != 0 {
+		t.Errorf("ComposeConfig calls = %+v, want none before the first deploy", server.volumeCLI.ComposeConfigRefs)
+	}
+}
+
+// Once a deploy has written the env file, a CLI refusal is a real failure:
+// the response carries the CLI's own message with a Bad Gateway status.
+func TestComposeVolumesSurfacesTheCLIsErrorAfterADeploy(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	project := createProject(t, server, "Volume Co", "")
+	production := productionEnvironment(t, server, project)
+	compose := createCompose(t, server, project.ID, production.ID, "web")
+	writeDeployedEnvFile(t, server, compose.ID)
+
+	server.volumeCLI.ComposeConfigErr = errors.New("docker compose config --format json: exit status 1: services.web.image must be a string")
 
 	response := server.request(t, http.MethodGet, composeVolumesPath(project.ID, production.ID, compose.ID), nil)
 	defer response.Body.Close()
@@ -1077,7 +1110,7 @@ func TestComposeVolumesSurfacesTheCLIsNotDeployedError(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&failure); err != nil {
 		t.Fatalf("decode volumes failure: %v", err)
 	}
-	for _, want := range []string{"volume resolution failed", "couldn't find env file"} {
+	for _, want := range []string{"volume resolution failed", "must be a string"} {
 		if !strings.Contains(failure["error"], want) {
 			t.Errorf("volumes failure = %q, want it to contain %q", failure["error"], want)
 		}
@@ -2410,6 +2443,7 @@ type composeStatusResponse struct {
 // composeVolumesResponse mirrors the Volume Explorer's listing endpoint.
 type composeVolumesResponse struct {
 	Available bool                    `json:"available"`
+	Deployed  bool                    `json:"deployed"`
 	Reason    string                  `json:"reason"`
 	Volumes   []composeVolumeResponse `json:"volumes"`
 	Services  []serviceUserResponse   `json:"services"`
@@ -2957,6 +2991,20 @@ func composeLogsPath(projectID, environmentID, composeID int64) string {
 
 func composeVolumesPath(projectID, environmentID, composeID int64) string {
 	return composePath(projectID, environmentID, composeID) + "/volumes"
+}
+
+// writeDeployedEnvFile stands in for a deploy: it writes the env file the
+// Volumes routes look for before they ask the Compose CLI. The Composes these
+// tests create keep the id-keyed directory under .composes.
+func writeDeployedEnvFile(t *testing.T, server *testServer, composeID int64) {
+	t.Helper()
+	dir := filepath.Join(server.dataDir, ".composes", strconv.FormatInt(composeID, 10))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create compose dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), nil, 0o600); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
 }
 
 const (

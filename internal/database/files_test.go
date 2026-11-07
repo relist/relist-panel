@@ -173,8 +173,8 @@ func TestUpgradeFrom17Boots(t *testing.T) {
 		t.Fatalf("SchemaVersion() = %d, %v, want 39", version, err)
 	}
 	var recorded int
-	if err := db.QueryRow("SELECT COUNT(*) FROM migration_files").Scan(&recorded); err != nil || recorded != 35 {
-		t.Fatalf("migration_files rows = %d, %v, want 35 (backfilled)", recorded, err)
+	if err := db.QueryRow("SELECT COUNT(*) FROM migration_files").Scan(&recorded); err != nil || recorded != 39 {
+		t.Fatalf("migration_files rows = %d, %v, want 39 (backfilled)", recorded, err)
 	}
 }
 

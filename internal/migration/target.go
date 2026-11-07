@@ -85,15 +85,17 @@ type Progress struct {
 	SourceURL string `json:"sourceUrl"`
 	// SelfURL is this panel's own URL as given at connect, so a retried
 	// preflight on the same session keeps it.
-	SelfURL  string         `json:"selfUrl,omitempty"`
-	LockStep Step           `json:"lockStep"`
-	Selected []string       `json:"selected"`
-	Items    []ItemProgress `json:"items"`
-	Checks   []Check        `json:"checks"`
-	Info     *OldHostInfo   `json:"info"`
-	Warnings []string       `json:"warnings"`
-	Error    string         `json:"error,omitempty"`
-	Summary  *Summary       `json:"summary,omitempty"`
+	SelfURL  string   `json:"selfUrl,omitempty"`
+	LockStep Step     `json:"lockStep"`
+	Selected []string `json:"selected"`
+	// IncludeRegistry is whether the Registry's volume moves too.
+	IncludeRegistry bool           `json:"includeRegistry"`
+	Items           []ItemProgress `json:"items"`
+	Checks          []Check        `json:"checks"`
+	Info            *OldHostInfo   `json:"info"`
+	Warnings        []string       `json:"warnings"`
+	Error           string         `json:"error,omitempty"`
+	Summary         *Summary       `json:"summary,omitempty"`
 	// Log is the activity log, oldest first; FinalizeStep is where
 	// finalize is while finalizing.
 	Log          []LogEntry   `json:"log"`
@@ -123,20 +125,21 @@ type itemState struct {
 
 // targetState is state.json: everything needed to continue after a restart.
 type targetState struct {
-	Phase        Phase                 `json:"phase"`
-	SourceURL    string                `json:"sourceUrl"`
-	SelfURL      string                `json:"selfUrl"`
-	SessionKey   string                `json:"sessionKey"`
-	Selected     []string              `json:"selected"`
-	Info         *OldHostInfo          `json:"info"`
-	Checks       []Check               `json:"checks"`
-	LockStep     Step                  `json:"lockStep"`
-	Manifest     *Manifest             `json:"manifest"`
-	Items        map[string]*itemState `json:"items"`
-	Warnings     []string              `json:"warnings"`
-	Error        string                `json:"error,omitempty"`
-	Log          []LogEntry            `json:"log"`
-	FinalizeStep FinalizeStep          `json:"finalizeStep,omitempty"`
+	Phase           Phase                 `json:"phase"`
+	SourceURL       string                `json:"sourceUrl"`
+	SelfURL         string                `json:"selfUrl"`
+	SessionKey      string                `json:"sessionKey"`
+	Selected        []string              `json:"selected"`
+	IncludeRegistry bool                  `json:"includeRegistry,omitempty"`
+	Info            *OldHostInfo          `json:"info"`
+	Checks          []Check               `json:"checks"`
+	LockStep        Step                  `json:"lockStep"`
+	Manifest        *Manifest             `json:"manifest"`
+	Items           map[string]*itemState `json:"items"`
+	Warnings        []string              `json:"warnings"`
+	Error           string                `json:"error,omitempty"`
+	Log             []LogEntry            `json:"log"`
+	FinalizeStep    FinalizeStep          `json:"finalizeStep,omitempty"`
 }
 
 // Target is the new host's side of a Migration.
@@ -290,11 +293,17 @@ func (t *Target) setError(err error) {
 
 // Recheck re-runs preflight for another host path selection.
 func (t *Target) Recheck(ctx context.Context, selected []string) (Progress, error) {
+	return t.RecheckWith(ctx, selected, false)
+}
+
+// RecheckWith is Recheck; includeRegistry adds the Registry's data to the
+// checks.
+func (t *Target) RecheckWith(ctx context.Context, selected []string, includeRegistry bool) (Progress, error) {
 	if !t.op.TryLock() {
 		return Progress{}, errBusy
 	}
 	defer t.op.Unlock()
-	if err := t.recheck(ctx, selected); err != nil {
+	if err := t.recheck(ctx, selected, includeRegistry); err != nil {
 		return Progress{}, err
 	}
 	return t.Progress(), nil
@@ -302,7 +311,7 @@ func (t *Target) Recheck(ctx context.Context, selected []string) (Progress, erro
 
 // recheck runs preflight without holding t.mu, so polling never waits on
 // the source or on a helper container. The caller holds t.op.
-func (t *Target) recheck(ctx context.Context, selected []string) error {
+func (t *Target) recheck(ctx context.Context, selected []string, includeRegistry bool) error {
 	if selected == nil {
 		selected = []string{}
 	}
@@ -316,23 +325,30 @@ func (t *Target) recheck(ctx context.Context, selected []string) error {
 	if err != nil {
 		return err
 	}
-	checks, err := Evaluate(ctx, t.d.Local, info, selected)
+	includeRegistry = includeRegistry && info.Registry != nil
+	checks, err := EvaluateWith(ctx, t.d.Local, info, selected, includeRegistry)
 	if err != nil {
 		return err
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.st.Info, t.st.Checks, t.st.Selected, t.st.Error = &info, checks, selected, ""
+	t.st.IncludeRegistry = includeRegistry
 	return t.save()
 }
 
 // Start locks the source and pulls every item in the background.
 func (t *Target) Start(ctx context.Context, selected []string) error {
+	return t.StartWith(ctx, selected, false)
+}
+
+// StartWith is Start; includeRegistry also moves the Registry's volume.
+func (t *Target) StartWith(ctx context.Context, selected []string, includeRegistry bool) error {
 	if !t.op.TryLock() {
 		return errBusy
 	}
 	defer t.op.Unlock()
-	if err := t.recheck(ctx, selected); err != nil {
+	if err := t.recheck(ctx, selected, includeRegistry); err != nil {
 		return err
 	}
 	t.mu.Lock()
@@ -343,7 +359,11 @@ func (t *Target) Start(ctx context.Context, selected []string) error {
 		}
 	}
 	t.st.Phase = PhaseLocking
-	t.record("info", "", fmt.Sprintf("Locking the old server; copying %d host paths", len(t.st.Selected)))
+	what := fmt.Sprintf("copying %d host paths", len(t.st.Selected))
+	if t.st.IncludeRegistry {
+		what += " and the Registry's data"
+	}
+	t.record("info", "", "Locking the old server; "+what)
 	if err := t.save(); err != nil {
 		return err
 	}
@@ -425,8 +445,9 @@ func (t *Target) waitManifest(ctx context.Context) error {
 	for {
 		var c *client
 		var selected []string
-		t.locked(func() { c, selected = t.client(), t.st.Selected })
-		m, step, lastErr, err := c.start(ctx, selected)
+		var includeRegistry bool
+		t.locked(func() { c, selected, includeRegistry = t.client(), t.st.Selected, t.st.IncludeRegistry })
+		m, step, lastErr, err := c.start(ctx, selected, includeRegistry)
 		if err != nil {
 			var remote *remoteError
 			if errors.As(err, &remote) && remote.Status < 500 && remote.Status != http.StatusTooManyRequests {
@@ -445,6 +466,9 @@ func (t *Target) waitManifest(ctx context.Context) error {
 				var reviewed []Item
 				if t.st.Info != nil {
 					reviewed = t.st.Info.Volumes
+					if t.st.IncludeRegistry && t.st.Info.Registry != nil {
+						reviewed = append(slices.Clone(reviewed), *t.st.Info.Registry)
+					}
 				}
 				late, err := checkVolumes(*m, reviewed)
 				if err != nil {
@@ -788,7 +812,8 @@ func (t *Target) Progress() Progress {
 
 func (t *Target) progress() Progress {
 	p := Progress{Phase: t.st.Phase, SourceURL: t.st.SourceURL, SelfURL: t.st.SelfURL, LockStep: t.st.LockStep, Selected: t.st.Selected,
-		Items: []ItemProgress{}, Checks: t.st.Checks, Info: t.st.Info, Warnings: t.st.Warnings, Error: t.st.Error, Summary: t.summary}
+		IncludeRegistry: t.st.IncludeRegistry,
+		Items:           []ItemProgress{}, Checks: t.st.Checks, Info: t.st.Info, Warnings: t.st.Warnings, Error: t.st.Error, Summary: t.summary}
 	if p.Checks == nil {
 		p.Checks = []Check{}
 	}

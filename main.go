@@ -27,6 +27,7 @@ import (
 	"relist-panel/internal/metrics"
 	"relist-panel/internal/migration"
 	"relist-panel/internal/migrationcli"
+	"relist-panel/internal/registryauth"
 	"relist-panel/internal/sources"
 	"relist-panel/internal/terminal"
 	"relist-panel/internal/volumes"
@@ -173,11 +174,17 @@ func main() {
 	}
 
 	control := http.NewServeMux()
+	// The handler builds the stores that list registry logins; the runner it
+	// is handed reads them through this switch (ADR-0034).
+	registryAuth := &registryauth.Switch{}
 	panelDocker := dockerexec.NewPanelDocker(dockerexec.DefaultSocketPath)
 	traefikDocker := dockerexec.NewTraefikDocker()
 	handler, waitDeployments := httpapi.NewHandler(ctx, httpapi.Deps{
 		DB:             db,
-		Runner:         dockerexec.New(),
+		Runner:         dockerexec.New(registryAuth),
+		RegistryAuth:   registryAuth,
+		RegistryTester: dockerexec.RegistryLogin{},
+		RegistryHost:   dockerexec.NewRegistryHost(dockerexec.DefaultSocketPath),
 		Engine:         dockerexec.NewEngine(dockerexec.DefaultSocketPath),
 		DataDir:        cfg.DataDir,
 		Version:        version,

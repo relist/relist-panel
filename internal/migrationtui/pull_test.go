@@ -19,13 +19,15 @@ import (
 
 // fakeController records what the TUI asked the panel to do.
 type fakeController struct {
-	mu        sync.Mutex
-	connected [][]string
-	rechecked [][]string
-	started   [][]string
-	retried   int
-	aborted   int
-	startErr  error
+	mu                sync.Mutex
+	connected         [][]string
+	rechecked         [][]string
+	started           [][]string
+	registry          []bool // includeRegistry of each start
+	recheckedRegistry []bool
+	retried           int
+	aborted           int
+	startErr          error
 
 	status      migration.OldHostStatus
 	activity    migration.Activity
@@ -51,17 +53,19 @@ func (f *fakeController) Connect(_ context.Context, oldHostURL, token, selfURL s
 	return migration.Progress{Phase: migration.PhaseConnected, SourceURL: oldHostURL}, nil
 }
 
-func (f *fakeController) Recheck(_ context.Context, paths []string) (migration.Progress, error) {
+func (f *fakeController) Recheck(_ context.Context, paths []string, includeRegistry bool) (migration.Progress, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rechecked = append(f.rechecked, slices.Clone(paths))
+	f.recheckedRegistry = append(f.recheckedRegistry, includeRegistry)
 	return f.progress, nil
 }
 
-func (f *fakeController) Start(_ context.Context, paths []string) error {
+func (f *fakeController) Start(_ context.Context, paths []string, includeRegistry bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.started = append(f.started, slices.Clone(paths))
+	f.registry = append(f.registry, includeRegistry)
 	return f.startErr
 }
 
@@ -312,6 +316,36 @@ func TestPullStartNeedsY(t *testing.T) {
 	m = send(t, m, key("y"))
 	if len(c.started) != 1 || !slices.Equal(c.started[0], []string{"/srv/up"}) {
 		t.Fatalf("start calls = %q", c.started)
+	}
+	if c.registry[0] {
+		t.Fatal("Registry data included without being ticked")
+	}
+}
+
+func TestPullRegistryCheckbox(t *testing.T) {
+	c := &fakeController{}
+	m := pull(c, connected())
+	if strings.Contains(screen(m), "Include registry data") {
+		t.Fatal("offered Registry data the old server does not have")
+	}
+	p := connected()
+	p.Info.Registry = &migration.Item{ID: "volume-relist-registry", Kind: migration.KindVolume, Size: 3 << 20}
+	ticked := p
+	ticked.IncludeRegistry = true
+	c.progress = ticked // what the panel answers the recheck with
+	m = pull(c, p)
+	mustContain(t, m, "[ ] Include registry data ("+migration.HumanBytes(3<<20)+")")
+	m = send(t, m, key("down"))
+	m = send(t, m, key("down"))
+	m = send(t, m, key("space"))
+	mustContain(t, m, "[x] Include registry data")
+	if len(c.recheckedRegistry) != 1 || !c.recheckedRegistry[0] {
+		t.Fatalf("ticking Registry data rechecks with it: %v", c.recheckedRegistry)
+	}
+	m = send(t, m, key("enter"))
+	m = send(t, m, key("y"))
+	if len(c.registry) != 1 || !c.registry[0] {
+		t.Fatalf("includeRegistry on start = %v", c.registry)
 	}
 }
 
@@ -869,4 +903,38 @@ func TestPullCountsWhileReadingTheOldPanel(t *testing.T) {
 	}
 	m.pending = ""
 	mustContain(t, m, "r reads it again")
+}
+
+// A recheck that no longer offers Registry data must not leave the cursor on
+// the row that went away.
+func TestPullCursorStaysOnARowWhenRegistryGoes(t *testing.T) {
+	c := &fakeController{}
+	p := connected()
+	p.Info.Registry = &migration.Item{ID: "volume-relist-registry", Kind: migration.KindVolume, Size: 3 << 20}
+	m := pull(c, p)
+	rows := len(p.Info.HostPaths) + 1
+	for range rows {
+		m = send(t, m, key("down"))
+	}
+	if got := m.(*pullModel).cursor; got != rows-1 {
+		t.Fatalf("cursor = %d, want the Registry row %d", got, rows-1)
+	}
+	gone := connected()
+	m = send(t, m, ProgressMsg{P: gone})
+	if got, last := m.(*pullModel).cursor, len(gone.Info.HostPaths)-1; got != last {
+		t.Fatalf("cursor = %d after Registry data went, want %d", got, last)
+	}
+}
+
+// While the old server's info is being read again, the cursor keeps its row.
+func TestPullCursorKeepsItsRowWhileReading(t *testing.T) {
+	c := &fakeController{}
+	m := pull(c, connected())
+	m = send(t, m, key("down"))
+	reading := connected()
+	reading.Info = nil
+	m = send(t, m, ProgressMsg{P: reading})
+	if got := m.(*pullModel).cursor; got != 1 {
+		t.Fatalf("cursor = %d while reading, want 1", got)
+	}
 }

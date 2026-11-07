@@ -31,7 +31,9 @@ type fakeSourceServer struct {
 	cutOnce       map[string]bool // first stream of the id stops halfway
 	badDigest     map[string]int  // how many times the id's digest is wrong
 	starts        int
-	failStart     int // the first n start calls answer 502, like Traefik while the old panel restarts
+	startBodies   []map[string]any
+	registry      *Item // the Registry volume preflight reports
+	failStart     int   // the first n start calls answer 502, like Traefik while the old panel restarts
 	aborted       bool
 	finished      string
 	failFinish    bool // finish answers 502 every time
@@ -93,7 +95,7 @@ func newFakeSourceServer(t *testing.T, items ...Item) *fakeSourceServer {
 			return
 		}
 		writeJSON(w, 200, OldHostInfo{Protocol: ProtocolVersion, SchemaVersion: 18, DataDir: "/var/lib/relist-panel",
-			HostPaths: paths, Volumes: []Item{}, Images: []Item{}, Warnings: []string{}})
+			HostPaths: paths, Volumes: []Item{}, Images: []Item{}, Warnings: []string{}, Registry: f.registry})
 	}))
 	mux.HandleFunc("POST /api/migration/start", auth(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -105,6 +107,9 @@ func newFakeSourceServer(t *testing.T, items ...Item) *fakeSourceServer {
 		}
 		f.starts++
 		n := f.starts
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.startBodies = append(f.startBodies, body)
 		f.mu.Unlock()
 		if n == 1 {
 			writeJSON(w, 202, map[string]string{"step": "stopping"})
@@ -822,5 +827,67 @@ func TestPanicInsideLockedSectionDoesNotDeadlock(t *testing.T) {
 		}
 	case <-time.After(4 * time.Second):
 		t.Fatal("status deadlocked after a panic inside a locked section")
+	}
+}
+
+// firstStartBody waits for the target's first start call to the source.
+func firstStartBody(t *testing.T, src *fakeSourceServer) map[string]any {
+	t.Helper()
+	var body map[string]any
+	eventuallyTrue(t, "a start call", func() bool {
+		src.mu.Lock()
+		defer src.mu.Unlock()
+		if len(src.startBodies) > 0 {
+			body = src.startBodies[0]
+		}
+		return body != nil
+	})
+	return body
+}
+
+func TestStartBodyWithoutIncludeRegistryIsFalse(t *testing.T) {
+	f := newTargetFixture(t)
+	f.connectAndStart(t)
+	if body := firstStartBody(t, f.src); body["includeRegistry"] != false {
+		t.Fatalf("start body = %v, want includeRegistry false", body)
+	}
+}
+
+func TestStartWithRegistrySendsIt(t *testing.T) {
+	f := newTargetFixture(t)
+	f.src.registry = &Item{ID: "volume-" + RegistryVolume, Kind: KindVolume, Size: 1 << 20, Volume: &VolumeInfo{Name: RegistryVolume, Driver: "local"}}
+	if _, err := f.target.Connect(context.Background(), f.src.srv.URL, "tok", "https://new.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.target.StartWith(context.Background(), []string{"/srv/up"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if !f.target.Progress().IncludeRegistry {
+		t.Fatal("progress does not say the Registry data is included")
+	}
+	if body := firstStartBody(t, f.src); body["includeRegistry"] != true {
+		t.Fatalf("start body = %v", body)
+	}
+}
+
+// I2: a Registry that would collide on this host blocks Start once ticked.
+func TestStartWithRegistryRunsItsChecks(t *testing.T) {
+	f := newTargetFixture(t)
+	f.src.registry = &Item{ID: "volume-" + RegistryVolume, Kind: KindVolume, Size: 1 << 20, Volume: &VolumeInfo{Name: RegistryVolume, Driver: "local"}}
+	f.deps.Local.Docker.(*FakeDocker).Volumes[RegistryVolume] = VolumeInfo{Name: RegistryVolume}
+	if _, err := f.target.Connect(context.Background(), f.src.srv.URL, "tok", "https://new.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.target.RecheckWith(context.Background(), []string{"/srv/up"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.IncludeRegistry || !slices.ContainsFunc(p.Checks, func(c Check) bool { return c.Blocking && strings.Contains(c.Message, RegistryVolume) }) {
+		t.Fatalf("recheck with Registry data: includeRegistry %v, checks %+v", p.IncludeRegistry, p.Checks)
+	}
+	err = f.target.StartWith(context.Background(), []string{"/srv/up"}, true)
+	var blocked *BlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("start = %v, want blocked", err)
 	}
 }

@@ -53,7 +53,7 @@ function volume(overrides: Partial<ComposeVolume> = {}): ComposeVolume {
 }
 
 function payload(overrides: Partial<ComposeVolumes> = {}): ComposeVolumes {
-  return { available: true, services: [], volumes: [], ...overrides };
+  return { available: true, deployed: true, services: [], volumes: [], ...overrides };
 }
 
 function entry(overrides: Partial<VolumeEntry> = {}): VolumeEntry {
@@ -72,6 +72,10 @@ function entry(overrides: Partial<VolumeEntry> = {}): VolumeEntry {
 describe('explorerView', () => {
   it('is loading while the page has neither a payload nor an error', () => {
     expect(explorerView(undefined, undefined, 'demo_pgdata')).toEqual({ status: 'loading' });
+  });
+
+  it('is not-deployed, with no CLI message, when the API says no deploy has written the env file', () => {
+    expect(explorerView(payload({ deployed: false }), undefined, 'demo_pgdata')).toEqual({ status: 'not-deployed' });
   });
 
   it('carries the CLI message in the not-deployed state, without the panel wrapper', () => {

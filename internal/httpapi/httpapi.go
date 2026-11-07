@@ -32,6 +32,8 @@ import (
 	"relist-panel/internal/panelupdate"
 	"relist-panel/internal/policy"
 	"relist-panel/internal/projects"
+	"relist-panel/internal/registry"
+	"relist-panel/internal/registryauth"
 	"relist-panel/internal/requestmetrics"
 	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
@@ -107,6 +109,15 @@ type Deps struct {
 	PolicyRoots    []string
 	// Version is the build version, shown by GET /api/auth/status.
 	Version string
+	// RegistryAuth is the Runner's source of registry logins; the handler
+	// sets it once its stores exist. Nil (tests) leaves pulls without logins.
+	RegistryAuth *registryauth.Switch
+	// RegistryTester logs in for an External registry's Test button. Nil
+	// answers every Test with "not available".
+	RegistryTester registryauth.Tester
+	// RegistryHost drives the Panel registry's container (ADR-0033). Nil
+	// leaves the Registry routes out; its hostname still reserves Domains.
+	RegistryHost registry.Host
 }
 
 // NewHandler builds the top-level HTTP handler for the panel.
@@ -126,7 +137,22 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		return access.View(), nil
 	})
 	authService.RegisterRoutes(mux)
-	composesService := composes.New(db, runner, dataDir).WithEngine(d.Engine)
+	externalRegistries := registryauth.NewStore(db)
+	composesService := composes.New(db, runner, dataDir).WithEngine(d.Engine).WithRegistryLogins(func(ctx context.Context) ([]string, error) {
+		list, err := externalRegistries.List(ctx)
+		hosts := make([]string, 0, len(list))
+		for _, e := range list {
+			hosts = append(hosts, e.Host)
+		}
+		return hosts, err
+	})
+	registryService := newRegistryService(db, dataDir, d, composesService)
+	composesService.WithRegistryHost(registryService.Hostname)
+	// External registry logins and the Registry's own reach every pull before
+	// any worker starts (ADR-0033, ADR-0034).
+	if d.RegistryAuth != nil {
+		d.RegistryAuth.Set(registryauth.MultiSource(externalRegistries, registryService))
+	}
 	composesService.SetPolicyRules(d.PolicyRoots, d.PanelDomain)
 	composesService.SetApprover(d.PolicyApprover)
 	authService.WithApprover(composesService.IsApprover)
@@ -186,11 +212,20 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	}
 	// The update lock is checked before any worker starts: a Panel update that
 	// is not over keeps this panel from running Deployments or taking writes.
+	// registryCleaner is declared here so the update's WaitingOn can name a
+	// running cleanup; it is set further down, once the Registry is wired.
+	var registryCleaner *registry.Cleaner
 	puDeps := panelupdate.Deps{
 		Store: panelupdate.NewStore(db), Version: d.Version, ManifestURL: panelupdate.ManifestURLFromEnv(),
 		Self: d.PanelSelf, Runner: d.PanelRunner, Updater: d.PanelUpdater,
 		DataDir: dataDir, DeploysBusy: queue.Busy, Queue: queue,
-		WaitingOn: func() string { return updateWaitingOn(ctx, db, queue) },
+		WaitingOn: func() string {
+			var cleaning func() bool
+			if registryCleaner != nil { // set below, before any update can run
+				cleaning = registryCleaner.Running
+			}
+			return updateWaitingOn(ctx, db, queue, cleaning)
+		},
 		MigrationLocked: func(ctx context.Context) (bool, error) {
 			if migrationOptions == nil {
 				return false, nil
@@ -224,6 +259,23 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		}
 		puDeps.TraefikApply = traefikApply
 	}
+	// Registry cleanup waits for Deployments and the locks, and a Panel
+	// update's quiesce waits for it (ADR-0033).
+	if d.RegistryHost != nil {
+		deployed, running := registryRefs(d, composesService)
+		registryCleaner = registry.NewCleaner(registry.CleanerDeps{
+			Service: registryService,
+			Gate: registryGate{busy: queue.Busy, locked: func() bool {
+				if panelUpdates.Locked() {
+					return true
+				}
+				locked, err := puDeps.MigrationLocked(ctx)
+				return locked || err != nil
+			}},
+			InUse: inUseRefs(deployed, running),
+		})
+		puDeps.RegistryCleanup = registryCleaner
+	}
 	panelUpdates = panelupdate.New(puDeps)
 	if err := panelUpdates.StartLocked(ctx); err != nil {
 		log.Printf("panelupdate: start locked: %v", err)
@@ -256,6 +308,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	}()
 	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
 	sshkeys.New(db).RegisterRoutes(mux)
+	registryauth.New(externalRegistries, d.RegistryTester, nil).RegisterRoutes(mux)
 	certificates.New(db, dataDir).RegisterRoutes(mux)
 	accessLogs := accesslog.New(db, dataDir, d.Traefik)
 	accessLogs.RegisterRoutes(mux)
@@ -289,7 +342,23 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			ingester.Run(ctx)
 		}()
 	}
-	domains.New(db).WithPanelHost(d.PanelDomain).RegisterRoutes(mux)
+	domains.New(db).WithPanelHost(d.PanelDomain).WithReservedHost(registryService.ReservedHost).RegisterRoutes(mux)
+	if d.RegistryHost != nil {
+		registryAPI(d, dataDir, registryService, composesService, registryCleaner).RegisterRoutes(mux)
+		worker.Add(1)
+		go func() {
+			defer worker.Done()
+			// A GC the panel died during goes back read-write first, then
+			// reconcile, then the schedule.
+			if err := registryCleaner.Startup(ctx); err != nil {
+				log.Printf("registry: finish an interrupted cleanup: %v", err)
+			}
+			if _, err := registryService.Reconcile(ctx); err != nil {
+				log.Printf("registry: reconcile at start: %v", err)
+			}
+			registryCleaner.RunScheduler(ctx)
+		}()
+	}
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
 	volumeapi.New(composesService, d.VolumeResolver, d.VolumeRunner).RegisterRoutes(mux)
@@ -319,6 +388,9 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 					volumes[vulnscan.CacheVolume] = vulnscan.OwnerName
 				}
 			}
+			if err == nil && images != nil && volumes != nil && d.RegistryHost != nil {
+				ownRegistry(images, volumes)
+			}
 			// The previous panel image stays for a manual rollback.
 			if err == nil && images != nil {
 				var prev string
@@ -337,7 +409,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	var inner http.Handler = panelUpdates.Middleware(gate.middleware(mux))
 	if migrationOptions != nil {
 		domainStore := domains.NewStore(db)
-		oldHost := migration.NewOldHost(migration.OldHostDeps{
+		oldHostDeps := migration.OldHostDeps{
 			Store:           migration.NewStore(db, nil),
 			Manifests:       migration.ManifestBuilder{DB: db, Composes: composesService, Volumes: d.VolumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir},
 			Queue:           queue,
@@ -351,7 +423,11 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			ReportedDataDir: migrationOptions.ReportedDataDir,
 			Install:         migrationOptions.Install,
 			UpdateLocked:    panelUpdates.Locked,
-		})
+		}
+		if registryCleaner != nil { // a nil *Cleaner in the interface would not read as nil
+			oldHostDeps.RegistryCleanup = registryCleaner
+		}
+		oldHost := migration.NewOldHost(oldHostDeps)
 		oldHost.RegisterRoutes(mux)
 		local := migration.LocalHost{DB: db, Docker: migrationOptions.Docker, DataDir: dataDir, Install: migrationOptions.Install}
 		stateDir := filepath.Join(dataDir, ".migration")
@@ -363,6 +439,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			Restore:  migration.NewRestorer(local, filepath.Join(stateDir, "staging")),
 			Finalizer: migration.NewFinalizer(migration.FinalizeDeps{
 				Local: local, Restart: migrationOptions.Restart, Queue: queue, Sources: sources.NewStore(db), Domains: domainStore,
+				BeforeDeploy: registryBeforeDeploy(d, registryService),
 			}),
 			Backoff: migrationOptions.Backoff,
 			Context: ctx,
@@ -403,11 +480,15 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 // updateWaitingOn says what a quiescing Panel update waits for. It is asked
-// only while the Deployment queue or the scan queue is not idle, so with no
-// Deployment running the wait is the scan worker's current task.
-func updateWaitingOn(ctx context.Context, db *sql.DB, queue *deployments.Queue) string {
+// only while the Deployment queue, the scan queue or a Registry cleanup is
+// not idle, so with no Deployment and no cleanup running the wait is the scan
+// worker's current task. cleaning is nil when there is no Registry.
+func updateWaitingOn(ctx context.Context, db *sql.DB, queue *deployments.Queue, cleaning func() bool) string {
 	composeID, number, ok := queue.Running()
 	if !ok {
+		if cleaning != nil && cleaning() {
+			return "a Registry cleanup"
+		}
 		return "a vulnerability scan"
 	}
 	var name string
@@ -415,4 +496,17 @@ func updateWaitingOn(ctx context.Context, db *sql.DB, queue *deployments.Queue) 
 		return fmt.Sprintf("Deployment #%d", number)
 	}
 	return fmt.Sprintf("Deployment %s #%d", name, number)
+}
+
+// registryBeforeDeploy brings the panel's own Registry up before a
+// Migration's Deployments, which may pull from it. Reconcile is idempotent and
+// shares the start-up one's lock. Nil without a Docker host for it.
+func registryBeforeDeploy(d Deps, svc *registry.Service) func(context.Context) error {
+	if d.RegistryHost == nil {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		_, err := svc.Reconcile(ctx)
+		return err
+	}
 }
