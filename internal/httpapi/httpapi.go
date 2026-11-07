@@ -32,6 +32,7 @@ import (
 	"relist-panel/internal/panelupdate"
 	"relist-panel/internal/policy"
 	"relist-panel/internal/projects"
+	"relist-panel/internal/registryauth"
 	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
 	"relist-panel/internal/sshkeys"
@@ -106,6 +107,12 @@ type Deps struct {
 	PolicyRoots    []string
 	// Version is the build version, shown by GET /api/auth/status.
 	Version string
+	// RegistryAuth is the Runner's source of registry logins; the handler
+	// sets it once its stores exist. Nil (tests) leaves pulls without logins.
+	RegistryAuth *registryauth.Switch
+	// RegistryTester logs in for an External registry's Test button. Nil
+	// answers every Test with "not available".
+	RegistryTester registryauth.Tester
 }
 
 // NewHandler builds the top-level HTTP handler for the panel.
@@ -125,7 +132,20 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		return access.View(), nil
 	})
 	authService.RegisterRoutes(mux)
-	composesService := composes.New(db, runner, dataDir).WithEngine(d.Engine)
+	// External registry logins reach every pull before any worker starts
+	// (ADR-0034).
+	externalRegistries := registryauth.NewStore(db)
+	if d.RegistryAuth != nil {
+		d.RegistryAuth.Set(externalRegistries)
+	}
+	composesService := composes.New(db, runner, dataDir).WithEngine(d.Engine).WithRegistryLogins(func(ctx context.Context) ([]string, error) {
+		list, err := externalRegistries.List(ctx)
+		hosts := make([]string, 0, len(list))
+		for _, e := range list {
+			hosts = append(hosts, e.Host)
+		}
+		return hosts, err
+	})
 	composesService.SetPolicyRules(d.PolicyRoots, d.PanelDomain)
 	composesService.SetApprover(d.PolicyApprover)
 	authService.WithApprover(composesService.IsApprover)
@@ -255,6 +275,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	}()
 	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
 	sshkeys.New(db).RegisterRoutes(mux)
+	registryauth.New(externalRegistries, d.RegistryTester, nil).RegisterRoutes(mux)
 	certificates.New(db, dataDir).RegisterRoutes(mux)
 	accessLogs := accesslog.New(db, dataDir, d.Traefik)
 	accessLogs.RegisterRoutes(mux)

@@ -28,6 +28,8 @@ import type {
   SourceInput,
   SourceTestResult,
   SshKey,
+  ExternalRegistry,
+  ExternalRegistryInput,
   AccessLogList,
   AccessLogSettings,
   AccessLogSettingsInput,
@@ -537,6 +539,15 @@ export const api = {
   createSshKey: (name: string) => request<SshKey>('/api/ssh-keys', jsonInit('POST', { name })),
   renameSshKey: (id: number, name: string) => request<SshKey>(`/api/ssh-keys/${id}`, jsonInit('PATCH', { name })),
   deleteSshKey: (id: number) => request<void>(`/api/ssh-keys/${id}`, { method: 'DELETE' }),
+  // External registries: logins every pull and build gets (ADR-0034).
+  listExternalRegistries: () => request<ExternalRegistry[]>('/api/registry/external'),
+  createExternalRegistry: (input: ExternalRegistryInput) =>
+    request<ExternalRegistry>('/api/registry/external', jsonInit('POST', input)),
+  updateExternalRegistry: (id: number, input: ExternalRegistryInput) =>
+    request<ExternalRegistry>(`/api/registry/external/${id}`, jsonInit('PUT', input)),
+  deleteExternalRegistry: (id: number) => request<void>(`/api/registry/external/${id}`, { method: 'DELETE' }),
+  testExternalRegistry: (id: number) =>
+    request<{ ok: boolean; error: string }>(`/api/registry/external/${id}/test`, { method: 'POST' }),
   // Builders: resource-limited buildx builders, and the BuildKit image they run.
   listBuilders: () => request<BuildersResponse>('/api/builders'),
   setBuildKitImage: (buildkitImage: string) =>

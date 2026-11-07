@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -315,6 +317,51 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 		return nil, failure(FailureInternal, "could not record deploy time", err)
 	}
 	return files.warnings, nil
+}
+
+// authRefused matches a registry refusing a pull's login, not a local
+// "permission denied".
+var authRefused = regexp.MustCompile(`unauthorized|authentication required|pull access denied|\bdenied: `)
+
+// pullHint explains a pull a registry refused (ADR-0034): with a stored
+// External registry login for one of the images' hosts, that login was
+// refused; without one, the image may need one. Other failures get none.
+func (s *Service) pullHint(ctx context.Context, err error, images []string) string {
+	if !authRefused.MatchString(strings.ToLower(err.Error())) {
+		return ""
+	}
+	var stored []string
+	if s.registryLogins != nil {
+		if hosts, lerr := s.registryLogins(ctx); lerr == nil {
+			for _, image := range images {
+				host := imageHost(image)
+				if slices.Contains(hosts, host) && !slices.Contains(stored, host) {
+					stored = append(stored, host)
+				}
+			}
+		}
+	}
+	if len(stored) > 0 {
+		return ". Registry refused the stored login for " + strings.Join(stored, ", ") + ". Check it with Test on Registry → External registries."
+	}
+	return ". If the image is private, add its registry's credentials on Registry → External registries."
+}
+
+// imageHost is the registry host of an image reference, as Docker reads it:
+// a first path part with a dot or a port, or localhost, names the host;
+// anything else is Docker Hub.
+func imageHost(ref string) string {
+	ref, _, _ = strings.Cut(ref, "@")
+	first, _, found := strings.Cut(ref, "/")
+	if !found || !(strings.ContainsAny(first, ".:") || first == "localhost") {
+		return "docker.io"
+	}
+	switch host := strings.ToLower(first); host {
+	case "index.docker.io", "registry-1.docker.io":
+		return "docker.io"
+	default:
+		return host
+	}
 }
 
 const volumesRemovedAdvice = "The Compose is stopped; fix the cause and deploy again."
@@ -662,7 +709,11 @@ func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool,
 			continue
 		}
 		if err := s.runner.Pull(ctx, req, pull); err != nil {
-			return failure(FailureRunner, "pull failed: "+err.Error(), err)
+			images := make([]string, 0, len(pull.Services))
+			for _, name := range pull.Services {
+				images = append(images, config.Services[name].Image)
+			}
+			return failure(FailureRunner, "pull failed: "+err.Error()+s.pullHint(ctx, err, images), err)
 		}
 	}
 	var refused []string

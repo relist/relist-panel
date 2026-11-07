@@ -1,4 +1,4 @@
-import { AppstoreOutlined, AuditOutlined, BuildOutlined, CloudDownloadOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, FolderOutlined, GlobalOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined, TeamOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, AuditOutlined, BuildOutlined, CloudDownloadOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, DatabaseOutlined, FolderOutlined, GlobalOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined, TeamOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -119,6 +119,8 @@ export function AppShell() {
             ? 'images'
           : resolved.pattern === 'builders'
             ? 'builders'
+          : resolved.pattern === 'registry'
+            ? 'registry'
           : resolved.pattern === 'ssh-keys'
             ? 'ssh-keys'
           : resolved.pattern === 'certificates'
@@ -183,6 +185,7 @@ export function AppShell() {
     { key: 'panel-update', icon: <CloudDownloadOutlined />, label: 'Panel update' },
     { key: 'images', icon: <ContainerOutlined />, label: 'Images' },
     { key: 'builders', icon: <BuildOutlined />, label: 'Builders' },
+    { key: 'registry', icon: <DatabaseOutlined />, label: 'Registry' },
     {
       key: 'vulnerabilities', icon: <SafetyOutlined />,
       label: <Flex align="center" justify="space-between" gap={8}><span>Vulnerabilities</span>{criticalCount > 0 && <Badge count={criticalCount} color={token.colorError} title={`${criticalCount} Critical vulnerabilities`} />}</Flex>,
@@ -205,6 +208,7 @@ export function AppShell() {
     if (key === 'panel-update') return navigate(paths.panelUpdate);
     if (key === 'images') return navigate(paths.images);
     if (key === 'builders') return navigate(paths.builders);
+    if (key === 'registry') return navigate(paths.registry);
     if (key === 'ssh-keys') return navigate(paths.sshKeys);
     if (key === 'certificates') return navigate(paths.certificates);
     if (key === 'traefik') return navigate(paths.traefik);
@@ -234,6 +238,8 @@ export function AppShell() {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Images' });
       } else if (resolved?.pattern === 'builders') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Builders' });
+      } else if (resolved?.pattern === 'registry') {
+        trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Registry' });
       } else if (resolved?.pattern === 'ssh-keys') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'SSH keys' });
       } else if (resolved?.pattern === 'certificates') {
