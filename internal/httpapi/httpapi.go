@@ -32,6 +32,7 @@ import (
 	"relist-panel/internal/panelupdate"
 	"relist-panel/internal/policy"
 	"relist-panel/internal/projects"
+	"relist-panel/internal/registry"
 	"relist-panel/internal/registryauth"
 	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
@@ -113,6 +114,9 @@ type Deps struct {
 	// RegistryTester logs in for an External registry's Test button. Nil
 	// answers every Test with "not available".
 	RegistryTester registryauth.Tester
+	// RegistryHost drives the Panel registry's container (ADR-0033). Nil
+	// leaves the Registry routes out; its hostname still reserves Domains.
+	RegistryHost registry.Host
 }
 
 // NewHandler builds the top-level HTTP handler for the panel.
@@ -132,12 +136,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		return access.View(), nil
 	})
 	authService.RegisterRoutes(mux)
-	// External registry logins reach every pull before any worker starts
-	// (ADR-0034).
 	externalRegistries := registryauth.NewStore(db)
-	if d.RegistryAuth != nil {
-		d.RegistryAuth.Set(externalRegistries)
-	}
 	composesService := composes.New(db, runner, dataDir).WithEngine(d.Engine).WithRegistryLogins(func(ctx context.Context) ([]string, error) {
 		list, err := externalRegistries.List(ctx)
 		hosts := make([]string, 0, len(list))
@@ -146,6 +145,13 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		}
 		return hosts, err
 	})
+	registryService := newRegistryService(db, dataDir, d, composesService)
+	composesService.WithRegistryHost(registryService.Hostname)
+	// External registry logins and the Registry's own reach every pull before
+	// any worker starts (ADR-0033, ADR-0034).
+	if d.RegistryAuth != nil {
+		d.RegistryAuth.Set(registryauth.MultiSource(externalRegistries, registryService))
+	}
 	composesService.SetPolicyRules(d.PolicyRoots, d.PanelDomain)
 	composesService.SetApprover(d.PolicyApprover)
 	authService.WithApprover(composesService.IsApprover)
@@ -299,7 +305,17 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			accessLogs.Rotator().Run(ctx)
 		}()
 	}
-	domains.New(db).WithPanelHost(d.PanelDomain).RegisterRoutes(mux)
+	domains.New(db).WithPanelHost(d.PanelDomain).WithReservedHost(registryService.ReservedHost).RegisterRoutes(mux)
+	if d.RegistryHost != nil {
+		registryAPI(d, dataDir, registryService, composesService).RegisterRoutes(mux)
+		worker.Add(1)
+		go func() {
+			defer worker.Done()
+			if _, err := registryService.Reconcile(ctx); err != nil {
+				log.Printf("registry: reconcile at start: %v", err)
+			}
+		}()
+	}
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
 	volumeapi.New(composesService, d.VolumeResolver, d.VolumeRunner).RegisterRoutes(mux)
@@ -328,6 +344,12 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 					}
 					volumes[vulnscan.CacheVolume] = vulnscan.OwnerName
 				}
+			}
+			if err == nil && images != nil && volumes != nil && d.RegistryHost != nil {
+				for _, r := range registry.OwnedImageRefs(registry.DefaultImage) {
+					images[r] = registry.OwnerName
+				}
+				volumes[registry.VolumeName] = registry.OwnerName
 			}
 			// The previous panel image stays for a manual rollback.
 			if err == nil && images != nil {
