@@ -55,19 +55,10 @@ type API struct {
 	// changes, so a later load only HEADs each tag for its digest.
 	infoMu sync.Mutex
 	infos  map[string]TagInfo
-
-	// disk caches the volume's usage for a minute: Docker sizes every volume
-	// on the host to answer it.
-	diskMu    sync.Mutex
-	diskBytes int64
-	diskAt    time.Time
 }
 
 // maxCachedInfos bounds the tag info cache; past it the cache starts over.
 const maxCachedInfos = 10000
-
-// diskTTL is how long a volume usage reading is shown before it is read again.
-const diskTTL = time.Minute
 
 // The registry's name grammar (distribution/reference): lowercase path
 // components joined by "/", and tags of up to 128 word characters, "." or
@@ -91,34 +82,15 @@ func checkRepoTag(w http.ResponseWriter, repo, tag string, wantTag bool) bool {
 	return true
 }
 
-// volumeBytes is the Registry volume's usage, read at most once a minute.
-func (a *API) volumeBytes(ctx context.Context) int64 {
-	a.diskMu.Lock()
-	defer a.diskMu.Unlock()
-	if !a.diskAt.IsZero() && time.Since(a.diskAt) < diskTTL {
-		return a.diskBytes
-	}
-	n, err := a.d.Service.d.Host.VolumeBytes(ctx)
-	if err != nil {
-		return a.diskBytes
-	}
-	a.diskBytes, a.diskAt = n, time.Now()
-	return n
-}
-
-// forgetDisk makes the next load read the volume's usage again.
-func (a *API) forgetDisk() {
-	a.diskMu.Lock()
-	a.diskAt = time.Time{}
-	a.diskMu.Unlock()
-}
-
 // tagInfo reads a tag, from the cache when its manifest digest was read
 // before.
 func (a *API) tagInfo(ctx context.Context, c *Client, repo, tag string) (TagInfo, error) {
 	digest, err := c.Digest(ctx, repo, tag)
 	if err != nil {
 		return TagInfo{}, err
+	}
+	if digest == "" { // no Docker-Content-Digest: nothing to key the cache by
+		return c.TagInfo(ctx, repo, tag)
 	}
 	key := repo + "@" + digest
 	a.infoMu.Lock()
@@ -130,6 +102,11 @@ func (a *API) tagInfo(ctx context.Context, c *Client, repo, tag string) (TagInfo
 	}
 	if info, err = c.TagInfo(ctx, repo, tag); err != nil {
 		return TagInfo{}, err
+	}
+	// A created time that could not be read (its config blob failed) is
+	// read again next time instead of shown as unknown for good.
+	if info.Created.IsZero() || info.Digest == "" {
+		return info, nil
 	}
 	a.infoMu.Lock()
 	if a.infos == nil || len(a.infos) >= maxCachedInfos {
@@ -153,6 +130,30 @@ func (a *API) tagInfos(ctx context.Context, c *Client, repo string, tags []strin
 		})
 	}
 	return out, g.Wait()
+}
+
+// newest is the latest created time among repo's tags, or nil when none can
+// be read. A tag that fails is left out: it only decides a date.
+func (a *API) newest(ctx context.Context, c *Client, repo string, tags []string) *time.Time {
+	times := make([]time.Time, len(tags))
+	var g errgroup.Group
+	g.SetLimit(8)
+	for i, tag := range tags {
+		g.Go(func() error {
+			if info, err := a.tagInfo(ctx, c, repo, tag); err == nil {
+				times[i] = info.Created
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
+	var newest *time.Time
+	for _, at := range times {
+		if !at.IsZero() && (newest == nil || at.After(*newest)) {
+			newest = &at
+		}
+	}
+	return newest
 }
 
 func NewAPI(d APIDeps) *API {
@@ -198,7 +199,7 @@ func (a *API) get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status = StatusError
 	}
-	disk := a.volumeBytes(ctx)
+	disk := a.d.Service.cachedVolumeBytes(ctx)
 	timeout := ""
 	if a.d.ReadTimeout != nil {
 		timeout, _ = a.d.ReadTimeout(ctx)
@@ -456,19 +457,7 @@ func (a *API) repositories(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, "could not reach the Registry: "+err.Error())
 			return
 		}
-		infos, err := a.tagInfos(r.Context(), c, repo, tags)
-		if err != nil {
-			writeError(w, http.StatusBadGateway, "could not reach the Registry: "+err.Error())
-			return
-		}
-		item := repoResponse{Name: repo, TagCount: len(tags)}
-		for _, info := range infos {
-			if !info.Created.IsZero() && (item.Newest == nil || info.Created.After(*item.Newest)) {
-				created := info.Created
-				item.Newest = &created
-			}
-		}
-		out = append(out, item)
+		out = append(out, repoResponse{Name: repo, TagCount: len(tags), Newest: a.newest(r.Context(), c, repo, tags)})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -643,7 +632,6 @@ func (a *API) deleteTag(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "could not delete: "+err.Error())
 		return
 	}
-	a.forgetDisk()
 	sort.Strings(deleted)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 }
