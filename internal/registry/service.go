@@ -58,6 +58,38 @@ type Deps struct {
 type Service struct {
 	d  Deps
 	mu sync.Mutex // one change to the container at a time
+
+	// disk caches the volume's usage for a minute: Docker sizes every volume
+	// on the host to answer it. Whatever changes the usage forgets it.
+	diskMu    sync.Mutex
+	diskBytes int64
+	diskAt    time.Time
+}
+
+// diskTTL is how long a volume usage reading is shown before it is read again.
+const diskTTL = time.Minute
+
+// cachedVolumeBytes is the Registry volume's usage, read at most once a
+// minute. A failed read shows the last one.
+func (s *Service) cachedVolumeBytes(ctx context.Context) int64 {
+	s.diskMu.Lock()
+	defer s.diskMu.Unlock()
+	if !s.diskAt.IsZero() && s.d.Now().Sub(s.diskAt) < diskTTL {
+		return s.diskBytes
+	}
+	n, err := s.d.Host.VolumeBytes(ctx)
+	if err != nil {
+		return s.diskBytes
+	}
+	s.diskBytes, s.diskAt = n, s.d.Now()
+	return n
+}
+
+// forgetDisk makes the next load read the volume's usage again.
+func (s *Service) forgetDisk() {
+	s.diskMu.Lock()
+	s.diskAt = time.Time{}
+	s.diskMu.Unlock()
 }
 
 func New(d Deps) *Service {
@@ -115,6 +147,7 @@ func (s *Service) Save(ctx context.Context, in Settings) error {
 func (s *Service) Enable(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.forgetDisk()
 	st, err := s.d.Store.Settings(ctx)
 	if err != nil {
 		return err
@@ -193,6 +226,7 @@ func (s *Service) hash(st Settings) string {
 func (s *Service) Disable(ctx context.Context) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.forgetDisk()
 	st, err := s.d.Store.Settings(ctx)
 	if err != nil {
 		return nil, err
@@ -306,6 +340,7 @@ func (s *Service) Status(ctx context.Context) (string, error) {
 func (s *Service) DeleteData(ctx context.Context, confirm string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.forgetDisk()
 	st, err := s.d.Store.Settings(ctx)
 	if err != nil {
 		return err

@@ -25,15 +25,23 @@ type apiFixture struct {
 	gate     *fakeGate
 	cleaner  *Cleaner
 	requests *atomic.Int64 // requests the API sent the registry
+	// fail, when set, answers 500 to the requests it matches.
+	fail atomic.Pointer[func(*http.Request) bool]
 }
 
 type countingTransport struct {
 	next http.RoundTripper
 	n    *atomic.Int64
+	fail *atomic.Pointer[func(*http.Request) bool]
 }
 
 func (c countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	c.n.Add(1)
+	if c.fail != nil {
+		if fail := c.fail.Load(); fail != nil && (*fail)(r) {
+			return &http.Response{StatusCode: 500, Body: http.NoBody, Header: http.Header{}, Request: r}, nil
+		}
+	}
 	return c.next.RoundTrip(r)
 }
 
@@ -48,7 +56,7 @@ func newAPI(t *testing.T) *apiFixture {
 	client, deleted := fakeRegistry(t)
 	f.deleted = deleted
 	f.requests = &atomic.Int64{}
-	client.HTTP = &http.Client{Transport: countingTransport{next: client.HTTP.Transport, n: f.requests}}
+	client.HTTP = &http.Client{Transport: countingTransport{next: client.HTTP.Transport, n: f.requests, fail: &f.fail}}
 	f.mux = http.NewServeMux()
 	f.gate = &fakeGate{}
 	f.cleaner = NewCleaner(CleanerDeps{
@@ -475,12 +483,6 @@ func TestDiskUsageIsReadOnceAMinute(t *testing.T) {
 	if f.host.volumeReads != 1 {
 		t.Fatalf("volume read %d times, want 1", f.host.volumeReads)
 	}
-	// Deleting a tag reads it again on the next load.
-	f.do("DELETE", "/api/registry/tags?repo=app&tag=2", `{}`)
-	f.do("GET", "/api/registry", "")
-	if f.host.volumeReads != 2 {
-		t.Fatalf("volume read %d times after a delete, want 2", f.host.volumeReads)
-	}
 }
 
 func TestUnknownCreatedIsNull(t *testing.T) {
@@ -490,5 +492,71 @@ func TestUnknownCreatedIsNull(t *testing.T) {
 	at := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
 	if r := toTagResponse(TagInfo{Tag: "x", Digest: "d", Created: at}, nil); r.Created == nil || !r.Created.Equal(at) {
 		t.Fatalf("created = %v", r.Created)
+	}
+}
+
+// One tag that cannot be read must not blank the Repositories list.
+func TestOneUnreadableTagKeepsRepositories(t *testing.T) {
+	f := newAPI(t)
+	fail := func(r *http.Request) bool { return r.URL.Path == "/v2/app/manifests/2" }
+	f.fail.Store(&fail)
+	rec := f.do("GET", "/api/registry/repositories", "")
+	var repos []struct {
+		Name     string     `json:"name"`
+		TagCount int        `json:"tagCount"`
+		Newest   *time.Time `json:"newest"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &repos) != nil {
+		t.Fatalf("repositories = %d %s", rec.Code, rec.Body)
+	}
+	want := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
+	if repos[0].Name != "app" || repos[0].TagCount != 2 || repos[0].Newest == nil || !repos[0].Newest.Equal(want) {
+		t.Fatalf("app = %+v", repos[0])
+	}
+}
+
+// A created time that could not be read is read again on the next load.
+func TestUnreadCreatedIsNotCached(t *testing.T) {
+	f := newAPI(t)
+	fail := func(r *http.Request) bool { return r.URL.Path == "/v2/app/blobs/"+plainConfig }
+	f.fail.Store(&fail)
+	if rec := f.do("GET", "/api/registry/tags?repo=app", ""); !strings.Contains(rec.Body.String(), `"created":null`) {
+		t.Fatalf("first load = %d %s", rec.Code, rec.Body)
+	}
+	f.fail.Store(nil)
+	if rec := f.do("GET", "/api/registry/tags?repo=app", ""); strings.Contains(rec.Body.String(), `"created":null`) {
+		t.Fatalf("second load kept the unread time: %s", rec.Body)
+	}
+}
+
+// Actions that change the volume's usage show it again on the next load.
+func TestDiskUsageIsReadAgainAfterItChanges(t *testing.T) {
+	f := newAPI(t)
+	reads := func() int {
+		f.host.volumeReads = 0
+		f.do("GET", "/api/registry", "")
+		return f.host.volumeReads
+	}
+	reads() // primes the cache
+	if rec := f.do("POST", "/api/registry/cleanup/run", ""); rec.Code != 202 {
+		t.Fatalf("run = %d %s", rec.Code, rec.Body)
+	}
+	if err := f.cleaner.WaitIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := reads(); n != 1 {
+		t.Fatalf("after a cleanup run: volume read %d times, want 1", n)
+	}
+	if _, err := f.svc.Disable(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := reads(); n != 1 {
+		t.Fatalf("after Disable: volume read %d times, want 1", n)
+	}
+	if rec := f.do("DELETE", "/api/registry/data", `{"confirm":"registry.example.com"}`); rec.Code != 204 {
+		t.Fatalf("delete data = %d %s", rec.Code, rec.Body)
+	}
+	if n := reads(); n != 1 {
+		t.Fatalf("after deleting data: volume read %d times, want 1", n)
 	}
 }
