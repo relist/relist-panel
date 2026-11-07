@@ -68,6 +68,9 @@ type Deps struct {
 	// TraefikApply is waited for like a scan: the update's health check goes
 	// through the Traefik it restarts (ADR-0030).
 	TraefikApply ScanWaiter
+	// RegistryCleanup is waited for too: a run may hold the Registry
+	// read-only for GC (ADR-0033). Its Gate keeps new runs from starting.
+	RegistryCleanup ScanWaiter
 	// WaitingOn says what the update lock waits for: "Deployment api #3", a
 	// vulnerability scan, or "" when nothing.
 	WaitingOn func() string

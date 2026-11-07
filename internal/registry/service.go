@@ -139,7 +139,12 @@ func (s *Service) Enable(ctx context.Context) error {
 		return err
 	}
 	st.LastError = ""
-	return s.d.Store.SaveSettings(ctx, st)
+	if err := s.d.Store.SaveSettings(ctx, st); err != nil {
+		return err
+	}
+	// The cleanup schedule starts from now: a run "missed" while the
+	// Registry was off must not fire the moment it comes on.
+	return s.d.Store.SetLastRunAt(ctx, s.d.Now())
 }
 
 // start pulls, writes the files and (re)creates the container for st.

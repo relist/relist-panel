@@ -39,6 +39,8 @@ type APIDeps struct {
 	DeployedRefs func(ctx context.Context) (map[string][]User, error)
 	RunningRefs  func(ctx context.Context) (map[string][]User, error)
 	ReadTimeout  func(ctx context.Context) (string, error)
+	// Cleaner runs Registry cleanup; nil leaves the cleanup routes out.
+	Cleaner *Cleaner
 }
 
 // API serves /api/registry. Every route is admin-only (authz leaves them
@@ -69,6 +71,12 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/registry/repositories", a.repositories)
 	mux.HandleFunc("GET /api/registry/tags", a.tags)
 	mux.HandleFunc("DELETE /api/registry/tags", a.deleteTag)
+	if a.d.Cleaner != nil {
+		mux.HandleFunc("GET /api/registry/cleanup", a.getCleanup)
+		mux.HandleFunc("PUT /api/registry/cleanup", a.putCleanup)
+		mux.HandleFunc("GET /api/registry/cleanup/preview", a.previewCleanup)
+		mux.HandleFunc("POST /api/registry/cleanup/run", a.runCleanup)
+	}
 }
 
 func (a *API) get(w http.ResponseWriter, r *http.Request) {
@@ -369,6 +377,19 @@ func (a *API) repoTags(ctx context.Context, c *Client, hostname, repo string) ([
 		in := mergeUsers(users[base+":"+tag], users[base+"@"+info.Digest])
 		out = append(out, tagResponse{Tag: tag, Digest: info.Digest, Size: info.Size, Created: info.Created, InUseBy: in})
 	}
+	// Kept: what cleanup would keep with today's settings.
+	if settings, err := a.d.Service.d.Store.CleanupSettings(ctx); err == nil {
+		infos := make([]TagInfo, 0, len(out))
+		used := map[string]bool{}
+		for _, t := range out {
+			infos = append(infos, TagInfo{Tag: t.Tag, Digest: t.Digest, Created: t.Created})
+			used[t.Tag] = len(t.InUseBy) > 0
+		}
+		_, gone := SelectDeletions(infos, used, settings.Keep)
+		for i := range out {
+			out[i].Kept = !slices.Contains(gone, out[i].Tag)
+		}
+	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if !out[i].Created.Equal(out[j].Created) {
 			return out[i].Created.After(out[j].Created)
@@ -515,4 +536,128 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+// inUseRefs is every reference users() knows, for retention.
+func (a *API) inUseRefs(ctx context.Context) (map[string]bool, error) {
+	users, err := a.users(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(users))
+	for ref, us := range users {
+		out[ref] = len(us) > 0
+	}
+	return out, nil
+}
+
+func (a *API) writeCleanup(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	settings, err := a.d.Service.d.Store.CleanupSettings(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not read the cleanup settings")
+		return
+	}
+	runs, err := a.d.Service.d.Store.Runs(ctx, keptRuns)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not read the cleanup history")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"settings": settings,
+		"next":     Next(a.d.Cleaner.d.Now(), settings),
+		"running":  a.d.Cleaner.Running(),
+		"runs":     runs,
+	})
+}
+
+func (a *API) getCleanup(w http.ResponseWriter, r *http.Request) { a.writeCleanup(w, r) }
+
+var weekdays = []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+
+func (a *API) putCleanup(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Enabled bool     `json:"enabled"`
+		Keep    int      `json:"keep"`
+		Days    []string `json:"days"`
+		Minute  int      `json:"minute"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	switch {
+	case in.Keep < 1:
+		writeError(w, http.StatusUnprocessableEntity, "keep at least 1 tag per repository")
+		return
+	case in.Minute < 0 || in.Minute > 1439:
+		writeError(w, http.StatusUnprocessableEntity, "the time must be between 00:00 and 23:59")
+		return
+	case len(in.Days) == 0:
+		writeError(w, http.StatusUnprocessableEntity, "choose Daily or at least one weekday")
+		return
+	}
+	days := []string{}
+	for _, d := range in.Days {
+		switch {
+		case d == "daily":
+			days = []string{"daily"}
+		case slices.Contains(weekdays, d):
+			if !slices.Contains(days, d) && !slices.Contains(days, "daily") {
+				days = append(days, d)
+			}
+		default:
+			writeError(w, http.StatusUnprocessableEntity, "days must be daily or weekdays mon to sun")
+			return
+		}
+	}
+	slices.SortFunc(days, func(x, y string) int { return slices.Index(weekdays, x) - slices.Index(weekdays, y) })
+	ctx := r.Context()
+	settings, err := a.d.Service.d.Store.CleanupSettings(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not read the cleanup settings")
+		return
+	}
+	if in.Enabled && !settings.Enabled {
+		// Switched on: the schedule starts from now, not with a run at once.
+		now := a.d.Cleaner.d.Now()
+		settings.LastRunAt = &now
+	}
+	settings.Enabled, settings.Keep, settings.Days, settings.Minute = in.Enabled, in.Keep, days, in.Minute
+	if err := a.d.Service.d.Store.SaveCleanupSettings(ctx, settings); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not save the cleanup settings")
+		return
+	}
+	a.writeCleanup(w, r)
+}
+
+func (a *API) previewCleanup(w http.ResponseWriter, r *http.Request) {
+	if _, _, ok := a.client(w, r); !ok {
+		return
+	}
+	preview, err := a.d.Cleaner.preview(r.Context(), a.inUseRefs)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "could not reach the Registry: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, preview)
+}
+
+func (a *API) runCleanup(w http.ResponseWriter, r *http.Request) {
+	if _, _, ok := a.client(w, r); !ok {
+		return
+	}
+	trigger := "user"
+	if u, ok := auth.UserFrom(r.Context()); ok {
+		trigger = "user:" + u.Email
+	}
+	id, err := a.d.Cleaner.RunNow(r.Context(), trigger)
+	if errors.Is(err, ErrCleanupBusy) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"runId": id})
 }

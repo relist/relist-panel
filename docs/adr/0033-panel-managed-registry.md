@@ -20,7 +20,9 @@ The operator wants CI (GitHub Actions) to build images and push them to this hos
 3. runs `garbage-collect --delete-untagged` in a short-lived `relist-registry-gc` container on the same volume, with no network;
 4. always restarts the registry read-write, success or failure.
 
-A `gc_running` flag lets start-up reconcile finish an interrupted run. A full stop was rejected because pulls would fail too.
+A `gc_running` flag, cleared only once the Registry is writable again, lets start-up (and each scheduler tick) finish an interrupted run or a failed restore.
+
+Cleanup is not a Deployment-queue job. A run waits for a running Deployment before it starts and again between repositories. A Panel update or Migration lock stops a run that has not reached GC, since the update's quiesce and the Migration lock wait for a run already past that point. Retention keeps any tag whose created time could not be read. The schedule starts when the Registry is enabled or automatic cleanup is switched on: a schedule that has never run is armed rather than fired, so an upgrade never deletes at once. A run the panel missed while down is made up once. A full stop was rejected because pulls would fail too.
 
 **Deleting is by digest.** The API deletes a manifest, so every tag on it goes. The UI lists the other tags before deleting. Before each digest delete, retention re-lists the repository and skips the digest if a tag outside its delete set now points at it. A push landing between that re-list and the delete can still lose its tag — a window of one HTTP round trip. CI can push again.
 
@@ -30,12 +32,13 @@ A `gc_running` flag lets start-up reconcile finish an interrupted run. A full st
 
 **Token auth (a JWT issuer) instead of htpasswd.** Rejected: per-repository scopes are not needed yet, since every Push credential is full access by decision, and htpasswd is native to `registry:3`.
 
-**Registry data under the data directory.** Rejected: it would make every Migration and backup carry images that CI can rebuild. The volume moves only when a Migration ticks **Include registry data** (PR 3).
+**Registry data under the data directory.** Rejected: it would make every Migration and backup carry images that CI can rebuild. The volume moves only when a Migration ticks **Include registry data**, which the pull TUI offers with the volume's size, off by default. Settings and Push credentials always move with the database.
 
 ## Consequences
 
 - **The Registry outlives the panel.** It is an ordinary container with `restart: unless-stopped`, so it keeps serving if the panel stops. It can be run by hand with the Docker CLI using the files in `<data dir>/.registry/`.
 - **Hairpin access.** A Compose pulls `<hostname>/<repo>:<tag>` through the public hostname, so the host must reach its own hostname. When it cannot, the Deployment log names this (Task 15).
+- **Migration.** Without Include registry data, the new host starts with an empty Registry, and CI must push again before Composes using it can deploy. The old host's Registry keeps serving while its volume is copied, so a push landing during the copy may arrive incomplete; its layers are unreferenced and the next cleanup collects them.
 - **Delete all registry data** removes the volume. It needs the Registry disabled and the hostname typed.
 - **Probes** (2026-11-06 and 2026-11-07, Docker 29.8, registry 3.1.2):
   - The config path is `/etc/distribution/config.yml`, and the image runs as root, so it reads a `0600` htpasswd.

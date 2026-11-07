@@ -249,6 +249,24 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		}
 		puDeps.TraefikApply = traefikApply
 	}
+	// Registry cleanup waits for Deployments and the locks, and a Panel
+	// update's quiesce waits for it (ADR-0033).
+	var registryCleaner *registry.Cleaner
+	if d.RegistryHost != nil {
+		deployed, running := registryRefs(d, composesService)
+		registryCleaner = registry.NewCleaner(registry.CleanerDeps{
+			Service: registryService,
+			Gate: registryGate{busy: queue.Busy, locked: func() bool {
+				if panelUpdates.Locked() {
+					return true
+				}
+				locked, err := puDeps.MigrationLocked(ctx)
+				return locked || err != nil
+			}},
+			InUse: inUseRefs(deployed, running),
+		})
+		puDeps.RegistryCleanup = registryCleaner
+	}
 	panelUpdates = panelupdate.New(puDeps)
 	if err := panelUpdates.StartLocked(ctx); err != nil {
 		log.Printf("panelupdate: start locked: %v", err)
@@ -307,13 +325,19 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	}
 	domains.New(db).WithPanelHost(d.PanelDomain).WithReservedHost(registryService.ReservedHost).RegisterRoutes(mux)
 	if d.RegistryHost != nil {
-		registryAPI(d, dataDir, registryService, composesService).RegisterRoutes(mux)
+		registryAPI(d, dataDir, registryService, composesService, registryCleaner).RegisterRoutes(mux)
 		worker.Add(1)
 		go func() {
 			defer worker.Done()
+			// A GC the panel died during goes back read-write first, then
+			// reconcile, then the schedule.
+			if err := registryCleaner.Startup(ctx); err != nil {
+				log.Printf("registry: finish an interrupted cleanup: %v", err)
+			}
 			if _, err := registryService.Reconcile(ctx); err != nil {
 				log.Printf("registry: reconcile at start: %v", err)
 			}
+			registryCleaner.RunScheduler(ctx)
 		}()
 	}
 	composevariables.New(db).RegisterRoutes(mux)
@@ -369,7 +393,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	var inner http.Handler = panelUpdates.Middleware(gate.middleware(mux))
 	if migrationOptions != nil {
 		domainStore := domains.NewStore(db)
-		oldHost := migration.NewOldHost(migration.OldHostDeps{
+		oldHostDeps := migration.OldHostDeps{
 			Store:           migration.NewStore(db, nil),
 			Manifests:       migration.ManifestBuilder{DB: db, Composes: composesService, Volumes: d.VolumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir},
 			Queue:           queue,
@@ -383,7 +407,11 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			ReportedDataDir: migrationOptions.ReportedDataDir,
 			Install:         migrationOptions.Install,
 			UpdateLocked:    panelUpdates.Locked,
-		})
+		}
+		if registryCleaner != nil { // a nil *Cleaner in the interface would not read as nil
+			oldHostDeps.RegistryCleanup = registryCleaner
+		}
+		oldHost := migration.NewOldHost(oldHostDeps)
 		oldHost.RegisterRoutes(mux)
 		local := migration.LocalHost{DB: db, Docker: migrationOptions.Docker, DataDir: dataDir, Install: migrationOptions.Install}
 		stateDir := filepath.Join(dataDir, ".migration")
