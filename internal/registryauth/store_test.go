@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ func TestNormalizeHost(t *testing.T) {
 		{"", "", false},
 		{"ghcr.io/owner", "", false},
 		{"reg.example.com:123456", "", false},
+		{"reg.example.com:05000", "reg.example.com:5000", true},
 	}
 	for _, c := range cases {
 		got, err := NormalizeHost(c.in)
@@ -111,5 +113,22 @@ func TestSetTestResultAndDelete(t *testing.T) {
 	}
 	if _, err := s.Get(ctx, e.ID); err == nil {
 		t.Fatal("Get after Delete succeeded")
+	}
+}
+
+func TestNormalizeHostRefusesBadShapes(t *testing.T) {
+	for _, in := range []string{"..", "a..b", ".ghcr.io", "ghcr.io.", "-a.io", "reg.example.com:0", "reg.example.com:65536", "reg.example.com:"} {
+		if got, err := NormalizeHost(in); err == nil {
+			t.Errorf("NormalizeHost(%q) = %q, want an error", in, got)
+		}
+	}
+	for _, in := range []string{"reg.example.com:65535", "localhost:5000", "10.0.0.1:5000"} {
+		if _, err := NormalizeHost(in); err != nil {
+			t.Errorf("NormalizeHost(%q) = %v", in, err)
+		}
+	}
+	_, err := NormalizeHost("ghcr.io/owner/app")
+	if err == nil || !strings.Contains(err.Error(), "no path") {
+		t.Fatalf("path error = %v, want it to say no path", err)
 	}
 }

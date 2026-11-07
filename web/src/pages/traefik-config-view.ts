@@ -23,14 +23,15 @@ export function ipsFromText(text: string): string[] {
     .filter((line) => line !== '');
 }
 
-const DURATION_PART = /(\d+(?:\.\d+)?)(ms|h|m|s)/g;
-const UNIT_SECONDS: Record<string, number> = { h: 3600, m: 60, ms: 0.001, s: 1 };
+const DURATION_PART = /(\d+(?:\.\d+)?)(ns|us|µs|μs|ms|h|m|s)/g;
+const UNIT_SECONDS: Record<string, number> = { h: 3600, m: 60, ms: 1e-3, ns: 1e-9, s: 1, us: 1e-6, µs: 1e-6, μs: 1e-6 };
 
 /** Seconds in a Traefik duration ("90s", "5m", "1h30m", bare "3600"), or undefined. */
 function durationSeconds(text: string): number | undefined {
-  const value = text.trim();
+  // Go's time.ParseDuration: an optional "+", then number-unit pairs.
+  const value = text.trim().replace(/^\+/, '');
   if (/^\d+$/.test(value)) return Number(value);
-  if (!/^(\d+(?:\.\d+)?(ms|h|m|s))+$/.test(value)) return undefined;
+  if (!/^(\d+(?:\.\d+)?(ns|us|µs|μs|ms|h|m|s))+$/.test(value)) return undefined;
   let total = 0;
   for (const [, amount, unit] of value.matchAll(DURATION_PART)) total += Number(amount) * UNIT_SECONDS[unit];
   return total;

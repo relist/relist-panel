@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,6 +19,9 @@ var ErrDuplicateHost = errors.New("an External registry for this host already ex
 
 // ErrBadHost is a host that is not a registry host name.
 var ErrBadHost = errors.New("host must be a registry host such as ghcr.io or registry.example.com:5000")
+
+// ErrHostPath is a host with a path after it, such as ghcr.io/owner.
+var ErrHostPath = errors.New("host takes no path: enter ghcr.io, not ghcr.io/owner")
 
 // DockerHub is the host Docker Hub's credentials are stored under.
 const DockerHub = "docker.io"
@@ -35,7 +39,28 @@ type External struct {
 	UpdatedAt     time.Time
 }
 
-var hostPattern = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]{1,5})?$`)
+var (
+	hostPattern = regexp.MustCompile(`^[a-z0-9.-]+(:[0-9]{1,5})?$`)
+	hostLabel   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+)
+
+// validHostPort checks what hostPattern lets through: every dot-separated
+// label is a DNS label, and a port is 1 to 65535.
+func validHostPort(h string) bool {
+	name, port, hasPort := strings.Cut(h, ":")
+	if hasPort {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return false
+		}
+	}
+	for _, label := range strings.Split(name, ".") {
+		if !hostLabel.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
 
 // NormalizeHost lowercases a registry host, strips a scheme and a trailing
 // slash, and stores Docker Hub's names as docker.io.
@@ -43,8 +68,16 @@ func NormalizeHost(s string) (string, error) {
 	h := strings.ToLower(strings.TrimSpace(s))
 	h = strings.TrimPrefix(strings.TrimPrefix(h, "https://"), "http://")
 	h = strings.TrimSuffix(h, "/")
-	if !hostPattern.MatchString(h) {
+	if strings.Contains(h, "/") {
+		return "", ErrHostPath
+	}
+	if !hostPattern.MatchString(h) || !validHostPort(h) {
 		return "", ErrBadHost
+	}
+	// Docker matches hosts as text: 05000 and 5000 are one port, so store one.
+	if name, port, ok := strings.Cut(h, ":"); ok {
+		n, _ := strconv.Atoi(port)
+		h = name + ":" + strconv.Itoa(n)
 	}
 	switch h {
 	case "index.docker.io", "registry-1.docker.io":

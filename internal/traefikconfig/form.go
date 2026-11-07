@@ -30,6 +30,12 @@ const DefaultReadTimeout = "3600s"
 
 const readTimeoutProblem = "read timeout must be a duration of at least 30s, like 90s, 5m or 1h"
 
+// What Settings says about a read timeout it cannot show.
+const (
+	readTimeoutNull        = "read timeout is null here, which passes over base's 3600s; saving Settings removes it"
+	readTimeoutNotDuration = "read timeout is not a duration; saving Settings replaces it with the value shown"
+)
+
 // LogLevels are the levels the form offers.
 var LogLevels = []string{"ERROR", "WARN", "INFO", "DEBUG"}
 
@@ -73,6 +79,16 @@ func ReadForm(override []byte) (Form, []Problem, error) {
 	if webOK && secureOK && !slices.Equal(web, secure) {
 		warnings = append(warnings, Problem{Key: "entryPoints.web.forwardedHeaders.trustedIPs", Message: listsDiffer})
 	}
+	for _, ep := range entryPoints {
+		key := "entryPoints." + ep + "." + strings.Join(timeoutTail, ".")
+		switch _, v := lookup(m, append([]string{"entryPoints", ep}, timeoutTail...)...); {
+		case v == nil:
+		case isNull(v):
+			warnings = append(warnings, Problem{Key: key, Message: readTimeoutNull})
+		case v.Kind != yaml.ScalarNode:
+			warnings = append(warnings, Problem{Key: key, Message: readTimeoutNotDuration})
+		}
+	}
 	f.ReadTimeout = DefaultReadTimeout
 	webTimeout, webTimeoutOK := readTimeout(m, "web")
 	secureTimeout, secureTimeoutOK := readTimeout(m, "websecure")
@@ -109,7 +125,9 @@ func WriteForm(override []byte, f Form) ([]byte, []Problem, error) {
 		}
 	}
 	timeout, timeoutText := time.Duration(0), ""
-	if raw := strings.TrimSpace(f.ReadTimeout); raw != "" {
+	// A value left as Settings shows it is not checked or rewritten, so a
+	// hand-written one keeps its spelling, comment and shape.
+	if raw := strings.TrimSpace(f.ReadTimeout); raw != "" && !sameAsShown(override, raw) {
 		var ok bool
 		if timeout, timeoutText, ok = parseReadTimeout(raw); !ok {
 			problems = append(problems, Problem{Key: "entryPoints.websecure." + strings.Join(timeoutTail, "."), Message: readTimeoutProblem})
@@ -171,6 +189,12 @@ func WriteForm(override []byte, f Form) ([]byte, []Problem, error) {
 		setPath(m, path, seq)
 	}
 
+	for _, ep := range entryPoints {
+		path := append([]string{"entryPoints", ep}, timeoutTail...)
+		if _, v := lookup(m, path...); v != nil && isNull(v) {
+			removePath(m, path) // null would pass over base's 3600s
+		}
+	}
 	if timeoutText != "" {
 		for _, ep := range entryPoints {
 			path := append([]string{"entryPoints", ep}, timeoutTail...)
@@ -223,11 +247,32 @@ func ipList(m *yaml.Node, ep string) ([]string, bool) {
 	return out, true
 }
 
+// sameAsShown reports whether raw is the read timeout Settings shows for
+// override, by text or by duration, and both entrypoints already hold it.
+// While they differ (or one holds null or a non-duration), saving writes the
+// value to both, as Settings' warning says.
+func sameAsShown(override []byte, raw string) bool {
+	shown, warnings, err := ReadForm(override)
+	if err != nil {
+		return false
+	}
+	tail := "." + strings.Join(timeoutTail, ".")
+	if slices.ContainsFunc(warnings, func(p Problem) bool { return strings.HasSuffix(p.Key, tail) }) {
+		return false
+	}
+	if raw == shown.ReadTimeout {
+		return true
+	}
+	a, _, aOK := parseReadTimeout(raw)
+	b, _, bOK := parseReadTimeout(shown.ReadTimeout)
+	return aOK && bOK && a == b
+}
+
 // readTimeout is an entrypoint's read timeout in the override, and whether
-// the key is there.
+// the key holds a value (null and non-scalar ones count as absent).
 func readTimeout(m *yaml.Node, ep string) (string, bool) {
 	_, v := lookup(m, append([]string{"entryPoints", ep}, timeoutTail...)...)
-	if v == nil || v.Kind != yaml.ScalarNode {
+	if v == nil || v.Kind != yaml.ScalarNode || isNull(v) {
 		return "", false
 	}
 	return v.Value, true
