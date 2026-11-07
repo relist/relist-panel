@@ -361,15 +361,51 @@ func openAndReady(t *testing.T, server *testServer, path string) (*websocket.Con
 	if err != nil {
 		t.Fatalf("dial terminal: %v (HTTP %v)", err, resp)
 	}
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for len(server.terminal.StartsSnapshot()) == before && time.Now().Before(deadline) {
-		time.Sleep(2 * time.Millisecond)
+	// The server answers with ready once a started session reports its PID,
+	// or with an error and no start at all (the cap). Read the answer while
+	// watching for the start, so a start that comes late under load still
+	// gets its PID instead of the read timing out.
+	type answer struct {
+		typ  websocket.MessageType
+		data []byte
+		err  error
 	}
-	if starts := server.terminal.StartsSnapshot(); len(starts) > before {
-		writePID(t, starts[before].Session)
+	ctx, cancel := context.WithTimeout(context.Background(), terminalWait)
+	defer cancel()
+	answers := make(chan answer, 1)
+	go func() {
+		typ, data, err := conn.Read(ctx)
+		answers <- answer{typ, data, err}
+	}()
+	tick := time.NewTicker(2 * time.Millisecond)
+	defer tick.Stop()
+	pidWritten := false
+	for {
+		select {
+		case a := <-answers:
+			if a.err != nil {
+				t.Fatalf("read websocket message: %v", a.err)
+			}
+			if a.typ != websocket.MessageText {
+				t.Fatalf("message type = %v, want text (%q)", a.typ, a.data)
+			}
+			var ctrl terminalControl
+			if err := json.Unmarshal(a.data, &ctrl); err != nil {
+				t.Fatalf("decode control frame %q: %v", a.data, err)
+			}
+			return conn, ctrl
+		case <-tick.C:
+			if starts := server.terminal.StartsSnapshot(); !pidWritten && len(starts) > before {
+				writePID(t, starts[before].Session)
+				pidWritten = true
+			}
+		}
 	}
-	return conn, readControl(t, conn, 2*time.Second)
 }
+
+// terminalWait bounds a wait that ends as soon as its event comes: generous,
+// so a loaded machine (the full suite under -race) does not fail a test.
+const terminalWait = 10 * time.Second
 
 func dialReady(t *testing.T, server *testServer, path string) (*websocket.Conn, terminalControl) {
 	t.Helper()
@@ -814,19 +850,19 @@ func TestTerminalSessionEndsWhenTheStreamEndsBeforeOutput(t *testing.T) {
 	if err := first.Remote.Close(); err != nil {
 		t.Fatalf("close Remote: %v", err)
 	}
-	ctrl := readControl(t, conns[0], 2*time.Second)
+	ctrl := readControl(t, conns[0], terminalWait)
 	if ctrl.Type != "exit" {
 		t.Fatalf("control frame = %+v, want exit", ctrl)
 	}
 	awaitClose(t, conns[0])
 	select {
 	case <-first.Closed():
-	case <-time.After(2 * time.Second):
+	case <-time.After(terminalWait):
 		t.Fatal("session was not closed after its stream ended")
 	}
 
 	// The slot is freed once the handler returns; dial until the eleventh opens.
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(terminalWait)
 	for {
 		conn, ctrl := openAndReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
 		conn.CloseNow()
@@ -856,7 +892,7 @@ func TestTerminalSessionEnforcesTheSessionCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("eleventh dial: %v", err)
 	}
-	ctrl := readControl(t, over, 2*time.Second)
+	ctrl := readControl(t, over, terminalWait)
 	over.CloseNow()
 	want := "Too many open terminal sessions (10) — close one first"
 	if ctrl.Type != "error" || ctrl.Message != want {
@@ -867,11 +903,11 @@ func TestTerminalSessionEnforcesTheSessionCap(t *testing.T) {
 	_ = conns[0].Close(websocket.StatusNormalClosure, "")
 	select {
 	case <-starts[0].Session.Closed():
-	case <-time.After(2 * time.Second):
+	case <-time.After(terminalWait):
 		t.Fatal("the closed session never signalled")
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(terminalWait)
 	for {
 		conn, ctrl := openAndReady(t, server, terminalSessionPath(projectID, environmentID, composeID, "service=app"))
 		conn.CloseNow()
