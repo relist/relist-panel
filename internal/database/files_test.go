@@ -38,7 +38,7 @@ func TestOpenAndMigrateRefusesASchemaNewerThanTheBinary(t *testing.T) {
 	if !errors.Is(err, ErrSchemaAhead) {
 		t.Fatalf("error = %v, want ErrSchemaAhead", err)
 	}
-	for _, want := range []string{"36", "35"} {
+	for _, want := range []string{"40", "39"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not name version %s", err, want)
 		}
@@ -169,8 +169,8 @@ func TestUpgradeFrom17Boots(t *testing.T) {
 		t.Fatalf("project after upgrade = %q, %v", name, err)
 	}
 	version, err := SchemaVersion(t.Context(), db)
-	if err != nil || version != 35 {
-		t.Fatalf("SchemaVersion() = %d, %v, want 35", version, err)
+	if err != nil || version != 39 {
+		t.Fatalf("SchemaVersion() = %d, %v, want 39", version, err)
 	}
 	var recorded int
 	if err := db.QueryRow("SELECT COUNT(*) FROM migration_files").Scan(&recorded); err != nil || recorded != 35 {

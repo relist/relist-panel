@@ -12,7 +12,7 @@ const { Text, Title } = Typography;
 const ALL_HOSTS = '';
 
 /**
- * The Compose's request metrics, split by host (ADR-0033). The host list comes
+ * The Compose's request metrics, split by host (ADR-0035). The host list comes
  * with the answer, so the panel loads first and the section stays hidden until
  * the Compose turns out to have a Domain.
  */

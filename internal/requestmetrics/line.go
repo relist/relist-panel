@@ -62,7 +62,7 @@ var domainRouter = regexp.MustCompile(`^relist-c(\d+)-d(\d+)$`)
 
 // ClassifyRouter maps a Traefik router name to its Route. The panel writes
 // these names, so they are trusted, unlike the request's Host header
-// (ADR-0033). The -http redirect routers count in the total only.
+// (ADR-0035). The -http redirect routers count in the total only.
 func ClassifyRouter(name string) Route {
 	if i := strings.IndexByte(name, '@'); i >= 0 {
 		name = name[:i]

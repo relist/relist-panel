@@ -112,7 +112,7 @@ const TABS: TabKey[] = ['host', 'requests', 'panel'];
 
 /**
  * Monitoring: the host's own charts, and the request metrics the panel reads
- * from the Access log (ADR-0033) for all traffic and for the panel alone. The
+ * from the Access log (ADR-0035) for all traffic and for the panel alone. The
  * tab lives in `?tab=` so a view is linkable.
  */
 export function MonitoringPage() {

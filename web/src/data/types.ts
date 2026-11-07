@@ -411,7 +411,7 @@ export type ServiceMetrics = MetricsEnvelope<ServiceSample>;
 // ---- Request metrics (.scratch/request-metrics) ------------------------------
 //
 // Counts by status class and latency percentiles read from the Access log
-// (ADR-0033). The server merges histograms and computes every percentile; a
+// (ADR-0035). The server merges histograms and computes every percentile; a
 // bucket's percentiles are null when it holds no requests.
 
 export type RequestWindow = '15m' | '1h' | '6h' | '24h' | '7d' | '30d' | '90d';

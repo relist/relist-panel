@@ -1,6 +1,6 @@
 // Package requestmetrics turns Traefik's Access log into request metrics:
 // counts by status class and latency percentiles per minute and per hour
-// (ADR-0033).
+// (ADR-0035).
 package requestmetrics
 
 import (

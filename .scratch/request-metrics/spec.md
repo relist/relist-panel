@@ -124,7 +124,7 @@ anything else goes to `cother`. Latency is `Duration`.
 
 ### Storage
 
-New migration `00035_request_metrics.sql` (never edit a committed migration):
+New migration `00039_request_metrics.sql` (never edit a committed migration):
 
 ```sql
 CREATE TABLE request_metric_rollups (

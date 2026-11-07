@@ -1,4 +1,4 @@
--- Request metrics read from the Traefik Access log (ADR-0033). Series are keyed
+-- Request metrics read from the Traefik Access log (ADR-0035). Series are keyed
 -- by the router the panel wrote, never by the client-chosen Host, so the
 -- number of series follows the number of Domains, not the traffic.
 --

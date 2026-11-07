@@ -317,7 +317,7 @@ func AccessLogOn(effective []byte) bool {
 	return v != nil
 }
 
-// metricFields are the Access log fields request metrics read (ADR-0033).
+// metricFields are the Access log fields request metrics read (ADR-0035).
 var metricFields = []string{"StartUTC", "RouterName", "DownstreamStatus", "Duration"}
 
 // AccessLogFiltered reports whether the Access log leaves out requests or the

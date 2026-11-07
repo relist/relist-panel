@@ -12,8 +12,8 @@
 
 ## Global Constraints
 
-- New migration only: `internal/migrations/00035_request_metrics.sql`. Never edit a committed migration (live installs run feature branches).
-- New ADR: `docs/adr/0033-request-metrics-from-the-access-log.md`. Re-check `ls internal/migrations docs/adr` against `main` before Task 4 and Task 6; take the next free numbers if `main` moved.
+- New migration only: `internal/migrations/00039_request_metrics.sql`. Never edit a committed migration (live installs run feature branches).
+- New ADR: `docs/adr/0035-request-metrics-from-the-access-log.md`. Re-check `ls internal/migrations docs/adr` against `main` before Task 4 and Task 6; take the next free numbers if `main` moved.
 - Series are keyed by `RouterName`, never by `RequestHost`.
 - Status is `DownstreamStatus`; latency is `Duration` (nanoseconds).
 - Histogram: bucket ratio 1.2, from 1 ms to 60 s, plus underflow and overflow; percentile = geometric midpoint of its bucket; within ±10% of exact.
@@ -167,7 +167,7 @@ func TestCursorAfterNewFile(t *testing.T) // line offset 500 in open 10:01, NewF
 ### Task 4: Migration and storage
 
 **Files:**
-- Create: `internal/migrations/00035_request_metrics.sql` (exact DDL from the spec's Storage section, plus `CREATE INDEX request_metric_rollups_bucket ON request_metric_rollups (bucket_at)` and the same for `request_metric_hourly`; goose `Up`/`Down` like `00029_access_log_settings.sql`)
+- Create: `internal/migrations/00039_request_metrics.sql` (exact DDL from the spec's Storage section, plus `CREATE INDEX request_metric_rollups_bucket ON request_metric_rollups (bucket_at)` and the same for `request_metric_hourly`; goose `Up`/`Down` like `00029_access_log_settings.sql`)
 - Create: `internal/requestmetrics/store.go`
 - Test: `internal/requestmetrics/store_test.go` (use the migrated test database helper other packages' store tests use)
 
@@ -253,7 +253,7 @@ func TestIngesterHourlyMaintenance(t *testing.T)    // lines across 10:59–11:0
 - Create: `internal/requestmetrics/http.go`, `internal/requestmetrics/http_test.go`
 - Modify: `internal/authz/routes.go` (Compose route at `LevelViewer`), `internal/authz/routescan_test.go` (`adminOnly`: the four host-wide patterns), `internal/authz/actions.go` (`"PUT /api/requests/settings": "request_metrics.settings_update"`)
 - Modify: `internal/httpapi/httpapi.go` (construct, register, start `Ingester.Run` in the `worker` group next to the Rotator, only when `d.Traefik != nil`)
-- Create: `docs/adr/0033-request-metrics-from-the-access-log.md` (decision, considered options — Traefik Prometheus metrics, external stack, keying by `RequestHost` — and consequences, from the spec's Decisions)
+- Create: `docs/adr/0035-request-metrics-from-the-access-log.md` (decision, considered options — Traefik Prometheus metrics, external stack, keying by `RequestHost` — and consequences, from the spec's Decisions)
 
 **Interfaces:**
 - Consumes: `Store`, `Key`, `Row`, `Counts`, `Histogram.Quantile`; `traefikconfig.PathsFor(dataDir).Effective()`, `traefikconfig.AccessLogOn`; `domains.NewStore(db).ListForCompose`.

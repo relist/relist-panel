@@ -9,7 +9,7 @@ const { Text } = Typography;
 export const REQUEST_SETTINGS_KEY = '/api/requests/settings';
 
 /**
- * How long hourly request history is kept, 1 to 90 days (ADR-0033). The last
+ * How long hourly request history is kept, 1 to 90 days (ADR-0035). The last
  * 24 hours are always kept at one-minute detail. Saving a lower value deletes
  * the older history within the hour, so that is confirmed first.
  */

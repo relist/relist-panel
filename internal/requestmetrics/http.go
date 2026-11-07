@@ -43,7 +43,7 @@ func (w window) bucket() time.Duration {
 	return time.Minute
 }
 
-// Service serves request metrics (ADR-0033). The host-wide routes are left
+// Service serves request metrics (ADR-0035). The host-wide routes are left
 // out of authz.Routes, so only admins reach them; the Compose route is a
 // Viewer's, like the Service metrics.
 type Service struct {

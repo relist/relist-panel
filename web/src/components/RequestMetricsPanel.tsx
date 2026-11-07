@@ -19,7 +19,7 @@ import {
 import { MetricChart } from './MetricChart';
 
 /**
- * Request metrics for one scope (ADR-0033): a window picker, the summary row,
+ * Request metrics for one scope (ADR-0035): a window picker, the summary row,
  * and the Status and Latency charts. The three views (Monitoring › Requests,
  * Monitoring › Panel, a Compose's Monitor tab) differ only in `load`, so they
  * share this. `extra` sits next to the picker: a Settings button, a host

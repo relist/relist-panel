@@ -280,7 +280,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			defer worker.Done()
 			accessLogs.Rotator().Run(ctx)
 		}()
-		// Request metrics are read from the same Access log (ADR-0033).
+		// Request metrics are read from the same Access log (ADR-0035).
 		domainHosts := requestmetrics.NewDomainHosts(domains.NewStore(db).ListAll, time.Now)
 		ingester := &requestmetrics.Ingester{Dir: accesslog.Dir(dataDir), Store: requestStore, Hosts: domainHosts.Lookup}
 		worker.Add(1)

@@ -33,7 +33,7 @@ The record of every HTTP request Traefik receives, kept as JSON lines in `<data 
 _Avoid_: Request log, Traffic log (as the entity name). "Traefik log" means Traefik's own log on stdout, not this.
 
 **Request metrics**:
-Request counts by status class and latency p50, p90 and p99 per minute (and per hour for older history), computed by the panel from the Access log. Series are keyed by the Traefik router name the panel wrote, never by the request's `Host`: one for all requests, one for the panel, one per host of a Compose's Domains (ADR-0033).
+Request counts by status class and latency p50, p90 and p99 per minute (and per hour for older history), computed by the panel from the Access log. Series are keyed by the Traefik router name the panel wrote, never by the request's `Host`: one for all requests, one for the panel, one per host of a Compose's Domains (ADR-0035).
 _Avoid_: Traffic stats, Analytics (as the entity name). Not Traefik's Prometheus metrics, which the panel does not read.
 
 **Traefik override**:

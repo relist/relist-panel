@@ -22,7 +22,7 @@ const (
 	minuteKeep = 25 * time.Hour
 )
 
-// Ingester tails the Access log and turns it into metric rows (ADR-0033).
+// Ingester tails the Access log and turns it into metric rows (ADR-0035).
 // Run drives it; tests call Step directly. It is not safe for concurrent use.
 type Ingester struct {
 	Dir   string // the Access log directory, holding access.log
