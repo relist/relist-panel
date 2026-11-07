@@ -370,10 +370,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 				}
 			}
 			if err == nil && images != nil && volumes != nil && d.RegistryHost != nil {
-				for _, r := range registry.OwnedImageRefs(registry.DefaultImage) {
-					images[r] = registry.OwnerName
-				}
-				volumes[registry.VolumeName] = registry.OwnerName
+				ownRegistry(images, volumes)
 			}
 			// The previous panel image stays for a manual rollback.
 			if err == nil && images != nil {

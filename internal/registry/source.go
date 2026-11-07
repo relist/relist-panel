@@ -2,7 +2,7 @@ package registry
 
 import (
 	"context"
-	"strings"
+	"relist-panel/internal/imageref"
 
 	"relist-panel/internal/registryauth"
 )
@@ -35,15 +35,5 @@ func (s *Service) ReservedHost(ctx context.Context) (string, bool) {
 // OwnedImageRefs are the references the registry image shows on the host:
 // repo:tag and repo@digest (the same shapes vulnscan.ScannerRefs gives).
 func OwnedImageRefs(ref string) []string {
-	name, digest, _ := strings.Cut(ref, "@")
-	refs := []string{}
-	repo := name
-	if i := strings.LastIndex(name, ":"); i > strings.LastIndex(name, "/") {
-		repo = name[:i]
-		refs = append(refs, name)
-	}
-	if digest != "" {
-		refs = append(refs, repo+"@"+digest)
-	}
-	return refs
+	return imageref.Pinned(ref)
 }
