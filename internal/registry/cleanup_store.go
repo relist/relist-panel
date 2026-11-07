@@ -93,12 +93,15 @@ func (s *Store) RunResult(ctx context.Context, id int64) (string, error) {
 const freedUnknown = -1
 
 // InterruptRunning marks every run still recorded running as interrupted:
-// at start, nothing runs yet, so they are runs the panel stopped in.
+// with the cleanup flag held nothing runs, so they are runs the panel stopped
+// in. The run named in gc_running is left to recover, which records the
+// garbage collect's own logs.
 func (s *Store) InterruptRunning(ctx context.Context, at time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE registry_cleanup_runs SET result = 'interrupted', finished_at = ?, freed_bytes = -1,
 			log = log || 'the panel stopped before this run finished' || char(10)
-		WHERE result = 'running'`, at.Unix())
+		WHERE result = 'running'
+			AND id != COALESCE((SELECT gc_running FROM registry_settings WHERE id = 1), 0)`, at.Unix())
 	return err
 }
 

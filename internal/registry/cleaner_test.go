@@ -276,6 +276,9 @@ func TestStartupFinishesInterruptedGC(t *testing.T) {
 	if runs[0].ID != id || runs[0].Result != RunInterrupted || runs[0].FinishedAt == nil {
 		t.Fatalf("run = %+v", runs[0])
 	}
+	if !strings.Contains(runs[0].Log, "during garbage collection") || !strings.Contains(runs[0].Log, "marked 3 blobs") {
+		t.Fatalf("log lost the GC's own story: %q", runs[0].Log)
+	}
 	if ro, _ := f.files.ReadOnly(); ro {
 		t.Fatal("still read-only")
 	}
