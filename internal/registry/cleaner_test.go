@@ -590,3 +590,23 @@ func TestPreviewReadsTagInfoOncePerDigest(t *testing.T) {
 		t.Fatalf("TagInfo calls = %d over two previews, want 2", f.reg.infoCalls)
 	}
 }
+
+// A repository deleted while cleanup works on it is said so, and nothing in
+// it is counted as deleted by cleanup.
+func TestRepositoryGoneMidCleanupIsSaidPlainly(t *testing.T) {
+	f := newCleaner(t)
+	f.reg.put("app", "v1", "d1", 1)
+	f.reg.put("app", "v2", "d2", 2)
+	f.reg.onTags = func(repo string, n int) {
+		if n == 2 { // the re-read before the delete
+			delete(f.reg.tags, repo)
+		}
+	}
+	r := f.runOnce(t)
+	if r.Result != RunOK || len(r.Deleted) != 0 || !strings.Contains(r.Log, "app: the repository is gone") || strings.Contains(r.Log, "()") {
+		t.Fatalf("run = %+v", r)
+	}
+	if len(f.reg.deleted) != 0 {
+		t.Fatalf("deleted from a gone repository: %v", f.reg.deleted)
+	}
+}

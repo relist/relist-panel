@@ -295,6 +295,12 @@ func (c *Cleaner) retain(ctx context.Context, st Settings, keep int, logf func(s
 			if err != nil {
 				return deleted, err
 			}
+			if len(current) == 0 {
+				// Deleted meanwhile (by hand or Delete all data): nothing
+				// left here for cleanup to delete.
+				logf("%s: the repository is gone; skipped it", repo)
+				break
+			}
 			var gone, raced []string
 			for _, tag := range current {
 				if selected[tag] {
@@ -326,10 +332,14 @@ func (c *Cleaner) retain(ctx context.Context, st Settings, keep int, logf func(s
 			for _, t := range gone {
 				deleted = append(deleted, repo+":"+t)
 			}
+			what := digest + " (no tags left)"
+			if len(gone) > 0 {
+				what = digest + " (" + strings.Join(gone, ", ") + ")"
+			}
 			if err != nil { // someone deleted it first: gone as wanted
-				logf("%s: %s (%s) was already gone", repo, digest, strings.Join(gone, ", "))
+				logf("%s: %s was already gone", repo, what)
 			} else {
-				logf("%s: deleted %s (%s)", repo, digest, strings.Join(gone, ", "))
+				logf("%s: deleted %s", repo, what)
 			}
 		}
 	}
