@@ -22,6 +22,7 @@ type memRegistry struct {
 	onTags    func(repo string, n int)
 	onDelete  func(repo string)
 	infoCalls int
+	ghosts    map[string]bool // repo:tag listed, but its manifest is gone
 }
 
 func newMemRegistry() *memRegistry {
@@ -53,12 +54,20 @@ func (m *memRegistry) Tags(_ context.Context, repo string) ([]string, error) {
 	for tag := range m.tags[repo] {
 		out = append(out, tag)
 	}
+	for key := range m.ghosts {
+		if r, tag, _ := strings.Cut(key, ":"); r == repo {
+			out = append(out, tag)
+		}
+	}
 	slices.Sort(out)
 	return out, nil
 }
 
 func (m *memRegistry) TagInfo(_ context.Context, repo, tag string) (TagInfo, error) {
 	m.infoCalls++
+	if m.ghosts[repo+":"+tag] {
+		return TagInfo{}, fmt.Errorf("registry GET /v2/%s/manifests/%s: %w", repo, tag, ErrNotFound)
+	}
 	info, ok := m.tags[repo][tag]
 	if !ok {
 		return TagInfo{}, errors.New("no such tag")
@@ -67,6 +76,9 @@ func (m *memRegistry) TagInfo(_ context.Context, repo, tag string) (TagInfo, err
 }
 
 func (m *memRegistry) Digest(_ context.Context, repo, tag string) (string, error) {
+	if m.ghosts[repo+":"+tag] {
+		return "", fmt.Errorf("registry HEAD /v2/%s/manifests/%s: %w", repo, tag, ErrNotFound)
+	}
 	info, ok := m.tags[repo][tag]
 	if !ok {
 		return "", errors.New("no such tag")
@@ -150,7 +162,7 @@ func TestCleanupDeletesThenGCsReadOnly(t *testing.T) {
 	f.reg.put("app", "v2", "d2", 2)
 	f.host.volume, f.host.volumeAfterGC = 5000, 3000
 	r := f.runOnce(t)
-	if r.Result != RunOK || !slices.Equal(r.Deleted, []string{"app:v1"}) || r.FreedBytes != 2000 {
+	if r.Result != RunOK || !slices.Equal(r.Deleted, []string{"app:v1"}) || r.FreedBytes == nil || *r.FreedBytes != 2000 {
 		t.Fatalf("run = %+v", r)
 	}
 	if !f.host.readOnlyAtGC {
@@ -432,5 +444,51 @@ func TestRaceCheckReadsOnlyDigests(t *testing.T) {
 	r := f.runOnce(t)
 	if len(r.Deleted) != 19 || f.reg.infoCalls != 20 {
 		t.Fatalf("deleted %d, TagInfo calls = %d, want 19 and 20", len(r.Deleted), f.reg.infoCalls)
+	}
+}
+
+// A run the panel died in before GC is not left "running" for ever.
+func TestStartupMarksLeftoverRunsInterrupted(t *testing.T) {
+	f := newCleaner(t)
+	ctx := context.Background()
+	id, _ := f.store.StartRun(ctx, time.Now(), "schedule")
+	if err := f.cleaner.Startup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := f.store.RunResult(ctx, id); r != RunInterrupted {
+		t.Fatalf("result = %q, want interrupted", r)
+	}
+}
+
+func TestFreedIsUnknownWhenUsageCannotBeRead(t *testing.T) {
+	f := newCleaner(t)
+	f.reg.put("app", "v1", "d1", 1)
+	f.host.volumeErr = errors.New("df failed")
+	r := f.runOnce(t)
+	if r.Result != RunOK || r.FreedBytes != nil || !strings.Contains(r.Log, "df failed") {
+		t.Fatalf("run = %+v", r)
+	}
+}
+
+func TestVanishedGCContainerFails(t *testing.T) {
+	f := newCleaner(t)
+	f.host.gcVanishes = true
+	r := f.runOnce(t)
+	if r.Result != RunFailed || !strings.Contains(r.Log, "disappeared") {
+		t.Fatalf("run = %+v", r)
+	}
+	if ro, _ := f.files.ReadOnly(); ro {
+		t.Fatal("left read-only")
+	}
+}
+
+func TestTagWithMissingManifestIsSkipped(t *testing.T) {
+	f := newCleaner(t)
+	f.reg.put("app", "v1", "d1", 1)
+	f.reg.put("app", "v2", "d2", 2)
+	f.reg.ghosts = map[string]bool{"app:ghost": true}
+	r := f.runOnce(t)
+	if r.Result != RunOK || !slices.Equal(r.Deleted, []string{"app:v1"}) || !strings.Contains(r.Log, "ghost") {
+		t.Fatalf("run = %+v", r)
 	}
 }

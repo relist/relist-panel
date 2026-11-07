@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"golang.org/x/sync/errgroup"
 	"net"
 	"net/http"
@@ -699,7 +700,19 @@ func (a *API) writeCleanup(w http.ResponseWriter, r *http.Request) {
 		"next":     Next(a.d.Cleaner.d.Now(), settings),
 		"running":  a.d.Cleaner.Running(),
 		"runs":     runs,
+		"timeZone": timeZone(a.d.Cleaner.d.Now()),
 	})
+}
+
+// timeZone names the zone the schedule's time is in, as the Scanner's page
+// does: the panel container's, which is UTC unless TZ is set.
+func timeZone(now time.Time) string {
+	zone, offset := now.Zone()
+	minutes := offset % 3600 / 60
+	if minutes < 0 {
+		minutes = -minutes
+	}
+	return fmt.Sprintf("%s (UTC%+03d:%02d)", zone, offset/3600, minutes)
 }
 
 func (a *API) getCleanup(w http.ResponseWriter, r *http.Request) { a.writeCleanup(w, r) }
@@ -766,6 +779,10 @@ func (a *API) previewCleanup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	preview, err := a.d.Cleaner.preview(r.Context(), a.inUseRefs)
+	if errors.Is(err, errInUseUnreadable) {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "could not reach the Registry: "+err.Error())
 		return

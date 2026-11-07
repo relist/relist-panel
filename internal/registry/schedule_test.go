@@ -53,3 +53,16 @@ func TestNextSkipsUnlistedDays(t *testing.T) {
 		t.Fatal("disabled has no next")
 	}
 }
+
+// On the day clocks spring forward, 03:00 is still 03:00 on the wall.
+func TestScheduleTimeOnDSTDay(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("no tzdata:", err)
+	}
+	morning := time.Date(2026, 3, 8, 1, 0, 0, 0, ny) // clocks jump 02:00 → 03:00
+	next := Next(morning, CleanupSettings{Enabled: true, Days: []string{"daily"}, Minute: 180})
+	if next == nil || next.Hour() != 3 || next.Minute() != 0 || next.Day() != 8 {
+		t.Fatalf("next = %v, want 03:00 that day", next)
+	}
+}

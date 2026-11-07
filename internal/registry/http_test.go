@@ -560,3 +560,23 @@ func TestDiskUsageIsReadAgainAfterItChanges(t *testing.T) {
 		t.Fatalf("after deleting data: volume read %d times, want 1", n)
 	}
 }
+
+func TestPreviewSaysWhenInUseCannotBeRead(t *testing.T) {
+	f := newAPI(t)
+	f.mux = http.NewServeMux()
+	NewAPI(APIDeps{
+		Service: f.svc, Cleaner: f.cleaner,
+		DeployedRefs: func(context.Context) (map[string][]User, error) { return nil, errors.New("db locked") },
+	}).RegisterRoutes(f.mux)
+	rec := f.do("GET", "/api/registry/cleanup/preview", "")
+	if rec.Code != 500 || !strings.Contains(rec.Body.String(), "which images are in use") {
+		t.Fatalf("preview = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestCleanupAnswersTimeZone(t *testing.T) {
+	f := newAPI(t)
+	if rec := f.do("GET", "/api/registry/cleanup", ""); !strings.Contains(rec.Body.String(), `"timeZone":"`) {
+		t.Fatalf("cleanup = %s", rec.Body)
+	}
+}

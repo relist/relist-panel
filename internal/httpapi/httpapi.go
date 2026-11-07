@@ -211,11 +211,20 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	}
 	// The update lock is checked before any worker starts: a Panel update that
 	// is not over keeps this panel from running Deployments or taking writes.
+	// registryCleaner is declared here so the update's WaitingOn can name a
+	// running cleanup; it is set further down, once the Registry is wired.
+	var registryCleaner *registry.Cleaner
 	puDeps := panelupdate.Deps{
 		Store: panelupdate.NewStore(db), Version: d.Version, ManifestURL: panelupdate.ManifestURLFromEnv(),
 		Self: d.PanelSelf, Runner: d.PanelRunner, Updater: d.PanelUpdater,
 		DataDir: dataDir, DeploysBusy: queue.Busy, Queue: queue,
-		WaitingOn: func() string { return updateWaitingOn(ctx, db, queue) },
+		WaitingOn: func() string {
+			var cleaning func() bool
+			if registryCleaner != nil { // set below, before any update can run
+				cleaning = registryCleaner.Running
+			}
+			return updateWaitingOn(ctx, db, queue, cleaning)
+		},
 		MigrationLocked: func(ctx context.Context) (bool, error) {
 			if migrationOptions == nil {
 				return false, nil
@@ -251,7 +260,6 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	}
 	// Registry cleanup waits for Deployments and the locks, and a Panel
 	// update's quiesce waits for it (ADR-0033).
-	var registryCleaner *registry.Cleaner
 	if d.RegistryHost != nil {
 		deployed, running := registryRefs(d, composesService)
 		registryCleaner = registry.NewCleaner(registry.CleanerDeps{
@@ -460,11 +468,15 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 // updateWaitingOn says what a quiescing Panel update waits for. It is asked
-// only while the Deployment queue or the scan queue is not idle, so with no
-// Deployment running the wait is the scan worker's current task.
-func updateWaitingOn(ctx context.Context, db *sql.DB, queue *deployments.Queue) string {
+// only while the Deployment queue, the scan queue or a Registry cleanup is
+// not idle, so with no Deployment and no cleanup running the wait is the scan
+// worker's current task. cleaning is nil when there is no Registry.
+func updateWaitingOn(ctx context.Context, db *sql.DB, queue *deployments.Queue, cleaning func() bool) string {
 	composeID, number, ok := queue.Running()
 	if !ok {
+		if cleaning != nil && cleaning() {
+			return "a Registry cleanup"
+		}
 		return "a vulnerability scan"
 	}
 	var name string

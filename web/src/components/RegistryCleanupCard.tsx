@@ -123,7 +123,12 @@ export function RegistryCleanupCard({ enabled: registryOn }: { enabled: boolean 
       render: (deleted: string[]) => (deleted.length === 1 ? '1 tag' : `${deleted.length} tags`),
       title: 'Deleted',
     },
-    { dataIndex: 'freedBytes', key: 'freedBytes', render: (bytes: number) => formatBytes(bytes), title: 'Freed' },
+    {
+      dataIndex: 'freedBytes',
+      key: 'freedBytes',
+      render: (bytes: number | null) => (bytes === null ? '—' : formatBytes(bytes)),
+      title: 'Freed',
+    },
     {
       dataIndex: 'result',
       key: 'result',
@@ -186,14 +191,14 @@ export function RegistryCleanupCard({ enabled: registryOn }: { enabled: boolean 
               <Checkbox.Group options={WEEKDAYS} />
             </Form.Item>
           )}
-          <Form.Item extra="Host time." label="At" name="time">
+          <Form.Item extra={`Panel time zone: ${data.timeZone}`} label="At" name="time">
             <TimePicker allowClear={false} format="HH:mm" minuteStep={5} needConfirm={false} />
           </Form.Item>
           <Flex align="center" gap={12} wrap>
             <Button htmlType="submit" loading={saving}>
               Save cleanup
             </Button>
-            {data.next && settings.enabled && (
+            {data.next && settings.enabled && registryOn && (
               <Text type="secondary">
                 Next run <RelativeTime value={data.next} />
               </Text>
