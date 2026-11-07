@@ -599,3 +599,35 @@ func TestTagListSkipsAGoneManifest(t *testing.T) {
 		t.Fatalf("tags = %d %s", rec.Code, rec.Body)
 	}
 }
+
+// A failed usage read is not retried on every load: Docker is asked again
+// after the same minute, and the last reading is shown meanwhile.
+func TestFailedDiskUsageIsNotRetriedEveryLoad(t *testing.T) {
+	f := newAPI(t)
+	f.host.volume = 2468
+	f.do("GET", "/api/registry", "") // a good reading
+	f.svc.forgetDisk()
+	f.host.volumeErr = errors.New("df failed")
+	f.host.volumeReads = 0
+	f.do("GET", "/api/registry", "")
+	rec := f.do("GET", "/api/registry", "")
+	if !strings.Contains(rec.Body.String(), `"diskBytes":2468`) {
+		t.Fatalf("load after a failed read = %s", rec.Body)
+	}
+	if f.host.volumeReads != 1 {
+		t.Fatalf("volume read %d times, want 1", f.host.volumeReads)
+	}
+}
+
+// A first usage read that fails is tried again on the next load rather
+// than shown as 0 B for a minute.
+func TestFirstFailedDiskUsageIsRetried(t *testing.T) {
+	f := newAPI(t)
+	f.host.volume = 2468
+	f.host.volumeErr = errors.New("df failed")
+	f.do("GET", "/api/registry", "")
+	f.host.volumeErr = nil
+	if rec := f.do("GET", "/api/registry", ""); !strings.Contains(rec.Body.String(), `"diskBytes":2468`) {
+		t.Fatalf("second load = %s", rec.Body)
+	}
+}

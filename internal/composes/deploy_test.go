@@ -742,6 +742,8 @@ func TestPullUnauthorizedAddsHint(t *testing.T) {
 		{"login for another host", unauthorized, []string{"ghcr.io"}, noLogin},
 		{"permission denied is not auth", "open /var/lib/docker/x: permission denied", nil, ""},
 		{"dns", "dial tcp: lookup ghcr.io: no such host", nil, ""},
+		// docker compose prints progress first; the refusal comes lines later.
+		{"compose output", "docker compose -p relist-c1 pull app: exit status 1: Image localhost:5001/private/app:1 Pulling\nImage localhost:5001/private/app:1 Error unknown: failed to resolve reference: 401 Unauthorized", []string{"docker.io"}, "Registry refused the stored login for docker.io. Check it with Test on Registry → External registries."},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
@@ -759,8 +761,10 @@ func TestPullUnauthorizedAddsHint(t *testing.T) {
 				}
 				return
 			}
-			if !strings.HasSuffix(f.Message, c.want) {
-				t.Fatalf("message = %q, want suffix %q", f.Message, c.want)
+			// A Deployment's reason is the message's first line: the hint
+			// must be on it.
+			if first, _, _ := strings.Cut(f.Message, "\n"); !strings.Contains(first, c.want) {
+				t.Fatalf("first line = %q, want it to hold %q", first, c.want)
 			}
 		})
 	}
@@ -788,7 +792,7 @@ func TestPullHairpinHint(t *testing.T) {
 		if !errors.As(err, &f) {
 			t.Fatalf("err = %v", err)
 		}
-		if strings.HasSuffix(f.Message, want) != c.hint {
+		if first, _, _ := strings.Cut(f.Message, "\n"); strings.Contains(first, want) != c.hint {
 			t.Errorf("%s: message = %q, want hint = %v", c.err, f.Message, c.hint)
 		}
 	}
@@ -877,5 +881,37 @@ func TestDeployChecksTheImageOfTheServicesPlatform(t *testing.T) {
 	sort.Strings(runner.inspected)
 	if want := []string{"app:1", "app:1@linux/386"}; !reflect.DeepEqual(runner.inspected, want) {
 		t.Fatalf("inspected = %v, want %v", runner.inspected, want)
+	}
+}
+
+// docker compose prints progress before the error, and a Deployment's reason
+// is the message's first line: it must carry the error line, not "Pulling".
+func TestFailureReasonCarriesTheErrorLine(t *testing.T) {
+	const pullOut = "docker compose -p relist-c1 pull app: exit status 1: Image app:1 Pulling\nImage app:1 Pulling\nError response from daemon: manifest for app:1 not found: manifest unknown"
+	const upOut = "docker compose -p relist-c1 up -d: exit status 1: Container relist-c1-web-1 Creating\nContainer relist-c1-web-1 Created\nError response from daemon: driver failed programming external connectivity: port is already allocated"
+	for _, c := range []struct {
+		name, want, not string
+		set             func(*recordingRunner)
+	}{
+		{"pull", "manifest unknown", "Pulling", func(r *recordingRunner) { r.pullErr = errors.New(pullOut) }},
+		{"up", "port is already allocated", "Creating", func(r *recordingRunner) { r.upErr = errors.New(upOut) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+			runner.config = []byte(imageConfig)
+			c.set(runner)
+			_, err := svc.RunDeploy(context.Background(), target, DeployOptions{})
+			var f *DeployFailure
+			if !errors.As(err, &f) {
+				t.Fatalf("err = %v", err)
+			}
+			first, rest, _ := strings.Cut(f.Message, "\n")
+			if !strings.Contains(first, c.want) || strings.Contains(first, c.not) {
+				t.Fatalf("first line = %q, want the error line", first)
+			}
+			if !strings.Contains(rest, "exit status 1") {
+				t.Fatalf("the full output was dropped: %q", f.Message)
+			}
+		})
 	}
 }

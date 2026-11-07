@@ -66,3 +66,20 @@ func TestScheduleTimeOnDSTDay(t *testing.T) {
 		t.Fatalf("next = %v, want 03:00 that day", next)
 	}
 }
+
+// A time inside the hour skipped at spring-forward runs when the gap ends.
+func TestScheduleTimeInTheSkippedHour(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("no tzdata:", err)
+	}
+	morning := time.Date(2026, 3, 8, 0, 30, 0, 0, ny) // clocks jump 02:00 → 03:00
+	next := Next(morning, CleanupSettings{Enabled: true, Days: []string{"daily"}, Minute: 150})
+	if next == nil || next.Hour() != 3 || next.Minute() != 0 || next.Day() != 8 {
+		t.Fatalf("next = %v, want 03:00 that day", next)
+	}
+	// Before the gap ends it is not due yet.
+	if Due(time.Date(2026, 3, 8, 1, 45, 0, 0, ny), CleanupSettings{Enabled: true, Days: []string{"daily"}, Minute: 150}) {
+		t.Fatal("due at 01:45, before the skipped 02:30")
+	}
+}

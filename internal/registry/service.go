@@ -58,31 +58,39 @@ type Deps struct {
 type Service struct {
 	d  Deps
 	mu sync.Mutex // one change to the container at a time
+	infoCache
 
 	// disk caches the volume's usage for a minute: Docker sizes every volume
 	// on the host to answer it. Whatever changes the usage forgets it.
 	diskMu    sync.Mutex
 	diskBytes int64
 	diskAt    time.Time
+	diskOK    bool // diskBytes holds a real reading
 }
 
 // diskTTL is how long a volume usage reading is shown before it is read again.
 const diskTTL = time.Minute
 
 // cachedVolumeBytes is the Registry volume's usage, read at most once a
-// minute. A failed read shows the last one.
+// minute. A failed read shows the last one and waits the same minute before
+// asking Docker again. The lock is held across the read, so loads arriving
+// meanwhile share it instead of each asking Docker.
 func (s *Service) cachedVolumeBytes(ctx context.Context) int64 {
 	s.diskMu.Lock()
 	defer s.diskMu.Unlock()
 	if !s.diskAt.IsZero() && s.d.Now().Sub(s.diskAt) < diskTTL {
 		return s.diskBytes
 	}
-	n, err := s.d.Host.VolumeBytes(ctx)
-	if err != nil {
-		return s.diskBytes
+	// The read is shared by every load waiting on the lock, so one viewer
+	// leaving must not cut it short for the rest.
+	n, err := s.d.Host.VolumeBytes(context.WithoutCancel(ctx))
+	if err == nil {
+		s.diskBytes, s.diskOK = n, true
 	}
-	s.diskBytes, s.diskAt = n, s.d.Now()
-	return n
+	if s.diskOK { // with no reading yet, try again on the next load
+		s.diskAt = s.d.Now()
+	}
+	return s.diskBytes
 }
 
 // forgetDisk makes the next load read the volume's usage again.

@@ -9,9 +9,15 @@ import (
 // dayMoment is the cleanup time on day's date, in day's location.
 func dayMoment(day time.Time, minute int) time.Time {
 	// The wall-clock time, so a DST change day keeps the time set. A time in
-	// the hour skipped at spring-forward does not exist; Go picks one side of
-	// the gap, so that day's run may come an hour early or late.
+	// the hour skipped at spring-forward does not exist (Go would pick either
+	// side of the gap): it runs at the first minute after the gap, as cron does.
 	y, m, d := day.Date()
+	for at := minute; at < 24*60; at++ {
+		t := time.Date(y, m, d, at/60, at%60, 0, 0, day.Location())
+		if t.Hour()*60+t.Minute() == at {
+			return t
+		}
+	}
 	return time.Date(y, m, d, minute/60, minute%60, 0, 0, day.Location())
 }
 

@@ -5,10 +5,11 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"relist-panel/internal/imageref"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"relist-panel/internal/imageref"
 )
 
 var (

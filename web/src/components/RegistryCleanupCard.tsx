@@ -1,8 +1,8 @@
 import { Alert, Button, Card, Checkbox, Flex, Form, InputNumber, Modal, Radio, Switch, Table, Tag, TimePicker, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
-import { useState } from 'react';
-import useSWR from 'swr';
+import { useEffect, useRef, useState } from 'react';
+import useSWR, { useSWRConfig } from 'swr';
 
 import { api } from '../data/api';
 import type { RegistryCleanupRun } from '../data/types';
@@ -57,6 +57,16 @@ export function RegistryCleanupCard({ enabled: registryOn }: { enabled: boolean 
   const [preview, setPreview] = useState<Record<string, string[]>>();
   const [previewing, setPreviewing] = useState(false);
   const [running, setRunning] = useState(false);
+  const { mutate: mutateGlobal } = useSWRConfig();
+  // When a run ends, its deletions and freed space show everywhere on the
+  // page: tags, repositories and Disk used.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && data && !data.running) {
+      void mutateGlobal((key) => typeof key === 'string' && key.startsWith('/api/registry') && key !== REGISTRY_CLEANUP_KEY);
+    }
+    wasRunning.current = data?.running ?? false;
+  }, [data, mutateGlobal]);
 
   if (!data) {
     return error ? (
