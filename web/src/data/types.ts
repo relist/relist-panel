@@ -1083,7 +1083,8 @@ export interface RegistryCleanupRun {
   trigger: string;
   /** repo:tag */
   deleted: string[];
-  freedBytes: number;
+  /** Null when the volume's usage could not be read. */
+  freedBytes: number | null;
   result: RegistryCleanupResult;
   log: string;
 }
@@ -1093,4 +1094,6 @@ export interface RegistryCleanupState {
   next: string | null;
   running: boolean;
   runs: RegistryCleanupRun[];
+  /** The zone the schedule's time is in, e.g. "UTC (UTC+00:00)". */
+  timeZone: string;
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"golang.org/x/sync/errgroup"
 	"net"
 	"net/http"
@@ -117,19 +118,35 @@ func (a *API) tagInfo(ctx context.Context, c *Client, repo, tag string) (TagInfo
 	return info, nil
 }
 
-// tagInfos reads every tag of repo, eight at a time, in tags' order.
+// tagInfos reads every tag of repo, eight at a time, in tags' order. A tag
+// whose manifest is gone (listed, then deleted) is left out, as the cleaner
+// does.
 func (a *API) tagInfos(ctx context.Context, c *Client, repo string, tags []string) ([]TagInfo, error) {
 	out := make([]TagInfo, len(tags))
+	gone := make([]bool, len(tags))
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(8)
 	for i, tag := range tags {
 		g.Go(func() error {
 			info, err := a.tagInfo(ctx, c, repo, tag)
+			if errors.Is(err, ErrNotFound) {
+				gone[i] = true
+				return nil
+			}
 			out[i] = info
 			return err
 		})
 	}
-	return out, g.Wait()
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	kept := out[:0]
+	for i, info := range out {
+		if !gone[i] {
+			kept = append(kept, info)
+		}
+	}
+	return kept, nil
 }
 
 // newest is the latest created time among repo's tags, or nil when none can
@@ -699,7 +716,19 @@ func (a *API) writeCleanup(w http.ResponseWriter, r *http.Request) {
 		"next":     Next(a.d.Cleaner.d.Now(), settings),
 		"running":  a.d.Cleaner.Running(),
 		"runs":     runs,
+		"timeZone": timeZone(a.d.Cleaner.d.Now()),
 	})
+}
+
+// timeZone names the zone the schedule's time is in, as the Scanner's page
+// does: the panel container's, which is UTC unless TZ is set.
+func timeZone(now time.Time) string {
+	zone, offset := now.Zone()
+	minutes := offset % 3600 / 60
+	if minutes < 0 {
+		minutes = -minutes
+	}
+	return fmt.Sprintf("%s (UTC%+03d:%02d)", zone, offset/3600, minutes)
 }
 
 func (a *API) getCleanup(w http.ResponseWriter, r *http.Request) { a.writeCleanup(w, r) }
@@ -766,6 +795,10 @@ func (a *API) previewCleanup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	preview, err := a.d.Cleaner.preview(r.Context(), a.inUseRefs)
+	if errors.Is(err, errInUseUnreadable) {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "could not reach the Registry: "+err.Error())
 		return

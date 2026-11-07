@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,6 +47,10 @@ func (c *Client) client() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second}
 }
 
+// ErrNotFound is a 404 from the registry: a repository, tag or manifest that
+// is not there (any more).
+var ErrNotFound = errors.New("not found in the registry")
+
 // do sends one request; a status outside 2xx is an error naming it.
 func (c *Client) do(ctx context.Context, method, path string, accept string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.Base+path, nil)
@@ -63,6 +68,9 @@ func (c *Client) do(ctx context.Context, method, path string, accept string) (*h
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		resp.Body.Close()
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("registry %s %s: %w: %s", method, path, ErrNotFound, strings.TrimSpace(string(body)))
+		}
 		return nil, fmt.Errorf("registry %s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(body)))
 	}
 	return resp, nil

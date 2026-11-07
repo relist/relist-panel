@@ -19,6 +19,8 @@ type fakeHost struct {
 	volume        int64
 	volumeAfterGC int64
 	volumeReads   int
+	volumeErr     error
+	gcVanishes    bool // the GC container is gone right after RunGC
 	filesDir      string
 	// filesAtCreate is whether config.yml existed when Create ran.
 	filesAtCreate bool
@@ -77,6 +79,9 @@ func (f *fakeHost) RemoveVolume(context.Context) error {
 // VolumeBytes reports volume, then volumeAfterGC once GC has run.
 func (f *fakeHost) VolumeBytes(context.Context) (int64, error) {
 	f.volumeReads++
+	if f.volumeErr != nil {
+		return 0, f.volumeErr
+	}
 	if f.volumeAfterGC != 0 && slices.Contains(f.calls, "RunGC") {
 		return f.volumeAfterGC, nil
 	}
@@ -87,6 +92,9 @@ func (f *fakeHost) RunGC(_ context.Context, image, filesDir string) error {
 	f.calls = append(f.calls, "RunGC")
 	f.readOnlyAtGC, _ = Files{Dir: filesDir}.ReadOnly()
 	f.gc = GCState{Exists: true, Running: true}
+	if f.gcVanishes {
+		f.gc = GCState{}
+	}
 	return nil
 }
 
