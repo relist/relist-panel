@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"golang.org/x/sync/errgroup"
 	"net"
 	"net/http"
 	"regexp"
@@ -14,8 +13,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"relist-panel/internal/audit"
 	"relist-panel/internal/auth"
@@ -51,15 +51,7 @@ type APIDeps struct {
 // out of Routes).
 type API struct {
 	d APIDeps
-
-	// infos caches tag info by repo@manifest-digest: a manifest never
-	// changes, so a later load only HEADs each tag for its digest.
-	infoMu sync.Mutex
-	infos  map[string]TagInfo
 }
-
-// maxCachedInfos bounds the tag info cache; past it the cache starts over.
-const maxCachedInfos = 10000
 
 // The registry's name grammar (distribution/reference): lowercase path
 // components joined by "/", and tags of up to 128 word characters, "." or
@@ -83,72 +75,6 @@ func checkRepoTag(w http.ResponseWriter, repo, tag string, wantTag bool) bool {
 	return true
 }
 
-// tagInfo reads a tag, from the cache when its manifest digest was read
-// before.
-func (a *API) tagInfo(ctx context.Context, c *Client, repo, tag string) (TagInfo, error) {
-	digest, err := c.Digest(ctx, repo, tag)
-	if err != nil {
-		return TagInfo{}, err
-	}
-	if digest == "" { // no Docker-Content-Digest: nothing to key the cache by
-		return c.TagInfo(ctx, repo, tag)
-	}
-	key := repo + "@" + digest
-	a.infoMu.Lock()
-	info, ok := a.infos[key]
-	a.infoMu.Unlock()
-	if ok {
-		info.Tag = tag
-		return info, nil
-	}
-	if info, err = c.TagInfo(ctx, repo, tag); err != nil {
-		return TagInfo{}, err
-	}
-	// A created time that could not be read (its config blob failed) is
-	// read again next time instead of shown as unknown for good.
-	if info.Created.IsZero() || info.Digest == "" {
-		return info, nil
-	}
-	a.infoMu.Lock()
-	if a.infos == nil || len(a.infos) >= maxCachedInfos {
-		a.infos = map[string]TagInfo{}
-	}
-	a.infos[repo+"@"+info.Digest] = info
-	a.infoMu.Unlock()
-	return info, nil
-}
-
-// tagInfos reads every tag of repo, eight at a time, in tags' order. A tag
-// whose manifest is gone (listed, then deleted) is left out, as the cleaner
-// does.
-func (a *API) tagInfos(ctx context.Context, c *Client, repo string, tags []string) ([]TagInfo, error) {
-	out := make([]TagInfo, len(tags))
-	gone := make([]bool, len(tags))
-	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(8)
-	for i, tag := range tags {
-		g.Go(func() error {
-			info, err := a.tagInfo(ctx, c, repo, tag)
-			if errors.Is(err, ErrNotFound) {
-				gone[i] = true
-				return nil
-			}
-			out[i] = info
-			return err
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-	kept := out[:0]
-	for i, info := range out {
-		if !gone[i] {
-			kept = append(kept, info)
-		}
-	}
-	return kept, nil
-}
-
 // newest is the latest created time among repo's tags, or nil when none can
 // be read. A tag that fails is left out: it only decides a date.
 func (a *API) newest(ctx context.Context, c *Client, repo string, tags []string) *time.Time {
@@ -157,7 +83,7 @@ func (a *API) newest(ctx context.Context, c *Client, repo string, tags []string)
 	g.SetLimit(8)
 	for i, tag := range tags {
 		g.Go(func() error {
-			if info, err := a.tagInfo(ctx, c, repo, tag); err == nil {
+			if info, err := a.d.Service.tagInfo(ctx, c, repo, tag); err == nil {
 				times[i] = info.Created
 			}
 			return nil
@@ -515,7 +441,7 @@ func (a *API) repoTags(ctx context.Context, c *Client, hostname, repo string) ([
 	if err != nil {
 		return nil, err
 	}
-	infos, err := a.tagInfos(ctx, c, repo, tags)
+	infos, err := readTagInfos(ctx, a.d.Service, c, repo, tags, nil)
 	if err != nil {
 		return nil, err
 	}

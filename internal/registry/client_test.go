@@ -154,3 +154,13 @@ func TestMissingManifestIsNotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
+
+// A repository still in the catalog whose tags list is gone (404) has no
+// tags: one such repository must not fail a cleanup run or the page.
+func TestTagsOfAGoneRepositoryAreEmpty(t *testing.T) {
+	c, _ := fakeRegistry(t)
+	tags, err := c.Tags(context.Background(), "gone")
+	if err != nil || len(tags) != 0 {
+		t.Fatalf("tags = %v, %v", tags, err)
+	}
+}
