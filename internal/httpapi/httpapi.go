@@ -428,6 +428,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			Restore:  migration.NewRestorer(local, filepath.Join(stateDir, "staging")),
 			Finalizer: migration.NewFinalizer(migration.FinalizeDeps{
 				Local: local, Restart: migrationOptions.Restart, Queue: queue, Sources: sources.NewStore(db), Domains: domainStore,
+				BeforeDeploy: registryBeforeDeploy(d, registryService),
 			}),
 			Backoff: migrationOptions.Backoff,
 			Context: ctx,
@@ -484,4 +485,17 @@ func updateWaitingOn(ctx context.Context, db *sql.DB, queue *deployments.Queue, 
 		return fmt.Sprintf("Deployment #%d", number)
 	}
 	return fmt.Sprintf("Deployment %s #%d", name, number)
+}
+
+// registryBeforeDeploy brings the panel's own Registry up before a
+// Migration's Deployments, which may pull from it. Reconcile is idempotent and
+// shares the start-up one's lock. Nil without a Docker host for it.
+func registryBeforeDeploy(d Deps, svc *registry.Service) func(context.Context) error {
+	if d.RegistryHost == nil {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		_, err := svc.Reconcile(ctx)
+		return err
+	}
 }
