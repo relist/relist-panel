@@ -352,9 +352,9 @@ func (s *Service) pullHint(ctx context.Context, err error, images []string) stri
 		}
 	}
 	if len(stored) > 0 {
-		return ". Registry refused the stored login for " + strings.Join(stored, ", ") + ". Check it with Test on Registry → External registries."
+		return "Registry refused the stored login for " + strings.Join(stored, ", ") + ". Check it with Test on Registry → External registries."
 	}
-	return ". If the image is private, add its registry's credentials on Registry → External registries."
+	return "If the image is private, add its registry's credentials on Registry → External registries."
 }
 
 // unreachable matches a pull that never reached a registry.
@@ -371,7 +371,7 @@ func (s *Service) hairpinHint(ctx context.Context, err error) string {
 	if !ok || !strings.Contains(msg, host) || !unreachable.MatchString(msg) {
 		return ""
 	}
-	return ". This host could not reach its own Registry at " + host + ". Check that the hostname resolves to this host from the host itself."
+	return "This host could not reach its own Registry at " + host + ". Check that the hostname resolves to this host from the host itself."
 }
 
 // imageHost is the registry host of an image reference, as Docker reads it:
@@ -741,7 +741,13 @@ func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool,
 			for _, name := range pull.Services {
 				images = append(images, config.Services[name].Image)
 			}
-			return nil, failure(FailureRunner, "pull failed: "+err.Error()+s.pullHint(ctx, err, images), err)
+			msg := "pull failed: " + err.Error()
+			// The hint goes first: a Deployment's reason is the message's
+			// first line, and compose prints the refusal lines later.
+			if hint := s.pullHint(ctx, err, images); hint != "" {
+				msg = "pull failed: " + hint + " " + err.Error()
+			}
+			return nil, failure(FailureRunner, msg, err)
 		}
 	}
 	var refused, refs []string
