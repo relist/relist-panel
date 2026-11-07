@@ -32,6 +32,10 @@ _Avoid_: SSL, Cert (as the entity name), Certificate resolver (that is how Traef
 The record of every HTTP request Traefik receives, kept as JSON lines in `<data dir>/.traefik/access/`, one gzipped file per day, and deleted by the panel after the retention period. It is host-wide, not per Compose (ADR-0027).
 _Avoid_: Request log, Traffic log (as the entity name). "Traefik log" means Traefik's own log on stdout, not this.
 
+**Request metrics**:
+Request counts by status class and latency p50, p90 and p99 per minute (and per hour for older history), computed by the panel from the Access log. Series are keyed by the Traefik router name the panel wrote, never by the request's `Host`: one for all requests, one for the panel, one per host of a Compose's Domains (ADR-0035).
+_Avoid_: Traffic stats, Analytics (as the entity name). Not Traefik's Prometheus metrics, which the panel does not read.
+
 **Traefik override**:
 The operator's part of Traefik's static config, `<data dir>/.traefik/static/traefik.override.yml`, edited on the Traefik page. The panel merges it over the base into the generated `traefik.yml` that Traefik reads (ADR-0030).
 _Avoid_: Traefik config (ambiguous between base, override and generated file), traefik.yml (that is the generated file).

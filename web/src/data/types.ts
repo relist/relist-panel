@@ -408,6 +408,42 @@ export type HostMetrics = MetricsEnvelope<MetricSample>;
 /** The Service envelope's one source is the Docker stats API sweep. */
 export type ServiceMetrics = MetricsEnvelope<ServiceSample>;
 
+// ---- Request metrics (.scratch/request-metrics) ------------------------------
+//
+// Counts by status class and latency percentiles read from the Access log
+// (ADR-0035). The server merges histograms and computes every percentile; a
+// bucket's percentiles are null when it holds no requests.
+
+export type RequestWindow = '15m' | '1h' | '6h' | '24h' | '7d' | '30d' | '90d';
+
+export type RequestPercentiles = { p50Ms: number | null; p90Ms: number | null; p99Ms: number | null };
+
+export type RequestCounts = {
+  c1xx: number;
+  c2xx: number;
+  c3xx: number;
+  c4xx: number;
+  c5xx: number;
+  cother: number;
+};
+
+export type RequestSummary = RequestCounts & RequestPercentiles & { requests: number };
+
+/** `at` is epoch ms, the start of the minute (or of the hour on 7d and longer). */
+export type RequestBucket = RequestCounts & RequestPercentiles & { at: number };
+
+export type RequestMetrics = {
+  window: RequestWindow;
+  partial: boolean;
+  accessLogEnabled: boolean;
+  accessLogFiltered: boolean;
+  retentionDays: number;
+  /** The Compose route only: its current Domain hosts, for the selector. */
+  hosts?: string[];
+  summary: RequestSummary;
+  buckets: RequestBucket[];
+};
+
 // ---- Volume files (.scratch/volume-files) ------------------------------------
 //
 // One Compose's resolved Volumes, from `GET .../composes/{c}/volumes`. Every

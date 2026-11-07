@@ -244,3 +244,27 @@ func TestAccessLogOnAndTrustedIPs(t *testing.T) {
 		t.Errorf("TrustedIPs(none) = %v", got)
 	}
 }
+
+func TestAccessLogFiltered(t *testing.T) {
+	cases := []struct {
+		name, override string
+		want           bool
+	}{
+		{"base access log", "accessLog: {}\n", false},
+		{"no access log", "", false},
+		{"filters", "accessLog: {filters: {statusCodes: ['500']}}\n", true},
+		{"router name dropped", "accessLog: {fields: {names: {RouterName: drop}}}\n", true},
+		{"all fields dropped by default", "accessLog: {fields: {defaultMode: drop}}\n", true},
+		{"other field dropped", "accessLog: {fields: {names: {ClientAddr: drop}}}\n", false},
+		{"headers dropped only", "accessLog: {fields: {headers: {defaultMode: drop}}}\n", false},
+	}
+	for _, c := range cases {
+		out, _, err := Generate([]byte(c.override))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got := AccessLogFiltered(out); got != c.want {
+			t.Errorf("%s: AccessLogFiltered = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

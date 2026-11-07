@@ -6,6 +6,7 @@ import { CODE_FONT_STACK, SERVICE_STATE_META } from '../app/theme';
 import { usePanel } from '../data/store';
 import type { Compose, MetricWindow, ServiceMetrics } from '../data/types';
 import { shortContainerId } from '../data/types';
+import { ComposeRequests } from './ComposeRequests';
 import { MetricChart } from './MetricChart';
 import { latestPids, serviceChartSpecs } from '../pages/monitor-view';
 import { CodeValue, EmptyState, HealthBadge, RelativeTime, ServiceStateTag } from './primitives';
@@ -81,20 +82,26 @@ export function ServiceMonitor({ compose, onOpenEditor }: { compose: Compose; on
 
   // "Never deployed" and "fully stopped" both arrive as an empty Services list
   // — the collector only caches containers it can see. Either way, deploying
-  // is what starts collection, so both get the same empty state.
+  // is what starts collection, so both get the same empty state. Request
+  // metrics come from Traefik's Access log, not from the containers, so they
+  // stay below it: right after a deploy or a panel restart the list is empty
+  // for a moment while the requests are already there.
   if (!service) {
     return (
-      <Card variant="outlined">
-        <EmptyState
-          action={
-            <Button icon={<RocketOutlined />} onClick={onOpenEditor}>
-              Open the Editor tab
-            </Button>
-          }
-          description="Per-service metrics begin with the first deploy — the panel reads the containers a Compose created, and a Compose with no containers on the host has none. Deploying starts collection."
-          title="Nothing to monitor yet"
-        />
-      </Card>
+      <>
+        <Card variant="outlined">
+          <EmptyState
+            action={
+              <Button icon={<RocketOutlined />} onClick={onOpenEditor}>
+                Open the Editor tab
+              </Button>
+            }
+            description="Per-service metrics begin with the first deploy — the panel reads the containers a Compose created, and a Compose with no containers on the host has none. Deploying starts collection."
+            title="Nothing to monitor yet"
+          />
+        </Card>
+        <ComposeRequests compose={compose} />
+      </>
     );
   }
 
@@ -227,6 +234,8 @@ export function ServiceMonitor({ compose, onOpenEditor }: { compose: Compose; on
               </Col>
             ))}
       </Row>
+
+      <ComposeRequests compose={compose} />
     </>
   );
 }

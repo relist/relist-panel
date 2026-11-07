@@ -34,6 +34,7 @@ import (
 	"relist-panel/internal/projects"
 	"relist-panel/internal/registry"
 	"relist-panel/internal/registryauth"
+	"relist-panel/internal/requestmetrics"
 	"relist-panel/internal/safely"
 	"relist-panel/internal/sources"
 	"relist-panel/internal/sshkeys"
@@ -311,6 +312,8 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	certificates.New(db, dataDir).RegisterRoutes(mux)
 	accessLogs := accesslog.New(db, dataDir, d.Traefik)
 	accessLogs.RegisterRoutes(mux)
+	requestStore := requestmetrics.NewStore(db)
+	requestmetrics.NewService(requestStore, traefikconfig.PathsFor(dataDir), domains.NewStore(db), db).RegisterRoutes(mux)
 	auditLog := auditapi.New(db)
 	auditLog.RegisterRoutes(mux)
 	worker.Add(1)
@@ -329,6 +332,14 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		go func() {
 			defer worker.Done()
 			accessLogs.Rotator().Run(ctx)
+		}()
+		// Request metrics are read from the same Access log (ADR-0035).
+		domainHosts := requestmetrics.NewDomainHosts(domains.NewStore(db).ListAll, time.Now)
+		ingester := &requestmetrics.Ingester{Dir: accesslog.Dir(dataDir), Store: requestStore, Hosts: domainHosts.Lookup}
+		worker.Add(1)
+		go func() {
+			defer worker.Done()
+			ingester.Run(ctx)
 		}()
 	}
 	domains.New(db).WithPanelHost(d.PanelDomain).WithReservedHost(registryService.ReservedHost).RegisterRoutes(mux)

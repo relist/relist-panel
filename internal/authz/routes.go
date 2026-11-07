@@ -56,6 +56,7 @@ var Routes = map[string]Rule{
 	"GET " + compose + "/services":                               {Level: LevelViewer},
 	"GET " + compose + "/services/{service}/effective-variables": {Level: LevelViewer},
 	"GET " + compose + "/services/{service}/metrics":             {Level: LevelViewer},
+	"GET " + compose + "/requests/metrics":                       {Level: LevelViewer},
 	"GET " + compose + "/zero-downtime":                          {Level: LevelViewer},
 	"GET " + compose + "/bindings":                               {Level: LevelViewer},
 	"GET " + compose + "/deployments":                            {Level: LevelViewer},

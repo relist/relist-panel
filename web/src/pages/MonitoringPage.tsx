@@ -1,9 +1,13 @@
 import { ReloadOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Col, Row, Segmented, Skeleton, Typography } from 'antd';
+import { Alert, Button, Card, Col, Flex, Row, Segmented, Skeleton, Tabs, Typography } from 'antd';
+import { SettingOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { MetricChart } from '../components/MetricChart';
 import { PageHeader } from '../components/primitives';
+import { RequestMetricsPanel } from '../components/RequestMetricsPanel';
+import { RequestMetricsSettingsDrawer } from '../components/RequestMetricsSettingsDrawer';
+import { api } from '../data/api';
 import { usePanel } from '../data/store';
 import type { HostMetrics, MetricWindow } from '../data/types';
 import { hostChartSpecs } from './monitor-view';
@@ -26,7 +30,7 @@ function parseWindow(value: string | null): MetricWindow {
  * in the URL's `?window=` so a chart is linkable; the design's `host.name`
  * does not port (no endpoint for host info — GUIDELINES §11).
  */
-export function MonitoringPage() {
+function HostMonitoring() {
   const { isPending, loadMetrics } = usePanel();
   const [searchParams, setSearchParams] = useSearchParams();
   const metricWindow = parseWindow(searchParams.get('window'));
@@ -63,29 +67,16 @@ export function MonitoringPage() {
 
   return (
     <>
-      <PageHeader
-        description="Host metrics — CPU, memory, disk, Docker space and I/O, read by the panel itself."
-        extra={
-          <>
-            <Segmented
-              onChange={(value) => setWindow(value as MetricWindow)}
-              options={WINDOWS.map((value) => ({ label: value, value }))}
-              value={metricWindow}
-            />
-            <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load(metricWindow)}>
-              Refresh
-            </Button>
-          </>
-        }
-        title="Monitoring"
-        titleExtra={
-          <Text style={{ display: 'block', fontSize: 13, maxWidth: 760 }} type="secondary">
-            Read from the host every 10 seconds inside the panel process — no agent, no sidecar. One hour is kept at 10s in
-            memory; the rest of the day is 1-minute rollups in the panel's own database, so a restart costs the current
-            hour's detail rather than the day.
-          </Text>
-        }
-      />
+      <Flex align="center" gap={12} style={{ marginBottom: 16 }} wrap>
+        <Segmented
+          onChange={(value) => setWindow(value as MetricWindow)}
+          options={WINDOWS.map((value) => ({ label: value, value }))}
+          value={metricWindow}
+        />
+        <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load(metricWindow)}>
+          Refresh
+        </Button>
+      </Flex>
 
       {error && (
         <Alert
@@ -112,6 +103,73 @@ export function MonitoringPage() {
               </Col>
             ))}
       </Row>
+    </>
+  );
+}
+
+type TabKey = 'host' | 'requests' | 'panel';
+const TABS: TabKey[] = ['host', 'requests', 'panel'];
+
+/**
+ * Monitoring: the host's own charts, and the request metrics the panel reads
+ * from the Access log (ADR-0035) for all traffic and for the panel alone. The
+ * tab lives in `?tab=` so a view is linkable.
+ */
+export function MonitoringPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requested = searchParams.get('tab');
+  const tab: TabKey = TABS.includes(requested as TabKey) ? (requested as TabKey) : 'host';
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Saving a retention changes which windows exist, so the Requests view
+  // remounts to re-read its retention.
+  const [settingsVersion, setSettingsVersion] = useState(0);
+
+  return (
+    <>
+      <PageHeader
+        description="Host metrics and request metrics, read by the panel itself."
+        title="Monitoring"
+        titleExtra={
+          <Text style={{ display: 'block', fontSize: 13, maxWidth: 760 }} type="secondary">
+            Host metrics are read every 10 seconds inside the panel process — no agent, no sidecar. One hour is kept at 10s
+            in memory; the rest of the day is 1-minute rollups in the panel's own database. Request metrics come from the
+            Traefik Access log.
+          </Text>
+        }
+      />
+      <Tabs
+        activeKey={tab}
+        items={[
+          { key: 'host', label: 'Host', children: <HostMonitoring /> },
+          {
+            key: 'requests',
+            label: 'Requests',
+            children: (
+              <RequestMetricsPanel
+                extra={
+                  <Button icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)}>
+                    Settings
+                  </Button>
+                }
+                key={settingsVersion}
+                load={(window) => api.requestMetrics(window)}
+                swrKey="/api/requests/metrics"
+              />
+            ),
+          },
+          {
+            key: 'panel',
+            label: 'Panel',
+            children: <RequestMetricsPanel load={(window) => api.panelRequestMetrics(window)} swrKey="/api/requests/panel/metrics" />,
+          },
+        ]}
+        onChange={(key) => setSearchParams(key === 'host' ? {} : { tab: key })}
+      />
+      <RequestMetricsSettingsDrawer
+        onClose={() => setSettingsOpen(false)}
+        onSaved={() => setSettingsVersion((value) => value + 1)}
+        open={settingsOpen}
+      />
     </>
   );
 }

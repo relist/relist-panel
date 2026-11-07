@@ -6,7 +6,7 @@ import { EmptyState } from './primitives';
 
 const { Text } = Typography;
 
-export type MetricUnit = 'bytes' | 'bytesPerSecond' | 'percent';
+export type MetricUnit = 'bytes' | 'bytesPerSecond' | 'percent' | 'requestsPerMinute' | 'milliseconds';
 export type MetricPoint = { at: number; value: number };
 export type MetricSeries = { key: string; label: string; points: MetricPoint[] };
 export type MetricSummary = { avg: number; current: number; max: number; min: number };
@@ -41,14 +41,24 @@ export function formatBytes(value: number): string {
 
 /** The reading the header shows, unit included. */
 export function formatMetricValue(value: number, unit: MetricUnit): string {
+  if (unit === 'requestsPerMinute') return `${value >= 100 ? Math.round(value) : value.toFixed(1)} req/min`;
+  if (unit === 'milliseconds') return formatMilliseconds(value);
   if (unit === 'percent') return `${value.toFixed(1)}%`;
   if (unit === 'bytesPerSecond') return `${formatBytes(value)}/s`;
   return formatBytes(value);
 }
 
+/** 410 ms, 1.25 s: a latency reads in seconds from 1000 ms on. */
+export function formatMilliseconds(value: number): string {
+  if (value >= 1000) return `${Number((value / 1000).toFixed(2))} s`;
+  return `${Math.round(value)} ms`;
+}
+
 /** Axis labels drop the unit — the header carries it, and the margin is 46px. */
 export function formatAxisValue(value: number, unit: MetricUnit): string {
   if (unit === 'percent') return `${Math.round(value)}%`;
+  if (unit === 'requestsPerMinute') return `${Number(value.toPrecision(2))}`;
+  if (unit === 'milliseconds') return formatMilliseconds(value);
   return formatBytes(value);
 }
 
@@ -236,7 +246,11 @@ export function MetricChart({
     return () => observer.disconnect();
   }, []);
 
-  const seriesColors = useMemo(() => [token.colorPrimary, token.purple], [token.colorPrimary, token.purple]);
+  // Four lines is the most a chart draws (the status classes); the host charts use the first two.
+  const seriesColors = useMemo(
+    () => [token.colorPrimary, token.purple, token.colorWarning, token.colorError],
+    [token.colorPrimary, token.purple, token.colorWarning, token.colorError],
+  );
 
   const plotted = useMemo(
     () => series.map((entry) => ({ ...entry, points: downsample(entry.points, width) })),
