@@ -32,6 +32,13 @@ describe('readTimeoutWarning', () => {
     expect(readTimeoutWarning('90s')).toBe(true);
     expect(readTimeoutWarning('599')).toBe(true);
   });
+  it('reads every Go duration spelling', () => {
+    expect(readTimeoutWarning('+5m')).toBe(true);
+    expect(readTimeoutWarning('300000000us')).toBe(true);
+    expect(readTimeoutWarning('300000000µs')).toBe(true);
+    expect(readTimeoutWarning('300000000000ns')).toBe(true);
+    expect(readTimeoutWarning('+1h')).toBe(false);
+  });
   it('stays quiet from ten minutes up and on text it cannot read', () => {
     expect(readTimeoutWarning('10m')).toBe(false);
     expect(readTimeoutWarning('3600')).toBe(false);

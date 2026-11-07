@@ -301,3 +301,80 @@ func TestWriteFormReadTimeoutReachesGenerated(t *testing.T) {
 		t.Fatalf("generated web readTimeout = %q, %v", v, ok)
 	}
 }
+
+// An edit that leaves the read timeout as shown does not touch it: a
+// hand-written short value, its comment and its spelling survive, and it does
+// not block the save.
+func TestWriteFormLeavesUnchangedReadTimeoutAlone(t *testing.T) {
+	override := `entryPoints:
+  web:
+    transport:
+      respondingTimeouts:
+        readTimeout: 10s # short on purpose
+  websecure:
+    transport:
+      respondingTimeouts:
+        readTimeout: 10s # short on purpose
+`
+	f, _, err := ReadForm([]byte(override))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.LogLevel = "DEBUG"
+	out, problems, err := WriteForm([]byte(override), f)
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("problems = %+v, err = %v", problems, err)
+	}
+	if strings.Count(string(out), "readTimeout: 10s # short on purpose") != 2 {
+		t.Fatalf("read timeout rewritten:\n%s", out)
+	}
+	// Changed, it is checked and written.
+	f.ReadTimeout = "15s"
+	if _, problems, _ := WriteForm([]byte(override), f); len(problems) != 1 {
+		t.Fatalf("a new short value passed: %+v", problems)
+	}
+}
+
+func TestReadTimeoutThatIsNotADurationIsKept(t *testing.T) {
+	override := "entryPoints:\n  websecure:\n    transport:\n      respondingTimeouts:\n        readTimeout: [1h]\n"
+	f, warnings, err := ReadForm([]byte(override))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(warnings, func(p Problem) bool { return strings.Contains(p.Message, "not a duration") }) {
+		t.Fatalf("warnings = %+v", warnings)
+	}
+	f.LogLevel = "DEBUG"
+	out, problems, err := WriteForm([]byte(override), f)
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("problems = %+v, err = %v", problems, err)
+	}
+	if !strings.Contains(string(out), "readTimeout: [1h]") {
+		t.Fatalf("a list read timeout was dropped:\n%s", out)
+	}
+}
+
+// A null read timeout would pass over base's 3600s; Settings says so and
+// saving removes it.
+func TestNullReadTimeoutWarnsAndSaveRemovesIt(t *testing.T) {
+	override := "entryPoints:\n  websecure:\n    transport:\n      respondingTimeouts:\n        readTimeout: null\n"
+	f, warnings, err := ReadForm([]byte(override))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.ReadTimeout != DefaultReadTimeout || !slices.ContainsFunc(warnings, func(p Problem) bool { return strings.Contains(p.Message, "null") }) {
+		t.Fatalf("form = %q, warnings = %+v", f.ReadTimeout, warnings)
+	}
+	out := writeForm(t, override, f)
+	if strings.Contains(out, "readTimeout") {
+		t.Fatalf("null read timeout kept:\n%s", out)
+	}
+}
+
+func TestRemovingReadTimeoutKeepsSiblings(t *testing.T) {
+	override := "entryPoints:\n  web:\n    transport:\n      respondingTimeouts:\n        readTimeout: 10m\n        writeTimeout: 5m\n  websecure:\n    transport:\n      respondingTimeouts:\n        readTimeout: 10m\n        writeTimeout: 5m\n"
+	out := writeForm(t, override, Form{LogLevel: "INFO", ReadTimeout: "1h"})
+	if strings.Contains(out, "readTimeout") || strings.Count(out, "writeTimeout: 5m") != 2 {
+		t.Fatalf("out:\n%s", out)
+	}
+}
