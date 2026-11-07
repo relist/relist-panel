@@ -68,12 +68,13 @@ func (t *Target) connectRoute(w http.ResponseWriter, r *http.Request) {
 
 func (t *Target) recheckRoute(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		HostPaths []string `json:"hostPaths"`
+		HostPaths       []string `json:"hostPaths"`
+		IncludeRegistry bool     `json:"includeRegistry"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	p, err := t.Recheck(r.Context(), in.HostPaths)
+	p, err := t.RecheckWith(r.Context(), in.HostPaths, in.IncludeRegistry)
 	if err != nil {
 		writeJSONError(w, http.StatusConflict, err.Error())
 		return

@@ -393,7 +393,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	var inner http.Handler = panelUpdates.Middleware(gate.middleware(mux))
 	if migrationOptions != nil {
 		domainStore := domains.NewStore(db)
-		oldHost := migration.NewOldHost(migration.OldHostDeps{
+		oldHostDeps := migration.OldHostDeps{
 			Store:           migration.NewStore(db, nil),
 			Manifests:       migration.ManifestBuilder{DB: db, Composes: composesService, Volumes: d.VolumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir},
 			Queue:           queue,
@@ -407,7 +407,11 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			ReportedDataDir: migrationOptions.ReportedDataDir,
 			Install:         migrationOptions.Install,
 			UpdateLocked:    panelUpdates.Locked,
-		})
+		}
+		if registryCleaner != nil { // a nil *Cleaner in the interface would not read as nil
+			oldHostDeps.RegistryCleanup = registryCleaner
+		}
+		oldHost := migration.NewOldHost(oldHostDeps)
 		oldHost.RegisterRoutes(mux)
 		local := migration.LocalHost{DB: db, Docker: migrationOptions.Docker, DataDir: dataDir, Install: migrationOptions.Install}
 		stateDir := filepath.Join(dataDir, ".migration")

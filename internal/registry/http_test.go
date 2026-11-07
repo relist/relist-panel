@@ -376,3 +376,19 @@ func TestRunNowConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// I3: switching automatic cleanup on starts the schedule from now.
+func TestTurningCleanupOnArmsSchedule(t *testing.T) {
+	f := newAPI(t)
+	ctx := context.Background()
+	old := time.Date(2026, 1, 1, 3, 0, 0, 0, time.UTC)
+	c, _ := f.store.CleanupSettings(ctx)
+	c.Enabled, c.LastRunAt = false, &old
+	_ = f.store.SaveCleanupSettings(ctx, c)
+	if rec := f.do("PUT", "/api/registry/cleanup", `{"enabled":true,"keep":3,"days":["daily"],"minute":180}`); rec.Code != 200 {
+		t.Fatalf("put = %d %s", rec.Code, rec.Body)
+	}
+	if c, _ := f.store.CleanupSettings(ctx); c.LastRunAt == nil || !c.LastRunAt.After(old) {
+		t.Fatalf("lastRunAt = %v, want now", c.LastRunAt)
+	}
+}

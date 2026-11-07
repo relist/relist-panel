@@ -18,7 +18,9 @@ func SelectDeletions(tags []TagInfo, inUse map[string]bool, keep int) (deleteDig
 	sortNewestFirst(sorted)
 	kept := map[string]bool{}
 	for i, t := range sorted {
-		if i < keep || inUse[t.Tag] {
+		// A tag whose created time could not be read sorts last; it is kept
+		// rather than taken for the oldest.
+		if i < keep || inUse[t.Tag] || t.Created.IsZero() {
 			kept[t.Digest] = true
 		}
 	}

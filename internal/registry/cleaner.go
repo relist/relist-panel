@@ -2,10 +2,12 @@ package registry
 
 import (
 	"context"
+
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"relist-panel/internal/audit"
 	"slices"
 	"strings"
 	"sync"
@@ -14,6 +16,11 @@ import (
 
 // ErrCleanupBusy is a second cleanup while one runs.
 var ErrCleanupBusy = errors.New("a Registry cleanup is already running")
+
+// errLocked stops a run that a Panel update or Migration lock meets: the
+// update's quiesce waits for cleanup to be idle, so waiting here would hold
+// it for good.
+var errLocked = errors.New("a Panel update or Migration holds the panel; cleanup stopped")
 
 // emptyRegistryGC is what garbage-collect prints, exiting 1, on a registry
 // nothing was ever pushed to (probe 2026-11-06): nothing to collect.
@@ -31,6 +38,7 @@ type RegistryAPI interface {
 	Repositories(ctx context.Context) ([]string, error)
 	Tags(ctx context.Context, repo string) ([]string, error)
 	TagInfo(ctx context.Context, repo, tag string) (TagInfo, error)
+	Digest(ctx context.Context, repo, tag string) (string, error)
 	Delete(ctx context.Context, repo, digest string) error
 }
 
@@ -89,27 +97,55 @@ func (c *Cleaner) Running() bool {
 // Gate before touching the registry. ctx's values are kept, not its
 // cancellation, so the run outlives the request.
 func (c *Cleaner) RunNow(ctx context.Context, trigger string) (int64, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.done != nil {
+	if !c.tryStart() {
 		return 0, ErrCleanupBusy
 	}
 	id, err := c.store().StartRun(ctx, c.d.Now(), trigger)
 	if err != nil {
+		c.end()
 		return 0, err
 	}
-	done := make(chan struct{})
-	c.done = done
 	go func() {
-		defer func() {
-			c.mu.Lock()
-			c.done = nil
-			c.mu.Unlock()
-			close(done)
-		}()
-		c.run(context.WithoutCancel(ctx), id)
+		defer c.end()
+		c.run(context.WithoutCancel(ctx), id, trigger)
 	}()
 	return id, nil
+}
+
+// tryStart marks the Cleaner busy; false when it already is.
+func (c *Cleaner) tryStart() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.done != nil {
+		return false
+	}
+	c.done = make(chan struct{})
+	return true
+}
+
+func (c *Cleaner) end() {
+	c.mu.Lock()
+	done := c.done
+	c.done = nil
+	c.mu.Unlock()
+	close(done)
+}
+
+// waitGate waits while a Deployment runs; a Panel update or Migration lock
+// stops the run instead (errLocked).
+func (c *Cleaner) waitGate(ctx context.Context) error {
+	for c.d.Gate != nil {
+		if c.d.Gate.Locked() {
+			return errLocked
+		}
+		if !c.d.Gate.Busy() {
+			return nil
+		}
+		if err := c.sleep(ctx, c.d.Poll); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // WaitIdle returns once no run is in progress, or ctx ends.
@@ -137,20 +173,21 @@ func (c *Cleaner) sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func (c *Cleaner) run(ctx context.Context, id int64) {
+func (c *Cleaner) run(ctx context.Context, id int64, trigger string) {
 	var logs strings.Builder
 	logf := func(format string, args ...any) { fmt.Fprintf(&logs, format+"\n", args...) }
 	finish := func(result string, deleted []string, freed int64) {
 		if err := c.store().FinishRun(ctx, id, c.d.Now(), result, deleted, freed, logs.String()); err != nil {
 			log.Printf("registry cleanup: record run %d: %v", id, err)
 		}
-	}
-	for c.d.Gate != nil && (c.d.Gate.Busy() || c.d.Gate.Locked()) {
-		if err := c.sleep(ctx, c.d.Poll); err != nil {
-			logf("stopped while waiting: %v", err)
-			finish(RunFailed, nil, 0)
-			return
+		if trigger == "schedule" {
+			c.auditScheduled(ctx, result, deleted, freed)
 		}
+	}
+	if err := c.waitGate(ctx); err != nil {
+		logf("%v", err)
+		finish(RunFailed, nil, 0)
+		return
 	}
 	st, err := c.store().Settings(ctx)
 	if err != nil || !st.Enabled {
@@ -180,6 +217,18 @@ func (c *Cleaner) run(ctx context.Context, id int64) {
 	finish(result, deleted, max(before-after, 0))
 }
 
+// auditScheduled writes a scheduled run to the audit log; a user's run is
+// written by the authz middleware on its POST.
+func (c *Cleaner) auditScheduled(ctx context.Context, result string, deleted []string, freed int64) {
+	err := audit.Record(ctx, c.store().db, audit.Event{
+		At: c.d.Now(), Actor: "schedule", Action: "registry.cleanup_run", Outcome: audit.OutcomeOK, Target: "Registry",
+		Detail: map[string]any{"result": result, "deleted": len(deleted), "freedBytes": freed},
+	})
+	if err != nil {
+		log.Printf("registry cleanup: audit: %v", err)
+	}
+}
+
 // retain deletes what SelectDeletions picks in each repository. Before each
 // delete it reads the repository's tags again and skips a digest that a tag
 // outside the selection now points at (a push raced). It returns repo:tag
@@ -199,6 +248,11 @@ func (c *Cleaner) retain(ctx context.Context, st Settings, keep int, logf func(s
 	}
 	var deleted []string
 	for _, repo := range repos {
+		// A Deployment may have started, or an update locked, since the
+		// last repository.
+		if err := c.waitGate(ctx); err != nil {
+			return deleted, err
+		}
 		infos, err := tagInfos(ctx, reg, repo)
 		if err != nil {
 			return deleted, err
@@ -212,19 +266,26 @@ func (c *Cleaner) retain(ctx context.Context, st Settings, keep int, logf func(s
 			selected[t] = true
 		}
 		for _, digest := range digests {
-			now, err := tagInfos(ctx, reg, repo)
+			// Re-read only what could have moved onto digest: tags outside
+			// the selection, one HEAD each.
+			current, err := reg.Tags(ctx, repo)
 			if err != nil {
 				return deleted, err
 			}
 			var gone, raced []string
-			for _, info := range now {
-				if info.Digest != digest {
+			for _, tag := range current {
+				if selected[tag] {
+					if slices.ContainsFunc(infos, func(i TagInfo) bool { return i.Tag == tag && i.Digest == digest }) {
+						gone = append(gone, tag)
+					}
 					continue
 				}
-				if selected[info.Tag] {
-					gone = append(gone, info.Tag)
-				} else {
-					raced = append(raced, info.Tag)
+				d, err := reg.Digest(ctx, repo, tag)
+				if err != nil {
+					return deleted, err
+				}
+				if d == digest {
+					raced = append(raced, tag)
 				}
 			}
 			if len(raced) > 0 {
@@ -322,22 +383,32 @@ func (c *Cleaner) setReadOnly(ctx context.Context, readOnly bool) error {
 }
 
 // restoreWritable is the part that always runs: read-write, restart, remove
-// the GC container, clear gc_running.
+// the GC container. gc_running is cleared only once the Registry is
+// writable again, so a failed restore is retried (recover).
 func (c *Cleaner) restoreWritable(ctx context.Context) error {
-	err := c.setReadOnly(ctx, false)
-	if rerr := c.host().RemoveGC(ctx); err == nil {
-		err = rerr
+	if err := c.setReadOnly(ctx, false); err != nil {
+		return fmt.Errorf("put the Registry back read-write: %w", err)
 	}
-	if serr := c.store().SetGCRunning(ctx, 0); err == nil {
-		err = serr
+	if err := c.host().RemoveGC(ctx); err != nil {
+		log.Printf("registry cleanup: remove the GC container: %v", err)
 	}
-	return err
+	return c.store().SetGCRunning(ctx, 0)
 }
 
 // Startup finishes a run the panel was killed during: it waits for the GC
 // container, puts the registry back read-write and records the run as
 // interrupted.
 func (c *Cleaner) Startup(ctx context.Context) error {
+	if !c.tryStart() {
+		return ErrCleanupBusy
+	}
+	defer c.end()
+	return c.recover(ctx)
+}
+
+// recover finishes an outstanding gc_running: after a panel restart, or a
+// restore that failed. A run still recorded running becomes interrupted.
+func (c *Cleaner) recover(ctx context.Context) error {
 	id, err := c.store().GCRunning(ctx)
 	if err != nil || id == 0 {
 		return err
@@ -346,12 +417,14 @@ func (c *Cleaner) Startup(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	rerr := c.restoreWritable(ctx)
-	msg := "the panel stopped during garbage collection\n" + strings.TrimSpace(state.Logs)
-	if ferr := c.store().FinishRun(ctx, id, c.d.Now(), RunInterrupted, nil, 0, msg); rerr == nil {
-		rerr = ferr
+	if err := c.restoreWritable(ctx); err != nil {
+		return err
 	}
-	return rerr
+	if result, err := c.store().RunResult(ctx, id); err != nil || result != RunRunning {
+		return err
+	}
+	msg := "the panel stopped during garbage collection\n" + strings.TrimSpace(state.Logs)
+	return c.store().FinishRun(ctx, id, c.d.Now(), RunInterrupted, nil, 0, msg)
 }
 
 // RunScheduler checks each minute whether a scheduled run is due, until ctx
@@ -366,6 +439,16 @@ func (c *Cleaner) RunScheduler(ctx context.Context) {
 }
 
 func (c *Cleaner) tick(ctx context.Context) {
+	// A restore that failed (or a Startup that could not reach Docker) is
+	// retried here first.
+	if id, err := c.store().GCRunning(ctx); err == nil && id != 0 && c.tryStart() {
+		err := c.recover(ctx)
+		c.end()
+		if err != nil {
+			log.Printf("registry cleanup: finish garbage collection: %v", err)
+			return
+		}
+	}
 	st, err := c.store().Settings(ctx)
 	if err != nil || !st.Enabled {
 		return
@@ -376,11 +459,18 @@ func (c *Cleaner) tick(ctx context.Context) {
 		return
 	}
 	now := c.d.Now()
-	if !Due(now, settings) || c.Running() {
+	if settings.LastRunAt == nil {
+		// Never ran (an upgrade, or a fresh install): start the schedule
+		// from now instead of deleting at once.
+		if err := c.store().SetLastRunAt(ctx, now); err != nil {
+			log.Printf("registry cleanup: arm the schedule: %v", err)
+		}
 		return
 	}
-	settings.LastRunAt = &now
-	if err := c.store().SaveCleanupSettings(ctx, settings); err != nil {
+	if !Due(now, settings) || c.Running() || (c.d.Gate != nil && c.d.Gate.Locked()) {
+		return
+	}
+	if err := c.store().SetLastRunAt(ctx, now); err != nil {
 		log.Printf("registry cleanup: record schedule: %v", err)
 		return
 	}

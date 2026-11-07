@@ -293,11 +293,17 @@ func (t *Target) setError(err error) {
 
 // Recheck re-runs preflight for another host path selection.
 func (t *Target) Recheck(ctx context.Context, selected []string) (Progress, error) {
+	return t.RecheckWith(ctx, selected, false)
+}
+
+// RecheckWith is Recheck; includeRegistry adds the Registry's data to the
+// checks.
+func (t *Target) RecheckWith(ctx context.Context, selected []string, includeRegistry bool) (Progress, error) {
 	if !t.op.TryLock() {
 		return Progress{}, errBusy
 	}
 	defer t.op.Unlock()
-	if err := t.recheck(ctx, selected); err != nil {
+	if err := t.recheck(ctx, selected, includeRegistry); err != nil {
 		return Progress{}, err
 	}
 	return t.Progress(), nil
@@ -305,7 +311,7 @@ func (t *Target) Recheck(ctx context.Context, selected []string) (Progress, erro
 
 // recheck runs preflight without holding t.mu, so polling never waits on
 // the source or on a helper container. The caller holds t.op.
-func (t *Target) recheck(ctx context.Context, selected []string) error {
+func (t *Target) recheck(ctx context.Context, selected []string, includeRegistry bool) error {
 	if selected == nil {
 		selected = []string{}
 	}
@@ -319,13 +325,15 @@ func (t *Target) recheck(ctx context.Context, selected []string) error {
 	if err != nil {
 		return err
 	}
-	checks, err := Evaluate(ctx, t.d.Local, info, selected)
+	includeRegistry = includeRegistry && info.Registry != nil
+	checks, err := EvaluateWith(ctx, t.d.Local, info, selected, includeRegistry)
 	if err != nil {
 		return err
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.st.Info, t.st.Checks, t.st.Selected, t.st.Error = &info, checks, selected, ""
+	t.st.IncludeRegistry = includeRegistry
 	return t.save()
 }
 
@@ -340,7 +348,7 @@ func (t *Target) StartWith(ctx context.Context, selected []string, includeRegist
 		return errBusy
 	}
 	defer t.op.Unlock()
-	if err := t.recheck(ctx, selected); err != nil {
+	if err := t.recheck(ctx, selected, includeRegistry); err != nil {
 		return err
 	}
 	t.mu.Lock()
@@ -351,7 +359,6 @@ func (t *Target) StartWith(ctx context.Context, selected []string, includeRegist
 		}
 	}
 	t.st.Phase = PhaseLocking
-	t.st.IncludeRegistry = includeRegistry && t.st.Info != nil && t.st.Info.Registry != nil
 	what := fmt.Sprintf("copying %d host paths", len(t.st.Selected))
 	if t.st.IncludeRegistry {
 		what += " and the Registry's data"

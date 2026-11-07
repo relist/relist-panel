@@ -287,3 +287,12 @@ func TestReconcileClearsAStaleError(t *testing.T) {
 		t.Fatalf("status after repair = %s, want running", status)
 	}
 }
+
+// I3: enabling the Registry starts the cleanup schedule from now.
+func TestEnableArmsCleanupSchedule(t *testing.T) {
+	f := newService(t)
+	f.enable(t)
+	if c, _ := f.store.CleanupSettings(context.Background()); c.LastRunAt == nil {
+		t.Fatal("Enable left the schedule unarmed, so cleanup would run at once")
+	}
+}

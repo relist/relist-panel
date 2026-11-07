@@ -19,14 +19,15 @@ import (
 
 // fakeController records what the TUI asked the panel to do.
 type fakeController struct {
-	mu        sync.Mutex
-	connected [][]string
-	rechecked [][]string
-	started   [][]string
-	registry  []bool // includeRegistry of each start
-	retried   int
-	aborted   int
-	startErr  error
+	mu                sync.Mutex
+	connected         [][]string
+	rechecked         [][]string
+	started           [][]string
+	registry          []bool // includeRegistry of each start
+	recheckedRegistry []bool
+	retried           int
+	aborted           int
+	startErr          error
 
 	status      migration.OldHostStatus
 	activity    migration.Activity
@@ -52,10 +53,11 @@ func (f *fakeController) Connect(_ context.Context, oldHostURL, token, selfURL s
 	return migration.Progress{Phase: migration.PhaseConnected, SourceURL: oldHostURL}, nil
 }
 
-func (f *fakeController) Recheck(_ context.Context, paths []string) (migration.Progress, error) {
+func (f *fakeController) Recheck(_ context.Context, paths []string, includeRegistry bool) (migration.Progress, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rechecked = append(f.rechecked, slices.Clone(paths))
+	f.recheckedRegistry = append(f.recheckedRegistry, includeRegistry)
 	return f.progress, nil
 }
 
@@ -328,14 +330,17 @@ func TestPullRegistryCheckbox(t *testing.T) {
 	}
 	p := connected()
 	p.Info.Registry = &migration.Item{ID: "volume-relist-registry", Kind: migration.KindVolume, Size: 3 << 20}
+	ticked := p
+	ticked.IncludeRegistry = true
+	c.progress = ticked // what the panel answers the recheck with
 	m = pull(c, p)
 	mustContain(t, m, "[ ] Include registry data ("+migration.HumanBytes(3<<20)+")")
 	m = send(t, m, key("down"))
 	m = send(t, m, key("down"))
 	m = send(t, m, key("space"))
 	mustContain(t, m, "[x] Include registry data")
-	if len(c.rechecked) != 0 {
-		t.Fatalf("ticking Registry data rechecked host paths: %q", c.rechecked)
+	if len(c.recheckedRegistry) != 1 || !c.recheckedRegistry[0] {
+		t.Fatalf("ticking Registry data rechecks with it: %v", c.recheckedRegistry)
 	}
 	m = send(t, m, key("enter"))
 	m = send(t, m, key("y"))

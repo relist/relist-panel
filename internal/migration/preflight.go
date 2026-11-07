@@ -120,8 +120,17 @@ func (l LocalHost) free(path string) (int64, error) {
 }
 
 // Evaluate checks the new host against what the source reported, for the
-// host paths the operator selected.
+// host paths the operator selected, without the Registry's data.
 func Evaluate(ctx context.Context, local LocalHost, src OldHostInfo, selected []string) ([]Check, error) {
+	return EvaluateWith(ctx, local, src, selected, false)
+}
+
+// EvaluateWith is Evaluate; includeRegistry checks the Registry volume like
+// any other volume: its size, and that this host has none already.
+func EvaluateWith(ctx context.Context, local LocalHost, src OldHostInfo, selected []string, includeRegistry bool) ([]Check, error) {
+	if includeRegistry && src.Registry != nil && src.Registry.Volume != nil {
+		src.Volumes = append(slices.Clone(src.Volumes), *src.Registry)
+	}
 	var checks []Check
 	block := func(msg string) { checks = append(checks, Check{Blocking: true, Message: msg}) }
 	warn := func(msg string) { checks = append(checks, Check{Message: msg}) }
