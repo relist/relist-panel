@@ -23,10 +23,6 @@ func authEnv(ctx context.Context, src registryauth.Source, environ []string) ([]
 		return nil, nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
-	if err := registryauth.WriteConfig(dir, auths); err != nil {
-		cleanup()
-		return nil, nil, err
-	}
 
 	var home, dockerConfig string
 	hasBuildx := false
@@ -44,14 +40,29 @@ func authEnv(ctx context.Context, src registryauth.Source, environ []string) ([]
 		}
 		env = append(env, kv)
 	}
-	if !hasBuildx {
-		original := dockerConfig
-		if original == "" && home != "" {
-			original = filepath.Join(home, ".docker")
+	original := dockerConfig
+	if original == "" && home != "" {
+		original = filepath.Join(home, ".docker")
+	}
+	var base []byte
+	if original != "" {
+		base, _ = os.ReadFile(filepath.Join(original, "config.json")) // unreadable: start empty
+		// Contexts and CLI plugins live under the config dir too.
+		for _, sub := range []string{"contexts", "cli-plugins"} {
+			if info, err := os.Stat(filepath.Join(original, sub)); err == nil && info.IsDir() {
+				if err := os.Symlink(filepath.Join(original, sub), filepath.Join(dir, sub)); err != nil {
+					cleanup()
+					return nil, nil, err
+				}
+			}
 		}
-		if original != "" {
-			env = append(env, "BUILDX_CONFIG="+filepath.Join(original, "buildx"))
-		}
+	}
+	if err := registryauth.WriteConfigOver(dir, auths, base); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	if !hasBuildx && original != "" {
+		env = append(env, "BUILDX_CONFIG="+filepath.Join(original, "buildx"))
 	}
 	return append(env, "DOCKER_CONFIG="+dir), cleanup, nil
 }

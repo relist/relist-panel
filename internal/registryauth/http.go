@@ -85,19 +85,27 @@ func readInput(w http.ResponseWriter, r *http.Request, requireSecret bool) (Exte
 	}
 	host, err := NormalizeHost(in.Host)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		writeFieldError(w, http.StatusUnprocessableEntity, "host", err.Error())
 		return External{}, false
 	}
 	username := strings.TrimSpace(in.Username)
 	if username == "" {
-		writeError(w, http.StatusUnprocessableEntity, "username is required")
+		writeFieldError(w, http.StatusUnprocessableEntity, "username", "username is required")
 		return External{}, false
 	}
-	if requireSecret && in.Secret == "" {
-		writeError(w, http.StatusUnprocessableEntity, "token or password is required")
+	// Docker's config joins them as user:secret, so a colon would split there.
+	if strings.Contains(username, ":") {
+		writeFieldError(w, http.StatusUnprocessableEntity, "username", `username cannot contain ":"`)
 		return External{}, false
 	}
-	return External{Host: host, Username: username, Secret: in.Secret}, true
+	// A pasted token often brings a newline; no token or password starts or
+	// ends with whitespace.
+	secret := strings.TrimSpace(in.Secret)
+	if requireSecret && secret == "" {
+		writeFieldError(w, http.StatusUnprocessableEntity, "secret", "token or password is required")
+		return External{}, false
+	}
+	return External{Host: host, Username: username, Secret: secret}, true
 }
 
 func (s *Service) create(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +140,7 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if old.Host != in.Host {
-			writeError(w, http.StatusUnprocessableEntity, "enter the token or password again when changing the host")
+			writeFieldError(w, http.StatusUnprocessableEntity, "secret", "enter the token or password again when changing the host")
 			return
 		}
 	}
@@ -206,7 +214,7 @@ func readID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 func writeStoreError(w http.ResponseWriter, err error, fallback string) {
 	switch {
 	case errors.Is(err, ErrDuplicateHost):
-		writeError(w, http.StatusConflict, err.Error())
+		writeFieldError(w, http.StatusConflict, "host", err.Error())
 	case errors.Is(err, sql.ErrNoRows):
 		writeError(w, http.StatusNotFound, "not found")
 	default:
@@ -222,4 +230,10 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+// writeFieldError names the form field at fault, so the page puts the
+// message under it.
+func writeFieldError(w http.ResponseWriter, status int, field, message string) {
+	writeJSON(w, status, map[string]string{"error": message, "field": field})
 }
