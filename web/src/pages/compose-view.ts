@@ -117,6 +117,8 @@ export function composeLinkIsStale(
   return projectId !== location.project.id || environmentId !== location.environment.id;
 }
 
+const NOT_DEPLOYED_REFUSAL = 'This Compose has not been deployed yet, so it has no volumes to replace.';
+
 /**
  * The fresh-volumes dialog's rules from the page's Volumes resolution: which
  * named volumes to list, and why the action is refused when it is. The list is
@@ -132,7 +134,7 @@ export function freshDeployView(
     return {
       volumes: [],
       refusal: isNotDeployed(error)
-        ? 'This Compose has not been deployed yet, so it has no volumes to replace.'
+        ? NOT_DEPLOYED_REFUSAL
         : `This Compose’s volumes could not be resolved: ${error}`,
     };
   }
@@ -141,6 +143,9 @@ export function freshDeployView(
   }
   if (!payload.available) {
     return { volumes: [], refusal: 'Volume management is unavailable on this host.' };
+  }
+  if (!payload.deployed) {
+    return { volumes: [], refusal: NOT_DEPLOYED_REFUSAL };
   }
   return { volumes: payload.volumes.filter((v) => v.kind === 'volume').map((v) => v.source), refusal: undefined };
 }

@@ -25,12 +25,23 @@ function volume(overrides: Partial<ComposeVolume> = {}): ComposeVolume {
 }
 
 function payload(overrides: Partial<ComposeVolumes> = {}): ComposeVolumes {
-  return { available: true, services: [], volumes: [], ...overrides };
+  return { available: true, deployed: true, services: [], volumes: [], ...overrides };
 }
 
 describe('volumesView', () => {
   it('is loading while the page has neither a payload nor an error', () => {
     expect(volumesView(undefined, undefined)).toEqual({ status: 'loading' });
+  });
+
+  it('is not-deployed, with no CLI message, when the API says no deploy has written the env file', () => {
+    expect(volumesView(payload({ deployed: false }), undefined)).toEqual({ status: 'not-deployed' });
+  });
+
+  it('is hidden before it is not-deployed when the feature cannot run', () => {
+    expect(volumesView(payload({ available: false, deployed: false, reason: 'no socket' }), undefined)).toEqual({
+      status: 'hidden',
+      reason: 'no socket',
+    });
   });
 
   it('carries the CLI message in the not-deployed state, without the panel wrapper', () => {

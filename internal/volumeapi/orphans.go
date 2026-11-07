@@ -23,13 +23,18 @@ type orphanResponse struct {
 }
 
 // listOrphans answers the volumes Compose created for this Compose's project
-// that its current YAML no longer declares. The derivation is the Resolver's,
-// so a resolution or listing failure — `couldn't find env file` before the
-// first deploy included — surfaces the CLI's own message with a Bad Gateway
-// status. It does not depend on the helper-container availability probe.
+// that its current YAML no longer declares. Before the first deploy there is
+// no env file to resolve against, so the list is empty and the CLI is not
+// asked. The derivation is the Resolver's, so a resolution or listing failure
+// surfaces the CLI's own message with a Bad Gateway status. It does not
+// depend on the helper-container availability probe.
 func (s *Service) listOrphans(w http.ResponseWriter, r *http.Request) {
 	ref, ok := s.orphanRef(w, r)
 	if !ok {
+		return
+	}
+	if !deployed(ref.EnvFilePath) {
+		writeJSON(w, http.StatusOK, orphansResponse{Orphans: []orphanResponse{}})
 		return
 	}
 

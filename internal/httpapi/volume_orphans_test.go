@@ -45,6 +45,7 @@ func setupOrphanCompose(t *testing.T) orphanFixture {
 	p := createProject(t, server, "Orphan Co", "")
 	e := productionEnvironment(t, server, p)
 	c := createCompose(t, server, p.ID, e.ID, "web")
+	writeDeployedEnvFile(t, server, c.ID)
 	project := "relist-c" + lifecycleID(c.ID)
 	server.volumeCLI.ComposeConfigOutput = orphanConfig(project)
 	base := composeVolumesPath(p.ID, e.ID, c.ID) + "/orphans"
@@ -99,16 +100,43 @@ func TestOrphanVolumesListIsAnEmptyArrayWhenThereAreNone(t *testing.T) {
 	}
 }
 
-func TestOrphanVolumesListSurfacesTheNotDeployedError(t *testing.T) {
+// Before the first deploy there is nothing for the CLI to resolve, so the
+// list is an empty 200 and the CLI is not asked.
+func TestOrphanVolumesListIsEmptyBeforeTheFirstDeploy(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	p := createProject(t, server, "Orphan Co", "")
+	e := productionEnvironment(t, server, p)
+	c := createCompose(t, server, p.ID, e.ID, "web")
+
+	response := server.request(t, http.MethodGet, composeVolumesPath(p.ID, e.ID, c.ID)+"/orphans", nil)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.StatusCode)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(response.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if string(raw["orphans"]) != "[]" {
+		t.Fatalf("orphans = %s, want []", raw["orphans"])
+	}
+	cli := server.volumeCLI
+	if len(cli.ComposeConfigRefs) != 0 || len(cli.ListedProjects) != 0 {
+		t.Fatalf("an undeployed Compose reached the Docker CLI: %+v", cli)
+	}
+}
+
+func TestOrphanVolumesListSurfacesTheCLIsErrorAfterADeploy(t *testing.T) {
 	f := setupOrphanCompose(t)
-	f.server.volumeCLI.ComposeConfigErr = errors.New("couldn't find env file: /data/.env")
+	f.server.volumeCLI.ComposeConfigErr = errors.New("services.web.image must be a string")
 
 	response := f.server.request(t, http.MethodGet, f.list, nil)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", response.StatusCode)
 	}
-	assertErrorContains(t, response, "couldn't find env file")
+	assertErrorContains(t, response, "must be a string")
 }
 
 func TestOrphanVolumesListFailureIs502(t *testing.T) {

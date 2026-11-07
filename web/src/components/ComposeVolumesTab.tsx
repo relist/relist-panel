@@ -94,7 +94,7 @@ export function ComposeVolumesTab({
           subTitle="The panel asks the Docker CLI which Volumes this Compose mounts, so that a path is never typed by hand. That needs the environment file a deploy writes."
           title="Not resolvable until this Compose is deployed"
         />
-        <CodeValue label="docker compose:" value={view.message} />
+        {view.message && <CodeValue label="docker compose:" value={view.message} />}
       </Card>
     );
   }
