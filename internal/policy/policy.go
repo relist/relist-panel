@@ -555,6 +555,7 @@ func (c *checker) networks(name string, value any) {
 			continue
 		}
 		if key == sharedNetwork && def["name"] == sharedNetwork && def["external"] == true {
+			c.registryAlias(name, joined[key])
 			continue
 		}
 		if def["external"] == true {
@@ -570,6 +571,33 @@ func (c *checker) networks(name string, value any) {
 		c.dockerLabels(name, "network "+key, labels)
 		if want := c.rules.ProjectName + "_" + key; def["name"] != want {
 			c.add(name, "network %s is not named %s", key, want)
+		}
+	}
+}
+
+// registryHost is the panel's Registry container on the shared network. The
+// panel and its cleanup send the Registry's system login to it by this name,
+// so a service answering to it there would get that login from Docker's DNS.
+const registryHost = "relist-registry"
+
+// registryAlias refuses a service on the shared network that Docker's DNS
+// would answer for relist-registry: its service name, its container_name or
+// one of its aliases there. DNS names match in any case and with a final dot.
+func (c *checker) registryAlias(name string, attachment any) {
+	names := []string{name}
+	if container, ok := c.services[name]["container_name"].(string); ok {
+		names = append(names, container)
+	}
+	settings, _ := attachment.(map[string]any)
+	for _, alias := range list(settings["aliases"]) {
+		if text, ok := alias.(string); ok {
+			names = append(names, text)
+		}
+	}
+	for _, n := range names {
+		if strings.EqualFold(strings.TrimSuffix(n, "."), registryHost) {
+			c.add(name, "%s on %s is the panel's Registry", registryHost, sharedNetwork)
+			return
 		}
 	}
 }
