@@ -130,7 +130,7 @@ describe('RegistryPage External registries', () => {
   });
 
   it('puts a duplicate host error under the Host field', async () => {
-    api.createExternalRegistry.mockRejectedValue(new ApiError(409, 'an External registry for this host already exists'));
+    api.createExternalRegistry.mockRejectedValue(new ApiError(409, 'an External registry for this host already exists', 'host'));
     const user = userEvent.setup();
     show();
     await screen.findByText('ghcr.io');
@@ -414,5 +414,43 @@ describe('RegistryPage Kept tags', () => {
     await user.click(await screen.findByRole('button', { name: 'Show tags of app' }));
     await screen.findByText('v1');
     expect(screen.getAllByText('Kept').length).toBe(1);
+  });
+});
+
+describe('RegistryPage External registries polish', () => {
+  it('puts an error under the field the API names', async () => {
+    api.createExternalRegistry.mockRejectedValue(new ApiError(422, 'username cannot contain ":"', 'username'));
+    const user = userEvent.setup();
+    show();
+    await screen.findByText('ghcr.io');
+    await user.click(screen.getAllByRole('button', { name: /Add registry/ })[0]);
+    await user.type(screen.getByLabelText('Host'), 'quay.io');
+    await user.type(screen.getByLabelText('Username'), 'a:b');
+    await user.type(screen.getByLabelText('Token or password'), 'tok');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    const message = await screen.findByText('username cannot contain ":"');
+    expect(message.closest('.ant-form-item')?.textContent).toContain('Username');
+  });
+
+  it('tests two logins at once, each with its own spinner', async () => {
+    let release: () => void = () => {};
+    api.testExternalRegistry.mockImplementation(() => new Promise((resolve) => (release = () => resolve({ error: '', ok: true }))));
+    const user = userEvent.setup();
+    show();
+    await screen.findByText('ghcr.io');
+    await user.click(screen.getByRole('button', { name: 'Test ghcr.io' }));
+    await user.click(screen.getByRole('button', { name: 'Test docker.io' }));
+    expect(api.testExternalRegistry).toHaveBeenCalledTimes(2);
+    for (const name of ['Test ghcr.io', 'Test docker.io']) {
+      expect(screen.getByRole('button', { name }).className).toContain('ant-btn-loading');
+    }
+    release();
+  });
+
+  it('wraps a long Test error instead of widening the table', async () => {
+    api.listExternalRegistries.mockResolvedValue([{ ...hub, lastTestError: 'x'.repeat(300) }]);
+    show();
+    const error = await screen.findByText('x'.repeat(300));
+    expect(error.style.overflowWrap).toBe('anywhere');
   });
 });

@@ -82,18 +82,39 @@ const dockerHubKey = "https://index.docker.io/v1/"
 // WriteConfig writes dir/config.json, mode 0600, with one auths entry per
 // login.
 func WriteConfig(dir string, auths []Auth) error {
-	type entry struct {
-		Auth string `json:"auth"`
+	return WriteConfigOver(dir, auths, nil)
+}
+
+// WriteConfigOver is WriteConfig on top of an original config.json: its
+// other keys (currentContext, proxies, ...) and other hosts' logins stay. A
+// credsStore, and a credHelper for one of these hosts, would make Docker
+// ask the helper instead of reading auths, so they go. An original that does
+// not parse is ignored.
+func WriteConfigOver(dir string, auths []Auth, original []byte) error {
+	cfg := map[string]any{}
+	if len(original) > 0 {
+		if err := json.Unmarshal(original, &cfg); err != nil || cfg == nil {
+			cfg = map[string]any{}
+		}
 	}
-	cfg := struct {
-		Auths map[string]entry `json:"auths"`
-	}{Auths: map[string]entry{}}
+	entries, _ := cfg["auths"].(map[string]any)
+	if entries == nil {
+		entries = map[string]any{}
+	}
+	helpers, _ := cfg["credHelpers"].(map[string]any)
+	delete(cfg, "credsStore")
 	for _, a := range auths {
 		key := a.Host
 		if key == DockerHub {
 			key = dockerHubKey
 		}
-		cfg.Auths[key] = entry{Auth: base64.StdEncoding.EncodeToString([]byte(a.Username + ":" + a.Secret))}
+		entries[key] = map[string]string{"auth": base64.StdEncoding.EncodeToString([]byte(a.Username + ":" + a.Secret))}
+		delete(helpers, a.Host)
+		delete(helpers, key)
+	}
+	cfg["auths"] = entries
+	if helpers != nil {
+		cfg["credHelpers"] = helpers
 	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
