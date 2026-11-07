@@ -85,7 +85,17 @@ export function RequestMetricsSettingsDrawer({
       {saveError && <Alert showIcon style={{ marginBottom: 16 }} title={saveError} type="error" />}
       <Flex gap={8} vertical>
         <Text>Days of hourly history to keep</Text>
-        <InputNumber aria-label="Days of hourly history to keep" max={90} min={1} onChange={setDays} precision={0} style={{ width: 160 }} value={days} />
+        {/* No min/max: antd would clamp 0 to 1 on blur and let Save write a
+            value the operator never typed. Out of range is an error instead. */}
+        <InputNumber
+          aria-label="Days of hourly history to keep"
+          onChange={setDays}
+          precision={0}
+          status={days !== null && !valid ? 'error' : undefined}
+          style={{ width: 160 }}
+          value={days}
+        />
+        {days !== null && !valid && <Text type="danger">Enter a whole number of days from 1 to 90.</Text>}
         <Text type="secondary">
           The last 24 hours are always kept per minute. Older history is kept per hour for this many days, 1 to 90. The
           7, 30 and 90 day windows appear once the retention covers them.
