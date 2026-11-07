@@ -212,7 +212,10 @@ func TestRecordScanLarge(t *testing.T) {
 	if err := s.RecordScan(ctx, "sha256:big", "node:24", Report{Findings: findings}, "db", t0); err != nil {
 		t.Fatal(err)
 	}
-	if d := time.Since(start); d > 2*time.Second {
+	// One transaction keeps 6000 findings well under 2s (0.1s normally);
+	// a row per commit would not. The race detector slows everything
+	// ~40x, so only the count is checked under it.
+	if d := time.Since(start); d > 2*time.Second && !raceEnabled {
 		t.Fatalf("RecordScan took %s", d)
 	}
 	if n := countFindings(t, s, "sha256:big"); n != 6000 {
