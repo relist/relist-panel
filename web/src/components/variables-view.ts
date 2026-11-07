@@ -166,3 +166,17 @@ export function effectiveVariableCount(
 ): number {
   return new Set([...environmentVariables, ...composeVariables].map((variable) => variable.key)).size;
 }
+
+/** One key a deploy writes, with the layer that wins it. */
+export type RailVariable = { key: string; secret: boolean; source: 'environment' | 'compose'; value: string };
+
+/** Environment Variables with the Compose's own laid over them: a Compose Variable wins its key. Sorted by key. */
+export function railVariables(
+  environmentVariables: readonly { key: string; secret: boolean; value: string }[],
+  composeVariables: readonly { key: string; secret: boolean; value: string }[],
+): RailVariable[] {
+  const byKey = new Map<string, RailVariable>();
+  for (const variable of environmentVariables) byKey.set(variable.key, { ...variable, source: 'environment' });
+  for (const variable of composeVariables) byKey.set(variable.key, { ...variable, source: 'compose' });
+  return [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key));
+}

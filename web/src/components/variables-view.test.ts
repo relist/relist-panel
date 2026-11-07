@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  railVariables,
   duplicateKeys,
   invalidKeys,
   isSecret,
@@ -209,5 +210,30 @@ describe('effectiveVariableCount', () => {
     expect(effectiveVariableCount([{ key: 'A' }, { key: 'B' }], [{ key: 'B' }, { key: 'C' }])).toBe(3);
     expect(effectiveVariableCount([], [])).toBe(0);
     expect(effectiveVariableCount([{ key: 'A' }], [])).toBe(1);
+  });
+});
+
+describe('railVariables', () => {
+  it('lets a Compose Variable win its key and sorts by key', () => {
+    const rows = railVariables(
+      [
+        { key: 'B', secret: false, value: 'env-b' },
+        { key: 'A', secret: false, value: 'env-a' },
+      ],
+      [
+        { key: 'B', secret: true, value: 'compose-b' },
+        { key: 'C', secret: false, value: 'compose-c' },
+      ],
+    );
+    expect(rows.map((row) => [row.key, row.source, row.value, row.secret])).toEqual([
+      ['A', 'environment', 'env-a', false],
+      ['B', 'compose', 'compose-b', true],
+      ['C', 'compose', 'compose-c', false],
+    ]);
+  });
+
+  it('takes secret from the winning layer when Compose is the plain one', () => {
+    const rows = railVariables([{ key: 'X', secret: true, value: 'e' }], [{ key: 'X', secret: false, value: 'c' }]);
+    expect(rows[0]).toMatchObject({ secret: false, source: 'compose', value: 'c' });
   });
 });
