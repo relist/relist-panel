@@ -65,6 +65,7 @@ type Service struct {
 	diskMu    sync.Mutex
 	diskBytes int64
 	diskAt    time.Time
+	diskOK    bool // diskBytes holds a real reading
 }
 
 // diskTTL is how long a volume usage reading is shown before it is read again.
@@ -80,10 +81,15 @@ func (s *Service) cachedVolumeBytes(ctx context.Context) int64 {
 	if !s.diskAt.IsZero() && s.d.Now().Sub(s.diskAt) < diskTTL {
 		return s.diskBytes
 	}
-	if n, err := s.d.Host.VolumeBytes(ctx); err == nil {
-		s.diskBytes = n
+	// The read is shared by every load waiting on the lock, so one viewer
+	// leaving must not cut it short for the rest.
+	n, err := s.d.Host.VolumeBytes(context.WithoutCancel(ctx))
+	if err == nil {
+		s.diskBytes, s.diskOK = n, true
 	}
-	s.diskAt = s.d.Now()
+	if s.diskOK { // with no reading yet, try again on the next load
+		s.diskAt = s.d.Now()
+	}
 	return s.diskBytes
 }
 
