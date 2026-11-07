@@ -925,3 +925,16 @@ func TestPullCursorStaysOnARowWhenRegistryGoes(t *testing.T) {
 		t.Fatalf("cursor = %d after Registry data went, want %d", got, last)
 	}
 }
+
+// While the old server's info is being read again, the cursor keeps its row.
+func TestPullCursorKeepsItsRowWhileReading(t *testing.T) {
+	c := &fakeController{}
+	m := pull(c, connected())
+	m = send(t, m, key("down"))
+	reading := connected()
+	reading.Info = nil
+	m = send(t, m, ProgressMsg{P: reading})
+	if got := m.(*pullModel).cursor; got != 1 {
+		t.Fatalf("cursor = %d while reading, want 1", got)
+	}
+}

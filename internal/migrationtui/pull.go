@@ -187,15 +187,15 @@ func (m *pullModel) setProgress(p migration.Progress) {
 		}
 	}
 	// A recheck can drop rows (Registry data no longer offered): keep the
-	// cursor on one that is still there.
-	rows := 0
+	// cursor on one that is still there. Without info (still reading) the
+	// rows are unknown, so the cursor stays put.
 	if p.Info != nil {
-		rows = len(p.Info.HostPaths)
+		rows := len(p.Info.HostPaths)
+		if m.registryOffered() {
+			rows++
+		}
+		m.cursor = max(min(m.cursor, rows-1), 0)
 	}
-	if m.registryOffered() {
-		rows++
-	}
-	m.cursor = max(min(m.cursor, rows-1), 0)
 }
 
 func (m *pullModel) selectedPaths() []string {

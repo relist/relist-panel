@@ -15,14 +15,15 @@ import (
 // Tags call of a repository (1-based), so a test can retag between selection
 // and delete.
 type memRegistry struct {
-	tags      map[string]map[string]TagInfo // repo → tag → info
-	deleted   []string                      // repo@digest
-	deleteErr error
-	tagCalls  map[string]int
-	onTags    func(repo string, n int)
-	onDelete  func(repo string)
-	infoCalls int
-	ghosts    map[string]bool // repo:tag listed, but its manifest is gone
+	tags         map[string]map[string]TagInfo // repo → tag → info
+	deleted      []string                      // repo@digest
+	deleteErr    error
+	tagCalls     map[string]int
+	onTags       func(repo string, n int)
+	onDelete     func(repo string)
+	infoCalls    int
+	ghosts       map[string]bool // repo:tag listed, but its manifest is gone
+	goneOnDelete map[string]bool // digests someone else deleted first
 }
 
 func newMemRegistry() *memRegistry {
@@ -89,6 +90,14 @@ func (m *memRegistry) Digest(_ context.Context, repo, tag string) (string, error
 func (m *memRegistry) Delete(_ context.Context, repo, digest string) error {
 	if m.deleteErr != nil {
 		return m.deleteErr
+	}
+	if m.goneOnDelete[digest] {
+		for tag, info := range m.tags[repo] {
+			if info.Digest == digest {
+				delete(m.tags[repo], tag)
+			}
+		}
+		return fmt.Errorf("delete %s: %w", digest, ErrNotFound)
 	}
 	m.deleted = append(m.deleted, repo+"@"+digest)
 	if m.onDelete != nil {
@@ -490,5 +499,33 @@ func TestTagWithMissingManifestIsSkipped(t *testing.T) {
 	r := f.runOnce(t)
 	if r.Result != RunOK || !slices.Equal(r.Deleted, []string{"app:v1"}) || !strings.Contains(r.Log, "ghost") {
 		t.Fatalf("run = %+v", r)
+	}
+}
+
+// A manifest deleted by someone else first is gone as wanted: the run goes on.
+func TestManifestAlreadyDeletedDoesNotFailTheRun(t *testing.T) {
+	f := newCleaner(t)
+	f.reg.put("app", "v1", "d1", 1)
+	f.reg.put("app", "v2", "d2", 2)
+	f.reg.goneOnDelete = map[string]bool{"d1": true}
+	r := f.runOnce(t)
+	if r.Result != RunOK || !slices.Equal(r.Deleted, []string{"app:v1"}) || !strings.Contains(r.Log, "already gone") {
+		t.Fatalf("run = %+v", r)
+	}
+}
+
+// A run interrupted at start has an unknown size freed, not 0 B.
+func TestInterruptedAtStartupFreedIsUnknown(t *testing.T) {
+	f := newCleaner(t)
+	ctx := context.Background()
+	if _, err := f.store.StartRun(ctx, time.Now(), "schedule"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.InterruptRunning(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	runs, _ := f.store.Runs(ctx, 10)
+	if len(runs) != 1 || runs[0].Result != RunInterrupted || runs[0].FreedBytes != nil {
+		t.Fatalf("runs = %+v", runs)
 	}
 }
