@@ -742,6 +742,8 @@ func TestPullUnauthorizedAddsHint(t *testing.T) {
 		{"login for another host", unauthorized, []string{"ghcr.io"}, noLogin},
 		{"permission denied is not auth", "open /var/lib/docker/x: permission denied", nil, ""},
 		{"dns", "dial tcp: lookup ghcr.io: no such host", nil, ""},
+		// docker compose prints progress first; the refusal comes lines later.
+		{"compose output", "docker compose -p relist-c1 pull app: exit status 1: Image localhost:5001/private/app:1 Pulling\nImage localhost:5001/private/app:1 Error unknown: failed to resolve reference: 401 Unauthorized", []string{"docker.io"}, "Registry refused the stored login for docker.io. Check it with Test on Registry → External registries."},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
@@ -759,8 +761,10 @@ func TestPullUnauthorizedAddsHint(t *testing.T) {
 				}
 				return
 			}
-			if !strings.HasSuffix(f.Message, c.want) {
-				t.Fatalf("message = %q, want suffix %q", f.Message, c.want)
+			// A Deployment's reason is the message's first line: the hint
+			// must be on it.
+			if first, _, _ := strings.Cut(f.Message, "\n"); !strings.Contains(first, c.want) {
+				t.Fatalf("first line = %q, want it to hold %q", first, c.want)
 			}
 		})
 	}
@@ -788,7 +792,7 @@ func TestPullHairpinHint(t *testing.T) {
 		if !errors.As(err, &f) {
 			t.Fatalf("err = %v", err)
 		}
-		if strings.HasSuffix(f.Message, want) != c.hint {
+		if first, _, _ := strings.Cut(f.Message, "\n"); strings.Contains(first, want) != c.hint {
 			t.Errorf("%s: message = %q, want hint = %v", c.err, f.Message, c.hint)
 		}
 	}
