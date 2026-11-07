@@ -733,6 +733,8 @@ export interface TraefikForm {
   trustCloudflare: boolean;
   logLevel: TraefikLogLevel;
   accessLog: boolean;
+  /** web's and websecure's request read timeout, a Traefik duration; base.yml's is 3600s. */
+  readTimeout: string;
 }
 
 /** Why a Traefik override cannot be used; `line` is 0 when unknown. */
