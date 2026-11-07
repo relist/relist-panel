@@ -599,3 +599,16 @@ func TestTagListSkipsAGoneManifest(t *testing.T) {
 		t.Fatalf("tags = %d %s", rec.Code, rec.Body)
 	}
 }
+
+// A failed usage read is not retried on every load: Docker is asked again
+// after the same minute.
+func TestFailedDiskUsageIsNotRetriedEveryLoad(t *testing.T) {
+	f := newAPI(t)
+	f.host.volumeErr = errors.New("df failed")
+	f.host.volumeReads = 0
+	f.do("GET", "/api/registry", "")
+	f.do("GET", "/api/registry", "")
+	if f.host.volumeReads != 1 {
+		t.Fatalf("volume read %d times, want 1", f.host.volumeReads)
+	}
+}
