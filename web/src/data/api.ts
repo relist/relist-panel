@@ -32,6 +32,7 @@ import type {
   ExternalRegistryInput,
   PushCredential,
   RegistryCheck,
+  RegistryCleanupState,
   RegistryRepository,
   RegistryState,
   RegistryTag,
@@ -567,6 +568,11 @@ export const api = {
   createPushCredential: (name: string) =>
     request<{ credential: PushCredential; token: string }>('/api/registry/credentials', jsonInit('POST', { name })),
   deletePushCredential: (id: number) => request<void>(`/api/registry/credentials/${id}`, { method: 'DELETE' }),
+  getRegistryCleanup: () => request<RegistryCleanupState>('/api/registry/cleanup'),
+  saveRegistryCleanup: (input: { enabled: boolean; keep: number; days: string[]; minute: number }) =>
+    request<RegistryCleanupState>('/api/registry/cleanup', jsonInit('PUT', input)),
+  previewRegistryCleanup: () => request<Record<string, string[]>>('/api/registry/cleanup/preview'),
+  runRegistryCleanup: () => request<{ runId: number }>('/api/registry/cleanup/run', { method: 'POST' }),
   listRegistryRepositories: () => request<RegistryRepository[]>('/api/registry/repositories'),
   listRegistryTags: (repo: string) => request<RegistryTag[]>(`/api/registry/tags?repo=${encodeURIComponent(repo)}`),
   deleteRegistryTag: (repo: string, tag: string, confirm?: string) =>

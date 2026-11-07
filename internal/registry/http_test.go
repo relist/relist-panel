@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 type apiFixture struct {
@@ -20,6 +21,8 @@ type apiFixture struct {
 	deleted  *[]string
 	deployed map[string][]User
 	running  map[string][]User
+	gate     *fakeGate
+	cleaner  *Cleaner
 }
 
 func newAPI(t *testing.T) *apiFixture {
@@ -33,7 +36,15 @@ func newAPI(t *testing.T) *apiFixture {
 	client, deleted := fakeRegistry(t)
 	f.deleted = deleted
 	f.mux = http.NewServeMux()
+	f.gate = &fakeGate{}
+	f.cleaner = NewCleaner(CleanerDeps{
+		Service: f.svc, Gate: f.gate, Poll: time.Millisecond, GCPoll: time.Millisecond,
+		Registry: func(st Settings) RegistryAPI {
+			return &Client{Base: client.Base, User: SystemUser, Secret: st.SystemSecret, HTTP: client.HTTP}
+		},
+	})
 	NewAPI(APIDeps{
+		Cleaner:      f.cleaner,
 		Service:      f.svc,
 		RegistryBase: client.Base,
 		HTTP:         client.HTTP,
@@ -294,3 +305,74 @@ func TestRegistryCallsRepairAMissingContainerFirst(t *testing.T) {
 }
 
 func itoa(id int64) string { return strconv.FormatInt(id, 10) }
+
+func TestCleanupSettingsRoundTrip(t *testing.T) {
+	f := newAPI(t)
+	rec := f.do("GET", "/api/registry/cleanup", "")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"keep":10`) || !strings.Contains(rec.Body.String(), `"next":"`) ||
+		!strings.Contains(rec.Body.String(), `"runs":[]`) {
+		t.Fatalf("get = %d %s", rec.Code, rec.Body)
+	}
+	rec = f.do("PUT", "/api/registry/cleanup", `{"enabled":true,"keep":3,"days":["mon","fri"],"minute":90}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"days":["mon","fri"]`) {
+		t.Fatalf("put = %d %s", rec.Code, rec.Body)
+	}
+	for _, bad := range []string{
+		`{"enabled":true,"keep":0,"days":["daily"],"minute":90}`,
+		`{"enabled":true,"keep":3,"days":[],"minute":90}`,
+		`{"enabled":true,"keep":3,"days":["funday"],"minute":90}`,
+		`{"enabled":true,"keep":3,"days":["daily"],"minute":1440}`,
+	} {
+		if rec := f.do("PUT", "/api/registry/cleanup", bad); rec.Code != 422 {
+			t.Errorf("%s = %d %s, want 422", bad, rec.Code, rec.Body)
+		}
+	}
+}
+
+func TestCleanupPreviewAndKept(t *testing.T) {
+	f := newAPI(t)
+	c, _ := f.store.CleanupSettings(context.Background())
+	c.Keep = 1
+	_ = f.store.SaveCleanupSettings(context.Background(), c)
+	rec := f.do("GET", "/api/registry/cleanup/preview", "")
+	if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `{"app":["2"]}` {
+		t.Fatalf("preview = %d %s", rec.Code, rec.Body)
+	}
+	rec = f.do("GET", "/api/registry/tags?repo=app", "")
+	if !strings.Contains(rec.Body.String(), `"tag":"1"`) {
+		t.Fatalf("tags = %s", rec.Body)
+	}
+	var tags []struct {
+		Tag  string `json:"tag"`
+		Kept bool   `json:"kept"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &tags)
+	kept := map[string]bool{}
+	for _, tg := range tags {
+		kept[tg.Tag] = tg.Kept
+	}
+	if !kept["1"] || kept["2"] {
+		t.Fatalf("kept = %v, want 1 only", kept)
+	}
+	// In use keeps it too, and the preview agrees.
+	f.deployed["registry.example.com/app:2"] = []User{{ComposeID: 1, ComposeName: "shop"}}
+	if rec := f.do("GET", "/api/registry/cleanup/preview", ""); strings.TrimSpace(rec.Body.String()) != `{}` {
+		t.Fatalf("preview with app:2 in use = %s", rec.Body)
+	}
+}
+
+func TestRunNowConflict(t *testing.T) {
+	f := newAPI(t)
+	f.gate.busy.Store(true)
+	if rec := f.do("POST", "/api/registry/cleanup/run", ""); rec.Code != 202 || !strings.Contains(rec.Body.String(), `"runId":`) {
+		t.Fatalf("first = %d %s", rec.Code, rec.Body)
+	}
+	rec := f.do("POST", "/api/registry/cleanup/run", "")
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "a Registry cleanup is already running") {
+		t.Fatalf("second = %d %s", rec.Code, rec.Body)
+	}
+	f.gate.busy.Store(false)
+	if err := f.cleaner.WaitIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

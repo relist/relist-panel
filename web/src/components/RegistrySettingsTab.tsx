@@ -10,6 +10,7 @@ import type { RegistryCheck, RegistryTLS } from '../data/types';
 import { CHECK_STEP, REGISTRY_STATUS } from '../pages/registry-view';
 import { DangerModal } from './DangerModal';
 import { formatBytes } from './MetricChart';
+import { RegistryCleanupCard } from './RegistryCleanupCard';
 import { REGISTRY_KEY } from './RegistryOffState';
 
 const { Text } = Typography;
@@ -204,6 +205,8 @@ export function RegistrySettingsTab() {
             ))}
         </Flex>
       </Card>
+
+      <RegistryCleanupCard enabled={settings.enabled} />
 
       <Card title="Danger zone" variant="outlined">
         <Flex align="center" gap={16} justify="space-between" wrap>

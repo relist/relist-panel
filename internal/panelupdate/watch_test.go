@@ -100,6 +100,27 @@ func TestWatcherWaitsForTraefikApply(t *testing.T) {
 	})
 }
 
+// A Registry cleanup may hold the registry read-only; the update waits for
+// it so the panel never restarts mid-GC (ADR-0033).
+func TestQuiesceWaitsForRegistryCleanup(t *testing.T) {
+	r := newLockRig(t)
+	cleanup := blockingWaiter{release: make(chan struct{})}
+	r.s.d.RegistryCleanup = cleanup
+	r.writeRun(t, watchRun, StateQuiescing)
+	r.updater.state[UpdaterName(watchRun)] = UpdaterState{Exists: true, Running: true}
+	r.s.watchOnce(t.Context())
+	time.Sleep(20 * time.Millisecond)
+	r.s.watchOnce(t.Context())
+	if got := r.ack(t).State; got != AckWaiting {
+		t.Fatalf("ack = %s while a Registry cleanup runs", got)
+	}
+	close(cleanup.release)
+	waitFor(t, func() bool {
+		r.s.watchOnce(t.Context())
+		return r.ack(t).State == AckReady
+	})
+}
+
 func TestWatcherRefusesUnderMigrationLock(t *testing.T) {
 	r := newLockRig(t)
 	r.migr = true
