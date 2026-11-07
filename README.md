@@ -440,6 +440,11 @@ with hand-written `traefik.*` labels, or with `relist-network` listed in its own
 `networks:`. Every other Service stays on its Compose's private `default`
 network, so two Composes can both have a `db` without reaching each other's.
 
+To let other Composes call a Service, `networks: [relist-network]` is enough:
+the panel keeps it on `default` too, so it still reaches its own Compose's
+Services by name. A list that names another network, such as
+`[backend, relist-network]`, is kept as written.
+
 Each Service on `relist-network` also answers to two names from other Composes:
 
 - `<service>.<docker compose project>.internal`, e.g. `web.relist-c12.internal`,
