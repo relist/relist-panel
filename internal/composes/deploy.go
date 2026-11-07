@@ -310,7 +310,8 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 		return files.warnings, nil
 	}
 	if err := s.runner.Up(ctx, req, UpOptions{NoPull: true, Out: opts.Out}); err != nil {
-		return nil, failure(FailureRunner, "deploy failed"+suffix+": "+err.Error()+volumesAdvice(removed), err)
+		line, more := errorLine(err)
+		return nil, failure(FailureRunner, "deploy failed"+suffix+": "+line+volumesAdvice(removed)+more, err)
 	}
 
 	// The deploy timestamp records success only (deploy-timestamps spec): it
@@ -324,6 +325,29 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 		return nil, failure(FailureInternal, "could not record the deployed images", err)
 	}
 	return files.warnings, nil
+}
+
+// errorWords picks the line of compose output that says what went wrong.
+var errorWords = regexp.MustCompile(`(?i)error|denied|unauthorized|failed|refused|not found|no such|unknown|invalid|cannot|already allocated`)
+
+// errorLine splits a runner error for a Deployment's reason, which is the
+// message's first line: docker compose prints progress ("Pulling",
+// "Creating") before the error, so the first line is the last output line
+// that names an error, and more is the whole output on the lines after it.
+// A one-line error is returned as is.
+func errorLine(err error) (line, more string) {
+	full := err.Error()
+	if !strings.Contains(full, "\n") {
+		return full, ""
+	}
+	lines := strings.Split(full, "\n")
+	for i := len(lines) - 1; i > 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" && errorWords.MatchString(l) {
+			return l, "\n" + full
+		}
+	}
+	first, rest, _ := strings.Cut(full, "\n")
+	return first, "\n" + rest
 }
 
 // authRefused matches a registry refusing a pull's login, not a local
@@ -729,7 +753,8 @@ func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool,
 	}
 	if build && builds {
 		if err := s.runner.Build(ctx, req, BuildOptions{Out: out}); err != nil {
-			return nil, failure(FailureRunner, "build failed: "+err.Error(), err)
+			line, more := errorLine(err)
+			return nil, failure(FailureRunner, "build failed: "+line+more, err)
 		}
 	}
 	for _, pull := range []PullOptions{{Missing: true, Services: missing, Out: out}, {Services: refresh, Out: out}} {
@@ -741,13 +766,13 @@ func (s *Service) prepareImages(ctx context.Context, req RunRequest, build bool,
 			for _, name := range pull.Services {
 				images = append(images, config.Services[name].Image)
 			}
-			msg := "pull failed: " + err.Error()
 			// The hint goes first: a Deployment's reason is the message's
 			// first line, and compose prints the refusal lines later.
+			line, more := errorLine(err)
 			if hint := s.pullHint(ctx, err, images); hint != "" {
-				msg = "pull failed: " + hint + " " + err.Error()
+				line = hint + " " + line
 			}
-			return nil, failure(FailureRunner, msg, err)
+			return nil, failure(FailureRunner, "pull failed: "+line+more, err)
 		}
 	}
 	var refused, refs []string

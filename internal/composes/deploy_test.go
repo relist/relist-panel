@@ -883,3 +883,35 @@ func TestDeployChecksTheImageOfTheServicesPlatform(t *testing.T) {
 		t.Fatalf("inspected = %v, want %v", runner.inspected, want)
 	}
 }
+
+// docker compose prints progress before the error, and a Deployment's reason
+// is the message's first line: it must carry the error line, not "Pulling".
+func TestFailureReasonCarriesTheErrorLine(t *testing.T) {
+	const pullOut = "docker compose -p relist-c1 pull app: exit status 1: Image app:1 Pulling\nImage app:1 Pulling\nError response from daemon: manifest for app:1 not found: manifest unknown"
+	const upOut = "docker compose -p relist-c1 up -d: exit status 1: Container relist-c1-web-1 Creating\nContainer relist-c1-web-1 Created\nError response from daemon: driver failed programming external connectivity: port is already allocated"
+	for _, c := range []struct {
+		name, want, not string
+		set             func(*recordingRunner)
+	}{
+		{"pull", "manifest unknown", "Pulling", func(r *recordingRunner) { r.pullErr = errors.New(pullOut) }},
+		{"up", "port is already allocated", "Creating", func(r *recordingRunner) { r.upErr = errors.New(upOut) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			svc, runner, target, _ := newDeployService(t, "services: {web: {image: nginx}}\n")
+			runner.config = []byte(imageConfig)
+			c.set(runner)
+			_, err := svc.RunDeploy(context.Background(), target, DeployOptions{})
+			var f *DeployFailure
+			if !errors.As(err, &f) {
+				t.Fatalf("err = %v", err)
+			}
+			first, rest, _ := strings.Cut(f.Message, "\n")
+			if !strings.Contains(first, c.want) || strings.Contains(first, c.not) {
+				t.Fatalf("first line = %q, want the error line", first)
+			}
+			if !strings.Contains(rest, "exit status 1") {
+				t.Fatalf("the full output was dropped: %q", f.Message)
+			}
+		})
+	}
+}

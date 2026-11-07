@@ -42,7 +42,14 @@ export function RegistryPage() {
           { children: <ExternalRegistriesTab />, key: 'external', label: 'External registries' },
           { children: <RegistrySettingsTab />, key: 'settings', label: 'Settings' },
         ]}
-        onChange={(key) => setParams({ tab: key }, { replace: true })}
+        onChange={(key) => {
+          setParams({ tab: key }, { replace: true });
+          // The pane stays mounted while hidden: what CI pushed meanwhile
+          // shows when the operator comes back to it.
+          if (key === 'repositories') {
+            void mutate((swrKey) => typeof swrKey === 'string' && (swrKey.startsWith('/api/registry/repositories') || swrKey.startsWith('/api/registry/tags')));
+          }
+        }}
       />
     </>
   );
