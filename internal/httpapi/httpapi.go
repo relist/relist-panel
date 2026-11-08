@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"relist-panel/internal/authz"
 	"relist-panel/internal/builders"
 	"relist-panel/internal/certificates"
+	"relist-panel/internal/clientip"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/composevariables"
 	"relist-panel/internal/deployments"
@@ -468,7 +470,30 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	// browser headers, like the migration pull, pass.
 	// authz sits inside auth, which puts the User in the context, and outside
 	// every lock: a request without the right is refused before a lock sees it.
-	return http.NewCrossOriginProtection().Handler(authService.Middleware(authz.New(db, authService.CurrentUser).Middleware(mux, inner))), worker.Wait
+	h := http.NewCrossOriginProtection().Handler(authService.Middleware(authz.New(db, authService.CurrentUser).Middleware(mux, inner)))
+	return clientIPResolver(d.TraefikApply, dataDir).Middleware(h), worker.Wait
+}
+
+// clientIPResolver finds the client address the Audit log records: from
+// X-Forwarded-For only when the peer is the install's Traefik (ADR-0037).
+// Without a Traefik to ask, every request records its TCP peer.
+func clientIPResolver(t traefikconfig.Traefik, dataDir string) *clientip.Resolver {
+	proxyIP := func(ctx context.Context) (string, error) {
+		if t == nil {
+			return "", nil
+		}
+		st, err := t.State(ctx)
+		return st.IP, err
+	}
+	effective := traefikconfig.PathsFor(dataDir).Effective()
+	trusted := func() []string {
+		raw, err := os.ReadFile(effective)
+		if err != nil {
+			return nil
+		}
+		return traefikconfig.TrustedIPs(raw)
+	}
+	return clientip.New(proxyIP, trusted)
 }
 
 func healthz(w http.ResponseWriter, _ *http.Request) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"relist-panel/internal/audit"
+	"relist-panel/internal/clientip"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -150,7 +151,7 @@ func (s *Service) acceptInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), audit.Event{
 		Action: "auth.invite_accepted", Outcome: audit.OutcomeOK, ActorUserID: link.userID, Actor: link.email,
-		Detail: map[string]any{"kind": string(link.kind)}, IP: peerIP(r),
+		Detail: map[string]any{"kind": string(link.kind)}, IP: clientip.From(r),
 	})
 	setSessionCookie(w, r, token, expiresAt)
 	// isAdmin tells the page where to land: a User who is not an Admin has

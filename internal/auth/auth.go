@@ -11,10 +11,10 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/mail"
 	"relist-panel/internal/audit"
+	"relist-panel/internal/clientip"
 	"strings"
 	"sync"
 	"time"
@@ -407,7 +407,7 @@ func (s *Service) completeLogin(w http.ResponseWriter, r *http.Request, tx *sql.
 // loginOK and loginFailed are a sign-in's events. failed carries the email
 // typed, never the password; reason is "locked", "code" or empty.
 func loginOK(r *http.Request, account userRow) *audit.Event {
-	return &audit.Event{Action: "auth.login", Outcome: audit.OutcomeOK, ActorUserID: account.id, Actor: account.email, IP: peerIP(r)}
+	return &audit.Event{Action: "auth.login", Outcome: audit.OutcomeOK, ActorUserID: account.id, Actor: account.email, IP: clientip.From(r)}
 }
 
 func loginFailed(r *http.Request, userID int64, actor, typed, reason string) *audit.Event {
@@ -415,7 +415,7 @@ func loginFailed(r *http.Request, userID int64, actor, typed, reason string) *au
 	if reason != "" {
 		detail["reason"] = reason
 	}
-	return &audit.Event{Action: "auth.login_failed", Outcome: audit.OutcomeDenied, ActorUserID: userID, Actor: actor, Detail: detail, IP: peerIP(r)}
+	return &audit.Event{Action: "auth.login_failed", Outcome: audit.OutcomeDenied, ActorUserID: userID, Actor: actor, Detail: detail, IP: clientip.From(r)}
 }
 
 // recordAudit writes an event; a failure is logged and changes nothing.
@@ -423,15 +423,6 @@ func (s *Service) recordAudit(ctx context.Context, e audit.Event) {
 	if err := audit.Record(context.WithoutCancel(ctx), s.db, e); err != nil {
 		log.Printf("audit: %s: %v", e.Action, err)
 	}
-}
-
-// peerIP is the TCP peer, as authz records it.
-func peerIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 // startSession creates a session for userID in the caller's transaction. The
