@@ -18,6 +18,8 @@ const panel = vi.hoisted(() => ({
 vi.mock('../data/store', () => ({ usePanel: () => panel }));
 
 const domain: Domain = {
+  authGroupId: null,
+  authGroupName: '',
   certProvider: 'letsencrypt',
   certResolver: '',
   createdAt: '2026-10-09T10:00:00Z',

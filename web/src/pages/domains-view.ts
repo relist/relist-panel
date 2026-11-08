@@ -24,6 +24,7 @@ export function domainFormValues(domain?: Domain): DomainFormValues {
       certProvider: 'none',
       certResolver: '',
       middlewares: [],
+      authGroupId: null,
       customEntrypoint: false,
     };
   }
@@ -41,6 +42,7 @@ export function domainFormValues(domain?: Domain): DomainFormValues {
     certProvider: domain.https ? domain.certProvider : 'none',
     certResolver: domain.https ? domain.certResolver : '',
     middlewares: [...domain.middlewares],
+    authGroupId: domain.authGroupId,
     customEntrypoint: domain.entrypoint !== '',
   };
 }
@@ -65,6 +67,7 @@ export function domainInput(values: DomainFormValues): DomainInput {
     certProvider,
     certResolver: certProvider === 'custom' ? values.certResolver : '',
     middlewares: values.middlewares,
+    authGroupId: values.authGroupId,
   };
 }
 

@@ -12,6 +12,8 @@ const RESOLVER_HELP =
   "Must match a certificate resolver in Traefik's static config. The panel can't check it — a wrong name shows only in Traefik's log.";
 
 const domain: Domain = {
+  authGroupId: null,
+  authGroupName: '',
   certProvider: 'custom',
   certResolver: 'corp-dns',
   createdAt: '2026-10-09T10:00:00Z',

@@ -16,6 +16,8 @@ const domain: Domain = {
   certProvider: 'custom',
   certResolver: 'dns',
   middlewares: ['rate-limit@file'],
+  authGroupId: 4,
+  authGroupName: 'Staging',
   createdAt: '2026-10-01T00:00:00Z',
   updatedAt: '2026-10-01T00:00:00Z',
 };
@@ -26,6 +28,18 @@ const values = (overrides: Partial<ReturnType<typeof domainFormValues>>) => ({
   service: 'web',
   port: 3000,
   ...overrides,
+});
+
+describe('authGroupId', () => {
+  it('starts as None and copies the stored group on edit', () => {
+    expect(domainFormValues(undefined).authGroupId).toBeNull();
+    expect(domainFormValues(domain).authGroupId).toBe(4);
+  });
+
+  it('is sent as given, null for None', () => {
+    expect(domainInput(values({ authGroupId: 4 })).authGroupId).toBe(4);
+    expect(domainInput(values({ authGroupId: null })).authGroupId).toBeNull();
+  });
 });
 
 describe('domainInput', () => {
@@ -72,6 +86,7 @@ describe('domainFormValues', () => {
       certProvider: 'none',
       certResolver: '',
       middlewares: [],
+      authGroupId: null,
       customEntrypoint: false,
     });
   });
@@ -89,6 +104,7 @@ describe('domainFormValues', () => {
       certProvider: 'custom',
       certResolver: 'dns',
       middlewares: ['rate-limit@file'],
+      authGroupId: 4,
       customEntrypoint: true,
     });
     expect(domainFormValues({ ...domain, entrypoint: '' }).customEntrypoint).toBe(false);
