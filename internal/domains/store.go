@@ -35,17 +35,24 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db, now: time.Now}
 }
 
-const domainColumns = `id, compose_id, host, path, internal_path, strip_path, service, port, entrypoint, https, cert_provider, cert_resolver, middlewares, created_at, updated_at`
+const domainColumns = `d.id, d.compose_id, d.host, d.path, d.internal_path, d.strip_path, d.service, d.port, d.entrypoint, d.https, d.cert_provider, d.cert_resolver, d.middlewares, d.created_at, d.updated_at, d.auth_group_id, COALESCE(g.name, '')`
+
+// fromDomains reads domains with the name of their Basic auth group.
+const fromDomains = ` FROM domains d LEFT JOIN auth_groups g ON g.id = d.auth_group_id`
 
 func scanDomain(scan func(...any) error) (Domain, error) {
 	var (
 		d                   Domain
 		strip, https        int
 		middlewares         string
+		authGroup           sql.NullInt64
 		createdAt, updateAt int64
 	)
-	if err := scan(&d.ID, &d.ComposeID, &d.Host, &d.Path, &d.InternalPath, &strip, &d.Service, &d.Port, &d.Entrypoint, &https, &d.CertProvider, &d.CertResolver, &middlewares, &createdAt, &updateAt); err != nil {
+	if err := scan(&d.ID, &d.ComposeID, &d.Host, &d.Path, &d.InternalPath, &strip, &d.Service, &d.Port, &d.Entrypoint, &https, &d.CertProvider, &d.CertResolver, &middlewares, &createdAt, &updateAt, &authGroup, &d.AuthGroupName); err != nil {
 		return Domain{}, err
+	}
+	if authGroup.Valid {
+		d.AuthGroupID = &authGroup.Int64
 	}
 	d.StripPath = strip == 1
 	d.HTTPS = https == 1
@@ -63,7 +70,7 @@ func scanDomain(scan func(...any) error) (Domain, error) {
 
 // ListForCompose returns a Compose's domains in ID order.
 func (s *Store) ListForCompose(ctx context.Context, composeID int64) ([]Domain, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+domainColumns+` FROM domains WHERE compose_id = ? ORDER BY id ASC`, composeID)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+domainColumns+fromDomains+` WHERE d.compose_id = ? ORDER BY d.id ASC`, composeID)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +89,7 @@ func (s *Store) ListForCompose(ctx context.Context, composeID int64) ([]Domain, 
 // ListAll returns every Compose's domains in ID order, for the maintenance
 // page a Migration puts up (ADR-0018).
 func (s *Store) ListAll(ctx context.Context) ([]Domain, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+domainColumns+` FROM domains ORDER BY id ASC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+domainColumns+fromDomains+` ORDER BY d.id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -123,9 +130,9 @@ func (s *Store) create(ctx context.Context, composeID int64, in Input) (Domain, 
 			return err
 		}
 		result, err := tx.ExecContext(ctx, `
-			INSERT INTO domains (compose_id, host, path, internal_path, strip_path, service, port, entrypoint, https, cert_provider, cert_resolver, middlewares, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, composeID, in.Host, in.Path, in.InternalPath, boolInt(in.StripPath), in.Service, in.Port, in.Entrypoint, boolInt(in.HTTPS), in.CertProvider, in.CertResolver, string(middlewares), at, at)
+			INSERT INTO domains (compose_id, host, path, internal_path, strip_path, service, port, entrypoint, https, cert_provider, cert_resolver, middlewares, created_at, updated_at, auth_group_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, composeID, in.Host, in.Path, in.InternalPath, boolInt(in.StripPath), in.Service, in.Port, in.Entrypoint, boolInt(in.HTTPS), in.CertProvider, in.CertResolver, string(middlewares), at, at, in.AuthGroupID)
 		if err != nil {
 			return err
 		}
@@ -158,9 +165,9 @@ func (s *Store) update(ctx context.Context, composeID, id int64, in Input) (Doma
 		}
 		result, err := tx.ExecContext(ctx, `
 			UPDATE domains
-			SET host = ?, path = ?, internal_path = ?, strip_path = ?, service = ?, port = ?, entrypoint = ?, https = ?, cert_provider = ?, cert_resolver = ?, middlewares = ?, updated_at = ?
+			SET host = ?, path = ?, internal_path = ?, strip_path = ?, service = ?, port = ?, entrypoint = ?, https = ?, cert_provider = ?, cert_resolver = ?, middlewares = ?, updated_at = ?, auth_group_id = ?
 			WHERE id = ? AND compose_id = ?
-		`, in.Host, in.Path, in.InternalPath, boolInt(in.StripPath), in.Service, in.Port, in.Entrypoint, boolInt(in.HTTPS), in.CertProvider, in.CertResolver, string(middlewares), at, id, composeID)
+		`, in.Host, in.Path, in.InternalPath, boolInt(in.StripPath), in.Service, in.Port, in.Entrypoint, boolInt(in.HTTPS), in.CertProvider, in.CertResolver, string(middlewares), at, in.AuthGroupID, id, composeID)
 		if err != nil {
 			return err
 		}
@@ -183,7 +190,7 @@ func (s *Store) delete(ctx context.Context, composeID, id int64) error {
 }
 
 func (s *Store) get(ctx context.Context, composeID, id int64) (Domain, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+domainColumns+` FROM domains WHERE id = ? AND compose_id = ?`, id, composeID)
+	row := s.db.QueryRowContext(ctx, `SELECT `+domainColumns+fromDomains+` WHERE d.id = ? AND d.compose_id = ?`, id, composeID)
 	d, err := scanDomain(row.Scan)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Domain{}, ErrNotFound
@@ -429,6 +436,17 @@ func (s *Service) readInput(w http.ResponseWriter, r *http.Request, rt route) (I
 	if s.reserved != nil {
 		if host, ok := s.reserved(r.Context()); ok && in.Host == host {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": host + " is the Registry's hostname", "field": "host"})
+			return Input{}, false
+		}
+	}
+	if in.AuthGroupID != nil {
+		var one int
+		err := s.store.db.QueryRowContext(r.Context(), `SELECT 1 FROM auth_groups WHERE id = ?`, *in.AuthGroupID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "basic auth group does not exist", "field": "authGroupId"})
+			return Input{}, false
+		} else if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not check basic auth group")
 			return Input{}, false
 		}
 	}
