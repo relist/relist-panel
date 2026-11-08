@@ -67,8 +67,8 @@ branch takes 00040 first; never edit a committed one):
 CREATE TABLE auth_groups (
     id         INTEGER PRIMARY KEY,
     name       TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-    created_at TEXT    NOT NULL,
-    updated_at TEXT    NOT NULL
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE auth_group_users (
@@ -77,8 +77,8 @@ CREATE TABLE auth_group_users (
     username   TEXT    NOT NULL,
     password   TEXT    NOT NULL,
     hash       TEXT    NOT NULL,
-    created_at TEXT    NOT NULL,
-    updated_at TEXT    NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
     UNIQUE (group_id, username)
 );
 
@@ -97,7 +97,7 @@ ALTER TABLE domains ADD COLUMN auth_group_id INTEGER REFERENCES auth_groups(id);
 - Username: 1–64 characters, printable ASCII, no `:` and no whitespace (the htpasswd
   separator and what browsers send cleanly). Unique within the group (`409`, field
   `username`).
-- Password: 8–128 characters. The UI offers a generated one (24 characters, letters and
+- Password: 8–72 bytes (bcrypt's limit in Go). The UI offers a generated one (24 characters, letters and
   digits) but any value in range is accepted.
 - `domains.auth_group_id` on a Domain create or update: `null` or the id of an existing
   group, else `400` with a field error on `authGroupId`.
