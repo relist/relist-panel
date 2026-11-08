@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -304,5 +305,65 @@ func TestOptionsForMember(t *testing.T) {
 	rec = ts.doCtx(authz.WithAccess(context.Background(), grants.Access{Admin: true}), "GET", "/api/auth-group-options", nil)
 	if err := json.Unmarshal(rec.Body.Bytes(), &opts); err != nil || len(opts) != 1 {
 		t.Errorf("admin options = %s", rec.Body)
+	}
+}
+
+func newServiceWithRunning(t *testing.T, running RunningRefs) testService {
+	t.Helper()
+	ts := newService(t)
+	s := New(ts.db, ts.dataDir).WithRunning(running)
+	mux := http.NewServeMux()
+	s.RegisterRoutes(mux)
+	ts.mux = mux
+	return ts
+}
+
+// A Domain switched to None but not redeployed still has a running Container
+// whose router names the group's middleware; deleting the group would make
+// Traefik drop that router.
+func TestDeleteRefusedWhileRunningContainerUsesIt(t *testing.T) {
+	var asked string
+	ts := newServiceWithRunning(t, func(_ context.Context, middleware string) ([]string, error) {
+		asked = middleware
+		return []string{"relist-c1-web-1"}, nil
+	})
+	gid := ts.createGroup(t)
+	rec := ts.do("DELETE", "/api/auth-groups/"+strconv.FormatInt(gid, 10), nil)
+	if rec.Code != 409 {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	if want := "relist-auth-" + strconv.FormatInt(gid, 10) + "@file"; asked != want {
+		t.Errorf("asked about %q, want %q", asked, want)
+	}
+	if msg, _ := decode(t, rec)["error"].(string); !strings.Contains(msg, "relist-c1-web-1") || !strings.Contains(msg, "Redeploy") {
+		t.Errorf("error = %q", msg)
+	}
+	if _, err := ts.store.Get(context.Background(), gid); err != nil {
+		t.Errorf("group deleted: %v", err)
+	}
+	if _, err := os.Stat(ts.file(gid)); err != nil {
+		t.Errorf("file removed: %v", err)
+	}
+}
+
+func TestDeleteRefusedWhenRunningCheckFails(t *testing.T) {
+	ts := newServiceWithRunning(t, func(context.Context, string) ([]string, error) {
+		return nil, errors.New("docker: cannot connect")
+	})
+	gid := ts.createGroup(t)
+	rec := ts.do("DELETE", "/api/auth-groups/"+strconv.FormatInt(gid, 10), nil)
+	if rec.Code != 503 {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	if _, err := ts.store.Get(context.Background(), gid); err != nil {
+		t.Errorf("group deleted: %v", err)
+	}
+}
+
+func TestDeleteAllowedWhenNoRunningContainerUsesIt(t *testing.T) {
+	ts := newServiceWithRunning(t, func(context.Context, string) ([]string, error) { return nil, nil })
+	gid := ts.createGroup(t)
+	if rec := ts.do("DELETE", "/api/auth-groups/"+strconv.FormatInt(gid, 10), nil); rec.Code != 204 {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
 	}
 }

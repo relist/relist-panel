@@ -207,6 +207,7 @@ func main() {
 			Control:  control,
 		},
 		Docker:         dockerexec.NewDockerHost(dockerexec.DefaultSocketPath),
+		AuthGroupRefs:  dockerexec.RunningAuthRefs,
 		VulnScanner:    dockerexec.NewTrivyScanner(dockerexec.DefaultSocketPath, cfg.DataDir),
 		VulnInUse:      dockerexec.NewInUse(dockerexec.DefaultSocketPath, composeIdentities(db), os.Hostname),
 		PanelSelf:      dockerexec.NewPanelSelf(dockerexec.DefaultSocketPath),

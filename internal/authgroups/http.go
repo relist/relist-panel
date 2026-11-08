@@ -1,11 +1,13 @@
 package authgroups
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"relist-panel/internal/audit"
 	"relist-panel/internal/authz"
@@ -15,6 +17,20 @@ import (
 type Service struct {
 	store   *Store
 	dataDir string
+	running RunningRefs
+}
+
+// RunningRefs lists the running Containers whose Traefik routers name
+// middleware (e.g. "relist-auth-3@file").
+type RunningRefs func(ctx context.Context, middleware string) ([]string, error)
+
+// WithRunning makes a delete also refuse while a running Container still
+// routes through the group: a Domain switched away from it but not redeployed
+// keeps the old labels, and Traefik drops a router whose middleware is gone.
+// Without it (tests, no Docker) only the Domains in the database count.
+func (s *Service) WithRunning(running RunningRefs) *Service {
+	s.running = running
+	return s
 }
 
 func New(db *sql.DB, dataDir string) *Service {
@@ -162,6 +178,24 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	id, ok := readID(w, r, "id")
 	if !ok {
 		return
+	}
+	if s.running != nil {
+		if _, err := s.store.Get(r.Context(), id); err != nil {
+			writeStoreError(w, err, "could not delete group")
+			return
+		}
+		containers, err := s.running(r.Context(), MiddlewareName(id)+"@file")
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "could not check which running containers use this group: "+err.Error(), "")
+			return
+		}
+		if len(containers) > 0 {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":   "Running containers still use this group: " + strings.Join(containers, ", ") + ". Redeploy their Composes first.",
+				"domains": []UsedBy{},
+			})
+			return
+		}
 	}
 	used, err := s.store.Delete(r.Context(), id)
 	if err != nil {

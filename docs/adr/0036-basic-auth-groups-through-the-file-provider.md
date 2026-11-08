@@ -19,7 +19,7 @@ A Domain (ADR-0013) had no password option. An operator protected a host by writ
 ## Consequences
 
 - **Group edits apply immediately** to every Domain using the group. Picking a Domain's group applies on deploy, like any other Domain change.
-- **A group cannot be deleted while a Domain uses it.** Otherwise Traefik would not find the middleware and the router would break.
+- **A group cannot be deleted while a Domain uses it, or while a running container still routes through it.** Otherwise Traefik would not find the middleware and the router would break. The second check covers a Domain switched away from the group but not redeployed, and it reads the running containers' labels.
 - **An empty group refuses everyone.** It is written with one random, unstored user rather than left open.
 - **An install without the file-provider flags ignores groups.** A Domain naming a missing middleware breaks, which is the same guard as for Certificates: the README's upgrade section.
 - **A Migration (ADR-0018) needs no change.** `panel.db` travels whole, and startup reconciliation rewrites the files.

@@ -161,7 +161,7 @@ route.
 | POST | `/api/auth-groups` | `{name, users?: [{username, password}]}` → `201` group. Lets the Domain form create a group and its first user in one call |
 | GET | `/api/auth-groups/{id}` | group + `users: [{id, username, createdAt, updatedAt}]` + `domains: [{id, host, path, composeId, composeName, environmentName, projectName}]` |
 | PATCH | `/api/auth-groups/{id}` | `{name}` |
-| DELETE | `/api/auth-groups/{id}` | `204`, or `409 {error, domains: [...]}` when any Domain uses it |
+| DELETE | `/api/auth-groups/{id}` | `204`, or `409 {error, domains: [...]}` when any Domain uses it, or `409` naming the running containers whose router labels still name `relist-auth-<id>@file` (a Domain switched away but not redeployed); `503` when Docker cannot be asked |
 | POST | `/api/auth-groups/{id}/users` | `{username, password}` → `201` user |
 | PATCH | `/api/auth-groups/{id}/users/{uid}` | `{username?, password?}` |
 | DELETE | `/api/auth-groups/{id}/users/{uid}` | `204` |
