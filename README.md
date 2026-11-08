@@ -6,7 +6,8 @@ React frontend and a SQLite database.
 
 - Projects and Environments that hold Compose files, edited in the browser
 - Builds from a Git repository (HTTPS or SSH) or a zip upload
-- Domains routed by Traefik, with Let's Encrypt or uploaded Certificates
+- Domains routed by Traefik, with Let's Encrypt or uploaded Certificates, and
+  optional Basic auth groups
 - Variables scoped to an Environment or a Compose, with secrets
 - Zero-downtime deploys, a Deployment log and history, and a Terminal into
   each Service
@@ -297,6 +298,30 @@ to every app on those entrypoints, not only the panel), and 10 GiB needs roughly
 25 Mbit/s sustained. A slower link can upload through the panel's loopback port
 (`RELIST_PORT`, default host port `8888`) over an SSH tunnel, which bypasses
 Traefik.
+
+### Basic auth
+
+To password-protect a Domain (a staging site, a preview), make a **Basic auth
+group** on the **Basic auth** page (Admins only): a name and any number of users,
+each a username and a password. The page can generate a 24-character password
+and show or copy any user's password again later; each reveal is recorded in the
+Audit log, and the password itself never is. Then pick the group in the
+**Basic auth** field of the Domain form (Editors can pick, Admins can also make a
+group there). Traefik asks for a username and password of that group before it
+passes a request on; the HTTP to HTTPS redirect happens first, so credentials
+are only ever asked for over HTTPS. A Domain uses one group, or none.
+
+The panel writes each group into Traefik's file-provider directory,
+`RELIST_DATA_DIR/.traefik/dynamic/` (`auth-<id>.yml`, bcrypt hashes only), so
+adding, removing or re-passwording a user applies at once to every Domain using
+the group, with no redeploy. Picking or changing a Domain's group applies on its
+next deploy, like any other Domain change. A group in use cannot be deleted; the
+error names the Domains. A group with no users refuses everyone. Passwords are
+stored in clear text in `panel.db` so an Admin can reveal them, like SSH keys
+and Certificate private keys. This needs the same Traefik file-provider flags as
+Certificates (`--providers.file.directory=/letsencrypt/dynamic` and
+`--providers.file.watch=true`); on an install without them, a Domain that uses a
+group returns 404. See [ADR-0036](docs/adr/0036-basic-auth-groups-through-the-file-provider.md).
 
 ### Local development
 
