@@ -18,7 +18,7 @@ export function PasswordFormItem({
   help,
   required,
 }: {
-  form: FormInstance<UserFormValues>;
+  form: FormInstance;
   /** Shown under the field when it is optional. */
   help?: string;
   required: boolean;

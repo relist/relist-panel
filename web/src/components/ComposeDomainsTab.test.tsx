@@ -16,6 +16,11 @@ const panel = vi.hoisted(() => ({
 }));
 
 vi.mock('../data/store', () => ({ usePanel: () => panel }));
+vi.mock('../data/useCan', () => ({ useIsAdmin: () => true }));
+vi.mock('../data/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../data/api')>()),
+  api: { listAuthGroupOptions: async () => [] },
+}));
 
 const domain: Domain = {
   authGroupId: null,
@@ -184,5 +189,18 @@ describe('ComposeDomainsTab', () => {
     expect(screen.queryByText('api.example.com/v1')).toBeNull();
     second.resolve({ domains: [], services: [] });
     expect(await screen.findByText('No domains. Add one to route a Service through Traefik.')).toBeTruthy();
+  });
+  it('tags a domain with the name of its Basic auth group', async () => {
+    panel.loadDomains.mockResolvedValue({
+      domains: [{ ...domain, authGroupId: 4, authGroupName: 'Staging' }, { ...domain, id: 4, host: 'open.example.com' }],
+      services: ['web'],
+    });
+    renderTab();
+
+    const tagged = (await screen.findByText('Staging')).closest('tr') as HTMLElement;
+    expect(within(tagged).getByText('api.example.com/v1')).toBeTruthy();
+    const open = screen.getByText('open.example.com/v1').closest('tr') as HTMLElement;
+    expect(within(open).queryByText('Staging')).toBeNull();
+    expect(screen.getAllByText('Staging')).toHaveLength(1);
   });
 });

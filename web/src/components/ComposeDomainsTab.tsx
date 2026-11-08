@@ -1,4 +1,4 @@
-import { DeleteOutlined, EditOutlined, PlusOutlined, RocketOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, LockOutlined, PlusOutlined, RocketOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Flex, Popconfirm, Skeleton, Table, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
@@ -179,9 +179,16 @@ export function ComposeDomainsTab({
               {
                 dataIndex: 'host',
                 render: (_, domain) => (
-                  <a href={domainUrl(domain)} rel="noreferrer" target="_blank">
-                    {address(domain)}
-                  </a>
+                  <Flex align="center" gap={8} wrap>
+                    <a href={domainUrl(domain)} rel="noreferrer" target="_blank">
+                      {address(domain)}
+                    </a>
+                    {domain.authGroupName && (
+                      <Tag icon={<LockOutlined />} style={{ marginInlineEnd: 0 }}>
+                        {domain.authGroupName}
+                      </Tag>
+                    )}
+                  </Flex>
                 ),
                 title: 'Host and path',
               },
