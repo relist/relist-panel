@@ -32,6 +32,18 @@ func loginEvents(t *testing.T, f *userFixture) []loginEvent {
 	return out
 }
 
+func TestLoginRecordsForwardedClientIP(t *testing.T) {
+	f := newUserFixture(t)
+	response := f.doWith(http.MethodPost, "/api/auth/login", "", map[string]string{"email": "admin@example.com", "password": userPassword},
+		map[string]string{"X-Forwarded-For": "203.0.113.7"})
+	if response.Code != http.StatusOK {
+		t.Fatalf("login = %d", response.Code)
+	}
+	if events := loginEvents(t, f); len(events) != 1 || events[0].ip != "203.0.113.7" {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
 func TestLoginIsRecorded(t *testing.T) {
 	f := newUserFixture(t)
 	if response := f.login("admin@example.com", userPassword); response.Code != http.StatusOK {

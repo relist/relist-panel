@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"relist-panel/internal/clientip"
 	"time"
 
 	"relist-panel/internal/audit"
@@ -109,7 +110,7 @@ func (a *Authorizer) Middleware(mux *http.ServeMux, next http.Handler) http.Hand
 		}
 		pathScope, _ := scopeOf(pattern, path)
 		event := audit.Event{
-			ActorUserID: user.ID, Actor: user.Email, IP: peerIP(r),
+			ActorUserID: user.ID, Actor: user.Email, IP: clientip.From(r),
 			ProjectID: pathScope.ProjectID, EnvironmentID: pathScope.EnvironmentID, ComposeID: pathScope.ComposeID,
 		}
 		status, access, scope, err := a.decide(r.Context(), user, pattern, path)

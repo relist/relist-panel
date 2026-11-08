@@ -89,6 +89,10 @@ func (f *userFixture) addSession(t *testing.T, userID int64, token string) strin
 }
 
 func (f *userFixture) do(method, path, token string, body any) *httptest.ResponseRecorder {
+	return f.doWith(method, path, token, body, nil)
+}
+
+func (f *userFixture) doWith(method, path, token string, body any, headers map[string]string) *httptest.ResponseRecorder {
 	var reader *bytes.Reader
 	if body != nil {
 		encoded, _ := json.Marshal(body)
@@ -99,6 +103,9 @@ func (f *userFixture) do(method, path, token string, body any) *httptest.Respons
 	request := httptest.NewRequest(method, path, reader)
 	if token != "" {
 		request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: token})
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
 	}
 	recorder := httptest.NewRecorder()
 	f.handler.ServeHTTP(recorder, request)
