@@ -367,3 +367,25 @@ func TestDeleteAllowedWhenNoRunningContainerUsesIt(t *testing.T) {
 		t.Fatalf("code = %d %s", rec.Code, rec.Body)
 	}
 }
+
+// A group a Domain still uses is refused with those Domains, even though its
+// running Container also routes through it: picking another group on the
+// Domain is the fix, redeploying alone is not.
+func TestDeleteInUseListsDomainsBeforeRunningContainers(t *testing.T) {
+	ts := newServiceWithRunning(t, func(context.Context, string) ([]string, error) {
+		return []string{"relist-c1-web-1"}, nil
+	})
+	gid := ts.createGroup(t)
+	useGroup(t, ts, gid)
+	rec := ts.do("DELETE", "/api/auth-groups/"+strconv.FormatInt(gid, 10), nil)
+	if rec.Code != 409 {
+		t.Fatalf("code = %d %s", rec.Code, rec.Body)
+	}
+	body := decode(t, rec)
+	if domains := body["domains"].([]any); len(domains) != 1 {
+		t.Errorf("domains = %v", domains)
+	}
+	if msg, _ := body["error"].(string); strings.Contains(msg, "Redeploy") {
+		t.Errorf("error = %q", msg)
+	}
+}

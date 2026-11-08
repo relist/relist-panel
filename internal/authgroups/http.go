@@ -179,9 +179,20 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Domains first: picking another group on them is the fix, and a
+	// redeploy alone would not free the group.
 	if s.running != nil {
 		if _, err := s.store.Get(r.Context(), id); err != nil {
 			writeStoreError(w, err, "could not delete group")
+			return
+		}
+		used, err := s.store.UsedBy(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not delete group", "")
+			return
+		}
+		if len(used) > 0 {
+			writeInUse(w, used)
 			return
 		}
 		containers, err := s.running(r.Context(), MiddlewareName(id)+"@file")
@@ -203,10 +214,7 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(used) > 0 {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error":   "This group is used by a domain. Pick another group or None on those domains first.",
-			"domains": used,
-		})
+		writeInUse(w, used)
 		return
 	}
 	if err := Reconcile(r.Context(), s.store, s.dataDir); err != nil {
@@ -320,6 +328,13 @@ func (s *Service) reconcileAndWrite(w http.ResponseWriter, r *http.Request, stat
 		return
 	}
 	writeJSON(w, status, v)
+}
+
+func writeInUse(w http.ResponseWriter, used []UsedBy) {
+	writeJSON(w, http.StatusConflict, map[string]any{
+		"error":   "This group is used by a domain. Pick another group or None on those domains first.",
+		"domains": used,
+	})
 }
 
 func writeReconcileError(w http.ResponseWriter, err error) {
