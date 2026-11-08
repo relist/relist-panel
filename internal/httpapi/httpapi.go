@@ -15,6 +15,7 @@ import (
 	"relist-panel/internal/accesslog"
 	"relist-panel/internal/auditapi"
 	"relist-panel/internal/auth"
+	"relist-panel/internal/authgroups"
 	"relist-panel/internal/authz"
 	"relist-panel/internal/builders"
 	"relist-panel/internal/certificates"
@@ -310,6 +311,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	sshkeys.New(db).RegisterRoutes(mux)
 	registryauth.New(externalRegistries, d.RegistryTester, nil).RegisterRoutes(mux)
 	certificates.New(db, dataDir).RegisterRoutes(mux)
+	authgroups.New(db, dataDir).RegisterRoutes(mux)
 	accessLogs := accesslog.New(db, dataDir, d.Traefik)
 	accessLogs.RegisterRoutes(mux)
 	requestStore := requestmetrics.NewStore(db)
