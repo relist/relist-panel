@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"relist-panel/internal/auth"
+	"relist-panel/internal/authgroups"
 	"relist-panel/internal/certificates"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/config"
@@ -130,6 +131,10 @@ func main() {
 	// fatal.
 	if err := certificates.Reconcile(ctx, certificates.NewStore(db), cfg.DataDir); err != nil {
 		log.Printf("reconcile certificates: %v", err)
+	}
+	// Basic auth groups follow panel.db the same way (ADR-0036).
+	if err := authgroups.Reconcile(ctx, authgroups.NewStore(db), cfg.DataDir); err != nil {
+		log.Printf("reconcile basic auth groups: %v", err)
 	}
 	// The transport zero-downtime Domains name (ADR-0023) must always exist:
 	// a Domain whose label names a missing one returns 404.
