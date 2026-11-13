@@ -49,6 +49,32 @@ The copy holds real secrets: keep it under `.data/`, never commit it, never use 
   - Poll with `expect.poll` for anything Traefik applies asynchronously.
 - **After a manual or agent-driven check passes,** turn its important checks into a spec in the same PR. Next time, the manual check covers only what no spec does yet.
 
-## Handing a check to Codex or another agent
+## Running a manual check
 
-Use the `live-check-with-codex` skill (`.claude/skills/live-check-with-codex/`). Its prompt template takes its values from `.data/e2e/env`.
+Use this for anything no spec covers yet. Run it yourself with whatever browser tool you have (Playwright, a browser-use tool, curl), or hand the checklist to another agent. These steps do not depend on a particular tool.
+
+1. Run `task e2e:serve`, then `source .data/e2e/env`. Confirm `curl -sk $PANEL_URL/healthz` returns 200.
+2. Check `e2e/tests/` for checks a spec already covers. Run those with `task e2e`, and leave them out of the manual check.
+3. Write the checklist before you start:
+   - A few bullets on the behaviour under test, naming the spec or issue it comes from.
+   - Numbered checks, each with the exact action and the exact expected result: status code, UI text or Docker state.
+   - Expected noise to ignore, for example a 404 on a Compose's `/source`.
+4. Run every check in order and keep going after a FAIL. Save screenshots in your scratchpad as `NN-short-name.png`.
+5. Report one row per check: number, PASS / FAIL / SKIP, evidence (status codes, short output) and the screenshot path. For each FAIL, add the steps, the expected and actual results, and `docker logs relist-panel --since 10m | tail -50`.
+6. Reproduce each FAIL yourself before fixing it. After the fix, run `task e2e:reload` and run that check again.
+7. Turn the checks that matter into `e2e/tests/<feature>.spec.ts`, as in "e2e specs" above. Run `task e2e -- <feature>` twice on the same sandbox: the second run proves the spec can run again.
+
+**When another agent runs the checklist,** give it everything it cannot find out on its own:
+- Tell it to `source <repo>/.data/e2e/env` in every shell, and never to unset `DOCKER_HOST` or use the default Docker host.
+- Tell it not to edit source files, commit, push or remove the sandbox.
+- API writes need the header `Origin: $PANEL_URL`.
+- An HTTP→HTTPS redirect's Location has no port, so check only its status and scheme.
+- `traefik/whoami` is a test app image that echoes request headers on port 80.
+- For Role checks: invite a user from the Users page, grant a Role, and open the invite link in a second browser context.
+
+When it reports PASS, open at least two of its screenshots yourself.
+
+**Common mistakes:**
+- Guessing ports or hard-coding them in a checklist or a spec. Ports change when the sandbox restarts.
+- Leaving secrets in screenshots or specs. Screenshots of revealed passwords stay in the scratchpad: never commit or publish them.
+- Ending with a manual check only. If nothing lands in `e2e/`, the next change needs the same manual check again.

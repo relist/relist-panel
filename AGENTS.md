@@ -24,7 +24,7 @@ To run this checkout for real (browser, curl through Traefik, deploys), use `tas
 - The host's default Docker runs the user's live install: reach Docker only through the sandbox's `DOCKER_HOST`.
 - Ask before `task e2e:down`.
 
-When a manual check passes, add its important checks to `e2e/`. See `docs/agents/live-checks.md`.
+For a manual check, by yourself or through another agent, follow "Running a manual check" in `docs/agents/live-checks.md`. When it passes, add its important checks to `e2e/`.
 
 ### Frontend and Ant Design
 
