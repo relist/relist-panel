@@ -13,6 +13,7 @@ import (
 
 	"relist-panel/internal/composes"
 	"relist-panel/internal/database"
+	"relist-panel/internal/datadirlock"
 	"relist-panel/internal/volumes"
 )
 
@@ -358,6 +359,9 @@ func TestHostPathCandidatesSizeSystemPathsThatCanMove(t *testing.T) {
 func TestSkipInDataDirScanWork(t *testing.T) {
 	if !skipInDataDir(".scan-work") {
 		t.Fatal(".scan-work would be copied by a Migration")
+	}
+	if !skipInDataDir(datadirlock.FileName) {
+		t.Fatal("the lock file would be copied, and finalize would replace it under the running panel")
 	}
 	if skipInDataDir("projects") {
 		t.Fatal("projects skipped")
