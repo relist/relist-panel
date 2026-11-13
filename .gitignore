@@ -3,7 +3,8 @@
 /node_modules/
 /web/node_modules/
 /web/*.tsbuildinfo
-/.claude/
+/.claude/*
+!/.claude/skills/
 /.task/
 /.superpowers/
 docker-compose.override.yml

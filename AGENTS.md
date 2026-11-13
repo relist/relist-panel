@@ -16,6 +16,16 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents
 
 Conventional Commits, no scope (`feat: ...`, `fix: ...`, `chore: ...`). See `docs/agents/commit-conventions.md`.
 
+### Live checks and e2e tests
+
+To run this checkout for real (browser, curl through Traefik, deploys), use `task e2e:serve`. Then read ports and credentials from `.data/e2e/env`, and never guess them. Run the Playwright specs with `task e2e`.
+
+- Every checkout gets its own `docker:dind` sandbox, so worktrees never collide.
+- The host's default Docker runs the user's live install: reach Docker only through the sandbox's `DOCKER_HOST`.
+- Ask before `task e2e:down`.
+
+When a manual check passes, add its important checks to `e2e/`. See `docs/agents/live-checks.md`.
+
 ### Frontend and Ant Design
 
 Before creating or modifying frontend pages, components, layout, styling, or UI behavior in `web/`, **read [Ant Design's `llms.txt`](https://ant.design/llms.txt)**, then open the linked official component and design documentation relevant to the change. Use the index to select the relevant pages rather than loading the entire documentation bundle.
