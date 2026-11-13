@@ -10,3 +10,5 @@ relist-panel
 web/node_modules
 web/dist
 internal/webassets/dist
+e2e
+.claude
