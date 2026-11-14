@@ -16,6 +16,8 @@ const api = vi.hoisted(() => ({
   deleteDatabaseBackup: vi.fn(),
   getDatabaseSchedule: vi.fn(),
   pinDatabaseBackup: vi.fn(),
+  listBackupDestinations: vi.fn(),
+  retryDatabaseBackupUpload: vi.fn(),
   listDatabaseBackups: vi.fn(),
   listDatabaseRestores: vi.fn(),
   restoreDatabase: vi.fn(),
@@ -62,6 +64,7 @@ function backup(over: Partial<DatabaseBackup>): DatabaseBackup {
     sha256: 'abc',
     localRemoved: false,
     pinned: false,
+    upload: null,
     size: 1536,
     startedAt: '2026-11-14T10:00:00Z',
     status: 'succeeded',
@@ -85,9 +88,10 @@ describe('DatabaseBackupsTab', () => {
     vi.clearAllMocks();
     api.listDatabaseBackups.mockResolvedValue([backup({})]);
     api.listDatabaseRestores.mockResolvedValue([]);
+    api.listBackupDestinations.mockResolvedValue([]);
     api.getDatabaseSchedule.mockResolvedValue({
       all: true, databases: [], days: ['daily'], enabled: false, lastError: '', lastRunAt: null, localKeepCount: 7,
-      localKeepDays: null, minute: 180, next: null, remoteKeepCount: 30, remoteKeepDays: null, timeZone: 'UTC (UTC+00:00)',
+      localKeepDays: null, minute: 180, next: null, remoteKeepCount: 30, remoteKeepDays: null, destinationId: null, timeZone: 'UTC (UTC+00:00)',
     });
     api.databaseLogicalDatabases.mockResolvedValue({ databases: ['a', 'app'] });
     api.startDatabaseBackup.mockResolvedValue([backup({ status: 'running' })]);
@@ -289,5 +293,32 @@ describe('DatabaseBackupsTab', () => {
     expect(screen.queryByRole('link', { name: /Download/ })).toBeNull();
     expect((screen.getByRole('button', { name: /Download/ }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Restore' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows each copy: Copied, Copying and Copy failed with Retry', async () => {
+    api.retryDatabaseBackupUpload.mockResolvedValue(undefined);
+    api.listDatabaseBackups.mockResolvedValue([
+      backup({ id: 1, trigger: 'scheduled', upload: { destination: 'minio', error: '', status: 'uploaded', uploadedAt: '2026-11-14T10:01:00Z' } }),
+      backup({ id: 2, trigger: 'scheduled', upload: { destination: 'minio', error: '', status: 'running', uploadedAt: null } }),
+      backup({ id: 3, trigger: 'scheduled', upload: { destination: 'minio', error: 'connection refused', status: 'failed', uploadedAt: null } }),
+    ]);
+    const user = userEvent.setup();
+    renderTab();
+    expect(await screen.findByText('Copied')).toBeTruthy();
+    expect(screen.getByText('Copying…')).toBeTruthy();
+    expect(screen.getByText('Copy failed')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(api.retryDatabaseBackupUpload).toHaveBeenCalledWith(1, 3));
+  });
+
+  it('says a delete also deletes the copy in the destination', async () => {
+    api.listDatabaseBackups.mockResolvedValue([
+      backup({ id: 1, trigger: 'scheduled', upload: { destination: 'minio', error: '', status: 'uploaded', uploadedAt: '2026-11-14T10:01:00Z' } }),
+    ]);
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByText('Copied');
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(await screen.findByText('Also deletes its copy in minio.')).toBeTruthy();
   });
 });
