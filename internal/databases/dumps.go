@@ -142,8 +142,12 @@ func (m mysqlDumper) DumpCmd(db string) (cmd, env []string) {
 	return []string{m.dump, "-uroot", "--single-transaction", "--routines", "--events", "--triggers", db}, nil
 }
 
+// RestoreCmd runs the file with --binary-mode, which turns off every client
+// command but DELIMITER and \C for piped input. Without it a line could hold
+// \u other, connect other or system … anywhere in it and leave the target,
+// or run a shell in the container; CheckUpload only reads line starts.
 func (m mysqlDumper) RestoreCmd(target string) (cmd, env []string) {
-	return []string{m.client, "-uroot", "--database=" + target}, nil
+	return []string{m.client, "-uroot", "--binary-mode", "--database=" + target}, nil
 }
 
 func (m mysqlDumper) AdminCmd() []string { return []string{m.client, "-uroot", "-N"} }

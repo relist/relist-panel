@@ -27,10 +27,10 @@ func TestDumperCommands(t *testing.T) {
 			"psql -U postgres -X -At -v ON_ERROR_STOP=1 -d template1", []string{"PGPASSWORD=pw"}},
 		{"mysql", "mysql -uroot -N -e SHOW DATABASES", []string{"information_schema", "performance_schema", "mysql", "sys"},
 			mysqlDump("mysqldump"), nil,
-			"mysql -uroot --database=t", nil, "mysql -uroot -N", []string{"MYSQL_PWD=pw"}},
+			"mysql -uroot --binary-mode --database=t", nil, "mysql -uroot -N", []string{"MYSQL_PWD=pw"}},
 		{"mariadb", "mariadb -uroot -N -e SHOW DATABASES", []string{"information_schema", "performance_schema", "mysql", "sys"},
 			mysqlDump("mariadb-dump"), nil,
-			"mariadb -uroot --database=t", nil, "mariadb -uroot -N", []string{"MYSQL_PWD=pw"}},
+			"mariadb -uroot --binary-mode --database=t", nil, "mariadb -uroot -N", []string{"MYSQL_PWD=pw"}},
 	}
 	for _, c := range cases {
 		d, err := DumperFor(c.engine)
