@@ -466,6 +466,12 @@ func (e *TerminalExec) containerHasLocale(ctx context.Context, containerID strin
 // those bytes are the stream's, so the Session must read through the same
 // reader.
 func (e *TerminalExec) hijack(ctx context.Context, path string, in any) (net.Conn, *bufio.Reader, error) {
+	return hijackSocket(ctx, e.socketPath, path, in)
+}
+
+// hijackSocket is hijack over the socket at socketPath, shared by the
+// terminal and the Databases' non-TTY exec.
+func hijackSocket(ctx context.Context, socketPath, path string, in any) (net.Conn, *bufio.Reader, error) {
 	body, err := json.Marshal(in)
 	if err != nil {
 		return nil, nil, fmt.Errorf("docker api %s: encode: %w", path, err)
@@ -479,7 +485,7 @@ func (e *TerminalExec) hijack(ctx context.Context, path string, in any) (net.Con
 	req.Header.Set("Upgrade", "tcp")
 
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "unix", e.socketPath)
+	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("docker api %s: %w", path, err)
 	}

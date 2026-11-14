@@ -20,6 +20,16 @@ type fakeHost struct {
 	images     map[string]string // ref -> image ID after a pull
 	failOn     map[string]error  // call prefix -> error
 	logs       string
+
+	// Exec scripts: the first script whose prefix starts the joined command
+	// answers; an unscripted command exits 0 with no output.
+	scripts  []execScript
+	execReqs []ExecRequest
+}
+
+type execScript struct {
+	prefix string
+	fn     func(req ExecRequest) (int, error)
 }
 
 func newFakeHost() *fakeHost {
@@ -211,4 +221,46 @@ func (f *fakeHost) Logs(_ context.Context, name string, tail int) (string, error
 		return "", err
 	}
 	return f.logs, nil
+}
+
+// script answers every Exec whose command line starts with prefix.
+func (f *fakeHost) script(prefix string, fn func(req ExecRequest) (int, error)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scripts = append(f.scripts, execScript{prefix, fn})
+}
+
+// execs returns the recorded Exec requests whose command starts with prefix.
+func (f *fakeHost) execs(prefix string) []ExecRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []ExecRequest
+	for _, r := range f.execReqs {
+		if strings.HasPrefix(strings.Join(r.Cmd, " "), prefix) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func (f *fakeHost) Exec(_ context.Context, name string, req ExecRequest) (int, error) {
+	line := strings.Join(req.Cmd, " ")
+	f.mu.Lock()
+	err := f.record("exec " + name + " " + line)
+	f.execReqs = append(f.execReqs, req)
+	var fn func(ExecRequest) (int, error)
+	for _, sc := range f.scripts {
+		if strings.HasPrefix(line, sc.prefix) {
+			fn = sc.fn
+			break
+		}
+	}
+	f.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	if fn == nil {
+		return 0, nil
+	}
+	return fn(req)
 }

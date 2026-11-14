@@ -15,11 +15,14 @@ import (
 
 // DatabaseHost implements databases.Host over the Engine API (ADR-0039).
 type DatabaseHost struct {
-	engine *Engine
+	engine     *Engine
+	socketPath string
+	// exec carries the create, start and exit-code calls of Exec.
+	exec *TerminalExec
 }
 
 func NewDatabaseHost(socketPath string) *DatabaseHost {
-	return &DatabaseHost{engine: NewEngine(socketPath)}
+	return &DatabaseHost{engine: NewEngine(socketPath), socketPath: socketPath, exec: NewTerminalExec(socketPath, "")}
 }
 
 var _ databases.Host = (*DatabaseHost)(nil)
