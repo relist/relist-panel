@@ -89,6 +89,8 @@ func TestBackupRoutesRedis400(t *testing.T) {
 	a.seed(t, "Cache", "redis", "8")
 	for _, c := range [][2]string{
 		{"POST", "/api/databases/1/backups"}, {"GET", "/api/databases/1/logical-databases"},
+		{"GET", "/api/databases/1/backups"}, {"GET", "/api/databases/1/restores"},
+		{"GET", "/api/databases/1/backups/1/download"}, {"DELETE", "/api/databases/1/backups/1"},
 		{"POST", "/api/databases/1/restores"}, {"POST", "/api/databases/1/restores/upload?confirm=Cache&name=a.sql"},
 	} {
 		if w := a.do(c[0], c[1], `{"scope":{"all":true},"backupId":1,"confirm":"Cache"}`); w.Code != 400 {

@@ -262,9 +262,20 @@ func (s *Service) dumpTo(ctx context.Context, d Database, dp Dumper, sc Scope, d
 	return file.n, hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// hasBackups checks that Database id exists and its engine has Backups:
+// every backup route answers ErrNoBackups for Redis.
+func (s *Service) hasBackups(ctx context.Context, id int64) error {
+	d, err := s.d.Store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	_, err = DumperFor(d.Engine)
+	return err
+}
+
 // ListBackups returns Database id's Backups, newest first.
 func (s *Service) ListBackups(ctx context.Context, id int64) ([]Backup, error) {
-	if _, err := s.d.Store.Get(ctx, id); err != nil {
+	if err := s.hasBackups(ctx, id); err != nil {
 		return nil, err
 	}
 	return s.d.Store.ListBackups(ctx, id)
@@ -272,7 +283,7 @@ func (s *Service) ListBackups(ctx context.Context, id int64) ([]Backup, error) {
 
 // ListRestores returns Database id's last 20 restores, newest first.
 func (s *Service) ListRestores(ctx context.Context, id int64) ([]Restore, error) {
-	if _, err := s.d.Store.Get(ctx, id); err != nil {
+	if err := s.hasBackups(ctx, id); err != nil {
 		return nil, err
 	}
 	return s.d.Store.ListRestores(ctx, id)
@@ -281,6 +292,9 @@ func (s *Service) ListRestores(ctx context.Context, id int64) ([]Restore, error)
 // BackupPath is the file of a succeeded Backup, for download. Anything else,
 // including a file that is gone, is ErrNotFound.
 func (s *Service) BackupPath(ctx context.Context, id, backupID int64) (string, Backup, error) {
+	if err := s.hasBackups(ctx, id); err != nil {
+		return "", Backup{}, err
+	}
 	b, err := s.d.Store.GetBackup(ctx, id, backupID)
 	if err != nil {
 		return "", Backup{}, err
@@ -297,6 +311,9 @@ func (s *Service) BackupPath(ctx context.Context, id, backupID int64) (string, B
 
 // DeleteBackup removes a Backup's file, then its row. A running one is ErrBusy.
 func (s *Service) DeleteBackup(ctx context.Context, id, backupID int64) error {
+	if err := s.hasBackups(ctx, id); err != nil {
+		return err
+	}
 	b, err := s.d.Store.GetBackup(ctx, id, backupID)
 	if err != nil {
 		return err
