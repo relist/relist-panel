@@ -30,9 +30,10 @@ const (
 )
 
 var (
-	ErrInvalidName = errors.New("name must be 1 to 63 characters")
-	ErrConfirm     = errors.New("type the Database's name to confirm")
-	ErrLocked      = errors.New("a server Migration is running; Databases cannot change until it ends")
+	ErrInvalidName   = errors.New("name must be 1 to 63 characters")
+	ErrConfirm       = errors.New("type the Database's name to confirm")
+	ErrLocked        = errors.New("a server Migration is running; Databases cannot change until it ends")
+	ErrInvalidLimits = errors.New("memory and CPU limits cannot be negative")
 )
 
 // Deps wires the Service. Locked reports the server Migration lock (nil =
@@ -159,7 +160,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Database, error) 
 		return Database{}, err
 	}
 	if in.MemoryMB < 0 || in.CPUs < 0 {
-		return Database{}, errors.New("limits cannot be negative")
+		return Database{}, ErrInvalidLimits
 	}
 	sl := slug.Slugify(name)
 	if free, err := s.slugFree(ctx, sl, 0); err != nil {

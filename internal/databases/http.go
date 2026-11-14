@@ -281,7 +281,7 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 // writeError maps a service error to its status.
 func writeError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrInvalidName), errors.Is(err, ErrUnknownEngine), errors.Is(err, ErrUnknownVersion), errors.Is(err, ErrConfirm):
+	case errors.Is(err, ErrInvalidName), errors.Is(err, ErrUnknownEngine), errors.Is(err, ErrUnknownVersion), errors.Is(err, ErrConfirm), errors.Is(err, ErrInvalidLimits):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, "Database not found")

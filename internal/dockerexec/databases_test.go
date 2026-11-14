@@ -208,3 +208,18 @@ func TestDatabaseHostNotFoundIsNil(t *testing.T) {
 		t.Errorf("Inspect = %+v, %v", st, err)
 	}
 }
+
+// A recreate must let the database flush: stop with a grace period before the
+// forced remove, never SIGKILL a running server.
+func TestDatabaseHostCreateStopsBeforeRemove(t *testing.T) {
+	h, f := newDBHost(t)
+	f.inspect = `{"State":{"Running":true}}`
+	if err := h.Create(context.Background(), dbSpec()); err != nil {
+		t.Fatal(err)
+	}
+	stop := slices.Index(f.calls, "POST /containers/relist-db-1/stop")
+	remove := slices.Index(f.calls, "DELETE /containers/relist-db-1")
+	if stop < 0 || remove < 0 || stop > remove {
+		t.Fatalf("want stop before remove, calls = %v", f.calls)
+	}
+}

@@ -133,6 +133,13 @@ func TestUnknownVersion400(t *testing.T) {
 	}
 }
 
+func TestNegativeLimits400(t *testing.T) {
+	a := newAPIRig(t)
+	if w := a.do("POST", "/api/databases", `{"name":"A","engine":"redis","version":"8","memoryMb":-1}`); w.Code != 400 {
+		t.Fatalf("code = %d %s", w.Code, w.Body)
+	}
+}
+
 func TestDuplicateName409(t *testing.T) {
 	a := newAPIRig(t)
 	a.do("POST", "/api/databases", `{"name":"Shop","engine":"redis","version":"8"}`)

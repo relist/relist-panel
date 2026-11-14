@@ -148,6 +148,12 @@ func (h *DatabaseHost) VolumeExists(ctx context.Context, name string) (bool, err
 }
 
 func (h *DatabaseHost) Create(ctx context.Context, spec databases.ContainerSpec) error {
+	// A recreate (new image, new settings) must let the server flush first:
+	// the forced remove alone would SIGKILL it, and Redis would lose what it
+	// wrote since its last snapshot. A stopped container answers 304.
+	if err := h.Stop(ctx, spec.Name); err != nil && !isEngineNotFound(err) {
+		return err
+	}
 	if err := h.engine.Remove(ctx, spec.Name, true, false); err != nil {
 		return err
 	}

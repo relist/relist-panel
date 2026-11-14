@@ -78,4 +78,4 @@ type Host interface {
 
 // OwnerName is who the Docker page shows as the owner of a Database's volume
 // and image, so cleanup never offers them.
-const OwnerName = "databases"
+const OwnerName = "Databases"
