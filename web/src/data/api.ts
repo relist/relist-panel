@@ -28,8 +28,11 @@ import type {
   SourceInput,
   SourceTestResult,
   SshKey,
+  BackupScope,
   Database,
   DatabaseAction,
+  DatabaseBackup,
+  DatabaseRestore,
   DatabaseCredentials,
   DatabaseEngine,
   DatabaseInput,
@@ -604,9 +607,28 @@ export const api = {
   renameDatabase: (id: number, name: string) => request<void>(`/api/databases/${id}`, jsonInit('PATCH', { name })),
   databaseAction: (id: number, action: DatabaseAction) =>
     request<void>(`/api/databases/${id}/${action}`, { method: 'POST' }),
-  deleteDatabase: (id: number, confirm: string) =>
-    request<void>(`/api/databases/${id}`, jsonInit('DELETE', { confirm })),
+  updateDatabaseImage: (id: number, backupFirst: boolean) =>
+    request<void>(`/api/databases/${id}/update-image`, jsonInit('POST', { backupFirst })),
+  deleteDatabase: (id: number, confirm: string, deleteBackups = false) =>
+    request<void>(`/api/databases/${id}`, jsonInit('DELETE', { confirm, deleteBackups })),
+  // Backups and restores (SQL engines only).
+  databaseLogicalDatabases: (id: number) => request<{ databases: string[] }>(`/api/databases/${id}/logical-databases`),
+  listDatabaseBackups: (id: number) => request<DatabaseBackup[]>(`/api/databases/${id}/backups`),
+  startDatabaseBackup: (id: number, scope: BackupScope) =>
+    request<DatabaseBackup>(`/api/databases/${id}/backups`, jsonInit('POST', { scope })),
+  deleteDatabaseBackup: (id: number, backupId: number) =>
+    request<void>(`/api/databases/${id}/backups/${backupId}`, { method: 'DELETE' }),
+  listDatabaseRestores: (id: number) => request<DatabaseRestore[]>(`/api/databases/${id}/restores`),
+  restoreDatabase: (id: number, backupId: number, confirm: string) =>
+    request<DatabaseRestore>(`/api/databases/${id}/restores`, jsonInit('POST', { backupId, confirm })),
+  /** The raw file is the request body; confirm and name travel in the query. */
+  restoreDatabaseUpload: (id: number, file: File, confirm: string) =>
+    request<DatabaseRestore>(
+      `/api/databases/${id}/restores/upload?${new URLSearchParams({ confirm, name: file.name })}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file },
+    ),
   /** Reveals the password; every call is audited. */
+  databaseBackupUrl: (id: number, backupId: number) => `/api/databases/${id}/backups/${backupId}/download`,
   databaseCredentials: (id: number) => request<DatabaseCredentials>(`/api/databases/${id}/credentials`),
   databaseLogs: (id: number, tail = 200) => request<{ logs: string }>(`/api/databases/${id}/logs?tail=${tail}`),
   // Builders: resource-limited buildx builders, and the BuildKit image they run.
