@@ -170,10 +170,13 @@ func (s *Service) insertScoped(ctx context.Context, d Database, dp Dumper, sc Sc
 
 // backupNow records and runs a Backup before returning: the pre_restore and
 // pre_update Backups a job takes inside itself.
-func (s *Service) backupNow(ctx context.Context, d Database, dp Dumper, sc Scope, trigger string) Backup {
+func (s *Service) backupNow(ctx context.Context, d Database, dp Dumper, sc Scope, trigger string, onInsert func(Backup)) Backup {
 	b, err := s.insertScoped(ctx, d, dp, sc, trigger)
 	if err != nil {
 		return Backup{Status: JobFailed, Error: err.Error()}
+	}
+	if onInsert != nil {
+		onInsert(b)
 	}
 	return s.executeBackup(ctx, d, dp, b)
 }
