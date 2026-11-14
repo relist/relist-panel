@@ -123,55 +123,30 @@ func (s *Service) ListLogicalDatabases(ctx context.Context, id int64) ([]string,
 	return s.listLogical(ctx, d, dp)
 }
 
-// StartBackup validates, records a running Backup and runs it in the
-// background; the row is returned at once.
-func (s *Service) StartBackup(ctx context.Context, id int64, sc Scope) (Backup, error) {
-	d, dp, err := s.acquire(ctx, id, JobKindBackup)
-	if err != nil {
-		return Backup{}, err
-	}
-	b, err := s.insertScoped(ctx, d, dp, sc, TriggerManual)
-	if err != nil {
-		s.endJob(id)
-		return Backup{}, err
-	}
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		defer s.endJob(id)
-		s.executeBackup(context.WithoutCancel(ctx), d, dp, b)
-	}()
-	return b, nil
+// BackupRequest is what a Backup run covers: every logical database, or the
+// named ones.
+type BackupRequest struct {
+	All       bool     `json:"all"`
+	Databases []string `json:"databases"`
 }
 
-// insertScoped checks sc against the Database's logical databases and stores
-// the running Backup row.
-func (s *Service) insertScoped(ctx context.Context, d Database, dp Dumper, sc Scope, trigger string) (Backup, error) {
-	if !sc.All {
-		if len(sc.Databases) == 0 {
-			return Backup{}, ErrNoScope
-		}
-		have, err := s.listLogical(ctx, d, dp)
-		if err != nil {
-			return Backup{}, err
-		}
-		var missing []string
-		for _, n := range sc.Databases {
-			if !slices.Contains(have, n) {
-				missing = append(missing, n)
-			}
-		}
-		if len(missing) > 0 {
-			return Backup{}, ErrUnknownLogical{Names: missing}
-		}
-	}
-	return s.d.Store.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: trigger, Scope: sc})
+// StartBackup is replaced in the next commit (plan-phase-2b Task 2).
+func (s *Service) StartBackup(ctx context.Context, id int64, req BackupRequest) ([]Backup, error) {
+	return nil, errors.New("not implemented")
 }
 
-// backupNow records and runs a Backup before returning: the pre_restore and
-// pre_update Backups a job takes inside itself.
-func (s *Service) backupNow(ctx context.Context, d Database, dp Dumper, sc Scope, trigger string, onInsert func(Backup)) Backup {
-	b, err := s.insertScoped(ctx, d, dp, sc, trigger)
+// backupAll is replaced in the next commit (plan-phase-2b Task 2).
+func (s *Service) backupAll(ctx context.Context, d Database, dp Dumper, trigger string) (ok bool, firstErr string) {
+	return false, "not implemented"
+}
+
+// backupNow records and runs a Backup of one logical database before
+// returning: the pre_restore Backup a restore takes inside itself.
+func (s *Service) backupNow(ctx context.Context, d Database, dp Dumper, logical, trigger string, onInsert func(Backup)) Backup {
+	if err := checkName(logical); err != nil {
+		return Backup{Status: JobFailed, Error: err.Error()}
+	}
+	b, err := s.d.Store.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: trigger, LogicalName: logical})
 	if err != nil {
 		return Backup{Status: JobFailed, Error: err.Error()}
 	}
@@ -198,7 +173,7 @@ func (s *Service) executeBackup(ctx context.Context, d Database, dp Dumper, b Ba
 	dir := filepath.Join(s.dbDir(d.ID), "backups")
 	name := fmt.Sprintf("%s-%d.sql.gz", b.StartedAt.UTC().Format("20060102T150405Z"), b.ID)
 	logs := &tailBuffer{max: logLimit}
-	size, sum, err := s.dumpTo(ctx, d, dp, b.Scope, dir, name, logs)
+	size, sum, err := s.dumpTo(ctx, d, dp, b.LogicalName, dir, name, logs)
 	fin := Backup{Log: logs.String()}
 	if err != nil {
 		fin.Status, fin.Error = JobFailed, err.Error()
@@ -214,9 +189,9 @@ func (s *Service) executeBackup(ctx context.Context, d Database, dp Dumper, b Ba
 	return b
 }
 
-// dumpTo writes the dump of scope as one gzip stream to dir/name, through a
+// dumpTo writes the dump of one logical database as one gzip stream to dir/name, through a
 // .partial file that is renamed only when every step succeeded.
-func (s *Service) dumpTo(ctx context.Context, d Database, dp Dumper, sc Scope, dir, name string, stderr io.Writer) (size int64, sum string, err error) {
+func (s *Service) dumpTo(ctx context.Context, d Database, dp Dumper, logical, dir, name string, stderr io.Writer) (size int64, sum string, err error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return 0, "", err
 	}
@@ -237,14 +212,16 @@ func (s *Service) dumpTo(ctx context.Context, d Database, dp Dumper, sc Scope, d
 	h := sha256.New()
 	file := &countingWriter{w: io.MultiWriter(f, h)}
 	gz := gzip.NewWriter(file)
-	for _, cmd := range dp.DumpCmds(sc) {
-		code, err := s.d.Host.Exec(ctx, ContainerName(d.ID), ExecRequest{Cmd: cmd, Env: dp.Env(d.Password), Stdout: gz, Stderr: stderr})
-		if err != nil {
-			return 0, "", err
-		}
-		if code != 0 {
-			return 0, "", fmt.Errorf("%s exited with code %d", cmd[0], code)
-		}
+	if err := checkName(logical); err != nil {
+		return 0, "", err
+	}
+	cmd, extra := dp.DumpCmd(logical)
+	code, err := s.d.Host.Exec(ctx, ContainerName(d.ID), ExecRequest{Cmd: cmd, Env: execEnv(dp, d.Password, extra), Stdout: gz, Stderr: stderr})
+	if err != nil {
+		return 0, "", err
+	}
+	if code != 0 {
+		return 0, "", fmt.Errorf("%s exited with code %d", cmd[0], code)
 	}
 	if err = gz.Close(); err != nil {
 		return 0, "", err

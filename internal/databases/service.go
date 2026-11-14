@@ -492,8 +492,8 @@ func (s *Service) UpdateImage(ctx context.Context, id int64, backupFirst bool) e
 		defer s.wg.Done()
 		defer s.endJob(id)
 		ctx := context.WithoutCancel(ctx)
-		if b := s.backupNow(ctx, d, dp, Scope{All: true}, TriggerPreUpdate, nil); b.Status != JobSucceeded {
-			_ = s.d.Store.SetLastError(ctx, id, "the pre-update backup failed, so the image was not updated: "+b.Error)
+		if ok, firstErr := s.backupAll(ctx, d, dp, TriggerPreUpdate); !ok {
+			_ = s.d.Store.SetLastError(ctx, id, "the pre-update backup failed, so the image was not updated: "+firstErr)
 			return
 		}
 		unlock := s.lock(id)
