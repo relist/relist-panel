@@ -182,22 +182,49 @@ export function AppShell() {
     { key: 'overview', icon: <AppstoreOutlined />, label: 'Overview' },
     projectsItem,
     deploymentsItem,
-    { key: 'monitoring', icon: <DashboardOutlined />, label: 'Monitoring' },
-    { key: 'docker', icon: <CloudServerOutlined />, label: 'Docker' },
-    { key: 'panel-update', icon: <CloudDownloadOutlined />, label: 'Panel update' },
-    { key: 'images', icon: <ContainerOutlined />, label: 'Images' },
-    { key: 'builders', icon: <BuildOutlined />, label: 'Builders' },
-    { key: 'registry', icon: <DatabaseOutlined />, label: 'Registry' },
+    // Groups label the admin's host-wide pages by the question each answers
+    // (GUIDELINES §3); they are titles, not pages, so the breadcrumb skips them.
     {
-      key: 'vulnerabilities', icon: <SafetyOutlined />,
-      label: <Flex align="center" justify="space-between" gap={8}><span>Vulnerabilities</span>{criticalCount > 0 && <Badge count={criticalCount} color={token.colorError} title={`${criticalCount} Critical vulnerabilities`} />}</Flex>,
+      type: 'group', label: 'Host',
+      children: [
+        { key: 'monitoring', icon: <DashboardOutlined />, label: 'Monitoring' },
+        { key: 'docker', icon: <CloudServerOutlined />, label: 'Docker' },
+      ],
     },
-    { key: 'ssh-keys', icon: <KeyOutlined />, label: 'SSH keys' },
-    { key: 'certificates', icon: <SafetyCertificateOutlined />, label: 'Certificates' },
-    { key: 'basic-auth', icon: <LockOutlined />, label: 'Basic auth' },
-    { key: 'traefik', icon: <GlobalOutlined />, label: 'Traefik' },
-    { key: 'users', icon: <TeamOutlined />, label: 'Users' },
-    { key: 'audit', icon: <AuditOutlined />, label: 'Audit log' },
+    {
+      type: 'group', label: 'Build & images',
+      children: [
+        { key: 'images', icon: <ContainerOutlined />, label: 'Images' },
+        { key: 'registry', icon: <DatabaseOutlined />, label: 'Registry' },
+        { key: 'builders', icon: <BuildOutlined />, label: 'Builders' },
+        { key: 'ssh-keys', icon: <KeyOutlined />, label: 'SSH keys' },
+      ],
+    },
+    {
+      type: 'group', label: 'Routing',
+      children: [
+        { key: 'traefik', icon: <GlobalOutlined />, label: 'Traefik' },
+        { key: 'certificates', icon: <SafetyCertificateOutlined />, label: 'Certificates' },
+        { key: 'basic-auth', icon: <LockOutlined />, label: 'Basic auth' },
+      ],
+    },
+    {
+      type: 'group', label: 'Security',
+      children: [
+        {
+          key: 'vulnerabilities', icon: <SafetyOutlined />,
+          label: <Flex align="center" justify="space-between" gap={8}><span>Vulnerabilities</span>{criticalCount > 0 && <Badge count={criticalCount} color={token.colorError} title={`${criticalCount} Critical vulnerabilities`} />}</Flex>,
+        },
+        { key: 'audit', icon: <AuditOutlined />, label: 'Audit log' },
+      ],
+    },
+    {
+      type: 'group', label: 'Panel',
+      children: [
+        { key: 'users', icon: <TeamOutlined />, label: 'Users' },
+        { key: 'panel-update', icon: <CloudDownloadOutlined />, label: 'Panel update' },
+      ],
+    },
     recentProjects,
   ];
 
