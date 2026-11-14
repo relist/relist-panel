@@ -11,11 +11,13 @@ React frontend and a SQLite database.
 - Variables scoped to an Environment or a Compose, with secrets
 - Zero-downtime deploys, a Deployment log and history, and a Terminal into
   each Service
+- Databases: Postgres, MySQL, MariaDB and Redis the panel runs for you, with
+  a connection URL to paste into any Compose
 - Volume files, host monitoring, Docker cleanup and vulnerability scans (Trivy)
 - Two-factor sign-in, moving to a new server, and updating the panel itself
 
 It is a personal project, built for one operator on one host: no multi-host,
-no teams, no database-as-a-service. Use it at your own risk; see
+no teams. Use it at your own risk; see
 [License](#license).
 
 The domain language is in [CONTEXT.md](CONTEXT.md) and the design decisions

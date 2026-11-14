@@ -105,7 +105,9 @@ Registry (ADR-0033) and Builders (ADR-0028):
   - readable: `<slug>.db.internal`.
 
   The readable alias follows renames and is skipped with a warning when the
-  slug is not DNS-safe, as ADR-0014 does.
+  slug is not DNS-safe, as ADR-0014 does. A name with no ASCII letters or
+  digits has the fallback slug `x`, gets no readable alias, and may share that
+  slug with other Databases.
 - Optional **memory and CPU limits**.
 - **Healthcheck** by driver: `pg_isready`, `mysqladmin ping` / `mariadb-admin
   ping`, `redis-cli ping`.
