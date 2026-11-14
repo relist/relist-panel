@@ -207,10 +207,14 @@ export type DomainInput = {
   certProvider: CertProvider;
   certResolver: string;
   middlewares: string[];
+  /** The Basic auth group the Domain requires; `null` is None (ADR-0036). */
+  authGroupId: number | null;
 };
 
 export type Domain = DomainInput & {
   id: number;
+  /** The name of `authGroupId`'s group; empty when there is none. */
+  authGroupName: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -744,6 +748,44 @@ export interface Certificate {
 }
 
 export type CertificateInput = { name: string; certificate: string; privateKey: string };
+
+/** A Basic auth group (ADR-0036); never carries a password or hash. */
+export type AuthGroup = {
+  id: number;
+  name: string;
+  userCount: number;
+  domainCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AuthGroupUser = {
+  id: number;
+  username: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** One Domain that uses a group. */
+export type AuthGroupDomain = {
+  id: number;
+  host: string;
+  path: string;
+  projectId: number;
+  environmentId: number;
+  composeId: number;
+  projectName: string;
+  environmentName: string;
+  composeName: string;
+};
+
+export type AuthGroupDetail = AuthGroup & {
+  users: AuthGroupUser[];
+  domains: AuthGroupDomain[];
+};
+
+/** A group as the Domain form's Select lists it. */
+export type AuthGroupOption = { id: number; name: string };
 
 /** Traefik's own log; `found` is false when the install has no Traefik container. */
 export interface TraefikLogs {

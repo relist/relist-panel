@@ -17,6 +17,8 @@ import { ProjectPage } from '../pages/ProjectPage';
 import { ProjectsPage } from '../pages/ProjectsPage';
 import { RegistryPage } from '../pages/RegistryPage';
 import { SshKeysPage } from '../pages/SshKeysPage';
+import { BasicAuthGroupPage } from '../pages/BasicAuthGroupPage';
+import { BasicAuthPage } from '../pages/BasicAuthPage';
 import { CertificatesPage } from '../pages/CertificatesPage';
 import { TraefikPage } from '../pages/TraefikPage';
 import { UserPage } from '../pages/UserPage';
@@ -46,6 +48,8 @@ const elements: Record<string, ReactElement> = {
   'registry': <RegistryPage />,
   'ssh-keys': <SshKeysPage />,
   'certificates': <CertificatesPage />,
+  'basic-auth': <BasicAuthPage />,
+  'basic-auth/:groupId': <BasicAuthGroupPage />,
   'traefik': <TraefikPage />,
   'users': <UsersPage />,
   'users/:userId': <UserPage />,

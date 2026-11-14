@@ -40,6 +40,7 @@ func (a *Authorizer) target(ctx context.Context, pattern string, scope Scope, pa
 var hostTables = map[string]string{
 	"ssh-keys":     "ssh_keys",
 	"certificates": "certificates",
+	"auth-groups":  "auth_groups",
 	"builders":     "builders",
 }
 

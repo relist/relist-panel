@@ -329,6 +329,30 @@ func TestHostThingEventsKeepTheirName(t *testing.T) {
 	}
 }
 
+// A user route of an auth group names the group, and the password reveal is
+// an audited read.
+func TestAuthGroupUserEventsNameTheGroup(t *testing.T) {
+	f, c := recordingFixture(t, func(mux *http.ServeMux) {
+		mux.HandleFunc("DELETE /api/auth-groups/{id}/users/{uid}", answer(http.StatusNoContent))
+		mux.HandleFunc("GET /api/auth-groups/{id}/users/{uid}/password", answer(http.StatusOK))
+	})
+	if _, err := f.db.Exec(`INSERT INTO auth_groups (id, name, created_at, updated_at) VALUES (6, 'Staging', 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range []struct{ method, path, action string }{
+		{http.MethodDelete, "/api/auth-groups/6/users/2", "auth_group_user.delete"},
+		{http.MethodGet, "/api/auth-groups/6/users/2/password", "auth_group_user.password_read"},
+	} {
+		if got := f.serve(admin, call.method, call.path).Code; got >= 300 {
+			t.Fatalf("%s %s = %d", call.method, call.path, got)
+		}
+		events := c.take()
+		if len(events) != 1 || events[0].Target != "Staging" || events[0].Action != call.action {
+			t.Errorf("%s %s: events = %+v", call.method, call.path, events)
+		}
+	}
+}
+
 // range is recorded only for a partial download (206), and cut short: the
 // header is the caller's text.
 func TestRangeIsRecordedOnlyOnPartialContent(t *testing.T) {

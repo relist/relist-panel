@@ -1,9 +1,18 @@
-import { Alert, Form, Input, InputNumber, Modal, Select, Switch } from 'antd';
-import { useEffect } from 'react';
+import { PlusOutlined } from '@ant-design/icons';
+import { Alert, Button, Divider, Form, Input, InputNumber, Modal, Select, Switch } from 'antd';
+import { useEffect, useState } from 'react';
+import useSWR from 'swr';
+import { api } from '../data/api';
 import type { ApiError } from '../data/api';
-import type { Domain, DomainInput } from '../data/types';
+import { useIsAdmin } from '../data/useCan';
+import type { AuthGroupOption, Domain, DomainInput } from '../data/types';
 import { domainFormValues, domainInput } from '../pages/domains-view';
 import type { DomainFormValues } from '../pages/domains-view';
+import { NewAuthGroupModal } from './NewAuthGroupModal';
+
+const AUTH_OPTIONS_KEY = '/api/auth-group-options';
+/** The Select's value for None; the form stores `null`. */
+const NO_GROUP = 0;
 
 const FIELDS: readonly (keyof DomainFormValues)[] = [
   'host',
@@ -17,6 +26,7 @@ const FIELDS: readonly (keyof DomainFormValues)[] = [
   'certProvider',
   'certResolver',
   'middlewares',
+  'authGroupId',
 ];
 
 /**
@@ -45,6 +55,15 @@ export function DomainFormModal({
   const https = Form.useWatch('https', form);
   const certProvider = Form.useWatch('certProvider', form);
   const customEntrypoint = Form.useWatch('customEntrypoint', form);
+  const isAdmin = useIsAdmin();
+  const { data: groups, mutate: reloadGroups } = useSWR(open ? AUTH_OPTIONS_KEY : null, () => api.listAuthGroupOptions());
+  const [creatingGroup, setCreatingGroup] = useState(false);
+
+  // A stored group the list does not hold (still loading) keeps its name.
+  const groupOptions: AuthGroupOption[] = [...(groups ?? [])];
+  if (domain?.authGroupId != null && !groupOptions.some((group) => group.id === domain.authGroupId)) {
+    groupOptions.push({ id: domain.authGroupId, name: domain.authGroupName || String(domain.authGroupId) });
+  }
 
   // Each opening starts from the domain being edited, or the defaults.
   useEffect(() => {
@@ -176,7 +195,43 @@ export function DomainFormModal({
         <Form.Item label="Middlewares" name="middlewares">
           <Select mode="tags" open={false} placeholder="e.g. rate-limit@file, auth@file" tokenSeparators={[',', ' ']} />
         </Form.Item>
+        <Form.Item
+          extra="Visitors must sign in with a user of this group. Applies on the next deploy; edits to the group apply immediately."
+          getValueProps={(value: number | null) => ({ value: value ?? NO_GROUP })}
+          label="Basic auth"
+          name="authGroupId"
+          normalize={(value: number) => (value === NO_GROUP ? null : value)}
+        >
+          <Select
+            options={[
+              { label: 'None', value: NO_GROUP },
+              ...groupOptions.map((group) => ({ label: group.name, value: group.id })),
+            ]}
+            popupRender={(menu) => (
+              <>
+                {menu}
+                {isAdmin && (
+                  <>
+                    <Divider style={{ margin: '4px 0' }} />
+                    <Button block icon={<PlusOutlined />} onClick={() => setCreatingGroup(true)} type="text">
+                      New group
+                    </Button>
+                  </>
+                )}
+              </>
+            )}
+          />
+        </Form.Item>
       </Form>
+      <NewAuthGroupModal
+        onCancel={() => setCreatingGroup(false)}
+        onCreated={(group) => {
+          setCreatingGroup(false);
+          void reloadGroups((current) => [...(current ?? []), group].sort((a, b) => a.name.localeCompare(b.name)), { revalidate: true });
+          form.setFieldValue('authGroupId', group.id);
+        }}
+        open={creatingGroup}
+      />
     </Modal>
   );
 }

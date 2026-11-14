@@ -34,7 +34,7 @@ func TestEveryChangeHasAnAction(t *testing.T) {
 			gets[pattern] = true
 		}
 	}
-	for _, want := range []string{"GET " + compose + "/volumes/read", "GET " + compose + "/volumes/archive", "GET /api/traefik/access-logs/{name}"} {
+	for _, want := range []string{"GET " + compose + "/volumes/read", "GET " + compose + "/volumes/archive", "GET /api/traefik/access-logs/{name}", "GET /api/auth-groups/{id}/users/{uid}/password"} {
 		if !gets[want] {
 			t.Errorf("sensitive read %q has no action", want)
 		}

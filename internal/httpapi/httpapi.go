@@ -15,6 +15,7 @@ import (
 	"relist-panel/internal/accesslog"
 	"relist-panel/internal/auditapi"
 	"relist-panel/internal/auth"
+	"relist-panel/internal/authgroups"
 	"relist-panel/internal/authz"
 	"relist-panel/internal/builders"
 	"relist-panel/internal/certificates"
@@ -78,6 +79,9 @@ type Deps struct {
 	Migration *migration.Options
 	// Docker adds host reports and confirmed cleanup.
 	Docker dockerhost.Engine
+	// AuthGroupRefs lets a Basic auth group delete refuse while a running
+	// Container still routes through it (ADR-0036). Nil checks the database only.
+	AuthGroupRefs authgroups.RunningRefs
 	// VulnScanner and VulnInUse add vulnerability scanning (ADR-0021). Both
 	// nil leaves the feature out.
 	VulnScanner vulnscan.Scanner
@@ -310,6 +314,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	sshkeys.New(db).RegisterRoutes(mux)
 	registryauth.New(externalRegistries, d.RegistryTester, nil).RegisterRoutes(mux)
 	certificates.New(db, dataDir).RegisterRoutes(mux)
+	authgroups.New(db, dataDir).WithRunning(d.AuthGroupRefs).RegisterRoutes(mux)
 	accessLogs := accesslog.New(db, dataDir, d.Traefik)
 	accessLogs.RegisterRoutes(mux)
 	requestStore := requestmetrics.NewStore(db)

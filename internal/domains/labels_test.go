@@ -172,6 +172,64 @@ func TestInjectMiddlewareChain(t *testing.T) {
 		"traefik.http.routers.relist-c12-d3.middlewares")
 }
 
+func TestAddDomainAuthGroupFirst(t *testing.T) {
+	d := base()
+	group := int64(3)
+	d.AuthGroupID = &group
+	d.Path, d.StripPath, d.InternalPath, d.Middlewares = "/api", true, "/", []string{"x@file"}
+	services := parseServices(t, plain)
+	if _, err := domains.Inject(services, 12, []domains.Domain{d}, network, map[string]bool{"web": true}); err != nil {
+		t.Fatal(err)
+	}
+	assertLabels(t, labelsOf(t, services, "web"), map[string]string{
+		"traefik.http.routers.relist-c12-d3.middlewares": "relist-auth-3@file,relist-c12-d3-strip,x@file,relist-c12-d3-retry",
+	})
+}
+
+func TestAddDomainAuthGroupAlone(t *testing.T) {
+	d := base()
+	group := int64(5)
+	d.AuthGroupID = &group
+	services, _ := inject(t, plain, d)
+	assertLabels(t, labelsOf(t, services, "web"), map[string]string{
+		"traefik.http.routers.relist-c12-d3.middlewares": "relist-auth-5@file",
+	})
+}
+
+func TestAddDomainAuthGroupNotOnRedirect(t *testing.T) {
+	d := base()
+	group := int64(3)
+	d.AuthGroupID = &group
+	d.HTTPS, d.CertProvider = true, "letsencrypt"
+	services, _ := inject(t, plain, d)
+	assertLabels(t, labelsOf(t, services, "web"), map[string]string{
+		"traefik.http.routers.relist-c12-d3-http.middlewares": "relist-c12-d3-redirect",
+		"traefik.http.routers.relist-c12-d3.middlewares":      "relist-auth-3@file",
+	})
+}
+
+func TestAddDomainNoAuthGroupUnchanged(t *testing.T) {
+	d := base()
+	d.Middlewares = []string{"x@file"}
+	services, _ := inject(t, plain, d)
+	assertLabels(t, labelsOf(t, services, "web"), map[string]string{
+		"traefik.http.routers.relist-c12-d3.middlewares": "x@file",
+	})
+	d.Middlewares = nil
+	services, _ = inject(t, plain, d)
+	assertAbsent(t, labelsOf(t, services, "web"), "traefik.http.routers.relist-c12-d3.middlewares")
+}
+
+func TestGeneratedIncludesAuthGroup(t *testing.T) {
+	d := base()
+	group := int64(3)
+	d.AuthGroupID = &group
+	generated := domains.Generated(12, []domains.Domain{d}, network, nil)
+	if got := generated["web"]["traefik.http.routers.relist-c12-d3.middlewares"]; got != "relist-auth-3@file" {
+		t.Errorf("generated middlewares = %q", got)
+	}
+}
+
 func TestInjectKeepsLabelShape(t *testing.T) {
 	list := "services:\n  web:\n    labels:\n      - traefik.enable\n      - traefik.http.routers.mine.rule=PathPrefix(`/x`)\n      - traefik.http.routers.mine.service=mine\n      - other=1\n"
 	services, warnings := inject(t, list, base())

@@ -42,6 +42,8 @@ var Routes = map[string]Rule{
 	"GET /api/deployments/queue": {Level: LevelSignedIn},
 	"GET /api/ssh-keys":          {Level: LevelSignedIn},
 	"GET /api/builders":          {Level: LevelSignedIn},
+	// The handler answers [] unless the User edits an Environment.
+	"GET /api/auth-group-options": {Level: LevelSignedIn},
 
 	// Viewer: read.
 	"GET " + project: {Level: LevelViewer},

@@ -1,4 +1,4 @@
-import { AppstoreOutlined, AuditOutlined, BuildOutlined, CloudDownloadOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, DatabaseOutlined, FolderOutlined, GlobalOutlined, KeyOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined, TeamOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, AuditOutlined, BuildOutlined, CloudDownloadOutlined, CloudServerOutlined, ContainerOutlined, DashboardOutlined, DatabaseOutlined, FolderOutlined, GlobalOutlined, KeyOutlined, LockOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined, TeamOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -125,6 +125,8 @@ export function AppShell() {
             ? 'ssh-keys'
           : resolved.pattern === 'certificates'
             ? 'certificates'
+          : resolved.pattern === 'basic-auth' || resolved.pattern === 'basic-auth/:groupId'
+            ? 'basic-auth'
           : resolved.pattern === 'traefik'
             ? 'traefik'
           : resolved.pattern === 'users' || resolved.pattern === 'users/:userId'
@@ -192,6 +194,7 @@ export function AppShell() {
     },
     { key: 'ssh-keys', icon: <KeyOutlined />, label: 'SSH keys' },
     { key: 'certificates', icon: <SafetyCertificateOutlined />, label: 'Certificates' },
+    { key: 'basic-auth', icon: <LockOutlined />, label: 'Basic auth' },
     { key: 'traefik', icon: <GlobalOutlined />, label: 'Traefik' },
     { key: 'users', icon: <TeamOutlined />, label: 'Users' },
     { key: 'audit', icon: <AuditOutlined />, label: 'Audit log' },
@@ -211,6 +214,7 @@ export function AppShell() {
     if (key === 'registry') return navigate(paths.registry);
     if (key === 'ssh-keys') return navigate(paths.sshKeys);
     if (key === 'certificates') return navigate(paths.certificates);
+    if (key === 'basic-auth') return navigate(paths.basicAuth);
     if (key === 'traefik') return navigate(paths.traefik);
     if (key === 'users') return navigate(paths.users);
     if (key === 'audit') return navigate(paths.audit);
@@ -244,6 +248,8 @@ export function AppShell() {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'SSH keys' });
       } else if (resolved?.pattern === 'certificates') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Certificates' });
+      } else if (resolved?.pattern === 'basic-auth') {
+        trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Basic auth' });
       } else if (resolved?.pattern === 'traefik') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Traefik' });
       } else if (resolved?.pattern === 'vulnerabilities') {

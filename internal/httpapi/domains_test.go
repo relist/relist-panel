@@ -595,3 +595,70 @@ func TestDomainRefusesRegistryHost(t *testing.T) {
 		t.Fatalf("status = %d, body %s", response.StatusCode, raw)
 	}
 }
+
+func TestDomainsBasicAuthGroup(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	f := newDomainsCompose(t, server, "shop", "web")
+
+	response := server.request(t, http.MethodPost, "/api/auth-groups", map[string]any{"name": "Staging"})
+	var group struct {
+		ID int64 `json:"id"`
+	}
+	decodeJSON(t, response, &group)
+	if group.ID == 0 {
+		t.Fatal("group not created")
+	}
+
+	created := f.createDomain(t, "api.example.com", "/")
+	path := "/domains/" + idString(created.ID)
+	decode := func(raw []byte) map[string]any {
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("body %s: %v", raw, err)
+		}
+		return m
+	}
+
+	// A group that does not exist is refused on its field.
+	body := domainBody("api.example.com", "/")
+	body["authGroupId"] = 999
+	response, raw := f.send(t, http.MethodPut, path, body)
+	if got := decode(raw); response.StatusCode != http.StatusBadRequest || got["field"] != "authGroupId" {
+		t.Fatalf("unknown group = %d %s", response.StatusCode, raw)
+	}
+
+	// An existing group is stored and named.
+	body["authGroupId"] = group.ID
+	response, raw = f.send(t, http.MethodPut, path, body)
+	got := decode(raw)
+	if response.StatusCode != http.StatusOK || got["authGroupId"] != float64(group.ID) || got["authGroupName"] != "Staging" {
+		t.Fatalf("with group = %d %s", response.StatusCode, raw)
+	}
+	_, raw = f.send(t, http.MethodGet, "/domains", nil)
+	if !strings.Contains(string(raw), `"authGroupName":"Staging"`) {
+		t.Errorf("list = %s", raw)
+	}
+
+	// The group is in use now.
+	response = server.request(t, http.MethodDelete, "/api/auth-groups/"+idString(group.ID), nil)
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict {
+		t.Errorf("delete in use = %d", response.StatusCode)
+	}
+
+	// A body that omits authGroupId means None; the UI always sends it.
+	body = domainBody("api.example.com", "/")
+	response, raw = f.send(t, http.MethodPut, path, body)
+	got = decode(raw)
+	if response.StatusCode != http.StatusOK || got["authGroupId"] != nil || got["authGroupName"] != "" {
+		t.Errorf("omitted = %d %s", response.StatusCode, raw)
+	}
+
+	// With no Domain left on it the group can go.
+	response = server.request(t, http.MethodDelete, "/api/auth-groups/"+idString(group.ID), nil)
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Errorf("delete free = %d", response.StatusCode)
+	}
+}

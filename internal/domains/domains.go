@@ -13,21 +13,24 @@ import (
 
 // Domain routes one host and path to one port of one Service of a Compose.
 type Domain struct {
-	ID           int64     `json:"id"`
-	ComposeID    int64     `json:"-"`
-	Host         string    `json:"host"`
-	Path         string    `json:"path"`
-	InternalPath string    `json:"internalPath"`
-	StripPath    bool      `json:"stripPath"`
-	Service      string    `json:"service"`
-	Port         int       `json:"port"`
-	Entrypoint   string    `json:"entrypoint"`
-	HTTPS        bool      `json:"https"`
-	CertProvider string    `json:"certProvider"` // "none" | "letsencrypt" | "custom"
-	CertResolver string    `json:"certResolver"`
-	Middlewares  []string  `json:"middlewares"` // never nil on the wire
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	ID           int64    `json:"id"`
+	ComposeID    int64    `json:"-"`
+	Host         string   `json:"host"`
+	Path         string   `json:"path"`
+	InternalPath string   `json:"internalPath"`
+	StripPath    bool     `json:"stripPath"`
+	Service      string   `json:"service"`
+	Port         int      `json:"port"`
+	Entrypoint   string   `json:"entrypoint"`
+	HTTPS        bool     `json:"https"`
+	CertProvider string   `json:"certProvider"` // "none" | "letsencrypt" | "custom"
+	CertResolver string   `json:"certResolver"`
+	Middlewares  []string `json:"middlewares"` // never nil on the wire
+	// AuthGroupID is the Basic auth group the Domain requires; nil is None.
+	AuthGroupID   *int64    `json:"authGroupId"`
+	AuthGroupName string    `json:"authGroupName"` // empty when there is none
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 // RouterName is the name of the Traefik router, service and middleware
@@ -69,6 +72,8 @@ type Input struct {
 	CertProvider string   `json:"certProvider"`
 	CertResolver string   `json:"certResolver"`
 	Middlewares  []string `json:"middlewares"`
+	// AuthGroupID is null for None. A body that omits it means None.
+	AuthGroupID *int64 `json:"authGroupId"`
 }
 
 // FieldError names the first invalid field of an Input, by its JSON name.

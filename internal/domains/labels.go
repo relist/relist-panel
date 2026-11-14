@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"relist-panel/internal/authgroups"
 )
 
 const (
@@ -142,6 +144,10 @@ func addDomain(labels *labelSet, composeID int64, d Domain, zeroDowntime bool) {
 	entrypoint := EntrypointFor(d)
 
 	var chain []string
+	if d.AuthGroupID != nil {
+		// First, so a rejected request never reaches the others.
+		chain = append(chain, authgroups.MiddlewareName(*d.AuthGroupID)+"@file")
+	}
 	if d.StripPath && d.Path != "" && d.Path != "/" {
 		chain = append(chain, n+"-strip")
 		labels.set("traefik.http.middlewares."+n+"-strip.stripprefix.prefixes", d.Path)

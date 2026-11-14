@@ -43,6 +43,35 @@ tasks:
     cmds:
       - ./scripts/probe-traefik-config.sh
 
+  e2e:
+    desc: Build this checkout into its sandbox and run the Playwright e2e specs (task e2e -- basic-auth runs one file)
+    dir: e2e
+    cmds:
+      - ../scripts/e2e-sandbox.sh serve # builds this checkout into the sandbox first
+      - pnpm install --frozen-lockfile --silent
+      - pnpm exec playwright install chromium
+      - pnpm exec playwright test {{.CLI_ARGS}}
+
+  e2e:serve:
+    desc: Start (or reuse) this checkout's isolated install stack in docker:dind; ports and credentials go to .data/e2e/env
+    cmds:
+      - ./scripts/e2e-sandbox.sh serve
+
+  e2e:reload:
+    desc: Rebuild the panel from this checkout into its running e2e sandbox, keeping its data
+    cmds:
+      - ./scripts/e2e-sandbox.sh reload
+
+  e2e:ls:
+    desc: List every e2e sandbox on this host and the checkout it belongs to
+    cmds:
+      - ./scripts/e2e-sandbox.sh ls
+
+  e2e:down:
+    desc: Remove this checkout's e2e sandbox
+    cmds:
+      - ./scripts/e2e-sandbox.sh down
+
   sandbox:migration:
     desc: Start two docker:dind panels, the old one seeded, to try a migration by hand
     cmds:

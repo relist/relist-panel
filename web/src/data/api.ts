@@ -40,6 +40,10 @@ import type {
   AccessLogList,
   AccessLogSettings,
   AccessLogSettingsInput,
+  AuthGroup,
+  AuthGroupDetail,
+  AuthGroupOption,
+  AuthGroupUser,
   Certificate,
   CertificateInput,
   ConfigPreview,
@@ -249,12 +253,15 @@ export class ApiError extends Error {
   readonly status: number;
   /** The request field the API refused, when its 400 names one (e.g. `host`). */
   readonly field?: string;
+  /** The parsed JSON body of the response, when it had one (a 409 delete lists its `domains`). */
+  readonly body?: unknown;
 
-  constructor(status: number, message: string, field?: string) {
+  constructor(status: number, message: string, field?: string, body?: unknown) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.field = field;
+    this.body = body;
   }
 }
 
@@ -275,13 +282,15 @@ function errorMessage(status: number, bodyText: string): string {
 }
 
 /** The message and, when the body names one, the refused field. */
-function errorBody(status: number, bodyText: string): { message: string; field?: string } {
+function errorBody(status: number, bodyText: string): { message: string; field?: string; body?: unknown } {
   try {
     const payload = JSON.parse(bodyText) as (ErrorResponse & { field?: string }) | null;
     if (payload?.error) {
       return {
         message: payload.error,
         field: payload.field || undefined,
+        // Kept only when it says more than the message (a 409 delete lists its domains).
+        body: Object.keys(payload).some((key) => key !== 'error' && key !== 'field') ? payload : undefined,
       };
     }
   } catch {
@@ -310,8 +319,8 @@ async function responseError(response: Response): Promise<string> {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { credentials: 'same-origin', ...init });
   if (!response.ok) {
-    const { message, field } = errorBody(response.status, await response.text().catch(() => ''));
-    throw new ApiError(response.status, message, field);
+    const { message, field, body } = errorBody(response.status, await response.text().catch(() => ''));
+    throw new ApiError(response.status, message, field, body);
   }
   // Deletes, logout and an accepted cancel (202) answer with no body to parse.
   if (response.status === 204) {
@@ -599,6 +608,23 @@ export const api = {
   replaceCertificate: (id: number, input: Omit<CertificateInput, 'name'>) =>
     request<Certificate>(`/api/certificates/${id}`, jsonInit('PUT', input)),
   deleteCertificate: (id: number) => request<void>(`/api/certificates/${id}`, { method: 'DELETE' }),
+  // Basic auth groups (ADR-0036).
+  listAuthGroups: () => request<AuthGroup[]>('/api/auth-groups'),
+  getAuthGroup: (id: number) => request<AuthGroupDetail>(`/api/auth-groups/${id}`),
+  createAuthGroup: (input: { name: string; users?: { username: string; password: string }[] }) =>
+    request<AuthGroup>('/api/auth-groups', jsonInit('POST', input)),
+  renameAuthGroup: (id: number, name: string) =>
+    request<AuthGroup>(`/api/auth-groups/${id}`, jsonInit('PATCH', { name })),
+  deleteAuthGroup: (id: number) => request<void>(`/api/auth-groups/${id}`, { method: 'DELETE' }),
+  addAuthGroupUser: (id: number, input: { username: string; password: string }) =>
+    request<AuthGroupUser>(`/api/auth-groups/${id}/users`, jsonInit('POST', input)),
+  updateAuthGroupUser: (id: number, userId: number, input: { username?: string; password?: string }) =>
+    request<AuthGroupUser>(`/api/auth-groups/${id}/users/${userId}`, jsonInit('PATCH', input)),
+  deleteAuthGroupUser: (id: number, userId: number) =>
+    request<void>(`/api/auth-groups/${id}/users/${userId}`, { method: 'DELETE' }),
+  revealAuthGroupPassword: async (id: number, userId: number): Promise<string> =>
+    (await request<{ password: string }>(`/api/auth-groups/${id}/users/${userId}/password`)).password,
+  listAuthGroupOptions: () => request<AuthGroupOption[]>('/api/auth-group-options'),
   // Traefik's log and the Access log (ADR-0027).
   traefikLogs: () => request<TraefikLogs>('/api/traefik/logs'),
   traefikStatus: () => request<TraefikStatus>('/api/traefik/status'),

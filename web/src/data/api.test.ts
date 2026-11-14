@@ -208,6 +208,7 @@ describe('domain errors', () => {
         certProvider: 'none',
         certResolver: '',
         middlewares: [],
+        authGroupId: null,
       }),
     ).rejects.toMatchObject({ message: 'x', status: 400, field: 'host' });
   });

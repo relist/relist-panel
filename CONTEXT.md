@@ -21,12 +21,16 @@ One service defined inside a Compose file — the unit the panel starts, stops a
 _Avoid_: Container (a Service is the definition; a Container is one running instance of it), Process
 
 **Domain**:
-A host and path that Traefik routes to one Service's port in a Compose, managed on the Compose's Domains tab and applied on deploy. A host belongs to one Project: Composes of that Project may split it by path, no other Project may use it.
+A host and path that Traefik routes to one Service's port in a Compose, managed on the Compose's Domains tab and applied on deploy. A host belongs to one Project: Composes of that Project may split it by path, no other Project may use it. It may require the username and password of one Basic auth group.
 _Avoid_: Route, Hostname (as the entity name)
 
 **Certificate**:
 A TLS certificate and its private key, uploaded by the operator to the host-wide Certificates page and handed to Traefik's file provider. Traefik serves it to any HTTPS Domain on provider None whose host it covers, chosen by SNI; the panel does not link a Certificate to a Domain (ADR-0022).
 _Avoid_: SSL, Cert (as the entity name), Certificate resolver (that is how Traefik obtains certificates, e.g. Let's Encrypt)
+
+**Basic auth group**:
+A named list of usernames and passwords, host-wide and managed by Admins on the Basic auth page. A Domain may use one group; Traefik then asks for a username and password of that group before passing a request on. Group edits apply at once; picking a group for a Domain applies on deploy (ADR-0036).
+_Avoid_: access list, htpasswd file
 
 **Access log**:
 The record of every HTTP request Traefik receives, kept as JSON lines in `<data dir>/.traefik/access/`, one gzipped file per day, and deleted by the panel after the retention period. It is host-wide, not per Compose (ADR-0027).
