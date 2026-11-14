@@ -205,6 +205,7 @@ data under `/var/lib/postgresql`, while 17 and below use
     Backups tab, for downloading or deleting files. Remote copies stay listed
     too.
   - When the last backup is deleted, the record disappears.
+  - The tombstone's `deleted_at` is set, its container and volume are removed, and its name becomes `<name> (deleted #<id>)` with slug `deleted-<id>`, so the name is free again (phase 2 decision).
 
 ### Backups
 
@@ -227,20 +228,20 @@ data under `/var/lib/postgresql`, while 17 and below use
 
   | Engine | Whole instance | Selected databases |
   |---|---|---|
-  | postgres | `pg_dumpall --clean --if-exists` | `pg_dumpall --globals-only`, then `pg_dump --create --clean` per database, concatenated into one `.sql.gz` |
+  | postgres | `pg_dumpall --clean --if-exists` | `pg_dump --create --clean --if-exists` per database, concatenated into one `.sql.gz`. No roles (phase 2 decision: restoring roles with some databases would `DROP ROLE` roles other databases still use) |
   | mysql / mariadb | `--all-databases --single-transaction --routines --events` | `--databases a b --add-drop-database --single-transaction --routines --events` |
 
   A selected database that no longer exists fails the run and names it. It is
   never skipped silently.
-- **Trigger** is one of `manual`, `scheduled` or `pre_restore`.
-- **Concurrency.** Only one backup or restore runs per Database at a time.
+- **Trigger** is one of `manual`, `scheduled`, `pre_restore` or `pre_update` (phase 2 adds `pre_update`, the Backup "Back up first" takes before Update image).
+- **Concurrency.** Only one job runs per Database at a time. A job is a Backup, a restore, or an Update image with "Back up first". While one runs, Start, Stop, Restart, Update image, Apply settings and Delete answer 409; Rename and reads still work (phase 2 decision).
   Scheduled runs queue host-wide and run one at a time. They do not use the
   Deployment queue.
 - **Panel update and Migration.** Backups and restores behave like Registry
   cleanup. A run that has not started waits. A Panel update's quiesce, and the
   Migration lock, wait for a run already in progress.
 - **Download** streams the file to the browser. Every download is audited.
-- **Pin** marks a scheduled Backup so Rotation never deletes it.
+- **Pin** marks a scheduled Backup so Rotation never deletes it. Pin moves to phase 3: with no Rotation, nothing could delete a Backup that Pin protects.
 
 ### Restore
 
@@ -256,14 +257,14 @@ data under `/var/lib/postgresql`, while 17 and below use
   fails, the restore does not start.
 - **SQL engines** stream the file into `psql` / `mysql` / `mariadb` inside the
   container. The Database keeps running.
-  - The client stops at the first error (`ON_ERROR_STOP=1` for `psql`).
+  - `mysql` and `mariadb` stop at the first error. `psql` runs with `ON_ERROR_STOP=0` and the restore fails when stderr has any `ERROR:` line other than `role "postgres" already exists` and `current user cannot be dropped`, the two errors `pg_dumpall` always causes on a running cluster (phase 2 decision).
   - **Postgres** first terminates other sessions on the affected databases
     (`pg_terminate_backend`), so `DROP DATABASE` can proceed. It runs connected
     to `postgres`, or to `template1` when `postgres` is itself in scope. For
     this reason a whole-instance dump uses `pg_dumpall --clean --if-exists`.
   - Apps connected to an affected database lose their connections during the
     restore. The confirmation dialog says so.
-- A failed restore shows its log and links to the `pre_restore` Backup.
+- A failed restore shows its log and links to the `pre_restore` Backup. Restores are recorded in `database_restores` (phase 2 decision), so the log has a home.
 
 ### Backup schedule and Rotation
 
@@ -408,8 +409,9 @@ numbers are picked at implementation time.
   - `status`, `status_error`, `created_at`, `deleted_at`.
 - `database_backups`:
   - `id`, `database_id`, `trigger`, `scope` (JSON: `all` or a list of names);
-  - `status`, `error`, `log`, `file_name`, `size`, `sha256`, `pinned`;
+  - `status`, `error`, `log`, `file_name`, `size`, `sha256` (`pinned` comes in phase 3);
   - `started_at`, `finished_at`.
+- `database_restores` (phase 2): `id`, `database_id`, `source` (`backup` or `upload`), `backup_id`, `pre_backup_id`, `upload_name`, `status`, `error`, `log`, `started_at`, `finished_at`.
 - `database_backup_schedules` (one per Database):
   - `enabled`, `days`, `minute`, `scope`, `destination_id`;
   - `local_keep_count`, `local_keep_days`, `remote_keep_count`,
