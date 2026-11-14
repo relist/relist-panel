@@ -30,7 +30,8 @@ setup.
 - **Connection.** The Database page shows host, port, user, password and a
   ready-to-paste connection URL plus a Compose snippet. A Service in any Compose
   that joins `relist-network` can connect with them unchanged.
-- **Backup and restore.** One click backs up either the whole instance or the
+- **Backup and restore** are for the SQL engines only; Redis has none (see
+  Decisions). One click backs up either the whole instance or the
   selected logical databases. The file can be downloaded, restored, or
   uploaded and restored. A restore never runs without first taking a backup of
   the current state.
@@ -49,6 +50,8 @@ setup.
   own image) that forwards a host port to a Database, binds to `127.0.0.1` by
   default, expires after a set time, and never restarts the Database. This is
   for DBeaver/TablePlus over an SSH tunnel.
+- **Redis backup and restore** (RDB via `redis-cli --rdb`). Possibly with a
+  Cache / Persistent choice at create, so only persistent Redis offers it.
 - **SFTP and WebDAV** Backup destinations. SFTP will reuse the SSH key library.
 - **Attach.** Pointing the same tools at a database Service that already runs
   inside a Compose.
@@ -134,7 +137,8 @@ implements:
 - container env, data path, port and healthcheck;
 - connection URL and env snippet;
 - list logical databases (for Backup scope and the Query panel's selector);
-- dump command for a given scope, and restore command;
+- dump command for a given scope, and restore command (SQL engines only;
+  the Redis driver reports that it has no backup support);
 - open a query session.
 
 Phase 1 ships `postgres`, `mysql`, `mariadb` and `redis`. The version lists are
@@ -144,7 +148,7 @@ example postgres 17/16/15, mysql 8.4, mariadb 11.4, redis 7.x.
 ### How tools reach the database
 
 - **Backup and restore run `docker exec` in the Database's own container**
-  (`pg_dump`, `mysqldump`, `mariadb-dump`, `redis-cli`). The output streams back
+  (`pg_dump`, `mysqldump`, `mariadb-dump`). The output streams back
   to the panel.
   - The dump tool always matches the server version. This avoids the classic
     `pg_dump` version mismatch.
@@ -180,9 +184,17 @@ example postgres 17/16/15, mysql 8.4, mariadb 11.4, redis 7.x.
 
 ### Backups
 
+- **SQL engines only.** Redis Databases have no Backups tab, no schedule and no
+  restore. The operator's Redis use is cache-like, and Redis restore (stop,
+  swap `dump.rdb`, handle AOF) was the costliest part of the backup work for
+  the least value.
+  - A Redis Database keeps the image's default persistence (RDB snapshots in
+    its volume), so its data survives restarts and Update image.
+  - Redis backup is listed under Out of scope and can be added later as a
+    driver capability.
 - **One Backup is one file.** It is gzipped by the panel while streaming, and
   its sha256 is computed at the same time.
-  - Local path: `<data dir>/.databases/<id>/backups/<UTC timestamp>-<backup id>.{sql,rdb}.gz`.
+  - Local path: `<data dir>/.databases/<id>/backups/<UTC timestamp>-<backup id>.sql.gz`.
   - Directory mode `0700`, file mode `0600`.
   - A run that fails deletes its partial file.
 - **Backup scope** is either the whole instance (the default) or selected
@@ -193,7 +205,6 @@ example postgres 17/16/15, mysql 8.4, mariadb 11.4, redis 7.x.
   |---|---|---|
   | postgres | `pg_dumpall --clean --if-exists` | `pg_dumpall --globals-only`, then `pg_dump --create --clean` per database, concatenated into one `.sql.gz` |
   | mysql / mariadb | `--all-databases --single-transaction --routines --events` | `--databases a b --add-drop-database --single-transaction --routines --events` |
-  | redis | `redis-cli --rdb` to a temp file in the container, streamed out, then removed | not offered (an RDB is always the whole instance) |
 
   A selected database that no longer exists fails the run and names it. It is
   never skipped silently.
@@ -210,8 +221,7 @@ example postgres 17/16/15, mysql 8.4, mariadb 11.4, redis 7.x.
 ### Restore
 
 - **Source:** a Backup from the list (its sha256 is checked first), or an
-  uploaded `.sql`, `.sql.gz`, `.rdb` or `.rdb.gz` file. An upload must match the
-  engine: SQL for SQL engines, RDB for Redis.
+  uploaded `.sql` or `.sql.gz` file.
 - **Confirmation.**
   - The Admin types the Database name.
   - For a selected-scope Backup, the dialog lists the logical databases that
@@ -229,14 +239,6 @@ example postgres 17/16/15, mysql 8.4, mariadb 11.4, redis 7.x.
     this reason a whole-instance dump uses `pg_dumpall --clean --if-exists`.
   - Apps connected to an affected database lose their connections during the
     restore. The confirmation dialog says so.
-- **Redis**:
-  1. stop the container;
-  2. replace `dump.rdb` in the volume using a short-lived container from the
-     same image with no network;
-  3. start the container.
-
-  If AOF is on, it is turned off for the load and back on afterwards (`CONFIG
-  SET appendonly yes`, which rewrites the AOF from the loaded data).
 - A failed restore shows its log and links to the `pre_restore` Backup.
 
 ### Backup schedule and Rotation
@@ -419,14 +421,17 @@ numbers are picked at implementation time.
   - The shared schedule package (existing Registry tests move with it).
   - The Redis read-only filter and the dangerous-command list.
   - The Redis argument splitter.
-- **Integration in the dind sandbox** (`task e2e:serve`), for each engine:
+- **Integration in the dind sandbox** (`task e2e:serve`), for each SQL engine:
   1. create;
   2. write data;
   3. back up the whole instance and a selected scope;
   4. delete data;
   5. restore;
   6. check the data is back;
-  7. check that read-only refuses an `INSERT` / `SET`.
+  7. check that read-only refuses an `INSERT`.
+
+  For Redis: create, `SET` with writes allowed, check that read-only refuses a
+  `SET`, then restart and check the key survived.
 
   For S3, run against a MinIO container in the sandbox.
 - **Playwright** (`e2e/`):
