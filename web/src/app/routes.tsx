@@ -6,6 +6,7 @@ import { InvitePage } from '../pages/InvitePage';
 import { AccountPage } from '../pages/AccountPage';
 import { ComposePage } from '../pages/ComposePage';
 import { DatabasePage } from '../pages/DatabasePage';
+import { BackupDestinationsPage } from '../pages/BackupDestinationsPage';
 import { DatabasesPage } from '../pages/DatabasesPage';
 import { DeploymentsPage } from '../pages/DeploymentsPage';
 import { DockerPage } from '../pages/DockerPage';
@@ -50,6 +51,7 @@ const elements: Record<string, ReactElement> = {
   'registry': <RegistryPage />,
   'databases': <DatabasesPage />,
   'databases/:databaseId': <DatabasePage />,
+  'backup-destinations': <BackupDestinationsPage />,
   'ssh-keys': <SshKeysPage />,
   'certificates': <CertificatesPage />,
   'basic-auth': <BasicAuthPage />,

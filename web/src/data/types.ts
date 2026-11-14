@@ -1276,6 +1276,15 @@ export interface DatabaseBackup {
   pinned: boolean;
   /** Rotation removed the file; only a copy in a Backup destination is left. */
   localRemoved: boolean;
+  /** The latest copy to a Backup destination; null when none was tried. */
+  upload: DatabaseBackupUpload | null;
+}
+
+export interface DatabaseBackupUpload {
+  destination: string;
+  status: 'running' | 'uploaded' | 'failed';
+  error: string;
+  uploadedAt: string | null;
 }
 
 /** A Database's backup schedule. A keep value is a number, or null for no limit. */
@@ -1291,6 +1300,8 @@ export interface DatabaseSchedule {
   localKeepDays: number | null;
   remoteKeepCount: number | null;
   remoteKeepDays: number | null;
+  /** The Backup destination its scheduled Backups are copied to; null = none. */
+  destinationId: number | null;
   lastRunAt: string | null;
   lastError: string;
 }
@@ -1313,4 +1324,32 @@ export interface DatabaseRestore {
   log: string;
   startedAt: string;
   finishedAt: string | null;
+}
+
+/** The settings of an s3 Backup destination; the secret access key never comes back (ADR-0040). */
+export interface BackupDestinationS3 {
+  endpoint: string;
+  region: string;
+  bucket: string;
+  prefix: string;
+  accessKeyId: string;
+  pathStyle: boolean;
+}
+
+export interface BackupDestination {
+  id: number;
+  name: string;
+  type: 's3';
+  s3: BackupDestinationS3;
+  lastTestAt: string | null;
+  lastTestOk: boolean;
+  lastTestError: string;
+}
+
+/** Add or edit a Backup destination; an empty secret on edit keeps the stored one. */
+export interface BackupDestinationInput {
+  name: string;
+  type: 's3';
+  s3: BackupDestinationS3;
+  secret: string;
 }

@@ -12,6 +12,7 @@ import { DatabaseScheduleCard } from './DatabaseScheduleCard';
 
 const api = vi.hoisted(() => ({
   databaseLogicalDatabases: vi.fn(),
+  listBackupDestinations: vi.fn(),
   getDatabaseSchedule: vi.fn(),
   saveDatabaseSchedule: vi.fn(),
 }));
@@ -37,6 +38,7 @@ function state(over: Partial<DatabaseScheduleState> = {}): DatabaseScheduleState
     next: null,
     remoteKeepCount: 30,
     remoteKeepDays: null,
+    destinationId: null,
     timeZone: 'UTC (UTC+00:00)',
     ...over,
   };
@@ -58,6 +60,9 @@ describe('DatabaseScheduleCard', () => {
     api.getDatabaseSchedule.mockResolvedValue(state());
     api.saveDatabaseSchedule.mockResolvedValue(state({ enabled: true }));
     api.databaseLogicalDatabases.mockResolvedValue({ databases: ['a', 'app'] });
+    api.listBackupDestinations.mockResolvedValue([
+      { id: 1, lastTestAt: null, lastTestError: '', lastTestOk: false, name: 'minio', s3: {}, type: 's3' },
+    ]);
   });
 
   it('saves the schedule it shows, with the days, the time and the local keep rules', async () => {
@@ -76,6 +81,7 @@ describe('DatabaseScheduleCard', () => {
         minute: 150,
         remoteKeepCount: 30,
         remoteKeepDays: null,
+        destinationId: null,
       }),
     );
     expect(screen.getByText('Panel time zone: UTC (UTC+00:00)')).toBeTruthy();
@@ -98,5 +104,28 @@ describe('DatabaseScheduleCard', () => {
     renderCard();
     expect(await screen.findByText('skipped: the Database was not running')).toBeTruthy();
     expect(screen.getByText(/Next run/)).toBeTruthy();
+  });
+
+  it('shows the destination keep fields only when a destination is chosen, and saves them', async () => {
+    api.getDatabaseSchedule.mockResolvedValue(state({ destinationId: 1, remoteKeepCount: 30 }));
+    const user = userEvent.setup();
+    renderCard();
+    const field = await screen.findByRole('spinbutton', { name: 'Destination: last N backups' });
+    expect((field as HTMLInputElement).value).toBe('30');
+    await user.clear(field);
+    await user.type(field, '12');
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }));
+    await waitFor(() => expect(api.saveDatabaseSchedule).toHaveBeenCalled());
+    const sent = api.saveDatabaseSchedule.mock.calls[0][1];
+    expect(sent.destinationId).toBe(1);
+    expect(sent.remoteKeepCount).toBe(12);
+    expect(sent.remoteKeepDays).toBeNull();
+  });
+
+  it('hides the destination keep fields when copying to None', async () => {
+    renderCard();
+    await screen.findByRole('button', { name: 'Save schedule' });
+    expect(screen.queryByRole('spinbutton', { name: 'Destination: last N backups' })).toBeNull();
+    expect(screen.getByText('Copy to')).toBeTruthy();
   });
 });

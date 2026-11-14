@@ -546,6 +546,13 @@ numbers are picked at implementation time.
   `SET`, then restart and check the key survived.
 
   For S3, run against a MinIO container in the sandbox.
+  - **Images (phase 3 decision).** The upstream `minio/minio` and `minio/mc`
+    images are no longer published on Docker Hub or Quay (checked 2026-11-15).
+    The newest pullable releases are the Bitnami legacy mirror's:
+    `bitnamilegacy/minio:2025.7.23-debian-12-r5` (MinIO
+    `RELEASE.2025-07-23T15-54-02Z`) and
+    `bitnamilegacy/minio-client:2025.7.21-debian-12-r3` (mc
+    `RELEASE.2025-07-21T05-28-08Z`). Pinned in `e2e/tests/backup-destinations.spec.ts`.
 - **Playwright** (`e2e/`):
   1. create a Postgres;
   2. copy the URL;
