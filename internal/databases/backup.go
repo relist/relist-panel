@@ -309,5 +309,14 @@ func (s *Service) DeleteBackup(ctx context.Context, id, backupID int64) error {
 			return err
 		}
 	}
-	return s.d.Store.DeleteBackup(ctx, backupID)
+	if err := s.d.Store.DeleteBackup(ctx, backupID); err != nil {
+		return err
+	}
+	// The last Backup of a tombstone takes the tombstone with it.
+	if d, err := s.d.Store.Get(ctx, id); err == nil && d.DeletedAt != nil {
+		if left, err := s.d.Store.ListBackups(ctx, id); err == nil && len(left) == 0 {
+			return s.removeRecord(ctx, id)
+		}
+	}
+	return nil
 }

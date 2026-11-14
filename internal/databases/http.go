@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -34,7 +35,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/databases/{id}/stop", a.action(a.s.Stop))
 	mux.HandleFunc("POST /api/databases/{id}/restart", a.action(a.s.Restart))
 	mux.HandleFunc("POST /api/databases/{id}/repair", a.action(a.s.Repair))
-	mux.HandleFunc("POST /api/databases/{id}/update-image", a.action(a.s.UpdateImage))
+	mux.HandleFunc("POST /api/databases/{id}/update-image", a.updateImage)
 	mux.HandleFunc("POST /api/databases/{id}/apply-settings", a.action(a.s.ApplySettings))
 }
 
@@ -206,19 +207,48 @@ func (a *API) action(run func(ctx context.Context, id int64) error) http.Handler
 	}
 }
 
+// updateImage takes an optional {backupFirst}. With it true the update is a
+// job: 202 at once, and 409 when the Database is not running. Otherwise 204.
+func (a *API) updateImage(w http.ResponseWriter, r *http.Request) {
+	n, ok := id(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		BackupFirst bool `json:"backupFirst"`
+	}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+			writeJSONError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	a.target(r, n)
+	if err := a.s.UpdateImage(r.Context(), n, in.BackupFirst); err != nil {
+		writeError(w, err)
+		return
+	}
+	if in.BackupFirst {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *API) delete(w http.ResponseWriter, r *http.Request) {
 	n, ok := id(w, r)
 	if !ok {
 		return
 	}
 	var in struct {
-		Confirm string `json:"confirm"`
+		Confirm       string `json:"confirm"`
+		DeleteBackups bool   `json:"deleteBackups"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
 	a.target(r, n)
-	if err := a.s.Delete(r.Context(), n, in.Confirm); err != nil {
+	if err := a.s.Delete(r.Context(), n, in.Confirm, in.DeleteBackups); err != nil {
 		writeError(w, err)
 		return
 	}

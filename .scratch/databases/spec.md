@@ -190,7 +190,7 @@ data under `/var/lib/postgresql`, while 17 and below use
 - **Update image** pulls the same tag again, applies the panel's current
   container settings, and recreates the container on the same volume only if
   the image or the settings changed. A stopped Database is not started: its
-  old container is removed, and the next Start creates the new one. From phase 2 on, a "Back up first" checkbox is on by default; it is unticked and disabled while the Database is not running, since a Backup needs it running.
+  old container is removed, and the next Start creates the new one. From phase 2 on, a "Back up first" checkbox is on by default; it is unticked and disabled while the Database is not running, since a Backup needs it running. With it ticked, Update image is a job (phase 2 decision): the route answers 202, it takes a `pre_update` Backup first, and a failed Backup stops it before the pull.
   Changing the major version is not offered.
 - **Rename** changes the display name and the readable alias. The alias is
   swapped by disconnecting and reconnecting `relist-network`, and the Database
@@ -260,7 +260,8 @@ data under `/var/lib/postgresql`, while 17 and below use
   - `mysql` and `mariadb` stop at the first error. `psql` runs with `ON_ERROR_STOP=0` and the restore fails when stderr has any `ERROR:` line other than `role "postgres" already exists` and `current user cannot be dropped`, the two errors `pg_dumpall` always causes on a running cluster (phase 2 decision).
   - **Postgres** first terminates other sessions on the affected databases
     (`pg_terminate_backend`), so `DROP DATABASE` can proceed. It runs connected
-    to `postgres`, or to `template1` when `postgres` is itself in scope. For
+    to `template1` always (phase 2 decision). For a selected-scope Backup it ends only the sessions on
+    the databases in scope; otherwise on every database but `template1`. For
     this reason a whole-instance dump uses `pg_dumpall --clean --if-exists`.
   - Apps connected to an affected database lose their connections during the
     restore. The confirmation dialog says so.
