@@ -406,3 +406,38 @@ func TestDatabaseBackupDownloadIsAudited(t *testing.T) {
 		}
 	}
 }
+
+// Every Backup destination, schedule, pin and upload change is recorded under
+// its own action, and the record carries no request body (a destination's
+// secret travels in one).
+func TestBackupDestinationAndScheduleChangesAreAudited(t *testing.T) {
+	f, c := recordingFixture(t, func(mux *http.ServeMux) {
+		for _, route := range []string{
+			"POST /api/backup-destinations", "PUT /api/backup-destinations/{id}", "DELETE /api/backup-destinations/{id}",
+			"POST /api/backup-destinations/{id}/test", "PUT /api/databases/{id}/schedule",
+			"PUT /api/databases/{id}/backups/{backupID}/pin", "POST /api/databases/{id}/backups/{backupID}/retry-upload",
+		} {
+			mux.HandleFunc(route, answer(http.StatusOK))
+		}
+	})
+	if _, err := f.db.Exec(`INSERT INTO databases (id, name, slug, engine, version, password, created_at, updated_at) VALUES (4, 'Shop', 'shop', 'postgres', '18', 'x', 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range []struct{ method, path, action string }{
+		{http.MethodPost, "/api/backup-destinations", "backup_destination.create"},
+		{http.MethodPut, "/api/backup-destinations/1", "backup_destination.update"},
+		{http.MethodDelete, "/api/backup-destinations/1", "backup_destination.delete"},
+		{http.MethodPost, "/api/backup-destinations/1/test", "backup_destination.test"},
+		{http.MethodPut, "/api/databases/4/schedule", "database.schedule"},
+		{http.MethodPut, "/api/databases/4/backups/1/pin", "database.backup_pin"},
+		{http.MethodPost, "/api/databases/4/backups/1/retry-upload", "database.backup_upload"},
+	} {
+		if got := f.serve(admin, call.method, call.path).Code; got >= 300 {
+			t.Fatalf("%s %s = %d", call.method, call.path, got)
+		}
+		events := c.take()
+		if len(events) != 1 || events[0].Action != call.action || len(events[0].Detail) != 0 {
+			t.Errorf("%s %s: events = %+v", call.method, call.path, events)
+		}
+	}
+}
