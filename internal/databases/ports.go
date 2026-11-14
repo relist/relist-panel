@@ -3,6 +3,7 @@ package databases
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -51,6 +52,14 @@ type ContainerState struct {
 	Aliases         []string // on relist-network
 }
 
+// ExecRequest is one non-interactive command run inside a Database's
+// container. Passwords go in Env, never in Cmd.
+type ExecRequest struct {
+	Cmd, Env       []string
+	Stdin          io.Reader // nil = no stdin
+	Stdout, Stderr io.Writer // nil = discard
+}
+
 // Host drives Database containers and volumes on the Docker host.
 type Host interface {
 	// EnsureImage pulls ref when it is absent.
@@ -74,6 +83,10 @@ type Host interface {
 	// RemoveVolume deletes the volume; not found is nil.
 	RemoveVolume(ctx context.Context, name string) error
 	Logs(ctx context.Context, name string, tail int) (string, error)
+	// Exec runs req.Cmd in the container, streaming stdin and output, and
+	// returns the command's exit code. A write error on Stdout or Stderr is
+	// returned as the error.
+	Exec(ctx context.Context, name string, req ExecRequest) (exitCode int, err error)
 }
 
 // OwnerName is who the Docker page shows as the owner of a Database's volume
