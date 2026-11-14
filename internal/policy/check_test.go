@@ -463,3 +463,52 @@ func TestRegistryNameOnAnOwnNetworkPasses(t *testing.T) {
 		t.Fatalf("violations = %+v, err = %v", violations, err)
 	}
 }
+
+// A Database answers on relist-network as relist-db-<n> and <slug>.db.internal;
+// a Compose answering to either would receive its connections and passwords.
+func TestPolicyRefusesDatabaseNames(t *testing.T) {
+	f := newFixture(t)
+	shared := func(extra map[string]any) map[string]any {
+		return mergeImage(map[string]any{"networks": map[string]any{"relist-network": extra}})
+	}
+	for name, doc := range map[string]map[string]any{
+		"service name":        {"relist-db-3": shared(nil)},
+		"container name":      {"web": mergeImage(map[string]any{"container_name": "relist-db-3", "networks": map[string]any{"relist-network": nil}})},
+		"alias":               {"web": shared(map[string]any{"aliases": []any{"shop.db.internal"}})},
+		"alias any case, dot": {"web": shared(map[string]any{"aliases": []any{"SHOP.DB.INTERNAL."}})},
+		"stable name alias":   {"web": shared(map[string]any{"aliases": []any{"Relist-DB-12."}})},
+	} {
+		t.Run(name, func(t *testing.T) {
+			top := ordinaryTop()
+			top["name"] = "relist-c1"
+			top["services"] = doc
+			raw, _ := json.Marshal(top)
+			violations, err := Check(raw, "", f.rules)
+			if err != nil || len(violations) == 0 {
+				t.Fatalf("violations = %+v, err = %v", violations, err)
+			}
+			if !strings.Contains(violations[0].Message, "is reserved for the panel's Databases") {
+				t.Errorf("message = %q", violations[0].Message)
+			}
+		})
+	}
+}
+
+func TestPolicyAllowsDbNameOffSharedNetwork(t *testing.T) {
+	f := newFixture(t)
+	own := map[string]any{"image": "postgres:16", "networks": map[string]any{"default": map[string]any{"aliases": []any{"shop.db.internal"}}}}
+	doc := map[string]any{"name": "relist-c1",
+		"services": map[string]any{"relist-db-3": own},
+		"networks": map[string]any{"default": map[string]any{"name": "relist-c1_default"}}}
+	raw, _ := json.Marshal(doc)
+	if violations, err := Check(raw, "", f.rules); err != nil || len(violations) != 0 {
+		t.Fatalf("own network: violations = %+v, err = %v", violations, err)
+	}
+	top := ordinaryTop()
+	top["name"] = "relist-c1"
+	top["services"] = map[string]any{"web": mergeImage(map[string]any{"networks": map[string]any{"relist-network": map[string]any{"aliases": []any{"db.internal.example", "relist-db-x", "relist-db-3-old"}}}})}
+	raw, _ = json.Marshal(top)
+	if violations, err := Check(raw, "", f.rules); err != nil || len(violations) != 0 {
+		t.Fatalf("near misses: violations = %+v, err = %v", violations, err)
+	}
+}
