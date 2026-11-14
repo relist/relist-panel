@@ -234,9 +234,10 @@ data under `/var/lib/postgresql`, while 17 and below use
   A selected database that no longer exists fails the run and names it. It is
   never skipped silently.
 - **Trigger** is one of `manual`, `scheduled`, `pre_restore` or `pre_update` (phase 2 adds `pre_update`, the Backup "Back up first" takes before Update image).
-- **Concurrency.** Only one job runs per Database at a time. A job is a Backup, a restore, or an Update image with "Back up first". While one runs, Start, Stop, Restart, Update image, Apply settings and Delete answer 409; Rename and reads still work (phase 2 decision).
+- **Concurrency.** Only one job runs per Database at a time. A job is a Backup, a restore, or an Update image with "Back up first". While one runs, Start, Stop, Restart, Update image, Apply settings, Repair and Delete answer 409; Rename and reads still work (phase 2 decision).
   Scheduled runs queue host-wide and run one at a time. They do not use the
   Deployment queue.
+- **Panel restart.** A graceful shutdown waits for a running job, until Docker's stop timeout kills the panel. Either way a `running` row is made `failed` ("the panel stopped during this run") at the next start, and its `.partial` and upload files are removed (phase 2).
 - **Panel update and Migration.** Backups and restores behave like Registry
   cleanup. A run that has not started waits. A Panel update's quiesce, and the
   Migration lock, wait for a run already in progress.
@@ -257,7 +258,7 @@ data under `/var/lib/postgresql`, while 17 and below use
   fails, the restore does not start.
 - **SQL engines** stream the file into `psql` / `mysql` / `mariadb` inside the
   container. The Database keeps running.
-  - `mysql` and `mariadb` stop at the first error. `psql` runs with `ON_ERROR_STOP=0` and the restore fails when stderr has any `ERROR:` line other than `role "postgres" already exists` and `current user cannot be dropped`, the two errors `pg_dumpall` always causes on a running cluster (phase 2 decision).
+  - `mysql` and `mariadb` stop at the first error. `psql` runs with `ON_ERROR_STOP=0` and the restore fails when stderr has any `ERROR:` line other than `role "postgres" already exists`, `current user cannot be dropped`, `cannot drop the currently open database` and `database "template1" already exists`, the errors `pg_dumpall` always causes on a running cluster: it drops and recreates `template1`, the database the restore is connected to, so `template1` itself is not replaced (phase 2 decision; the last two were found in the live check on postgres 18).
   - **Postgres** first terminates other sessions on the affected databases
     (`pg_terminate_backend`), so `DROP DATABASE` can proceed. It runs connected
     to `template1` always (phase 2 decision). For a selected-scope Backup it ends only the sessions on

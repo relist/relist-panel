@@ -63,18 +63,32 @@ func (pgDumper) RestoreCmd() []string {
 
 func (pgDumper) Env(password string) []string { return []string{"PGPASSWORD=" + password} }
 
-// RestoreFailed tolerates exactly the errors pg_dumpall always causes on a
-// running cluster: it emits CREATE ROLE postgres, and DROP ROLE for the role
-// the restore runs as. Any other ERROR line fails the restore.
+// pgTolerated are the errors a pg_dumpall file always causes on a running
+// cluster, and so never fail a restore: it emits CREATE ROLE postgres and
+// DROP ROLE for the role the restore runs as, and it drops and recreates
+// template1, the database the restore is connected to.
+var pgTolerated = []string{
+	`role "postgres" already exists`,
+	"current user cannot be dropped",
+	"cannot drop the currently open database",
+	`database "template1" already exists`,
+}
+
+// RestoreFailed is true when stderr has any ERROR line besides pgTolerated.
 func (pgDumper) RestoreFailed(stderr string) bool {
 	for _, line := range strings.Split(stderr, "\n") {
 		if !strings.Contains(line, "ERROR:") {
 			continue
 		}
-		if strings.Contains(line, `role "postgres" already exists`) || strings.Contains(line, "current user cannot be dropped") {
-			continue
+		known := false
+		for _, t := range pgTolerated {
+			if strings.Contains(line, t) {
+				known = true
+			}
 		}
-		return true
+		if !known {
+			return true
+		}
 	}
 	return false
 }

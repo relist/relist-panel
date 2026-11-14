@@ -49,7 +49,10 @@ func TestDumpCommands(t *testing.T) {
 
 func TestPostgresRestoreFailed(t *testing.T) {
 	d, _ := DumperFor("postgres")
-	known := "psql:<stdin>:12: ERROR:  role \"postgres\" already exists\npsql:<stdin>:40: ERROR:  current user cannot be dropped\n"
+	// Seen on a live postgres 18 restore of a pg_dumpall file: the dump drops
+	// and recreates template1, which is the database psql is connected to.
+	known := "psql:<stdin>:12: ERROR:  role \"postgres\" already exists\npsql:<stdin>:40: ERROR:  current user cannot be dropped\n" +
+		"psql:<stdin>:82: ERROR:  cannot drop the currently open database\npsql:<stdin>:87: ERROR:  database \"template1\" already exists\n"
 	if d.RestoreFailed(known) {
 		t.Fatal("the errors pg_dumpall always causes failed the restore")
 	}
