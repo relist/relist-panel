@@ -7,9 +7,10 @@ import (
 	"time"
 )
 
-// What started a Backup. Phase 2 never deletes any of them automatically.
+// What started a Backup. Only scheduled ones are ever rotated or pinned.
 const (
 	TriggerManual     = "manual"
+	TriggerScheduled  = "scheduled"
 	TriggerPreRestore = "pre_restore"
 	TriggerPreUpdate  = "pre_update"
 )
@@ -34,6 +35,11 @@ type Backup struct {
 	SHA256         string
 	StartedAt      time.Time
 	FinishedAt     *time.Time
+	// Pinned keeps a scheduled Backup from Rotation. LocalRemovedAt is set
+	// when Rotation removed the file but a copy in a Backup destination is
+	// still tracked: the Backup is "Remote only".
+	Pinned         bool
+	LocalRemovedAt *time.Time
 }
 
 // Restore is one restore of a Backup or of an uploaded file.
@@ -49,13 +55,13 @@ type Restore struct {
 	FinishedAt         *time.Time
 }
 
-const backupColumns = `id, database_id, trigger, logical_name, status, error, log, file_name, size, sha256, started_at, finished_at`
+const backupColumns = `id, database_id, trigger, logical_name, status, error, log, file_name, size, sha256, started_at, finished_at, pinned, local_removed_at`
 
 func scanBackup(row interface{ Scan(...any) error }) (Backup, error) {
 	var b Backup
 	var started int64
-	var finished sql.NullInt64
-	err := row.Scan(&b.ID, &b.DatabaseID, &b.Trigger, &b.LogicalName, &b.Status, &b.Error, &b.Log, &b.FileName, &b.Size, &b.SHA256, &started, &finished)
+	var finished, removed sql.NullInt64
+	err := row.Scan(&b.ID, &b.DatabaseID, &b.Trigger, &b.LogicalName, &b.Status, &b.Error, &b.Log, &b.FileName, &b.Size, &b.SHA256, &started, &finished, &b.Pinned, &removed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Backup{}, ErrNotFound
 	}
@@ -66,6 +72,10 @@ func scanBackup(row interface{ Scan(...any) error }) (Backup, error) {
 	if finished.Valid {
 		t := time.UnixMilli(finished.Int64)
 		b.FinishedAt = &t
+	}
+	if removed.Valid {
+		t := time.UnixMilli(removed.Int64)
+		b.LocalRemovedAt = &t
 	}
 	return b, nil
 }
