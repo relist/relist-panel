@@ -1,5 +1,7 @@
 # Databases phase 2 (Manual backup and restore) Implementation Plan
 
+> **Superseded in part (2026-11-15):** `plan-phase-2b.md` replaces scope-based and whole-instance Backups with per-database Backups and restores into a picked target. Decisions 1 and 2 below, and the Scope JSON constraint, no longer hold.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** On a Postgres, MySQL or MariaDB Database, an Admin can:
