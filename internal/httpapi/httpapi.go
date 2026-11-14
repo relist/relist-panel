@@ -18,6 +18,7 @@ import (
 	"relist-panel/internal/auth"
 	"relist-panel/internal/authgroups"
 	"relist-panel/internal/authz"
+	"relist-panel/internal/backupdest"
 	"relist-panel/internal/builders"
 	"relist-panel/internal/certificates"
 	"relist-panel/internal/clientip"
@@ -226,6 +227,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	// running cleanup; it is set further down, once the Registry is wired.
 	var registryCleaner *registry.Cleaner
 	var databaseService *databases.Service
+	backupDestinations := backupdest.New(backupdest.NewStore(db), nil)
 	puDeps := panelupdate.Deps{
 		Store: panelupdate.NewStore(db), Version: d.Version, ManifestURL: panelupdate.ManifestURLFromEnv(),
 		Self: d.PanelSelf, Runner: d.PanelRunner, Updater: d.PanelUpdater,
@@ -296,6 +298,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	})
 	if databaseService != nil {
 		puDeps.DatabaseJobs = databaseService
+		backupDestinations.WithFileRemover(databaseService.RemoveFiles)
 	}
 	panelUpdates = panelupdate.New(puDeps)
 	if err := panelUpdates.StartLocked(ctx); err != nil {
@@ -330,6 +333,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	sources.New(db, composesService, sources.Git{}, queue, gate).RegisterRoutes(mux)
 	sshkeys.New(db).RegisterRoutes(mux)
 	registryauth.New(externalRegistries, d.RegistryTester, nil).RegisterRoutes(mux)
+	backupDestinations.RegisterRoutes(mux)
 	certificates.New(db, dataDir).RegisterRoutes(mux)
 	authgroups.New(db, dataDir).WithRunning(d.AuthGroupRefs).RegisterRoutes(mux)
 	accessLogs := accesslog.New(db, dataDir, d.Traefik)
