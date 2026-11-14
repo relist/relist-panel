@@ -42,7 +42,12 @@ type Deps struct {
 	Store  *Store
 	Host   Host
 	Locked func(ctx context.Context) bool
-	Now    func() time.Time
+	// UpdateLocked reports the Panel update lock (nil = never locked). While
+	// it is held, no Backup or restore starts.
+	UpdateLocked func() bool
+	// DataDir is the panel's data dir; Backups live under .databases/<id>/.
+	DataDir string
+	Now     func() time.Time
 }
 
 type CreateInput struct {
@@ -71,13 +76,17 @@ type Service struct {
 	locks    map[int64]*sync.Mutex
 	inflight map[int64]bool
 	wg       sync.WaitGroup
+	// jobs is the one running job per Database ("backup", "restore",
+	// "update_image"); jobsChanged is closed and replaced whenever one ends.
+	jobs        map[int64]string
+	jobsChanged chan struct{}
 }
 
 func New(d Deps) *Service {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	return &Service{d: d, locks: map[int64]*sync.Mutex{}, inflight: map[int64]bool{}}
+	return &Service{d: d, locks: map[int64]*sync.Mutex{}, inflight: map[int64]bool{}, jobs: map[int64]string{}, jobsChanged: make(chan struct{})}
 }
 
 func (s *Service) locked(ctx context.Context) bool {
