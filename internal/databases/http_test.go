@@ -160,7 +160,7 @@ func TestMissing404(t *testing.T) {
 func TestActionsAndRename(t *testing.T) {
 	a := newAPIRig(t)
 	a.do("POST", "/api/databases", `{"name":"Shop","engine":"redis","version":"8"}`)
-	for _, act := range []string{"stop", "start", "restart", "repair", "update-image"} {
+	for _, act := range []string{"stop", "start", "restart", "repair", "update-image", "apply-settings"} {
 		if w := a.do("POST", "/api/databases/1/"+act, ""); w.Code != 204 {
 			t.Errorf("%s = %d %s", act, w.Code, w.Body)
 		}
@@ -174,6 +174,15 @@ func TestActionsAndRename(t *testing.T) {
 		if e.Target == "" {
 			t.Fatalf("event without target: %+v", e)
 		}
+	}
+}
+
+func TestSettingsOutdatedInJSON(t *testing.T) {
+	a := newAPIRig(t)
+	a.do("POST", "/api/databases", `{"name":"Shop","engine":"redis","version":"8"}`)
+	w := a.do("GET", "/api/databases/1", "")
+	if !strings.Contains(w.Body.String(), `"settingsOutdated":false`) {
+		t.Fatalf("body = %s", w.Body)
 	}
 }
 

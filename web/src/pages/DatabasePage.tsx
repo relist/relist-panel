@@ -78,7 +78,7 @@ export function DatabasePage() {
               >
                 Restart
               </Button>
-              <Tooltip title="Pulls the tag again and recreates the container on the same volume if the image changed.">
+              <Tooltip title="Pulls the tag again and applies this panel's container settings. Recreates the container on the same volume only if either changed; a stopped Database stays stopped.">
                 <Button loading={busy === 'update-image'} onClick={() => void act('update-image', `Updated the image of ${name}`)}>
                   Update image
                 </Button>
@@ -120,6 +120,28 @@ export function DatabasePage() {
           style={{ marginBottom: 16 }}
           title="The data volume is gone"
           type="error"
+        />
+      )}
+      {data?.settingsOutdated && (
+        <Alert
+          action={
+            <Button
+              loading={busy === 'apply-settings'}
+              onClick={() => void act('apply-settings', `Applied the new settings to ${name}`)}
+              size="small"
+            >
+              Apply settings
+            </Button>
+          }
+          description={
+            wantsRunning
+              ? 'This panel version creates the container differently. Applying recreates the container on the same volume: a short restart. Nothing changes until you apply, or until Update image.'
+              : 'This panel version creates the container differently. Applying takes effect on the next Start.'
+          }
+          showIcon
+          style={{ marginBottom: 16 }}
+          title="New container settings are available"
+          type="info"
         />
       )}
       {data?.lastError && data.status !== 'volume_missing' && (

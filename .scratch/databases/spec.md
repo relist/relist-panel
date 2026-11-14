@@ -111,11 +111,21 @@ Registry (ADR-0033) and Builders (ADR-0028):
 - Optional **memory and CPU limits**.
 - **Healthcheck** by driver: `pg_isready`, `mysqladmin ping` / `mariadb-admin
   ping`, `redis-cli ping`.
-- **Drift and Repair.** A `relist.database.hash` label covers image, env, limits
-  and aliases. On panel start and before every Database operation, the panel
-  compares the container to the stored record and recreates it on drift, as
-  `registry.Service.Reconcile` does. The UI shows Drift, Stopped and Error, and
-  each offers **Repair**.
+- **Drift and Repair.** A `relist.database.hash` label covers image, data path,
+  env, command, healthcheck and limits, but not the alias. On panel start and
+  before every Database operation, the panel compares the container to the
+  stored record and recreates it on drift, as `registry.Service.Reconcile`
+  does. The UI shows Drift, Stopped and Error, and each offers **Repair**.
+- **Applied settings: a Panel update never restarts a Database.**
+  - Each Database stores the container spec it was last created with
+    (`applied_spec`, migration `00043`). Reconcile compares the container
+    with that spec, not with what the running panel's driver would choose
+    today, and recreates from it after real drift.
+  - When a newer panel's driver would create the container differently, the
+    Database page says "New container settings are available". **Apply
+    settings**, or **Update image**, applies them. A stopped Database gets
+    them on its next Start.
+  - This mirrors Deployments freezing their inputs when queued (ADR-0017).
 - **A missing volume is never silently recreated.** Reconcile sets the status
   to `volume_missing` and stops. An empty new volume would look like data loss
   that happened silently. The Admin either restores from a backup into a fresh
@@ -177,8 +187,10 @@ data under `/var/lib/postgresql`, while 17 and below use
   the healthcheck. Status moves through `creating`, then `running` or `error`
   (with the error message).
 - **Start / Stop / Restart.**
-- **Update image** pulls the same tag again and recreates the container on the
-  same volume. From phase 2 on, a "Back up first" checkbox is on by default.
+- **Update image** pulls the same tag again, applies the panel's current
+  container settings, and recreates the container on the same volume only if
+  the image or the settings changed. A stopped Database is not started: its
+  old container is removed, and the next Start creates the new one. From phase 2 on, a "Back up first" checkbox is on by default.
   Changing the major version is not offered.
 - **Rename** changes the display name and the readable alias. The alias is
   swapped by disconnecting and reconnecting `relist-network`, and the Database

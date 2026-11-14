@@ -54,6 +54,7 @@ var adminOnly = []string{
 	"POST /api/databases/{id}/restart",
 	"POST /api/databases/{id}/repair",
 	"POST /api/databases/{id}/update-image",
+	"POST /api/databases/{id}/apply-settings",
 	"GET /api/registry/cleanup",
 	"PUT /api/registry/cleanup",
 	"GET /api/registry/cleanup/preview",

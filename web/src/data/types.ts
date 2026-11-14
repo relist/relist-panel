@@ -1200,6 +1200,8 @@ export interface Database {
   /** What the Admin wants: the status is what Docker says. */
   desired: 'running' | 'stopped';
   status: DatabaseStatus;
+  /** This panel would create the container with newer settings; only Apply settings or Update image applies them. */
+  settingsOutdated: boolean;
   lastError: string;
   warnings: string[];
   memoryMb: number;
@@ -1229,7 +1231,7 @@ export interface DatabaseInput {
   cpus?: number;
 }
 
-export type DatabaseAction = 'start' | 'stop' | 'restart' | 'repair' | 'update-image';
+export type DatabaseAction = 'start' | 'stop' | 'restart' | 'repair' | 'update-image' | 'apply-settings';
 
 export interface DatabaseCredentials {
   password: string;

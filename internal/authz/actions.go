@@ -97,6 +97,7 @@ var Actions = map[string]string{
 	"POST /api/databases/{id}/restart":                "database.restart",
 	"POST /api/databases/{id}/repair":                 "database.repair",
 	"POST /api/databases/{id}/update-image":           "database.update_image",
+	"POST /api/databases/{id}/apply-settings":         "database.apply_settings",
 	"PUT /api/registry":                               "registry.update",
 	"POST /api/registry/enable":                       "registry.enable",
 	"POST /api/registry/disable":                      "registry.disable",

@@ -35,35 +35,39 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/databases/{id}/restart", a.action(a.s.Restart))
 	mux.HandleFunc("POST /api/databases/{id}/repair", a.action(a.s.Repair))
 	mux.HandleFunc("POST /api/databases/{id}/update-image", a.action(a.s.UpdateImage))
+	mux.HandleFunc("POST /api/databases/{id}/apply-settings", a.action(a.s.ApplySettings))
 }
 
 // DatabaseJSON is a Database as the browser sees it. It never carries the
 // password: only GET .../credentials does, and that read is audited.
 type DatabaseJSON struct {
-	ID              int64     `json:"id"`
-	Name            string    `json:"name"`
-	Slug            string    `json:"slug"`
-	Engine          string    `json:"engine"`
-	Version         string    `json:"version"`
-	Image           string    `json:"image"`
-	Desired         string    `json:"desired"`
-	Status          string    `json:"status"`
-	LastError       string    `json:"lastError"`
-	Warnings        []string  `json:"warnings"`
-	MemoryMB        int64     `json:"memoryMb"`
-	CPUs            float64   `json:"cpus"`
-	Host            string    `json:"host"`
-	HostReadable    string    `json:"hostReadable"`
-	Port            int       `json:"port"`
-	User            string    `json:"user"`
-	DefaultDatabase string    `json:"defaultDatabase"`
-	CreatedAt       time.Time `json:"createdAt"`
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	Slug    string `json:"slug"`
+	Engine  string `json:"engine"`
+	Version string `json:"version"`
+	Image   string `json:"image"`
+	Desired string `json:"desired"`
+	Status  string `json:"status"`
+	// SettingsOutdated: this panel would create the container with newer
+	// settings; Apply settings or Update image applies them.
+	SettingsOutdated bool      `json:"settingsOutdated"`
+	LastError        string    `json:"lastError"`
+	Warnings         []string  `json:"warnings"`
+	MemoryMB         int64     `json:"memoryMb"`
+	CPUs             float64   `json:"cpus"`
+	Host             string    `json:"host"`
+	HostReadable     string    `json:"hostReadable"`
+	Port             int       `json:"port"`
+	User             string    `json:"user"`
+	DefaultDatabase  string    `json:"defaultDatabase"`
+	CreatedAt        time.Time `json:"createdAt"`
 }
 
 func toJSON(v View) DatabaseJSON {
 	out := DatabaseJSON{
 		ID: v.ID, Name: v.Name, Slug: v.Slug, Engine: v.Engine, Version: v.Version,
-		Desired: v.Desired, Status: v.Status, LastError: v.LastError, Warnings: v.Warnings,
+		Desired: v.Desired, Status: v.Status, SettingsOutdated: v.SettingsOutdated, LastError: v.LastError, Warnings: v.Warnings,
 		MemoryMB: v.MemoryMB, CPUs: v.CPUs, Host: ContainerName(v.ID), HostReadable: Alias(v.Slug),
 		CreatedAt: v.CreatedAt,
 	}

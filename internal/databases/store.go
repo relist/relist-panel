@@ -34,8 +34,11 @@ type Database struct {
 	CPUs       float64 // 0 = no limit
 	Desired    string  // DesiredRunning | DesiredStopped
 	// Initialized: the container has started once on this volume.
-	Initialized          bool
-	LastError            string
+	Initialized bool
+	LastError   string
+	// AppliedSpec is the JSON ContainerSpec the container was last created
+	// with; "" until the first reconcile fills it.
+	AppliedSpec          string
 	CreatedAt, UpdatedAt time.Time
 }
 
@@ -48,13 +51,13 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db, now: time.Now}
 }
 
-const columns = `id, name, slug, engine, version, password, memory_mb, cpus, desired, initialized, last_error, created_at, updated_at`
+const columns = `id, name, slug, engine, version, password, memory_mb, cpus, desired, initialized, last_error, applied_spec, created_at, updated_at`
 
 func scan(row interface{ Scan(...any) error }) (Database, error) {
 	var d Database
 	var created, updated int64
 	err := row.Scan(&d.ID, &d.Name, &d.Slug, &d.Engine, &d.Version, &d.Password, &d.MemoryMB, &d.CPUs,
-		&d.Desired, &d.Initialized, &d.LastError, &created, &updated)
+		&d.Desired, &d.Initialized, &d.LastError, &d.AppliedSpec, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Database{}, ErrNotFound
 	}
@@ -77,9 +80,9 @@ func (s *Store) Insert(ctx context.Context, d Database) (Database, error) {
 	}
 	now := s.now().UnixMilli()
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO databases (name, slug, engine, version, password, memory_mb, cpus, desired, initialized, last_error, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.Name, d.Slug, d.Engine, d.Version, d.Password, d.MemoryMB, d.CPUs, d.Desired, d.Initialized, d.LastError, now, now)
+		INSERT INTO databases (name, slug, engine, version, password, memory_mb, cpus, desired, initialized, last_error, applied_spec, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.Name, d.Slug, d.Engine, d.Version, d.Password, d.MemoryMB, d.CPUs, d.Desired, d.Initialized, d.LastError, d.AppliedSpec, now, now)
 	if err != nil {
 		if isDuplicate(err) {
 			return Database{}, ErrDuplicateName
@@ -144,6 +147,10 @@ func (s *Store) SetInitialized(ctx context.Context, id int64) error {
 
 func (s *Store) SetLastError(ctx context.Context, id int64, msg string) error {
 	return s.update(ctx, id, `last_error = ?`, msg)
+}
+
+func (s *Store) SetAppliedSpec(ctx context.Context, id int64, spec string) error {
+	return s.update(ctx, id, `applied_spec = ?`, spec)
 }
 
 func (s *Store) Delete(ctx context.Context, id int64) error {

@@ -56,6 +56,10 @@ type View struct {
 	Database
 	Status   string
 	Warnings []string
+	// SettingsOutdated: this panel's driver would create the container with
+	// other settings than the applied ones. ApplySettings or UpdateImage
+	// applies them; nothing else does.
+	SettingsOutdated bool
 }
 
 // Service runs the panel's Databases. The database is the source of truth;
@@ -191,8 +195,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Database, error) 
 	return d, nil
 }
 
-// specFor builds the container spec for d. The hash covers everything but the
-// alias, so a rename never recreates the container.
+// specFor builds the container spec the running panel's driver would choose
+// for d today. Reconcile does not use it directly: it uses appliedSpec, so a
+// Panel update with new driver defaults never recreates a Database.
 func specFor(d Database) (ContainerSpec, Engine, error) {
 	eng, err := Lookup(d.Engine, d.Version)
 	if err != nil {
@@ -206,22 +211,51 @@ func specFor(d Database) (ContainerSpec, Engine, error) {
 		MemoryBytes: d.MemoryMB * 1024 * 1024,
 		NanoCPUs:    int64(d.CPUs * 1e9),
 	}
-	pwHash := sha256.Sum256([]byte(d.Password))
-	hashInput := struct {
+	spec.Labels = map[string]string{IDLabel: fmt.Sprint(d.ID), HashLabel: hashSpec(spec)}
+	return spec, eng, nil
+}
+
+// hashSpec is the relist.database.hash label: everything that needs a new
+// container to change. Not the names, which derive from the ID, nor the
+// alias, which a rename swaps without a restart.
+func hashSpec(spec ContainerSpec) string {
+	raw, _ := json.Marshal(struct {
 		Image, DataPath       string
 		Env, Cmd, Healthcheck []string
 		MemoryBytes, NanoCPUs int64
-	}{spec.Image, spec.DataPath, eng.Env(hex.EncodeToString(pwHash[:])), spec.Cmd, spec.Healthcheck, spec.MemoryBytes, spec.NanoCPUs}
-	raw, err := json.Marshal(hashInput)
-	if err != nil {
-		return ContainerSpec{}, nil, err
-	}
+	}{spec.Image, spec.DataPath, spec.Env, spec.Cmd, spec.Healthcheck, spec.MemoryBytes, spec.NanoCPUs})
 	sum := sha256.Sum256(raw)
-	spec.Labels = map[string]string{
-		IDLabel:   fmt.Sprint(d.ID),
-		HashLabel: hex.EncodeToString(sum[:]),
+	return hex.EncodeToString(sum[:])
+}
+
+// appliedSpec is the spec d's container was last created with, with the
+// names and alias of d as it is now. Before the first reconcile stored one,
+// it is today's specFor.
+func appliedSpec(d Database) (ContainerSpec, error) {
+	if d.AppliedSpec == "" {
+		spec, _, err := specFor(d)
+		return spec, err
 	}
-	return spec, eng, nil
+	var spec ContainerSpec
+	if err := json.Unmarshal([]byte(d.AppliedSpec), &spec); err != nil {
+		return ContainerSpec{}, fmt.Errorf("read the applied settings: %w", err)
+	}
+	spec.Name, spec.Volume, spec.Alias = ContainerName(d.ID), VolumeName(d.ID), Alias(d.Slug)
+	spec.Labels = map[string]string{IDLabel: fmt.Sprint(d.ID), HashLabel: hashSpec(spec)}
+	return spec, nil
+}
+
+// saveApplied records spec as the settings d's container is created with.
+func (s *Service) saveApplied(ctx context.Context, d *Database, spec ContainerSpec) error {
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		return err
+	}
+	if err := s.d.Store.SetAppliedSpec(ctx, d.ID, string(raw)); err != nil {
+		return err
+	}
+	d.AppliedSpec = string(raw)
+	return nil
 }
 
 // record stores the outcome of one operation on d.
@@ -259,9 +293,14 @@ func (s *Service) create(ctx context.Context, d Database, spec ContainerSpec) er
 // started.
 func (s *Service) reconcile(ctx context.Context, d Database) (changed bool, err error) {
 	defer func() { s.record(ctx, d, err) }()
-	spec, _, err := specFor(d)
+	spec, err := appliedSpec(d)
 	if err != nil {
 		return false, err
+	}
+	if d.AppliedSpec == "" {
+		if err := s.saveApplied(ctx, &d, spec); err != nil {
+			return false, err
+		}
 	}
 	st, err := s.d.Host.Inspect(ctx, spec.Name)
 	if err != nil {
@@ -400,13 +439,18 @@ func (s *Service) Rename(ctx context.Context, id int64, name string) error {
 	})
 }
 
-// UpdateImage pulls the Database's tag again and recreates the container on
-// the same volume when the image changed.
+// UpdateImage pulls the Database's tag again, applies this panel's settings,
+// and recreates the container on the same volume when either changed. A
+// stopped Database is not started: its container is removed, and the next
+// Start creates the new one.
 func (s *Service) UpdateImage(ctx context.Context, id int64) error {
 	return s.op(ctx, id, func(d Database) (err error) {
 		defer func() { s.record(ctx, d, err) }()
 		spec, _, err := specFor(d)
 		if err != nil {
+			return err
+		}
+		if err := s.saveApplied(ctx, &d, spec); err != nil {
 			return err
 		}
 		newID, err := s.d.Host.PullImage(ctx, spec.Image)
@@ -417,10 +461,33 @@ func (s *Service) UpdateImage(ctx context.Context, id int64) error {
 		if err != nil {
 			return err
 		}
-		if st.Exists && st.ImageID != newID {
-			return s.create(ctx, d, spec)
+		if !st.Exists || (st.ImageID == newID && st.Hash == spec.Labels[HashLabel]) {
+			return nil
 		}
-		return nil
+		if d.Desired == DesiredStopped {
+			if err := s.d.Host.Stop(ctx, spec.Name); err != nil {
+				return err
+			}
+			return s.d.Host.Remove(ctx, spec.Name)
+		}
+		return s.create(ctx, d, spec)
+	})
+}
+
+// ApplySettings makes this panel's driver settings the applied ones and
+// recreates the container with them. A stopped Database gets them on its
+// next Start.
+func (s *Service) ApplySettings(ctx context.Context, id int64) error {
+	return s.op(ctx, id, func(d Database) error {
+		spec, _, err := specFor(d)
+		if err != nil {
+			return err
+		}
+		if err := s.saveApplied(ctx, &d, spec); err != nil {
+			return err
+		}
+		_, err = s.reconcile(ctx, d)
+		return err
 	})
 }
 
@@ -488,10 +555,13 @@ func (s *Service) view(ctx context.Context, d Database) View {
 	if Alias(d.Slug) == "" {
 		v.Warnings = append(v.Warnings, "No readable hostname: the name has no usable letters or digits, or is too long. Use the stable host.")
 	}
-	spec, _, err := specFor(d)
+	spec, err := appliedSpec(d)
 	if err != nil {
 		v.Status = StatusError
 		return v
+	}
+	if current, _, err := specFor(d); err == nil {
+		v.SettingsOutdated = current.Labels[HashLabel] != spec.Labels[HashLabel]
 	}
 	if s.isInflight(d.ID) {
 		v.Status = StatusCreating

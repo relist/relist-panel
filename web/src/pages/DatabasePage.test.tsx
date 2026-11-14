@@ -39,6 +39,7 @@ const shop: Database = {
   memoryMb: 0,
   name: 'Shop',
   port: 5432,
+  settingsOutdated: false,
   slug: 'shop',
   status: 'running',
   user: 'postgres',
@@ -105,6 +106,23 @@ describe('DatabasePage', () => {
     renderPage();
     expect(await screen.findByText('The data volume is gone')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Repair' })).toBeNull();
+  });
+
+  it('applies new settings only when the Admin asks', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, settingsOutdated: true });
+    api.databaseAction.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage();
+    expect(await screen.findByText('New container settings are available')).toBeTruthy();
+    expect(api.databaseAction).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Apply settings' }));
+    await waitFor(() => expect(api.databaseAction).toHaveBeenCalledWith(1, 'apply-settings'));
+  });
+
+  it('shows no settings notice when they are current', async () => {
+    renderPage();
+    await screen.findByText('Host (stable)');
+    expect(screen.queryByText('New container settings are available')).toBeNull();
   });
 
   it('offers Repair on drift', async () => {

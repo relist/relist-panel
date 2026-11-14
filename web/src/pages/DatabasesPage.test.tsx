@@ -41,6 +41,7 @@ const shop: Database = {
   name: 'Shop',
   port: 5432,
   slug: 'shop',
+  settingsOutdated: false,
   status: 'running',
   user: 'postgres',
   version: '18',
