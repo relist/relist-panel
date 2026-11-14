@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"relist-panel/internal/databases"
 	"relist-panel/internal/imageref"
@@ -41,4 +42,32 @@ func ownDatabases(ctx context.Context, svc *databases.Service, images, volumes m
 		}
 	}
 	return nil
+}
+
+// databaseVolumes is the Migration manifest's source of Database volumes.
+// Nil without Databases.
+func databaseVolumes(svc *databases.Service) func(ctx context.Context) ([]string, error) {
+	if svc == nil {
+		return nil
+	}
+	return svc.Volumes
+}
+
+// beforeDeploy runs the Registry's start, then the wanted Databases', before a
+// Migration's Deployments: an app that needs a Database finds it up. Both run
+// even when the first fails, and their errors join. Nil when there is neither.
+func beforeDeploy(registryStart func(context.Context) error, svc *databases.Service) func(context.Context) error {
+	if registryStart == nil && svc == nil {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		var errs []error
+		if registryStart != nil {
+			errs = append(errs, registryStart(ctx))
+		}
+		if svc != nil {
+			errs = append(errs, svc.StartWanted(ctx))
+		}
+		return errors.Join(errs...)
+	}
 }

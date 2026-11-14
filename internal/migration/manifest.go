@@ -79,6 +79,10 @@ type ManifestBuilder struct {
 	Volumes  *volumes.Resolver
 	Docker   Docker
 	DataDir  string
+	// DatabaseVolumes names the volumes of the panel's Databases (ADR-0039).
+	// They always move, with no tick box: unlike Registry data, a Database's
+	// data cannot be rebuilt. Nil means none.
+	DatabaseVolumes func(ctx context.Context) ([]string, error)
 }
 
 // scan is everything the Composes resolve to, before any selection.
@@ -259,6 +263,36 @@ func (b ManifestBuilder) BuildWith(ctx context.Context, running []int64, hostPat
 		}
 		vol := v
 		m.Items = append(m.Items, Item{ID: "volume-" + name, Kind: KindVolume, Size: size, Volume: &vol})
+	}
+
+	if b.DatabaseVolumes != nil {
+		names, err := b.DatabaseVolumes(ctx)
+		if err != nil {
+			return Manifest{}, fmt.Errorf("list Database volumes: %w", err)
+		}
+		for _, name := range names {
+			if slices.Contains(s.volumes, name) {
+				continue
+			}
+			v, ok, err := b.Docker.InspectVolume(ctx, name)
+			if err != nil {
+				return Manifest{}, fmt.Errorf("inspect volume %s: %w", name, err)
+			}
+			if !ok {
+				m.Warnings = append(m.Warnings, "Database volume "+name+" does not exist on this host and is not moved")
+				continue
+			}
+			if (v.Driver != "" && v.Driver != "local") || len(v.Options) > 0 {
+				m.Warnings = append(m.Warnings, fmt.Sprintf("Database volume %s uses driver %s and is not moved", name, driverName(v)))
+				continue
+			}
+			size, err := b.Docker.Size(ctx, name, ".")
+			if err != nil {
+				return Manifest{}, fmt.Errorf("size volume %s: %w", name, err)
+			}
+			vol := v
+			m.Items = append(m.Items, Item{ID: "volume-" + name, Kind: KindVolume, Size: size, Volume: &vol})
+		}
 	}
 
 	if includeRegistry && !slices.Contains(s.volumes, RegistryVolume) {

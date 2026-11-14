@@ -436,7 +436,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		domainStore := domains.NewStore(db)
 		oldHostDeps := migration.OldHostDeps{
 			Store:           migration.NewStore(db, nil),
-			Manifests:       migration.ManifestBuilder{DB: db, Composes: composesService, Volumes: d.VolumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir},
+			Manifests:       migration.ManifestBuilder{DB: db, Composes: composesService, Volumes: d.VolumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir, DatabaseVolumes: databaseVolumes(databaseService)},
 			Queue:           queue,
 			Docker:          migrationOptions.Docker,
 			Status:          runner,
@@ -452,6 +452,9 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		if registryCleaner != nil { // a nil *Cleaner in the interface would not read as nil
 			oldHostDeps.RegistryCleanup = registryCleaner
 		}
+		if databaseService != nil {
+			oldHostDeps.Databases = databaseService
+		}
 		oldHost := migration.NewOldHost(oldHostDeps)
 		oldHost.RegisterRoutes(mux)
 		local := migration.LocalHost{DB: db, Docker: migrationOptions.Docker, DataDir: dataDir, Install: migrationOptions.Install}
@@ -464,7 +467,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			Restore:  migration.NewRestorer(local, filepath.Join(stateDir, "staging")),
 			Finalizer: migration.NewFinalizer(migration.FinalizeDeps{
 				Local: local, Restart: migrationOptions.Restart, Queue: queue, Sources: sources.NewStore(db), Domains: domainStore,
-				BeforeDeploy: registryBeforeDeploy(d, registryService),
+				BeforeDeploy: beforeDeploy(registryBeforeDeploy(d, registryService), databaseService),
 			}),
 			Backoff: migrationOptions.Backoff,
 			Context: ctx,
