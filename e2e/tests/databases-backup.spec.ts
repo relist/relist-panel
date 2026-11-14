@@ -21,6 +21,15 @@ function psql(container: string, sql: string, database = 'postgres'): string {
   return docker('exec', container, 'psql', '-U', 'postgres', '-At', '-d', database, '-c', sql);
 }
 
+// psql that answers '' while the database or table is not there yet, for polling.
+function psqlOrEmpty(container: string, sql: string, database: string): string {
+  try {
+    return psql(container, sql, database);
+  } catch {
+    return '';
+  }
+}
+
 async function signIn(page: Page) {
   const env = sandbox();
   await page.goto('/signin');
@@ -96,7 +105,7 @@ test('back up, download, restore and keep the backups of a deleted Postgres', as
   await copyDialog.getByLabel(`Type ${name} to confirm`).fill(name);
   await copyOk.click();
   await expect
-    .poll(() => psql(container, 'SELECT name FROM items', 'shop_copy'), { timeout: 120_000 })
+    .poll(() => psqlOrEmpty(container, 'SELECT name FROM items', 'shop_copy'), { timeout: 120_000 })
     .toBe('kept');
   expect(psql(container, 'SELECT name FROM items', 'shop')).toBe('kept');
   await expect(page.getByRole('row').filter({ hasText: 'Before restore' })).toHaveCount(0);
@@ -113,7 +122,7 @@ test('back up, download, restore and keep the backups of a deleted Postgres', as
   ).toBeVisible();
   await restoreDialog.getByLabel(`Type ${name} to confirm`).fill(name);
   await ok.click();
-  await expect.poll(() => psql(container, 'SELECT name FROM items', 'shop'), { timeout: 120_000 }).toBe('kept');
+  await expect.poll(() => psqlOrEmpty(container, 'SELECT name FROM items', 'shop'), { timeout: 120_000 }).toBe('kept');
   await expect(page.getByRole('row').filter({ hasText: 'Before restore' })).toBeVisible();
 
   // 5. Delete the Database, keeping its Backups: a tombstone.
