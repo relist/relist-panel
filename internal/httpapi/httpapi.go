@@ -23,6 +23,7 @@ import (
 	"relist-panel/internal/clientip"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/composevariables"
+	"relist-panel/internal/databases"
 	"relist-panel/internal/deployments"
 	"relist-panel/internal/dockerhost"
 	"relist-panel/internal/domains"
@@ -124,6 +125,9 @@ type Deps struct {
 	// RegistryHost drives the Panel registry's container (ADR-0033). Nil
 	// leaves the Registry routes out; its hostname still reserves Domains.
 	RegistryHost registry.Host
+	// DatabaseHost drives the panel's Databases (ADR-0039). Nil leaves the
+	// Databases routes out.
+	DatabaseHost databases.Host
 }
 
 // NewHandler builds the top-level HTTP handler for the panel.
@@ -282,6 +286,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		})
 		puDeps.RegistryCleanup = registryCleaner
 	}
+	databaseService := newDatabaseService(db, d, puDeps.MigrationLocked)
 	panelUpdates = panelupdate.New(puDeps)
 	if err := panelUpdates.StartLocked(ctx); err != nil {
 		log.Printf("panelupdate: start locked: %v", err)
@@ -366,6 +371,16 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			registryCleaner.RunScheduler(ctx)
 		}()
 	}
+	if databaseService != nil {
+		databases.NewAPI(databaseService).RegisterRoutes(mux)
+		worker.Add(1)
+		go func() {
+			defer worker.Done()
+			if err := databaseService.ReconcileAll(ctx); err != nil {
+				log.Printf("databases: reconcile at start: %v", err)
+			}
+		}()
+	}
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
 	volumeapi.New(composesService, d.VolumeResolver, d.VolumeRunner).RegisterRoutes(mux)
@@ -397,6 +412,9 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			}
 			if err == nil && images != nil && volumes != nil && d.RegistryHost != nil {
 				ownRegistry(images, volumes)
+			}
+			if err == nil && images != nil && volumes != nil && databaseService != nil {
+				err = ownDatabases(ctx, databaseService, images, volumes)
 			}
 			// The previous panel image stays for a manual rollback.
 			if err == nil && images != nil {
@@ -476,7 +494,13 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	// authz sits inside auth, which puts the User in the context, and outside
 	// every lock: a request without the right is refused before a lock sees it.
 	h := http.NewCrossOriginProtection().Handler(authService.Middleware(authz.New(db, authService.CurrentUser).Middleware(mux, inner)))
-	return clientIPResolver(d.TraefikApply, dataDir).Middleware(h), worker.Wait
+	wait := func() {
+		worker.Wait()
+		if databaseService != nil {
+			databaseService.Wait() // a Database being created finishes first
+		}
+	}
+	return clientIPResolver(d.TraefikApply, dataDir).Middleware(h), wait
 }
 
 // clientIPResolver finds the client address the Audit log records: from

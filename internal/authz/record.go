@@ -42,6 +42,7 @@ var hostTables = map[string]string{
 	"certificates": "certificates",
 	"auth-groups":  "auth_groups",
 	"builders":     "builders",
+	"databases":    "databases",
 }
 
 // hostTarget names the SSH key, Certificate or Builder an `/api/<kind>/{id}`

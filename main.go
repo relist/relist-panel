@@ -201,6 +201,7 @@ func main() {
 		RegistryAuth:   registryAuth,
 		RegistryTester: dockerexec.RegistryLogin{},
 		RegistryHost:   dockerexec.NewRegistryHost(dockerexec.DefaultSocketPath),
+		DatabaseHost:   dockerexec.NewDatabaseHost(dockerexec.DefaultSocketPath),
 		Engine:         dockerexec.NewEngine(dockerexec.DefaultSocketPath),
 		DataDir:        cfg.DataDir,
 		Version:        version,

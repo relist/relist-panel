@@ -75,3 +75,7 @@ type Host interface {
 	RemoveVolume(ctx context.Context, name string) error
 	Logs(ctx context.Context, name string, tail int) (string, error)
 }
+
+// OwnerName is who the Docker page shows as the owner of a Database's volume
+// and image, so cleanup never offers them.
+const OwnerName = "databases"
