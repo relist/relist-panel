@@ -59,6 +59,11 @@ export function call(url: string, options: CallOptions = {}): Promise<Reply> {
   const target = new URL(url);
   const client = target.protocol === 'https:' ? https : http;
   const headers: Record<string, string> = { ...options.headers };
+  // Node sends neither Content-Length nor chunked framing for a DELETE with a
+  // body, so the server would read it as empty.
+  if (options.body !== undefined) {
+    headers['Content-Length'] = String(Buffer.byteLength(options.body));
+  }
   if (options.auth) {
     headers.Authorization = `Basic ${Buffer.from(options.auth).toString('base64')}`;
   }
