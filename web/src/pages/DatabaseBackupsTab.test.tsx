@@ -56,7 +56,7 @@ function backup(over: Partial<DatabaseBackup>): DatabaseBackup {
     finishedAt: '2026-11-14T10:00:05Z',
     id: 1,
     log: '',
-    scope: { all: true },
+    database: 'app',
     sha256: 'abc',
     size: 1536,
     startedAt: '2026-11-14T10:00:00Z',
@@ -81,25 +81,26 @@ describe('DatabaseBackupsTab', () => {
     vi.clearAllMocks();
     api.listDatabaseBackups.mockResolvedValue([backup({})]);
     api.listDatabaseRestores.mockResolvedValue([]);
-    api.databaseLogicalDatabases.mockResolvedValue({ databases: ['a', 'b'] });
-    api.startDatabaseBackup.mockResolvedValue(backup({ status: 'running' }));
+    api.databaseLogicalDatabases.mockResolvedValue({ databases: ['a', 'app'] });
+    api.startDatabaseBackup.mockResolvedValue([backup({ status: 'running' })]);
   });
 
-  it('lists the Backups with their size, trigger and a Download link', async () => {
+  it('lists the Backups with their database, size, trigger and a Download link', async () => {
     renderTab();
     expect(await screen.findByText('1.5 KB')).toBeTruthy();
     expect(screen.getByText('Manual')).toBeTruthy();
-    expect(screen.getByText('Whole instance')).toBeTruthy();
+    expect(screen.getByText('app')).toBeTruthy();
     const link = screen.getByRole('link', { name: /Download/ }) as HTMLAnchorElement;
     expect(link.getAttribute('href')).toBe('/api/databases/1/backups/1/download');
   });
 
-  it('backs up the whole instance by default', async () => {
+  it('backs up all databases by default, one file each', async () => {
     const user = userEvent.setup();
     renderTab();
     await screen.findByText('1.5 KB');
     await user.click(screen.getByRole('button', { name: 'Back up now' }));
     const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('One file per database.')).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'Back up' }));
     await waitFor(() => expect(api.startDatabaseBackup).toHaveBeenCalledWith(1, { all: true }));
   });
@@ -110,7 +111,7 @@ describe('DatabaseBackupsTab', () => {
     await screen.findByText('1.5 KB');
     await user.click(screen.getByRole('button', { name: 'Back up now' }));
     const dialog = await screen.findByRole('dialog');
-    await user.click(within(dialog).getByLabelText('Selected databases'));
+    await user.click(within(dialog).getByLabelText('Choose databases'));
     const ok = within(dialog).getByRole('button', { name: 'Back up' }) as HTMLButtonElement;
     expect(ok.disabled).toBe(true);
     await user.click(await within(dialog).findByLabelText('a'));
@@ -119,37 +120,73 @@ describe('DatabaseBackupsTab', () => {
     await waitFor(() => expect(api.startDatabaseBackup).toHaveBeenCalledWith(1, { databases: ['a'] }));
   });
 
-  it('restores a Backup only after the Database name is typed', async () => {
+  it('restores a Backup into its own database by default, after the name is typed', async () => {
     api.restoreDatabase.mockResolvedValue({});
-    api.listDatabaseBackups.mockResolvedValue([backup({ scope: { databases: ['a', 'b'] } })]);
     const user = userEvent.setup();
     renderTab();
     await screen.findByText('1.5 KB');
     await user.click(screen.getByRole('button', { name: 'Restore' }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('Replaces these databases: a, b. Other databases are untouched.')).toBeTruthy();
-    expect(within(dialog).getByText(/A backup of the current state is taken first/)).toBeTruthy();
+    expect(await within(dialog).findByText('Replaces the database app. It is backed up first. Apps connected to it are disconnected.')).toBeTruthy();
     const ok = within(dialog).getByRole('button', { name: 'Restore' }) as HTMLButtonElement;
     expect(ok.disabled).toBe(true);
     await user.type(within(dialog).getByLabelText('Type Shop to confirm'), 'Shop');
     await waitFor(() => expect(ok.disabled).toBe(false));
     await user.click(ok);
-    await waitFor(() => expect(api.restoreDatabase).toHaveBeenCalledWith(1, 1, 'Shop'));
+    await waitFor(() => expect(api.restoreDatabase).toHaveBeenCalledWith(1, 1, 'app', 'Shop'));
   });
 
-  it('uploads a file to restore, after the same confirmation', async () => {
+  it('restores into a new database under the typed name', async () => {
+    api.restoreDatabase.mockResolvedValue({});
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByText('1.5 KB');
+    await user.click(screen.getByRole('button', { name: 'Restore' }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText(/Replaces the database app/);
+    await user.click(within(dialog).getByLabelText('Restore into a new database'));
+    await user.type(within(dialog).getByLabelText('New database name'), 'app_copy');
+    expect(within(dialog).getByText('Creates the database app_copy.')).toBeTruthy();
+    await user.type(within(dialog).getByLabelText('Type Shop to confirm'), 'Shop');
+    await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(api.restoreDatabase).toHaveBeenCalledWith(1, 1, 'app_copy', 'Shop'));
+  });
+
+  it('defaults to a new database named after a Backup whose database is gone', async () => {
+    api.listDatabaseBackups.mockResolvedValue([backup({ database: 'gone' })]);
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByText('1.5 KB');
+    await user.click(screen.getByRole('button', { name: 'Restore' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('Creates the database gone.')).toBeTruthy();
+  });
+
+  it('disables Restore on a Backup of the earlier, several-databases format', async () => {
+    api.listDatabaseBackups.mockResolvedValue([backup({ database: '' })]);
+    renderTab();
+    expect(await screen.findByText('Several databases')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Restore' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('uploads a file only after a target is picked, and sends it in the query', async () => {
     api.restoreDatabaseUpload.mockResolvedValue({});
     const user = userEvent.setup();
     const { container } = renderTab();
     await screen.findByText('1.5 KB');
+    expect(screen.getByText('A dump of one database: pg_dump <db> or mysqldump <db>.')).toBeTruthy();
     const file = new File(['SELECT 1;'], 'dump.sql', { type: 'application/sql' });
     await user.upload(container.querySelector('input[type=file]') as HTMLInputElement, file);
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('Replaces the whole instance.')).toBeTruthy();
     expect(within(dialog).getByText('dump.sql')).toBeTruthy();
     await user.type(within(dialog).getByLabelText('Type Shop to confirm'), 'Shop');
-    await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
-    await waitFor(() => expect(api.restoreDatabaseUpload).toHaveBeenCalledWith(1, file, 'Shop'));
+    const ok = within(dialog).getByRole('button', { name: 'Restore' }) as HTMLButtonElement;
+    expect(ok.disabled).toBe(true);
+    await user.click(within(dialog).getByLabelText('Restore into a new database'));
+    await user.type(within(dialog).getByLabelText('New database name'), 'imported');
+    await waitFor(() => expect(ok.disabled).toBe(false));
+    await user.click(ok);
+    await waitFor(() => expect(api.restoreDatabaseUpload).toHaveBeenCalledWith(1, file, 'imported', 'Shop'));
   });
 
   it('shows the error and the log of a failed Backup when its row expands', async () => {
@@ -172,6 +209,7 @@ describe('DatabaseBackupsTab', () => {
       log: 'ERROR: syntax error',
       preBackupId: 2,
       source: 'backup',
+      target: 'app',
       startedAt: '2026-11-14T11:00:00Z',
       status: 'failed',
       uploadName: '',

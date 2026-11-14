@@ -1,4 +1,4 @@
-import type { BackupScope, BackupTrigger, Database, DatabaseBackup, DatabaseRestore, DatabaseStatus } from '../data/types';
+import type { BackupTrigger, Database, DatabaseBackup, DatabaseRestore, DatabaseStatus } from '../data/types';
 
 type Meta = { color: string; label: string };
 
@@ -52,11 +52,6 @@ export function triggerLabel(trigger: BackupTrigger): string {
   return TRIGGERS[trigger] ?? trigger;
 }
 
-/** "Whole instance", or the chosen logical databases. */
-export function scopeLabel(scope: BackupScope): string {
-  return scope.all || !scope.databases?.length ? 'Whole instance' : scope.databases.join(', ');
-}
-
 /** A size in 1024-based units, one decimal at most: 1536 is "1.5 KB". */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -85,13 +80,16 @@ export function canBackUp(db: Pick<Database, 'status' | 'engine' | 'deleted'>): 
   return db.engine !== 'redis' && !db.deleted && (db.status === 'running' || db.status === 'starting' || db.status === 'unhealthy');
 }
 
-/** What the restore dialog says: which databases are replaced, then what always happens. */
-export function restoreWarning(scope: BackupScope | 'upload'): string[] {
-  const replaces =
-    scope === 'upload' || scope.all || !scope.databases?.length
-      ? 'Replaces the whole instance.'
-      : `Replaces these databases: ${scope.databases.join(', ')}. Other databases are untouched.`;
-  return [replaces, 'A backup of the current state is taken first. Apps connected to the affected databases are disconnected.'];
+/** The server's rule for a new restore target: letters, digits, _ and -, 63 at most, not starting with -. */
+export function validTargetName(name: string): boolean {
+  return /^[A-Za-z0-9_][A-Za-z0-9_-]{0,62}$/.test(name);
+}
+
+/** What the restore dialog says about its target. */
+export function restoreWarning(target: string, replace: boolean): string {
+  return replace
+    ? `Replaces the database ${target}. It is backed up first. Apps connected to it are disconnected.`
+    : `Creates the database ${target}.`;
 }
 
 /** The line under the header while a job runs. */

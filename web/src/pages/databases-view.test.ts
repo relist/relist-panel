@@ -8,7 +8,7 @@ import {
   jobNotice,
   pollInterval,
   restoreWarning,
-  scopeLabel,
+  validTargetName,
   snippet,
   statusMeta,
   triggerLabel,
@@ -59,12 +59,10 @@ describe('pollInterval with a job', () => {
 });
 
 describe('backup labels', () => {
-  it('names the trigger and the scope', () => {
+  it('names the trigger', () => {
     expect(triggerLabel('manual')).toBe('Manual');
     expect(triggerLabel('pre_restore')).toBe('Before restore');
     expect(triggerLabel('pre_update')).toBe('Before update');
-    expect(scopeLabel({ all: true })).toBe('Whole instance');
-    expect(scopeLabel({ databases: ['a', 'b'] })).toBe('a, b');
   });
 });
 
@@ -88,15 +86,18 @@ describe('backupsPollInterval', () => {
 });
 
 describe('restoreWarning', () => {
-  it('lists the databases of a selected scope', () => {
-    expect(restoreWarning({ databases: ['a', 'b'] })).toEqual([
-      'Replaces these databases: a, b. Other databases are untouched.',
-      'A backup of the current state is taken first. Apps connected to the affected databases are disconnected.',
-    ]);
+  it('names the target and whether it is replaced or created', () => {
+    expect(restoreWarning('app', true)).toBe('Replaces the database app. It is backed up first. Apps connected to it are disconnected.');
+    expect(restoreWarning('app_copy', false)).toBe('Creates the database app_copy.');
   });
-  it('says the whole instance for a whole-instance Backup and an upload', () => {
-    expect(restoreWarning({ all: true })[0]).toBe('Replaces the whole instance.');
-    expect(restoreWarning('upload')[0]).toBe('Replaces the whole instance.');
+});
+
+describe('validTargetName', () => {
+  it('follows the server rule', () => {
+    expect(validTargetName('app_1-x')).toBe(true);
+    expect(validTargetName('_x')).toBe(true);
+    expect(validTargetName('a'.repeat(63))).toBe(true);
+    for (const bad of ['', '-x', 'a b', 'a'.repeat(64), 'a.b']) expect(validTargetName(bad)).toBe(false);
   });
 });
 

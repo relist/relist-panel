@@ -28,7 +28,7 @@ import type {
   SourceInput,
   SourceTestResult,
   SshKey,
-  BackupScope,
+  BackupRequest,
   Database,
   DatabaseAction,
   DatabaseBackup,
@@ -614,17 +614,17 @@ export const api = {
   // Backups and restores (SQL engines only).
   databaseLogicalDatabases: (id: number) => request<{ databases: string[] }>(`/api/databases/${id}/logical-databases`),
   listDatabaseBackups: (id: number) => request<DatabaseBackup[]>(`/api/databases/${id}/backups`),
-  startDatabaseBackup: (id: number, scope: BackupScope) =>
-    request<DatabaseBackup>(`/api/databases/${id}/backups`, jsonInit('POST', { scope })),
+  startDatabaseBackup: (id: number, body: BackupRequest) =>
+    request<DatabaseBackup[]>(`/api/databases/${id}/backups`, jsonInit('POST', body)),
   deleteDatabaseBackup: (id: number, backupId: number) =>
     request<void>(`/api/databases/${id}/backups/${backupId}`, { method: 'DELETE' }),
   listDatabaseRestores: (id: number) => request<DatabaseRestore[]>(`/api/databases/${id}/restores`),
-  restoreDatabase: (id: number, backupId: number, confirm: string) =>
-    request<DatabaseRestore>(`/api/databases/${id}/restores`, jsonInit('POST', { backupId, confirm })),
-  /** The raw file is the request body; confirm and name travel in the query. */
-  restoreDatabaseUpload: (id: number, file: File, confirm: string) =>
+  restoreDatabase: (id: number, backupId: number, target: string, confirm: string) =>
+    request<DatabaseRestore>(`/api/databases/${id}/restores`, jsonInit('POST', { backupId, confirm, target })),
+  /** The raw file is the request body; target, confirm and name travel in the query. */
+  restoreDatabaseUpload: (id: number, file: File, target: string, confirm: string) =>
     request<DatabaseRestore>(
-      `/api/databases/${id}/restores/upload?${new URLSearchParams({ confirm, name: file.name })}`,
+      `/api/databases/${id}/restores/upload?${new URLSearchParams({ confirm, name: file.name, target })}`,
       { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file },
     ),
   /** Reveals the password; every call is audited. */

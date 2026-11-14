@@ -1251,8 +1251,8 @@ export interface DatabaseCredentials {
   env: string;
 }
 
-/** What a Backup covers: the whole instance, or chosen logical databases. */
-export interface BackupScope {
+/** What a backup run covers: every logical database, or the named ones. One Backup is made for each. */
+export interface BackupRequest {
   all?: boolean;
   databases?: string[];
 }
@@ -1263,7 +1263,8 @@ export type JobStatus = 'running' | 'succeeded' | 'failed';
 export interface DatabaseBackup {
   id: number;
   trigger: BackupTrigger;
-  scope: BackupScope;
+  /** The logical database it holds; empty for the earlier, several-databases format. */
+  database: string;
   status: JobStatus;
   error: string;
   log: string;
@@ -1279,6 +1280,8 @@ export interface DatabaseRestore {
   backupId: number | null;
   preBackupId: number | null;
   uploadName: string;
+  /** The logical database it restored into. */
+  target: string;
   status: JobStatus;
   error: string;
   log: string;
