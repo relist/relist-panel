@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"sync"
@@ -260,6 +261,12 @@ func (f *fakeHost) Exec(_ context.Context, name string, req ExecRequest) (int, e
 		return 0, err
 	}
 	if fn == nil {
+		// An unscripted list answers one database, "app", so a test that does
+		// not care which databases exist still has one to back up.
+		if strings.HasPrefix(line, "psql -U postgres -At -c SELECT datname") || strings.HasPrefix(line, "mysql -uroot -N -e SHOW DATABASES") {
+			_, err := io.WriteString(req.Stdout, "app\n")
+			return 0, err
+		}
 		return 0, nil
 	}
 	return fn(req)

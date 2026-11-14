@@ -12,7 +12,7 @@ import (
 var (
 	ErrBusy       = errors.New("another backup, restore or update is running on this Database")
 	ErrNotRunning = errors.New("start the Database first")
-	ErrNoScope    = errors.New("choose the whole instance or at least one database")
+	ErrNoScope    = errors.New("choose all databases or at least one")
 )
 
 // ErrUnknownLogical names the selected logical databases that do not exist.
