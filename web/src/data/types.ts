@@ -1193,7 +1193,7 @@ export type DatabaseStatus =
   | 'deleted';
 
 /** The job running on a Database; while one runs, lifecycle actions answer 409. */
-export type DatabaseJob = '' | 'backup' | 'restore' | 'update_image';
+export type DatabaseJob = '' | 'backup' | 'restore' | 'update_image' | 'rotate';
 
 export interface Database {
   id: number;
@@ -1257,7 +1257,7 @@ export interface BackupRequest {
   databases?: string[];
 }
 
-export type BackupTrigger = 'manual' | 'pre_restore' | 'pre_update';
+export type BackupTrigger = 'manual' | 'scheduled' | 'pre_restore' | 'pre_update';
 export type JobStatus = 'running' | 'succeeded' | 'failed';
 
 export interface DatabaseBackup {
@@ -1272,6 +1272,32 @@ export interface DatabaseBackup {
   sha256: string;
   startedAt: string;
   finishedAt: string | null;
+  /** Scheduled Backups only: Rotation never deletes a pinned one. */
+  pinned: boolean;
+  /** Rotation removed the file; only a copy in a Backup destination is left. */
+  localRemoved: boolean;
+}
+
+/** A Database's backup schedule. A keep value is a number, or null for no limit. */
+export interface DatabaseSchedule {
+  enabled: boolean;
+  /** ['daily'] or weekdays 'mon'..'sun'. */
+  days: string[];
+  /** Minute of the day, panel time zone. */
+  minute: number;
+  all: boolean;
+  databases: string[];
+  localKeepCount: number | null;
+  localKeepDays: number | null;
+  remoteKeepCount: number | null;
+  remoteKeepDays: number | null;
+  lastRunAt: string | null;
+  lastError: string;
+}
+
+export interface DatabaseScheduleState extends DatabaseSchedule {
+  next: string | null;
+  timeZone: string;
 }
 
 export interface DatabaseRestore {

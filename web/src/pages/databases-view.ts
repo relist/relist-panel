@@ -43,6 +43,7 @@ export function snippet(url: string): string {
 
 const TRIGGERS: Record<BackupTrigger, string> = {
   manual: 'Manual',
+  scheduled: 'Scheduled',
   pre_restore: 'Before restore',
   pre_update: 'Before update',
 };
@@ -101,6 +102,8 @@ export function jobNotice(job: Database['job']): string {
       return 'A restore is running. Start, Stop, Restart, Update image, Apply settings and Delete wait until it ends.';
     case 'update_image':
       return 'An image update is running: it backs up first, then updates. Other changes wait until it ends.';
+    case 'rotate':
+      return 'Old scheduled backups are being deleted. Other changes wait until it ends.';
     default:
       return '';
   }
