@@ -5,7 +5,6 @@ import { createRoot } from 'react-dom/client';
 import { RouterProvider } from 'react-router';
 
 import './index.css';
-import './monaco';
 
 import { router } from './app/routes';
 import { buildTheme } from './app/theme';

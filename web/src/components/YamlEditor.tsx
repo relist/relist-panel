@@ -2,7 +2,7 @@ import Editor from '@monaco-editor/react';
 import type { editor as MonacoEditorApi } from 'monaco-editor';
 import { useContext, useState } from 'react';
 import { CODE_FONT_STACK, MONACO_THEME, ThemeModeContext } from '../app/theme';
-import '../monaco';
+import { EditorPending, useMonaco } from './MonacoGate';
 
 export const MONACO_OPTIONS = {
   minimap: { enabled: false },
@@ -50,7 +50,9 @@ export function YamlEditor({
   const mode = useContext(ThemeModeContext);
   const [contentHeight, setContentHeight] = useState(0);
   const resolvedHeight = autoHeight ? `clamp(${autoHeight.min}px, ${contentHeight}px, ${autoHeight.max})` : height;
+  const monaco = useMonaco();
 
+  if (monaco !== 'ready') return <EditorPending height={resolvedHeight} status={monaco} />;
   return (
     <Editor
       height={resolvedHeight}

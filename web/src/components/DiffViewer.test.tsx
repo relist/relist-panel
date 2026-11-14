@@ -42,6 +42,8 @@ describe('DiffViewer', () => {
   // got reset" when the models go before the diff editor.
   it('disposes its models only after the diff editor', async () => {
     const view = render(<DiffViewer modified="b" original="a" />);
+    // Monaco loads on demand, so the editor mounts a tick later.
+    await vi.waitFor(() => expect(props.keepCurrentOriginalModel).toBe(true));
     view.unmount();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(order).toEqual(['editor', 'original', 'modified']);
