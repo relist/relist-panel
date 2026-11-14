@@ -91,13 +91,19 @@ type Service struct {
 	// "update_image"); jobsChanged is closed and replaced whenever one ends.
 	jobs        map[int64]string
 	jobsChanged chan struct{}
+	// uploadStall is how long an upload may send nothing before it is cut
+	// off; remoteTimeout bounds one delete in a Backup destination. A bucket
+	// that stops answering would otherwise hold the job slot, and the
+	// host-wide scheduler with it, for ever.
+	uploadStall, remoteTimeout time.Duration
 }
 
 func New(d Deps) *Service {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	return &Service{d: d, locks: map[int64]*sync.Mutex{}, inflight: map[int64]bool{}, jobs: map[int64]string{}, jobsChanged: make(chan struct{})}
+	return &Service{d: d, locks: map[int64]*sync.Mutex{}, inflight: map[int64]bool{}, jobs: map[int64]string{}, jobsChanged: make(chan struct{}),
+		uploadStall: 5 * time.Minute, remoteTimeout: time.Minute}
 }
 
 func (s *Service) locked(ctx context.Context) bool {
