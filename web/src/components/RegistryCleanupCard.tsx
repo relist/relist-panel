@@ -1,6 +1,5 @@
-import { Alert, Button, Card, Checkbox, Flex, Form, InputNumber, Modal, Radio, Switch, Table, Tag, TimePicker, Typography } from 'antd';
+import { Alert, Button, Card, Flex, Form, InputNumber, Modal, Switch, Table, Tag, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
-import dayjs, { type Dayjs } from 'dayjs';
 import { useEffect, useRef, useState } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 
@@ -8,20 +7,11 @@ import { api } from '../data/api';
 import type { RegistryCleanupRun } from '../data/types';
 import { formatBytes } from './MetricChart';
 import { RelativeTime } from './primitives';
+import { ScheduleFields, scheduleFormValues, scheduleFromValues, type ScheduleFormValues } from './ScheduleFields';
 
 const { Text } = Typography;
 
 export const REGISTRY_CLEANUP_KEY = '/api/registry/cleanup';
-
-const WEEKDAYS = [
-  { label: 'Mon', value: 'mon' },
-  { label: 'Tue', value: 'tue' },
-  { label: 'Wed', value: 'wed' },
-  { label: 'Thu', value: 'thu' },
-  { label: 'Fri', value: 'fri' },
-  { label: 'Sat', value: 'sat' },
-  { label: 'Sun', value: 'sun' },
-];
 
 const RESULT = {
   failed: { color: 'error', label: 'Failed' },
@@ -30,16 +20,9 @@ const RESULT = {
   running: { color: 'processing', label: 'Running' },
 } as const;
 
-interface CleanupForm {
+interface CleanupForm extends ScheduleFormValues {
   enabled: boolean;
   keep: number;
-  frequency: 'daily' | 'weekly';
-  weekdays: string[];
-  time: Dayjs;
-}
-
-function toTime(minute: number): Dayjs {
-  return dayjs().hour(Math.floor(minute / 60)).minute(minute % 60).second(0);
 }
 
 /**
@@ -51,7 +34,6 @@ export function RegistryCleanupCard({ enabled: registryOn }: { enabled: boolean 
     refreshInterval: (latest) => (latest?.running ? 3000 : 0),
   });
   const [form] = Form.useForm<CleanupForm>();
-  const frequency = Form.useWatch('frequency', form);
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [preview, setPreview] = useState<Record<string, string[]>>();
@@ -77,14 +59,12 @@ export function RegistryCleanupCard({ enabled: registryOn }: { enabled: boolean 
   }
 
   const { settings } = data;
-  const daily = settings.days.includes('daily');
 
   const save = async (values: CleanupForm) => {
     setSaving(true);
     setFailure(undefined);
     try {
-      const days = values.frequency === 'daily' ? ['daily'] : values.weekdays;
-      const minute = values.time.hour() * 60 + values.time.minute();
+      const { days, minute } = scheduleFromValues(values);
       await mutate(api.saveRegistryCleanup({ days, enabled: values.enabled, keep: values.keep, minute }), { revalidate: false });
     } catch (reason: unknown) {
       setFailure(reason instanceof Error ? reason.message : 'Could not save Registry cleanup');
@@ -169,10 +149,8 @@ export function RegistryCleanupCard({ enabled: registryOn }: { enabled: boolean 
           form={form}
           initialValues={{
             enabled: settings.enabled,
-            frequency: daily ? 'daily' : 'weekly',
             keep: settings.keep,
-            time: toTime(settings.minute),
-            weekdays: daily ? [] : settings.days,
+            ...scheduleFormValues(settings.days, settings.minute),
           }}
           layout="vertical"
           onFinish={(values) => void save(values)}
@@ -188,22 +166,7 @@ export function RegistryCleanupCard({ enabled: registryOn }: { enabled: boolean 
           >
             <InputNumber min={1} precision={0} />
           </Form.Item>
-          <Form.Item label="Runs" name="frequency">
-            <Radio.Group
-              options={[
-                { label: 'Daily', value: 'daily' },
-                { label: 'Weekly', value: 'weekly' },
-              ]}
-            />
-          </Form.Item>
-          {frequency === 'weekly' && (
-            <Form.Item name="weekdays" rules={[{ message: 'Choose at least one day', min: 1, required: true, type: 'array' }]}>
-              <Checkbox.Group options={WEEKDAYS} />
-            </Form.Item>
-          )}
-          <Form.Item extra={`Panel time zone: ${data.timeZone}`} label="At" name="time">
-            <TimePicker allowClear={false} format="HH:mm" minuteStep={5} needConfirm={false} />
-          </Form.Item>
+          <ScheduleFields timeZone={data.timeZone} />
           <Flex align="center" gap={12} wrap>
             <Button htmlType="submit" loading={saving}>
               Save cleanup

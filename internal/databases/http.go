@@ -42,6 +42,9 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/databases/{id}/backups", a.startBackup)
 	mux.HandleFunc("GET /api/databases/{id}/backups/{backupID}/download", a.downloadBackup)
 	mux.HandleFunc("DELETE /api/databases/{id}/backups/{backupID}", a.deleteBackup)
+	mux.HandleFunc("PUT /api/databases/{id}/backups/{backupID}/pin", a.pinBackup)
+	mux.HandleFunc("GET /api/databases/{id}/schedule", a.getSchedule)
+	mux.HandleFunc("PUT /api/databases/{id}/schedule", a.putSchedule)
 	mux.HandleFunc("GET /api/databases/{id}/restores", a.listRestores)
 	mux.HandleFunc("POST /api/databases/{id}/restores", a.startRestore)
 	mux.HandleFunc("POST /api/databases/{id}/restores/upload", a.uploadRestore)
@@ -331,7 +334,10 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 func writeError(w http.ResponseWriter, err error) {
 	var unknownLogical ErrUnknownLogical
 	var forbidden ErrForbiddenStatement
+	var invalid ErrInvalidSchedule
 	switch {
+	case errors.As(err, &invalid):
+		writeJSONError(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, ErrInvalidName), errors.Is(err, ErrUnknownEngine), errors.Is(err, ErrUnknownVersion), errors.Is(err, ErrConfirm), errors.Is(err, ErrInvalidLimits),
 		errors.Is(err, ErrNoBackups), errors.Is(err, ErrNoScope), errors.As(err, &unknownLogical),
 		errors.Is(err, ErrUnsafeName), errors.Is(err, ErrBadTarget), errors.Is(err, ErrNothingToBackUp), errors.Is(err, ErrNotRestorable),

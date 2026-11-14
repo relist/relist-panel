@@ -14,6 +14,8 @@ const api = vi.hoisted(() => ({
   databaseBackupUrl: (id: number, backupId: number) => `/api/databases/${id}/backups/${backupId}/download`,
   databaseLogicalDatabases: vi.fn(),
   deleteDatabaseBackup: vi.fn(),
+  getDatabaseSchedule: vi.fn(),
+  pinDatabaseBackup: vi.fn(),
   listDatabaseBackups: vi.fn(),
   listDatabaseRestores: vi.fn(),
   restoreDatabase: vi.fn(),
@@ -58,6 +60,8 @@ function backup(over: Partial<DatabaseBackup>): DatabaseBackup {
     log: '',
     database: 'app',
     sha256: 'abc',
+    localRemoved: false,
+    pinned: false,
     size: 1536,
     startedAt: '2026-11-14T10:00:00Z',
     status: 'succeeded',
@@ -81,6 +85,10 @@ describe('DatabaseBackupsTab', () => {
     vi.clearAllMocks();
     api.listDatabaseBackups.mockResolvedValue([backup({})]);
     api.listDatabaseRestores.mockResolvedValue([]);
+    api.getDatabaseSchedule.mockResolvedValue({
+      all: true, databases: [], days: ['daily'], enabled: false, lastError: '', lastRunAt: null, localKeepCount: 7,
+      localKeepDays: null, minute: 180, next: null, remoteKeepCount: 30, remoteKeepDays: null, timeZone: 'UTC (UTC+00:00)',
+    });
     api.databaseLogicalDatabases.mockResolvedValue({ databases: ['a', 'app'] });
     api.startDatabaseBackup.mockResolvedValue([backup({ status: 'running' })]);
   });
@@ -253,5 +261,33 @@ describe('DatabaseBackupsTab', () => {
     expect(screen.queryByRole('button', { name: 'Restore' })).toBeNull();
     expect(screen.getByRole('link', { name: /Download/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Delete' })).toBeTruthy();
+  });
+
+  it('pins a scheduled Backup, and offers no pin on a manual one', async () => {
+    api.pinDatabaseBackup.mockResolvedValue(undefined);
+    api.listDatabaseBackups.mockResolvedValue([backup({ id: 1, trigger: 'manual' }), backup({ id: 2, trigger: 'scheduled' })]);
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByText('Scheduled');
+    expect(screen.getAllByRole('button', { name: 'Pin' })).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Pin' }));
+    await waitFor(() => expect(api.pinDatabaseBackup).toHaveBeenCalledWith(1, 2, true));
+  });
+
+  it('shows a pinned Backup with Unpin', async () => {
+    api.listDatabaseBackups.mockResolvedValue([backup({ id: 2, pinned: true, trigger: 'scheduled' })]);
+    const user = userEvent.setup();
+    renderTab();
+    await user.click(await screen.findByRole('button', { name: 'Unpin' }));
+    await waitFor(() => expect(api.pinDatabaseBackup).toHaveBeenCalledWith(1, 2, false));
+  });
+
+  it('marks a Backup whose file was rotated away as Remote only, with Download and Restore disabled', async () => {
+    api.listDatabaseBackups.mockResolvedValue([backup({ localRemoved: true, trigger: 'scheduled' })]);
+    renderTab();
+    expect(await screen.findByText('Remote only')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /Download/ })).toBeNull();
+    expect((screen.getByRole('button', { name: /Download/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Restore' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
