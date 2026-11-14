@@ -149,7 +149,7 @@ func (s *Service) StartBackup(ctx context.Context, id int64, sc Scope) (Backup, 
 func (s *Service) insertScoped(ctx context.Context, d Database, dp Dumper, sc Scope, trigger string) (Backup, error) {
 	if !sc.All {
 		if len(sc.Databases) == 0 {
-			return Backup{}, errors.New("choose the whole instance or at least one database")
+			return Backup{}, ErrNoScope
 		}
 		have, err := s.listLogical(ctx, d, dp)
 		if err != nil {

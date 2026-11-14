@@ -383,3 +383,26 @@ func TestRangeIsRecordedOnlyOnPartialContent(t *testing.T) {
 		t.Errorf("range = %d bytes, want %d", len(fmt.Sprint(e.Detail["range"])), maxRangeDetail)
 	}
 }
+
+// A Backup download is an audited read that names its Database.
+func TestDatabaseBackupDownloadIsAudited(t *testing.T) {
+	f, c := recordingFixture(t, func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /api/databases/{id}/backups/{backupID}/download", answer(http.StatusOK))
+		mux.HandleFunc("POST /api/databases/{id}/restores", answer(http.StatusAccepted))
+	})
+	if _, err := f.db.Exec(`INSERT INTO databases (id, name, slug, engine, version, password, created_at, updated_at) VALUES (4, 'Shop', 'shop', 'postgres', '18', 'x', 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range []struct{ method, path, action string }{
+		{http.MethodGet, "/api/databases/4/backups/1/download", "database.backup_download"},
+		{http.MethodPost, "/api/databases/4/restores", "database.restore"},
+	} {
+		if got := f.serve(admin, call.method, call.path).Code; got >= 300 {
+			t.Fatalf("%s %s = %d", call.method, call.path, got)
+		}
+		events := c.take()
+		if len(events) != 1 || events[0].Target != "Shop" || events[0].Action != call.action {
+			t.Errorf("%s %s: events = %+v", call.method, call.path, events)
+		}
+	}
+}

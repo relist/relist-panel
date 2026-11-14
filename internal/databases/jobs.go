@@ -12,6 +12,7 @@ import (
 var (
 	ErrBusy       = errors.New("another backup, restore or update is running on this Database")
 	ErrNotRunning = errors.New("start the Database first")
+	ErrNoScope    = errors.New("choose the whole instance or at least one database")
 )
 
 // ErrUnknownLogical names the selected logical databases that do not exist.
@@ -54,6 +55,13 @@ func (s *Service) Jobs(id int64) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.jobs[id]
+}
+
+// Busy reports whether any Database has a job running.
+func (s *Service) Busy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.jobs) > 0
 }
 
 // WaitIdle blocks until no Database has a job running, or ctx ends. A Panel
