@@ -70,16 +70,6 @@ func (a *Authorizer) hostTarget(ctx context.Context, pattern, path string) strin
 	return name
 }
 
-// peerIP is the TCP peer, as the Access log records it; never a forwarded
-// header.
-func peerIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
 // statusWriter remembers the status a handler answered with, and whether
 // writing the body failed. A Write without WriteHeader is a 200.
 type statusWriter struct {
