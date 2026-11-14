@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"regexp"
@@ -19,6 +18,7 @@ import (
 
 	"relist-panel/internal/audit"
 	"relist-panel/internal/auth"
+	"relist-panel/internal/schedule"
 )
 
 // User is a Compose that uses an image. A running container may name only
@@ -637,29 +637,20 @@ func (a *API) writeCleanup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not read the cleanup history")
 		return
 	}
+	var next *time.Time
+	if settings.Enabled {
+		next = schedule.Next(a.d.Cleaner.d.Now(), schedule.Rule{Days: settings.Days, Minute: settings.Minute})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"settings": settings,
-		"next":     Next(a.d.Cleaner.d.Now(), settings),
+		"next":     next,
 		"running":  a.d.Cleaner.Running(),
 		"runs":     runs,
-		"timeZone": timeZone(a.d.Cleaner.d.Now()),
+		"timeZone": schedule.TimeZone(a.d.Cleaner.d.Now()),
 	})
 }
 
-// timeZone names the zone the schedule's time is in, as the Scanner's page
-// does: the panel container's, which is UTC unless TZ is set.
-func timeZone(now time.Time) string {
-	zone, offset := now.Zone()
-	minutes := offset % 3600 / 60
-	if minutes < 0 {
-		minutes = -minutes
-	}
-	return fmt.Sprintf("%s (UTC%+03d:%02d)", zone, offset/3600, minutes)
-}
-
 func (a *API) getCleanup(w http.ResponseWriter, r *http.Request) { a.writeCleanup(w, r) }
-
-var weekdays = []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 
 func (a *API) putCleanup(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -682,21 +673,11 @@ func (a *API) putCleanup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "choose Daily or at least one weekday")
 		return
 	}
-	days := []string{}
-	for _, d := range in.Days {
-		switch {
-		case d == "daily":
-			days = []string{"daily"}
-		case slices.Contains(weekdays, d):
-			if !slices.Contains(days, d) && !slices.Contains(days, "daily") {
-				days = append(days, d)
-			}
-		default:
-			writeError(w, http.StatusUnprocessableEntity, "days must be daily or weekdays mon to sun")
-			return
-		}
+	days, err := schedule.NormalizeDays(in.Days)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
 	}
-	slices.SortFunc(days, func(x, y string) int { return slices.Index(weekdays, x) - slices.Index(weekdays, y) })
 	ctx := r.Context()
 	settings, err := a.d.Service.d.Store.CleanupSettings(ctx)
 	if err != nil {
