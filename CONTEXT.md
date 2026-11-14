@@ -59,10 +59,22 @@ A Postgres, MySQL, MariaDB or Redis server the panel runs host-wide in its own c
 The kind of server a Database runs (postgres, mysql, mariadb, redis), with the versions, settings and tools the panel offers for it. _Avoid_: Type, Driver (the driver is the code).
 
 **Backup**:
-One gzipped plain-SQL dump of one logical database of a Database; never users or roles. It is a file kept on the panel under `.databases/<id>/backups/` with its sha256, made by `docker exec` in the Database's own container. Its trigger is manual, `pre_restore` or `pre_update`. Redis has none. _Avoid_: Snapshot, Export (a Backup is a file the panel keeps, not a volume copy).
+One gzipped plain-SQL dump of one logical database of a Database; never users or roles. It is a file kept on the panel under `.databases/<id>/backups/` with its sha256, made by `docker exec` in the Database's own container. Its trigger is manual, scheduled, `pre_restore` or `pre_update`. Redis has none. _Avoid_: Snapshot, Export (a Backup is a file the panel keeps, not a volume copy).
 
 **All databases / selected databases**:
 What a backup run covers; a run makes one Backup per logical database.
+
+**Backup destination**:
+A named, host-wide S3-compatible bucket (AWS S3, Cloudflare R2, Backblaze B2, MinIO) that a Database's schedule copies its scheduled Backups to, managed on Data → Backup destinations. Its secret access key stays in the panel database and is never returned (ADR-0040). _Avoid_: Remote storage, Bucket (the bucket is only part of a destination).
+
+**Rotation**:
+The rule that deletes a Database's old scheduled Backups, locally and in its Backup destination, keeping the last N or those from the last X days per logical database; the newest successful Backup of each is always kept. Manual and `pre_restore` Backups are never rotated.
+
+**Pin**:
+A mark on one scheduled Backup that keeps Rotation from deleting it.
+
+**Remote only**:
+A Backup whose local file Rotation removed while its copy in a Backup destination is still tracked; it cannot be downloaded or restored from the panel.
 
 **Restore**:
 Replaying a Backup, or an uploaded `.sql`/`.sql.gz` of one database, into a target logical database the Admin picks, replacing it (after a `pre_restore` Backup of it) or creating it. _Avoid_: Rollback.
