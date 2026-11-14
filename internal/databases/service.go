@@ -590,6 +590,10 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBa
 				return err
 			}
 			if len(kept) > 0 {
+				// A tombstone has no schedule.
+				if err := s.d.Store.DeleteSchedule(ctx, id); err != nil {
+					return err
+				}
 				return s.d.Store.Tombstone(ctx, id)
 			}
 		}

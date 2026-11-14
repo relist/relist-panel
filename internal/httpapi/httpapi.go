@@ -392,6 +392,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			if err := databaseService.ReconcileAll(ctx); err != nil {
 				log.Printf("databases: reconcile at start: %v", err)
 			}
+			databaseService.RunScheduler(ctx)
 		}()
 	}
 	composevariables.New(db).RegisterRoutes(mux)
