@@ -28,6 +28,11 @@ import type {
   SourceInput,
   SourceTestResult,
   SshKey,
+  Database,
+  DatabaseAction,
+  DatabaseCredentials,
+  DatabaseEngine,
+  DatabaseInput,
   ExternalRegistry,
   ExternalRegistryInput,
   PushCredential,
@@ -591,6 +596,19 @@ export const api = {
       `/api/registry/tags?repo=${encodeURIComponent(repo)}&tag=${encodeURIComponent(tag)}`,
       confirm === undefined ? { method: 'DELETE' } : jsonInit('DELETE', { confirm }),
     ),
+  // Databases the panel runs (ADR-0039).
+  listDatabases: () => request<Database[]>('/api/databases'),
+  listDatabaseEngines: () => request<DatabaseEngine[]>('/api/databases/engines'),
+  createDatabase: (input: DatabaseInput) => request<Database>('/api/databases', jsonInit('POST', input)),
+  getDatabase: (id: number) => request<Database>(`/api/databases/${id}`),
+  renameDatabase: (id: number, name: string) => request<void>(`/api/databases/${id}`, jsonInit('PATCH', { name })),
+  databaseAction: (id: number, action: DatabaseAction) =>
+    request<void>(`/api/databases/${id}/${action}`, { method: 'POST' }),
+  deleteDatabase: (id: number, confirm: string) =>
+    request<void>(`/api/databases/${id}`, jsonInit('DELETE', { confirm })),
+  /** Reveals the password; every call is audited. */
+  databaseCredentials: (id: number) => request<DatabaseCredentials>(`/api/databases/${id}/credentials`),
+  databaseLogs: (id: number, tail = 200) => request<{ logs: string }>(`/api/databases/${id}/logs?tail=${tail}`),
   // Builders: resource-limited buildx builders, and the BuildKit image they run.
   listBuilders: () => request<BuildersResponse>('/api/builders'),
   setBuildKitImage: (buildkitImage: string) =>

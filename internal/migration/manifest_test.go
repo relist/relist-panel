@@ -397,3 +397,29 @@ func TestManifestOmitsRegistryByDefault(t *testing.T) {
 		t.Fatalf("no volume: items %q, warnings %q, err %v", itemIDs(m), m.Warnings, err)
 	}
 }
+
+func TestManifestIncludesDatabaseVolumes(t *testing.T) {
+	f := newManifestFixture(t)
+	f.docker.Volumes["relist-db-4"] = VolumeInfo{Name: "relist-db-4", Driver: "local"}
+	b := f.builder()
+	b.DatabaseVolumes = func(context.Context) ([]string, error) { return []string{"relist-db-4", "relist-db-5"}, nil }
+	m, err := b.Build(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *Item
+	for i, it := range m.Items {
+		if it.ID == "volume-relist-db-4" {
+			found = &m.Items[i]
+		}
+	}
+	if found == nil || found.Kind != KindVolume {
+		t.Fatalf("items %q lack the Database volume", itemIDs(m))
+	}
+	if slices.Contains(itemIDs(m), "volume-relist-db-5") {
+		t.Fatal("a Database volume that does not exist was listed")
+	}
+	if !slices.ContainsFunc(m.Warnings, func(w string) bool { return strings.Contains(w, "relist-db-5") }) {
+		t.Fatalf("no warning for the missing volume: %q", m.Warnings)
+	}
+}
