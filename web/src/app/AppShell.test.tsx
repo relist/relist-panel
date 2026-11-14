@@ -191,6 +191,24 @@ describe('Users and non-admins', () => {
     expect(screen.getByRole('menuitem', { name: /Registry/ })).toBeTruthy();
   });
 
+  it('groups an admin\'s host-wide pages under titled sections', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: { ...member, isAdmin: true } });
+    renderShell('/');
+    await screen.findByRole('menuitem', { name: /Users/ });
+    const groups = Array.from(document.querySelectorAll('.ant-menu-item-group')).map((group) => ({
+      title: group.querySelector('.ant-menu-item-group-title')?.textContent,
+      items: within(group as HTMLElement).queryAllByRole('menuitem').map((item) => item.textContent),
+    }));
+    expect(groups).toEqual([
+      { title: 'Host', items: ['Monitoring', 'Docker'] },
+      { title: 'Build & images', items: ['Images', 'Registry', 'Builders', 'SSH keys'] },
+      { title: 'Routing', items: ['Traefik', 'Certificates', 'Basic auth'] },
+      { title: 'Security', items: ['Vulnerabilities', 'Audit log'] },
+      { title: 'Panel', items: ['Users', 'Panel update'] },
+      { title: 'Recent Projects', items: [] },
+    ]);
+  });
+
   it('shows a member the 403 result on the Registry page', async () => {
     vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member, access: { projects: [] } });
     renderShell('/registry');

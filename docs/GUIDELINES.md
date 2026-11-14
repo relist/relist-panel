@@ -72,6 +72,21 @@ Routes (history URLs, as shipped in `web/`):  /                                 
                      Design-system screens stay prototype-only: #/design/guidelines, #/design/states
 ```
 
+An admin's sider groups the host-wide pages under titles (antd `Menu` `type: 'group'`), each
+answering one question. A group is a title, not a page: it has no route and no breadcrumb crumb.
+
+| Group | Question | Items |
+|---|---|---|
+| *(none)* | How is my work doing? | Overview, Projects, Deployments |
+| Host | How is the machine doing? | Monitoring, Docker |
+| Build & images | Where do images come from? | Images, Registry, Builders, SSH keys |
+| Routing | How does traffic get in? | Traefik, Certificates, Basic auth |
+| Security | What is exposed, and who did what? | Vulnerabilities, Audit log |
+| Panel | The panel itself | Users, Panel update |
+| Recent Projects | — | the five newest Projects |
+
+A member sees only Projects and Deployments, then Recent Projects.
+
 Rules:
 
 - One **Environment switcher** (`Segmented`), one **tab row** (`Composes | Variables | Settings`).
@@ -492,7 +507,7 @@ remove eligible resources without opening a terminal.
 
 Known CVEs in the images this host runs: the panel's Composes, the panel itself, Traefik and
 the Scanner (ADR-0021). The page answers two questions: "what should I rebuild?" and "how exposed
-is the host?". It sits below Images in the side menu, and its badge is the host's Critical count.
+is the host?". It heads the side menu's **Security** group, above Audit log, and its badge is the host's Critical count.
 The badge is hidden while scanning is off, because hidden is not 0.
 
 - **Header:** **Refresh**, **Settings** (a right Drawer) and **Scan now**. Scan now is disabled
@@ -552,7 +567,7 @@ The badge is hidden while scanning is off, because hidden is not 0.
 ### 4.15 Panel update (`/panel-update`)
 
 Updates the panel to the newest signed release without leaving the browser (ADR-0024). It sits
-in the side menu between Docker and Images. The header shows the running version, and a
+in the side menu's **Panel** group, below Users. The header shows the running version, and a
 `processing` tag `Update available` that links here when a newer release was found; the header
 re-reads the status every 10 minutes and shares the page's data, so a check on the page moves the
 tag at once. No badge in the menu.
