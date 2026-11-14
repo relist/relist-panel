@@ -318,7 +318,18 @@ data under `/var/lib/postgresql`, while 17 and below use
     `internal/registry/schedule.go` into a shared package, which both the
     Registry and Databases use.
   - A run the panel missed while it was down is made up once.
-  - A schedule that has never run is armed, not fired.
+  - A schedule that has never run is armed, not fired. Turning a schedule on
+    arms it too (phase 3 decision), so enabling at 10:00 a 03:00 schedule runs
+    tomorrow, not now.
+  - **At run time** (phase 3 decision):
+    - the Database is running a job, or a Migration or Panel update holds its
+      lock: the run waits and is tried again each minute;
+    - the Database is not running: the day's run is skipped and the schedule
+      shows "skipped: the Database was not running";
+    - a selected database is gone: its Backup fails, naming it, and the others
+      run;
+    - the panel stops mid-run: the running rows fail at the next start, as in
+      phase 2, and the run is not repeated until the next due time.
 - **Rotation** applies only to `scheduled` Backups that are not pinned. It is
   configured separately for **Local** and for **Destination**, and counted
   **per logical database**, each with:
@@ -334,6 +345,15 @@ data under `/var/lib/postgresql`, while 17 and below use
 - Rotation runs after every successful scheduled Backup and on each scheduler
   tick, so the age rule applies even when no new Backups happen.
 - Rotation is a pure function: (backups, settings, now) → IDs to delete.
+- Rotation runs only for an enabled schedule. Remote Rotation covers the copies
+  in the schedule's current destination; copies in a destination the schedule
+  used before are kept until deleted by hand (phase 3 decision).
+- **Local and remote copies** (phase 3 decision). Local Rotation deletes the
+  local file. A Backup whose file is gone but whose copy is still in a
+  destination stays listed as **Remote only**: it cannot be downloaded or
+  restored from the panel; the Admin fetches it from the bucket. A Backup with
+  neither a file nor a copy is removed. A deleted Database's Backups view keeps
+  Remote only Backups until they are deleted.
 
 ### Backup destinations
 
@@ -351,17 +371,32 @@ data under `/var/lib/postgresql`, while 17 and below use
 
   This covers AWS S3, Cloudflare R2, Backblaze B2 and MinIO. Secrets are stored
   in the panel database and never sent back to the browser; editing leaves the
-  secret blank to keep it.
+  secret blank to keep it. A kept secret stays with its endpoint: changing the
+  endpoint asks for the secret again, as External registries do (phase 3
+  decision).
+- **Client library:** `github.com/minio/minio-go/v7` (phase 3 decision, 18
+  modules, against about 130 packages for `aws-sdk-go-v2`).
 - **Test** writes a small object under the prefix, reads it back and deletes it.
 - **Upload** happens after the local Backup succeeds. The object key is
-  `<prefix>/<db slug>-<db id>/<file name>`.
+  `<prefix>/<db slug>-<db id>/<logical database>/<file name>` (phase 3
+  decision: the logical database is in the key, so a person browsing the
+  bucket can tell the files apart). The panel sends the file's size with the
+  upload and checks the object's size afterwards.
   - Upload status is recorded per Backup.
   - A failed upload leaves the local Backup successful and offers **Retry
     upload**.
 - **Remote deletion** (Rotation, manual delete) only deletes objects the panel
   recorded uploading. It never lists the prefix and deletes what it finds.
+  - Deleting a Backup by hand, or a Database with its Backups, deletes the
+    remote copies first. If one cannot be deleted, nothing else is deleted and
+    the error names the destination (phase 3 decision), so no copy is left
+    behind untracked.
 - A Backup destination that a schedule still uses cannot be deleted. The error
-  names the Databases.
+  names the Databases. A destination that only holds copies can be deleted
+  after a confirmation that says how many: the copies stay in the bucket and
+  the panel stops tracking them (phase 3 decision).
+- **Restoring from a destination** is not offered in phase 3 (phase 3
+  decision): download the object from the bucket and use Restore from file.
 
 ### Connection tab
 
@@ -456,12 +491,12 @@ numbers are picked at implementation time.
 - `database_backups`:
   - `id`, `database_id`, `trigger`, `logical_name` (the one database in the
     file; `scope` is left from the first phase 2 draft and no longer read);
-  - `status`, `error`, `log`, `file_name`, `size`, `sha256` (`pinned` comes in phase 3);
+  - `status`, `error`, `log`, `file_name`, `size`, `sha256`, `pinned` and `local_removed_at` (phase 3);
   - `started_at`, `finished_at`.
 - `database_restores` (phase 2): `id`, `database_id`, `source` (`backup` or `upload`), `backup_id`, `pre_backup_id`, `upload_name`, `target`, `status`, `error`, `log`, `started_at`, `finished_at`.
 - `database_backup_schedules` (one per Database):
   - `enabled`, `days`, `minute`, `databases` (JSON: all, or a list of names),
-    `destination_id`;
+    `destination_id`, `last_error`;
   - `local_keep_count`, `local_keep_days`, `remote_keep_count`,
     `remote_keep_days`;
   - `last_run_at`.
@@ -470,7 +505,7 @@ numbers are picked at implementation time.
   - `status`, `error`, `uploaded_at`, `deleted_at`.
 - `backup_destinations`:
   - `id`, `name`, `type`, `config` (JSON, without secrets), `secret`;
-  - `created_at`.
+  - `last_test_at`, `last_test_ok`, `last_test_error`, `created_at`.
 
 ## Error handling
 
