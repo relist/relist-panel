@@ -140,3 +140,101 @@ func (s *Service) RetryUpload(ctx context.Context, id, backupID int64) error {
 	}()
 	return nil
 }
+
+// ErrRemoteDelete is a copy that could not be deleted from its Backup
+// destination; it is wrapped with the destination's name and the remote error.
+var ErrRemoteDelete = errors.New("could not delete the copy in the Backup destination")
+
+// deleteCopy deletes one live copy from its destination and records it.
+func (s *Service) deleteCopy(ctx context.Context, remotes map[int64]backupdest.Remote, u Upload) error {
+	remote, ok := remotes[u.DestinationID]
+	if !ok {
+		if s.d.Destinations == nil {
+			return fmt.Errorf("%w %q: %s", ErrRemoteDelete, u.DestinationName, ErrNoDestinations)
+		}
+		_, r, err := s.d.Destinations.Open(ctx, u.DestinationID)
+		if err != nil {
+			return fmt.Errorf("%w %q: %s", ErrRemoteDelete, u.DestinationName, err)
+		}
+		remotes[u.DestinationID], remote = r, r
+	}
+	if err := remote.Delete(ctx, u.ObjectKey); err != nil {
+		return fmt.Errorf("%w %q: %s", ErrRemoteDelete, u.DestinationName, err)
+	}
+	return s.d.Store.MarkUploadDeleted(ctx, u.ID, s.d.Now())
+}
+
+// rotateRemote deletes the copies in the schedule's current destination of
+// scheduled, unpinned Backups that break sc.Remote. Copies in a former
+// destination are never touched. A Backup whose file is gone goes with its
+// last copy. A failed delete is logged and tried again next tick.
+func (s *Service) rotateRemote(ctx context.Context, id int64, sc Schedule) error {
+	if sc.DestinationID == nil {
+		return nil
+	}
+	live, err := s.d.Store.LiveUploads(ctx, id, *sc.DestinationID)
+	if err != nil || len(live) == 0 {
+		return err
+	}
+	all, err := s.d.Store.ListBackups(ctx, id)
+	if err != nil {
+		return err
+	}
+	byID := map[int64]Backup{}
+	for _, b := range all {
+		byID[b.ID] = b
+	}
+	copies := map[int64]Upload{}
+	var items []RotItem
+	for _, u := range live {
+		b, ok := byID[u.BackupID]
+		if !ok || b.Trigger != TriggerScheduled || b.Pinned {
+			continue
+		}
+		copies[b.ID] = u
+		items = append(items, RotItem{ID: b.ID, Group: b.LogicalName, At: b.StartedAt, OK: true})
+	}
+	remotes := map[int64]backupdest.Remote{}
+	var errs []error
+	for _, bid := range Rotate(items, sc.Remote, s.d.Now()) {
+		if err := s.deleteCopy(ctx, remotes, copies[bid]); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		b := byID[bid]
+		if b.LocalRemovedAt != nil || !s.fileExists(id, b) {
+			if err := s.d.Store.DeleteBackup(ctx, bid); err != nil && !errors.Is(err, ErrNotFound) {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Service) fileExists(id int64, b Backup) bool {
+	if b.FileName == "" {
+		return false
+	}
+	_, err := os.Stat(s.filePath(id, b))
+	return err == nil
+}
+
+// deleteLiveCopies deletes every live copy of the given Backups from its
+// destination. The first failure stops it and is returned (ErrRemoteDelete);
+// the copies already deleted stay recorded as deleted.
+func (s *Service) deleteLiveCopies(ctx context.Context, databaseID int64, only map[int64]bool) error {
+	live, err := s.d.Store.LiveUploads(ctx, databaseID, 0)
+	if err != nil {
+		return err
+	}
+	remotes := map[int64]backupdest.Remote{}
+	for _, u := range live {
+		if only != nil && !only[u.BackupID] {
+			continue
+		}
+		if err := s.deleteCopy(ctx, remotes, u); err != nil {
+			return err
+		}
+	}
+	return nil
+}

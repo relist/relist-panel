@@ -121,6 +121,9 @@ func (s *Service) runScheduled(ctx context.Context, sc Schedule) {
 	if err := s.rotateLocal(ctx, sc.DatabaseID, sc.Local); err != nil {
 		log.Printf("databases: rotate backups of database %d: %v", sc.DatabaseID, err)
 	}
+	if err := s.rotateRemote(ctx, sc.DatabaseID, sc); err != nil {
+		log.Printf("databases: rotate remote backups of database %d: %v", sc.DatabaseID, err)
+	}
 	if firstErr != "" {
 		if err := s.d.Store.SetScheduleRun(ctx, sc.DatabaseID, now, firstErr); err != nil {
 			log.Printf("databases: record backup schedule: %v", err)
@@ -203,6 +206,9 @@ func (s *Service) rotateAll(ctx context.Context) {
 		}
 		if err := s.rotateLocal(context.WithoutCancel(ctx), sc.DatabaseID, sc.Local); err != nil {
 			log.Printf("databases: rotate backups of database %d: %v", sc.DatabaseID, err)
+		}
+		if err := s.rotateRemote(context.WithoutCancel(ctx), sc.DatabaseID, sc); err != nil {
+			log.Printf("databases: rotate remote backups of database %d: %v", sc.DatabaseID, err)
 		}
 		s.endJob(sc.DatabaseID)
 	}
