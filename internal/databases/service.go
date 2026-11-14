@@ -582,6 +582,12 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBa
 		if confirm != d.Name {
 			return ErrConfirm
 		}
+		if deleteBackups {
+			// Remote copies first: if one stays, nothing else is deleted.
+			if err := s.deleteLiveCopies(ctx, id, nil); err != nil {
+				return err
+			}
+		}
 		if err := s.d.Host.Remove(ctx, ContainerName(id)); err != nil {
 			return err
 		}
