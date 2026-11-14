@@ -1,7 +1,7 @@
 import { DiffEditor, type DiffOnMount } from '@monaco-editor/react';
 import { useContext, useEffect, useRef } from 'react';
 import { CODE_FONT_STACK, MONACO_THEME, ThemeModeContext } from '../app/theme';
-import '../monaco';
+import { EditorPending, useMonaco } from './MonacoGate';
 
 /** A read-only side-by-side diff of two text files (Monaco). */
 export function DiffViewer({
@@ -30,6 +30,8 @@ export function DiffViewer({
     },
     [],
   );
+  const monaco = useMonaco();
+  if (monaco !== 'ready') return <EditorPending height={height} status={monaco} />;
   return (
     <DiffEditor
       height={height}

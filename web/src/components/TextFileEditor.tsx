@@ -2,8 +2,8 @@ import Editor from '@monaco-editor/react';
 import type { editor as MonacoEditorApi } from 'monaco-editor';
 import { useContext } from 'react';
 import { MONACO_THEME, ThemeModeContext } from '../app/theme';
+import { EditorPending, useMonaco } from './MonacoGate';
 import { MONACO_OPTIONS } from './YamlEditor';
-import '../monaco';
 
 /**
  * The Volume Explorer's file editor.
@@ -56,7 +56,9 @@ export function TextFileEditor({
   // Monaco is themed separately from antd, so it takes the mode from context
   // rather than from a token (see `monacoThemeData` in app/theme.ts).
   const mode = useContext(ThemeModeContext);
+  const monaco = useMonaco();
 
+  if (monaco !== 'ready') return <EditorPending height={height ?? '100%'} status={monaco} />;
   return (
     <Editor
       height={height ?? '100%'}
