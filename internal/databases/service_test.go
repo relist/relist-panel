@@ -14,12 +14,17 @@ type rig struct {
 	host   *fakeHost
 	store  *Store
 	locked bool
+	// updateLocked is the Panel update lock; dataDir holds the Backups.
+	updateLocked bool
+	dataDir      string
 }
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
-	r := &rig{host: newFakeHost(), store: newStore(t)}
-	r.svc = New(Deps{Store: r.store, Host: r.host, Locked: func(context.Context) bool { return r.locked }})
+	r := &rig{host: newFakeHost(), store: newStore(t), dataDir: t.TempDir()}
+	r.svc = New(Deps{Store: r.store, Host: r.host, DataDir: r.dataDir,
+		Locked:       func(context.Context) bool { return r.locked },
+		UpdateLocked: func() bool { return r.updateLocked }})
 	return r
 }
 
