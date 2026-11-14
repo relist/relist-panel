@@ -380,6 +380,22 @@ func TestTickStartsNothingWhileLocked(t *testing.T) {
 	}
 }
 
+// A cleanup that is switched off never runs, however due its time is. The
+// check moved out of Due with the shared schedule package.
+func TestTickSkipsDisabledCleanup(t *testing.T) {
+	f := newCleaner(t)
+	ctx := context.Background()
+	c, _ := f.store.CleanupSettings(ctx)
+	yesterday := time.Date(2026, 11, 6, 3, 0, 0, 0, time.UTC)
+	c.LastRunAt = &yesterday
+	c.Enabled = false
+	_ = f.store.SaveCleanupSettings(ctx, c)
+	f.cleaner.tick(ctx)
+	if runs, _ := f.store.Runs(ctx, 10); len(runs) != 0 || f.cleaner.Running() {
+		t.Fatalf("a disabled cleanup ran: %+v", runs)
+	}
+}
+
 // I8: the Gate is checked again between repositories.
 func TestCleanupStopsBetweenRepositoriesWhenLocked(t *testing.T) {
 	f := newCleaner(t)
