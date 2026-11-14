@@ -35,6 +35,7 @@ type RestoreJSON struct {
 	BackupID    *int64     `json:"backupId"`
 	PreBackupID *int64     `json:"preBackupId"`
 	UploadName  string     `json:"uploadName"`
+	Target      string     `json:"target"`
 	Status      string     `json:"status"`
 	Error       string     `json:"error"`
 	Log         string     `json:"log"`
@@ -43,7 +44,7 @@ type RestoreJSON struct {
 }
 
 func restoreJSON(r Restore) RestoreJSON {
-	return RestoreJSON{ID: r.ID, Source: r.Source, BackupID: r.BackupID, PreBackupID: r.PreBackupID, UploadName: r.UploadName,
+	return RestoreJSON{ID: r.ID, Source: r.Source, BackupID: r.BackupID, PreBackupID: r.PreBackupID, UploadName: r.UploadName, Target: r.Target,
 		Status: r.Status, Error: r.Error, Log: r.Log, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt}
 }
 
@@ -184,6 +185,7 @@ func (a *API) startRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	var in struct {
 		BackupID int64  `json:"backupId"`
+		Target   string `json:"target"`
 		Confirm  string `json:"confirm"`
 	}
 	if !decode(w, r, &in) {
@@ -191,7 +193,7 @@ func (a *API) startRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	a.target(r, n)
 	audit.Detail(r.Context(), "backup", in.BackupID)
-	rs, err := a.s.RestoreFromBackup(r.Context(), n, in.BackupID, "", in.Confirm)
+	rs, err := a.s.RestoreFromBackup(r.Context(), n, in.BackupID, in.Target, in.Confirm)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -200,7 +202,7 @@ func (a *API) startRestore(w http.ResponseWriter, r *http.Request) {
 }
 
 // uploadRestore restores the raw request body, which is a .sql or .sql.gz
-// file; confirm and name come in the query.
+// file; target, confirm and name come in the query.
 func (a *API) uploadRestore(w http.ResponseWriter, r *http.Request) {
 	n, ok := id(w, r)
 	if !ok {
@@ -209,7 +211,7 @@ func (a *API) uploadRestore(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	a.target(r, n)
 	audit.Detail(r.Context(), "file", q.Get("name"))
-	rs, err := a.s.RestoreFromUpload(r.Context(), n, "", q.Get("confirm"), q.Get("name"), r.Body)
+	rs, err := a.s.RestoreFromUpload(r.Context(), n, q.Get("target"), q.Get("confirm"), q.Get("name"), r.Body)
 	if err != nil {
 		writeError(w, err)
 		return

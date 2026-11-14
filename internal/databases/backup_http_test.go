@@ -1,13 +1,15 @@
-//go:build phase2b_pending
-
 package databases
 
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -22,15 +24,15 @@ func (a *apiRig) seed(t *testing.T, name, engine, version string) {
 func TestBackupRoutes(t *testing.T) {
 	a := newAPIRig(t)
 	a.seed(t, "Shop", "postgres", "18")
-	a.dumps("pg_dumpall", "SELECT 1;\n")
+	a.dumps("pg_dump -U postgres", "SELECT 1;\n")
 
-	w := a.do("POST", "/api/databases/1/backups", `{"scope":{"all":true}}`)
+	w := a.do("POST", "/api/databases/1/backups", `{"all":true}`)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("POST = %d %s", w.Code, w.Body)
 	}
-	var created BackupJSON
+	var created []BackupJSON
 	_ = json.Unmarshal(w.Body.Bytes(), &created)
-	if created.ID != 1 || created.Status != JobRunning || !created.Scope.All || created.Trigger != "manual" {
+	if len(created) != 1 || created[0].ID != 1 || created[0].Status != JobRunning || created[0].Database != "app" || created[0].Trigger != "manual" {
 		t.Fatalf("created = %+v", created)
 	}
 
@@ -71,18 +73,31 @@ func TestBackupRouteErrors(t *testing.T) {
 	a := newAPIRig(t)
 	a.seed(t, "Shop", "postgres", "18")
 	a.dumps("psql -U postgres -At", "a\n")
-	if w := a.do("POST", "/api/databases/1/backups", `{"scope":{"databases":["nope"]}}`); w.Code != 400 || !strings.Contains(w.Body.String(), "no such database: nope") {
+	if w := a.do("POST", "/api/databases/1/backups", `{"databases":["nope"]}`); w.Code != 400 || !strings.Contains(w.Body.String(), "no such database: nope") {
 		t.Fatalf("unknown logical = %d %s", w.Code, w.Body)
 	}
-	if w := a.do("POST", "/api/databases/1/backups", `{"scope":{}}`); w.Code != 400 {
-		t.Fatalf("empty scope = %d %s", w.Code, w.Body)
+	if w := a.do("POST", "/api/databases/1/backups", `{}`); w.Code != 400 {
+		t.Fatalf("empty request = %d %s", w.Code, w.Body)
 	}
+	if w := a.do("POST", "/api/databases/1/backups", `{"databases":["-x"]}`); w.Code != 400 || !strings.Contains(w.Body.String(), "starting with -") {
+		t.Fatalf("unsafe name = %d %s", w.Code, w.Body)
+	}
+
 	a.do("POST", "/api/databases/1/stop", "")
-	if w := a.do("POST", "/api/databases/1/backups", `{"scope":{"all":true}}`); w.Code != 409 {
+	if w := a.do("POST", "/api/databases/1/backups", `{"all":true}`); w.Code != 409 {
 		t.Fatalf("stopped = %d %s", w.Code, w.Body)
 	}
 	if w := a.do("GET", "/api/databases/1/logical-databases", ""); w.Code != 409 {
 		t.Fatalf("logical while stopped = %d", w.Code)
+	}
+}
+
+func TestBackupRouteNothingToBackUp(t *testing.T) {
+	a := newAPIRig(t)
+	a.seed(t, "Shop", "mysql", "8.4")
+	a.dumps("mysql -uroot -N -e SHOW DATABASES", "information_schema\nmysql\n")
+	if w := a.do("POST", "/api/databases/1/backups", `{"all":true}`); w.Code != 400 || !strings.Contains(w.Body.String(), "there are no databases to back up") {
+		t.Fatalf("nothing = %d %s", w.Code, w.Body)
 	}
 }
 
@@ -93,9 +108,9 @@ func TestBackupRoutesRedis400(t *testing.T) {
 		{"POST", "/api/databases/1/backups"}, {"GET", "/api/databases/1/logical-databases"},
 		{"GET", "/api/databases/1/backups"}, {"GET", "/api/databases/1/restores"},
 		{"GET", "/api/databases/1/backups/1/download"}, {"DELETE", "/api/databases/1/backups/1"},
-		{"POST", "/api/databases/1/restores"}, {"POST", "/api/databases/1/restores/upload?confirm=Cache&name=a.sql"},
+		{"POST", "/api/databases/1/restores"}, {"POST", "/api/databases/1/restores/upload?confirm=Cache&name=a.sql&target=x"},
 	} {
-		if w := a.do(c[0], c[1], `{"scope":{"all":true},"backupId":1,"confirm":"Cache"}`); w.Code != 400 {
+		if w := a.do(c[0], c[1], `{"all":true,"backupId":1,"target":"x","confirm":"Cache"}`); w.Code != 400 {
 			t.Errorf("%s %s = %d %s", c[0], c[1], w.Code, w.Body)
 		}
 	}
@@ -104,28 +119,42 @@ func TestBackupRoutesRedis400(t *testing.T) {
 func TestRestoreUploadRoute(t *testing.T) {
 	a := newAPIRig(t)
 	a.seed(t, "Shop", "postgres", "18")
-	a.dumps("pg_dumpall", "PRE;\n")
-	got := a.captureRestore("psql -U postgres -d template1 -v", "")
+	a.dumps("pg_dump -U postgres", "PRE;\n")
+	a.adminSQL(pgAdmin, "postgres\n", nil)
+	got := a.captureRestore(pgRestore, "")
+	base := "/api/databases/1/restores/upload?name=a.sql"
 
-	if w := a.do("POST", "/api/databases/1/restores/upload?confirm=nope&name=a.sql", "SELECT 1;"); w.Code != 400 {
+	if w := a.do("POST", base+"&confirm=nope&target=app", "SELECT 1;"); w.Code != 400 {
 		t.Fatalf("wrong confirm = %d %s", w.Code, w.Body)
 	}
-	if len(*got) != 0 {
-		t.Fatal("a wrong confirm still ran the restore")
+	if w := a.do("POST", base+"&confirm=Shop", "SELECT 1;"); w.Code != 400 || !strings.Contains(w.Body.String(), "pick a database to restore into") {
+		t.Fatalf("no target = %d %s", w.Code, w.Body)
 	}
-	w := a.do("POST", "/api/databases/1/restores/upload?confirm=Shop&name=a.sql", "SELECT 1;")
+	if w := a.do("POST", base+"&confirm=Shop&target=template1", "SELECT 1;"); w.Code != 400 {
+		t.Fatalf("template1 = %d %s", w.Code, w.Body)
+	}
+	if w := a.do("POST", base+"&confirm=Shop&target=app", "CREATE ROLE x;\n"); w.Code != 400 || !strings.Contains(w.Body.String(), `line 1: \"CREATE ROLE x;\" is not allowed in an upload`) {
+		t.Fatalf("whole-instance = %d %s", w.Code, w.Body)
+	}
+	if w := a.do("POST", base+"&confirm=Shop&target=app", "\x1f\x8bnot gzip"); w.Code != 400 {
+		t.Fatalf("bad gzip = %d %s", w.Code, w.Body)
+	}
+	if len(*got) != 0 {
+		t.Fatal("a refused upload still ran the restore")
+	}
+	w := a.do("POST", base+"&confirm=Shop&target=app", "SELECT 1;")
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("upload = %d %s", w.Code, w.Body)
 	}
 	var rs RestoreJSON
 	_ = json.Unmarshal(w.Body.Bytes(), &rs)
-	if rs.Source != "upload" || rs.UploadName != "a.sql" || len(*got) != 1 || (*got)[0] != "SELECT 1;" {
+	if rs.Source != "upload" || rs.UploadName != "a.sql" || rs.Target != "app" || len(*got) != 1 || (*got)[0] != "SELECT 1;" {
 		t.Fatalf("restore = %+v, stdin %q", rs, *got)
 	}
 	w = a.do("GET", "/api/databases/1/restores", "")
 	var list []RestoreJSON
 	_ = json.Unmarshal(w.Body.Bytes(), &list)
-	if len(list) != 1 || list[0].Status != JobSucceeded || list[0].PreBackupID == nil {
+	if len(list) != 1 || list[0].Status != JobSucceeded || list[0].PreBackupID == nil || list[0].Target != "app" {
 		t.Fatalf("restores = %s", w.Body)
 	}
 }
@@ -133,25 +162,37 @@ func TestRestoreUploadRoute(t *testing.T) {
 func TestRestoreFromBackupRoute(t *testing.T) {
 	a := newAPIRig(t)
 	a.seed(t, "Shop", "postgres", "18")
-	a.dumps("pg_dumpall", "PRE;\n")
-	a.do("POST", "/api/databases/1/backups", `{"scope":{"all":true}}`)
-	a.captureRestore("psql -U postgres -d template1 -v", "")
-	if w := a.do("POST", "/api/databases/1/restores", `{"backupId":1,"confirm":"x"}`); w.Code != 400 {
+	a.dumps("pg_dump -U postgres", "PRE;\n")
+	a.do("POST", "/api/databases/1/backups", `{"all":true}`)
+	a.adminSQL(pgAdmin, "postgres\n", nil)
+	a.captureRestore(pgRestore, "")
+	if w := a.do("POST", "/api/databases/1/restores", `{"backupId":1,"target":"app","confirm":"x"}`); w.Code != 400 {
 		t.Fatalf("wrong confirm = %d", w.Code)
 	}
-	if w := a.do("POST", "/api/databases/1/restores", `{"backupId":99,"confirm":"Shop"}`); w.Code != 404 {
+	if w := a.do("POST", "/api/databases/1/restores", `{"backupId":1,"confirm":"Shop"}`); w.Code != 400 || !strings.Contains(w.Body.String(), "pick a database to restore into") {
+		t.Fatalf("no target = %d %s", w.Code, w.Body)
+	}
+	if w := a.do("POST", "/api/databases/1/restores", `{"backupId":99,"target":"app","confirm":"Shop"}`); w.Code != 404 {
 		t.Fatalf("unknown backup = %d", w.Code)
 	}
-	if w := a.do("POST", "/api/databases/1/restores", `{"backupId":1,"confirm":"Shop"}`); w.Code != http.StatusAccepted {
+	if w := a.do("POST", "/api/databases/1/restores", `{"backupId":1,"target":"app","confirm":"Shop"}`); w.Code != http.StatusAccepted {
 		t.Fatalf("restore = %d %s", w.Code, w.Body)
+	}
+	// A Backup of the earlier, several-databases format is not restorable.
+	old, _ := a.store.InsertBackup(context.Background(), Backup{DatabaseID: 1, Trigger: TriggerManual})
+	_ = os.MkdirAll(a.backupsDir(1), 0o700)
+	_ = os.WriteFile(filepath.Join(a.backupsDir(1), "old.sql.gz"), []byte("x"), 0o600)
+	_ = a.store.FinishBackup(context.Background(), old.ID, Backup{Status: JobSucceeded, FileName: "old.sql.gz", SHA256: "x"})
+	if w := a.do("POST", "/api/databases/1/restores", `{"backupId":`+fmt.Sprint(old.ID)+`,"target":"app","confirm":"Shop"}`); w.Code != 400 || !strings.Contains(w.Body.String(), "an earlier format") {
+		t.Fatalf("old format = %d %s", w.Code, w.Body)
 	}
 }
 
 func TestDeleteBodyDeleteBackups(t *testing.T) {
 	a := newAPIRig(t)
 	a.seed(t, "Shop", "postgres", "18")
-	a.dumps("pg_dumpall", "X;\n")
-	a.do("POST", "/api/databases/1/backups", `{"scope":{"all":true}}`)
+	a.dumps("pg_dump -U postgres", "X;\n")
+	a.do("POST", "/api/databases/1/backups", `{"all":true}`)
 	if w := a.do("DELETE", "/api/databases/1", `{"confirm":"Shop"}`); w.Code != 204 {
 		t.Fatalf("delete = %d %s", w.Code, w.Body)
 	}
@@ -168,7 +209,7 @@ func TestDeleteBodyDeleteBackups(t *testing.T) {
 		t.Fatalf("tombstone backups = %d", w.Code)
 	}
 	a.seed(t, "Other", "postgres", "17")
-	a.do("POST", "/api/databases/2/backups", `{"scope":{"all":true}}`)
+	a.do("POST", "/api/databases/2/backups", `{"all":true}`)
 	if w := a.do("DELETE", "/api/databases/2", `{"confirm":"Other","deleteBackups":true}`); w.Code != 204 {
 		t.Fatalf("delete = %d", w.Code)
 	}
@@ -180,7 +221,7 @@ func TestDeleteBodyDeleteBackups(t *testing.T) {
 func TestUpdateImageBackFirstRoute(t *testing.T) {
 	a := newAPIRig(t)
 	a.seed(t, "Shop", "postgres", "18")
-	a.dumps("pg_dumpall", "X;\n")
+	a.dumps("pg_dump -U postgres", "X;\n")
 	if w := a.do("POST", "/api/databases/1/update-image", ""); w.Code != 204 {
 		t.Fatalf("no body = %d %s", w.Code, w.Body)
 	}
@@ -199,8 +240,8 @@ func TestUpdateImageBackFirstRoute(t *testing.T) {
 func TestDownloadAudited(t *testing.T) {
 	a := newAPIRig(t)
 	a.seed(t, "Shop", "postgres", "18")
-	a.dumps("pg_dumpall", "X;\n")
-	a.do("POST", "/api/databases/1/backups", `{"scope":{"all":true}}`)
+	a.dumps("pg_dump -U postgres", "X;\n")
+	a.do("POST", "/api/databases/1/backups", `{"all":true}`)
 	if w := a.do("GET", "/api/databases/1/backups/1/download", ""); w.Code != 200 {
 		t.Fatalf("download = %d", w.Code)
 	}
