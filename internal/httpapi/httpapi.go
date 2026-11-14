@@ -295,7 +295,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	}
 	databaseService = newDatabaseService(db, d, dataDir, puDeps.MigrationLocked, func() bool {
 		return panelUpdates != nil && panelUpdates.Locked() // assigned just below
-	})
+	}, backupDestinations)
 	if databaseService != nil {
 		puDeps.DatabaseJobs = databaseService
 		backupDestinations.WithFileRemover(databaseService.RemoveFiles)

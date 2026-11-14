@@ -61,6 +61,7 @@ var adminOnly = []string{
 	"GET /api/databases/{id}/backups/{backupID}/download",
 	"DELETE /api/databases/{id}/backups/{backupID}",
 	"PUT /api/databases/{id}/backups/{backupID}/pin",
+	"POST /api/databases/{id}/backups/{backupID}/retry-upload",
 	"GET /api/databases/{id}/schedule",
 	"PUT /api/databases/{id}/schedule",
 	"GET /api/databases/{id}/restores",

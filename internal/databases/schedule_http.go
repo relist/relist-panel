@@ -2,11 +2,13 @@ package databases
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"time"
 
 	"relist-panel/internal/audit"
+	"relist-panel/internal/backupdest"
 	"relist-panel/internal/schedule"
 )
 
@@ -22,6 +24,7 @@ type ScheduleJSON struct {
 	LocalKeepDays   *int       `json:"localKeepDays"`
 	RemoteKeepCount *int       `json:"remoteKeepCount"`
 	RemoteKeepDays  *int       `json:"remoteKeepDays"`
+	DestinationID   *int64     `json:"destinationId"`
 	LastRunAt       *time.Time `json:"lastRunAt"`
 	LastError       string     `json:"lastError"`
 }
@@ -38,7 +41,7 @@ func (a *API) scheduleReply(sc Schedule) scheduleReply {
 	now := a.s.d.Now()
 	out := scheduleReply{ScheduleJSON: ScheduleJSON{Enabled: sc.Enabled, Days: sc.Days, Minute: sc.Minute, All: sc.All,
 		Databases: sc.Databases, LocalKeepCount: sc.Local.Count, LocalKeepDays: sc.Local.Days,
-		RemoteKeepCount: sc.Remote.Count, RemoteKeepDays: sc.Remote.Days, LastRunAt: sc.LastRunAt, LastError: sc.LastError},
+		RemoteKeepCount: sc.Remote.Count, RemoteKeepDays: sc.Remote.Days, DestinationID: sc.DestinationID, LastRunAt: sc.LastRunAt, LastError: sc.LastError},
 		TimeZone: schedule.TimeZone(now)}
 	if sc.Enabled {
 		out.Next = schedule.Next(now, ruleOf(sc))
@@ -70,13 +73,31 @@ func (a *API) putSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	a.target(r, n)
 	sc := Schedule{DatabaseID: n, Enabled: in.Enabled, Days: in.Days, Minute: in.Minute, All: in.All, Databases: in.Databases,
-		Local: Keep{Count: in.LocalKeepCount, Days: in.LocalKeepDays}, Remote: Keep{Count: in.RemoteKeepCount, Days: in.RemoteKeepDays}}
+		Local: Keep{Count: in.LocalKeepCount, Days: in.LocalKeepDays}, Remote: Keep{Count: in.RemoteKeepCount, Days: in.RemoteKeepDays}, DestinationID: in.DestinationID}
 	saved, err := a.s.SaveSchedule(r.Context(), sc)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, a.scheduleReply(saved))
+}
+
+func (a *API) retryUpload(w http.ResponseWriter, r *http.Request) {
+	n, ok := id(w, r)
+	if !ok {
+		return
+	}
+	bid, ok := backupID(w, r)
+	if !ok {
+		return
+	}
+	a.target(r, n)
+	if err := a.s.RetryUpload(r.Context(), n, bid); err != nil {
+		writeError(w, err)
+		return
+	}
+	audit.Detail(r.Context(), "backup", bid)
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (a *API) pinBackup(w http.ResponseWriter, r *http.Request) {
@@ -163,6 +184,16 @@ func (s *Service) SaveSchedule(ctx context.Context, sc Schedule) (Schedule, erro
 		}
 		slices.Sort(sc.Databases)
 		sc.Databases = slices.Compact(sc.Databases)
+	}
+	if sc.DestinationID != nil {
+		if s.d.Destinations == nil {
+			return Schedule{}, ErrInvalidSchedule{ErrNoDestinations.Error()}
+		}
+		if _, _, err := s.d.Destinations.Open(ctx, *sc.DestinationID); errors.Is(err, backupdest.ErrNotFound) {
+			return Schedule{}, ErrInvalidSchedule{"no such Backup destination"}
+		} else if err != nil {
+			return Schedule{}, err
+		}
 	}
 	if err := s.d.Store.SaveSchedule(ctx, sc); err != nil {
 		return Schedule{}, err
