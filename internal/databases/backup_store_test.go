@@ -3,7 +3,6 @@ package databases
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 	"time"
 )
@@ -21,7 +20,7 @@ func TestBackupRoundTrip(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 	d := seedDB(t, s, "Shop")
-	b, err := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, Scope: Scope{Databases: []string{"a"}}})
+	b, err := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, LogicalName: "a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,17 +34,17 @@ func TestBackupRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got.Scope, Scope{Databases: []string{"a"}}) || got.Status != JobSucceeded || got.Size != 12 ||
+	if got.LogicalName != "a" || got.Status != JobSucceeded || got.Size != 12 ||
 		got.SHA256 != "abc" || got.FileName != "f.sql.gz" || got.Log != "log" || got.FinishedAt == nil || got.Trigger != TriggerManual {
 		t.Fatalf("got = %+v", got)
 	}
-	all, err := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerPreRestore, Scope: Scope{All: true}})
+	all, err := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerPreRestore, LogicalName: "app"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.GetBackup(ctx, d.ID, all.ID)
-	if !got.Scope.All || len(got.Scope.Databases) != 0 {
-		t.Fatalf("scope = %+v", got.Scope)
+	if got.LogicalName != "app" {
+		t.Fatalf("logical name = %q", got.LogicalName)
 	}
 }
 
@@ -57,7 +56,7 @@ func TestListBackupsNewestFirst(t *testing.T) {
 	s.now = func() time.Time { now = now.Add(time.Second); return now }
 	var ids []int64
 	for i := 0; i < 3; i++ {
-		b, err := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, Scope: Scope{All: true}})
+		b, err := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, LogicalName: "app"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -74,7 +73,7 @@ func TestGetBackupOtherDatabase404(t *testing.T) {
 	ctx := context.Background()
 	d1 := seedDB(t, s, "One")
 	d2, _ := s.Insert(ctx, Database{Name: "Two", Slug: "two", Engine: "postgres", Version: "18", Password: "pw"})
-	b, _ := s.InsertBackup(ctx, Backup{DatabaseID: d1.ID, Trigger: TriggerManual, Scope: Scope{All: true}})
+	b, _ := s.InsertBackup(ctx, Backup{DatabaseID: d1.ID, Trigger: TriggerManual, LogicalName: "app"})
 	if _, err := s.GetBackup(ctx, d2.ID, b.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
@@ -84,8 +83,8 @@ func TestFailRunning(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 	d := seedDB(t, s, "Shop")
-	b, _ := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, Scope: Scope{All: true}})
-	done, _ := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, Scope: Scope{All: true}})
+	b, _ := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, LogicalName: "app"})
+	done, _ := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, LogicalName: "app"})
 	_ = s.FinishBackup(ctx, done.ID, Backup{Status: JobSucceeded})
 	r, _ := s.InsertRestore(ctx, Restore{DatabaseID: d.ID, Source: "upload", UploadName: "x.sql"})
 	failed, err := s.FailRunning(ctx, "the panel stopped during this run")
@@ -113,9 +112,9 @@ func TestRestoreRoundTrip(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 	d := seedDB(t, s, "Shop")
-	b, _ := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, Scope: Scope{All: true}})
-	r, err := s.InsertRestore(ctx, Restore{DatabaseID: d.ID, Source: "backup", BackupID: &b.ID})
-	if err != nil || r.Status != JobRunning {
+	b, _ := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, LogicalName: "app"})
+	r, err := s.InsertRestore(ctx, Restore{DatabaseID: d.ID, Source: "backup", BackupID: &b.ID, Target: "app_copy"})
+	if err != nil || r.Status != JobRunning || r.Target != "app_copy" {
 		t.Fatalf("restore = %+v, %v", r, err)
 	}
 	pre := b.ID
@@ -123,7 +122,7 @@ func TestRestoreRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	rs, _ := s.ListRestores(ctx, d.ID)
-	if len(rs) != 1 || rs[0].BackupID == nil || *rs[0].BackupID != b.ID || rs[0].PreBackupID == nil || rs[0].Status != JobFailed || rs[0].Log != "l" {
+	if len(rs) != 1 || rs[0].BackupID == nil || *rs[0].BackupID != b.ID || rs[0].PreBackupID == nil || rs[0].Status != JobFailed || rs[0].Log != "l" || rs[0].Target != "app_copy" {
 		t.Fatalf("restores = %+v", rs)
 	}
 }
@@ -148,7 +147,7 @@ func TestDeleteDatabaseCascades(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 	d := seedDB(t, s, "Shop")
-	b, _ := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, Scope: Scope{All: true}})
+	b, _ := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, LogicalName: "app"})
 	_, _ = s.InsertRestore(ctx, Restore{DatabaseID: d.ID, Source: "upload"})
 	if err := s.Delete(ctx, d.ID); err != nil {
 		t.Fatal(err)

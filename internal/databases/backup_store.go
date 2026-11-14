@@ -3,7 +3,6 @@ package databases
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"time"
 )
@@ -22,17 +21,12 @@ const (
 	JobFailed    = "failed"
 )
 
-// Scope is what a Backup covers: the whole instance, or named logical databases.
-type Scope struct {
-	All       bool     `json:"all,omitempty"`
-	Databases []string `json:"databases,omitempty"`
-}
-
-// Backup is one gzipped dump file of a Database.
+// Backup is one gzipped dump file of one logical database of a Database.
+// LogicalName is empty for a Backup of the earlier, whole-instance format.
 type Backup struct {
 	ID, DatabaseID int64
 	Trigger        string
-	Scope          Scope
+	LogicalName    string
 	Status         string
 	Error, Log     string
 	FileName       string
@@ -49,26 +43,23 @@ type Restore struct {
 	BackupID           *int64
 	PreBackupID        *int64
 	UploadName         string
+	Target             string // the logical database it restored into
 	Status, Error, Log string
 	StartedAt          time.Time
 	FinishedAt         *time.Time
 }
 
-const backupColumns = `id, database_id, trigger, scope, status, error, log, file_name, size, sha256, started_at, finished_at`
+const backupColumns = `id, database_id, trigger, logical_name, status, error, log, file_name, size, sha256, started_at, finished_at`
 
 func scanBackup(row interface{ Scan(...any) error }) (Backup, error) {
 	var b Backup
-	var scope string
 	var started int64
 	var finished sql.NullInt64
-	err := row.Scan(&b.ID, &b.DatabaseID, &b.Trigger, &scope, &b.Status, &b.Error, &b.Log, &b.FileName, &b.Size, &b.SHA256, &started, &finished)
+	err := row.Scan(&b.ID, &b.DatabaseID, &b.Trigger, &b.LogicalName, &b.Status, &b.Error, &b.Log, &b.FileName, &b.Size, &b.SHA256, &started, &finished)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Backup{}, ErrNotFound
 	}
 	if err != nil {
-		return Backup{}, err
-	}
-	if err := json.Unmarshal([]byte(scope), &b.Scope); err != nil {
 		return Backup{}, err
 	}
 	b.StartedAt = time.UnixMilli(started)
@@ -81,13 +72,10 @@ func scanBackup(row interface{ Scan(...any) error }) (Backup, error) {
 
 // InsertBackup stores b as running, started now.
 func (s *Store) InsertBackup(ctx context.Context, b Backup) (Backup, error) {
-	scope, err := json.Marshal(b.Scope)
-	if err != nil {
-		return Backup{}, err
-	}
+	// scope is a column of the first schema; it is written and never read.
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO database_backups (database_id, trigger, scope, status, started_at)
-		VALUES (?, ?, ?, ?, ?)`, b.DatabaseID, b.Trigger, string(scope), JobRunning, s.now().UnixMilli())
+		INSERT INTO database_backups (database_id, trigger, scope, logical_name, status, started_at)
+		VALUES (?, ?, '{}', ?, ?, ?)`, b.DatabaseID, b.Trigger, b.LogicalName, JobRunning, s.now().UnixMilli())
 	if err != nil {
 		return Backup{}, err
 	}
@@ -149,13 +137,13 @@ func (s *Store) DeleteBackup(ctx context.Context, id int64) error {
 	return nil
 }
 
-const restoreColumns = `id, database_id, source, backup_id, pre_backup_id, upload_name, status, error, log, started_at, finished_at`
+const restoreColumns = `id, database_id, source, backup_id, pre_backup_id, upload_name, target, status, error, log, started_at, finished_at`
 
 func scanRestore(row interface{ Scan(...any) error }) (Restore, error) {
 	var r Restore
 	var backup, pre, finished sql.NullInt64
 	var started int64
-	err := row.Scan(&r.ID, &r.DatabaseID, &r.Source, &backup, &pre, &r.UploadName, &r.Status, &r.Error, &r.Log, &started, &finished)
+	err := row.Scan(&r.ID, &r.DatabaseID, &r.Source, &backup, &pre, &r.UploadName, &r.Target, &r.Status, &r.Error, &r.Log, &started, &finished)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Restore{}, ErrNotFound
 	}
@@ -179,8 +167,8 @@ func scanRestore(row interface{ Scan(...any) error }) (Restore, error) {
 // InsertRestore stores r as running, started now.
 func (s *Store) InsertRestore(ctx context.Context, r Restore) (Restore, error) {
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO database_restores (database_id, source, backup_id, upload_name, status, started_at)
-		VALUES (?, ?, ?, ?, ?, ?)`, r.DatabaseID, r.Source, r.BackupID, r.UploadName, JobRunning, s.now().UnixMilli())
+		INSERT INTO database_restores (database_id, source, backup_id, upload_name, target, status, started_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, r.DatabaseID, r.Source, r.BackupID, r.UploadName, r.Target, JobRunning, s.now().UnixMilli())
 	if err != nil {
 		return Restore{}, err
 	}

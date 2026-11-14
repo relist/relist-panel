@@ -2,24 +2,38 @@ package databases
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 )
 
 // ErrNoBackups is returned for an engine that has no Backups (Redis).
 var ErrNoBackups = errors.New("this engine has no backups")
 
-// Dumper holds one SQL engine's commands for listing, dumping and restoring.
-// They run by `docker exec` in the Database's own container, so the tool
-// always matches the server version (ADR-0039).
+var (
+	ErrUnsafeName      = errors.New("database names starting with - are not supported")
+	ErrBadTarget       = errors.New("pick a database to restore into: letters, digits, _ and -, at most 63 characters")
+	ErrNothingToBackUp = errors.New("there are no databases to back up")
+	ErrNotRestorable   = errors.New("this Backup holds several databases (an earlier format); download it and restore by hand")
+)
+
+// Dumper holds one SQL engine's commands for listing, dumping and restoring
+// one logical database. They run by `docker exec` in the Database's own
+// container, so the tool always matches the server version (ADR-0039).
 type Dumper interface {
-	ListCmd() []string            // prints one logical database per line
-	SystemDatabases() []string    // hidden from the list of logical databases
-	DumpCmds(s Scope) [][]string  // run in order, their outputs concatenated
-	RestoreCmd() []string         // reads SQL on stdin
-	Env(password string) []string // the password, as the tools read it
-	// RestoreFailed reports whether a restore that exited 0 still failed,
-	// from its stderr.
-	RestoreFailed(stderr string) bool
+	ListCmd() []string         // prints one logical database per line
+	SystemDatabases() []string // hidden from the list of logical databases
+	// DumpCmd and RestoreCmd return the command and the env it needs beside
+	// Env(password): PGDATABASE for postgres, nothing for mysql/mariadb.
+	DumpCmd(db string) (cmd, env []string) // plain SQL of one database on stdout
+	RestoreCmd(target string) (cmd, env []string)
+	AdminCmd() []string // reads SQL on stdin; stops at the first error
+	Env(password string) []string
+	// InspectSQL prints, for target, one line "<owner>" (postgres) or
+	// "<charset>\t<collation>" (mysql/mariadb), or nothing when it does not exist.
+	InspectSQL(target string) string
+	// ReplaceSQL drops and recreates target. prev is InspectSQL's output
+	// ("" = the target is new).
+	ReplaceSQL(target, prev string) string
 }
 
 // DumperFor returns the Dumper of an engine, ErrNoBackups for Redis.
@@ -35,62 +49,83 @@ func DumperFor(engine string) (Dumper, error) {
 	return nil, ErrNoBackups
 }
 
+// checkName refuses a logical database name that a tool would read as an
+// option.
+func checkName(name string) error {
+	if strings.HasPrefix(name, "-") {
+		return ErrUnsafeName
+	}
+	return nil
+}
+
+var (
+	targetPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]{0,62}$`)
+	// neverTarget are never a restore target, whatever the engine.
+	neverTarget = []string{"template0", "template1", "information_schema", "performance_schema", "mysql", "sys"}
+)
+
+// checkTarget validates a restore target. replace is true when it is one of
+// existing, false when the restore creates it.
+func checkTarget(name string, existing []string) (replace bool, err error) {
+	if !targetPattern.MatchString(name) {
+		return false, ErrBadTarget
+	}
+	for _, n := range neverTarget {
+		if strings.EqualFold(name, n) {
+			return false, ErrBadTarget
+		}
+	}
+	for _, e := range existing {
+		if e == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// pgIdent quotes a Postgres identifier; pgLit a literal.
+func pgIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
+func pgLit(s string) string   { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+
+// myIdent quotes a MySQL identifier; myLit a literal, where \ is an escape.
+func myIdent(s string) string { return "`" + strings.ReplaceAll(s, "`", "``") + "`" }
+func myLit(s string) string {
+	return "'" + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), "'", "''") + "'"
+}
+
 type pgDumper struct{}
 
 func (pgDumper) ListCmd() []string {
 	return []string{"psql", "-U", "postgres", "-At", "-c", "SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY 1"}
 }
 
-func (pgDumper) SystemDatabases() []string { return []string{"postgres"} }
+func (pgDumper) SystemDatabases() []string { return nil }
 
-// DumpCmds: the whole instance is pg_dumpall, with its roles. A selection is
-// one pg_dump per database and no roles: restoring roles beside some
-// databases would DROP ROLE roles that other databases still use.
-func (pgDumper) DumpCmds(s Scope) [][]string {
-	if s.All {
-		return [][]string{{"pg_dumpall", "-U", "postgres", "--clean", "--if-exists"}}
-	}
-	var out [][]string
-	for _, db := range s.Databases {
-		out = append(out, []string{"pg_dump", "-U", "postgres", "--create", "--clean", "--if-exists", db})
-	}
-	return out
+func (pgDumper) DumpCmd(db string) (cmd, env []string) {
+	return []string{"pg_dump", "-U", "postgres"}, []string{"PGDATABASE=" + db}
 }
 
-func (pgDumper) RestoreCmd() []string {
-	return []string{"psql", "-U", "postgres", "-d", "template1", "-v", "ON_ERROR_STOP=0"}
+func (pgDumper) RestoreCmd(target string) (cmd, env []string) {
+	return []string{"psql", "-U", "postgres", "-X", "-q", "-v", "ON_ERROR_STOP=1"}, []string{"PGDATABASE=" + target}
+}
+
+func (pgDumper) AdminCmd() []string {
+	return []string{"psql", "-U", "postgres", "-X", "-At", "-v", "ON_ERROR_STOP=1", "-d", "template1"}
 }
 
 func (pgDumper) Env(password string) []string { return []string{"PGPASSWORD=" + password} }
 
-// pgTolerated are the errors a pg_dumpall file always causes on a running
-// cluster, and so never fail a restore: it emits CREATE ROLE postgres and
-// DROP ROLE for the role the restore runs as, and it drops and recreates
-// template1, the database the restore is connected to.
-var pgTolerated = []string{
-	`role "postgres" already exists`,
-	"current user cannot be dropped",
-	"cannot drop the currently open database",
-	`database "template1" already exists`,
+func (pgDumper) InspectSQL(target string) string {
+	return "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = " + pgLit(target) + ";"
 }
 
-// RestoreFailed is true when stderr has any ERROR line besides pgTolerated.
-func (pgDumper) RestoreFailed(stderr string) bool {
-	for _, line := range strings.Split(stderr, "\n") {
-		if !strings.Contains(line, "ERROR:") {
-			continue
-		}
-		known := false
-		for _, t := range pgTolerated {
-			if strings.Contains(line, t) {
-				known = true
-			}
-		}
-		if !known {
-			return true
-		}
+func (pgDumper) ReplaceSQL(target, prev string) string {
+	owner := strings.TrimSpace(prev)
+	if owner == "" {
+		owner = "postgres"
 	}
-	return false
+	return "DROP DATABASE IF EXISTS " + pgIdent(target) + " WITH (FORCE);\n" +
+		"CREATE DATABASE " + pgIdent(target) + " TEMPLATE template0 OWNER " + pgIdent(owner) + ";\n"
 }
 
 type mysqlDumper struct{ client, dump string }
@@ -103,20 +138,33 @@ func (mysqlDumper) SystemDatabases() []string {
 	return []string{"information_schema", "performance_schema", "mysql", "sys"}
 }
 
-func (m mysqlDumper) DumpCmds(s Scope) [][]string {
-	common := []string{"--single-transaction", "--routines", "--events", "--triggers"}
-	if s.All {
-		return [][]string{append([]string{m.dump, "-uroot", "--all-databases"}, common...)}
-	}
-	cmd := append([]string{m.dump, "-uroot", "--databases"}, s.Databases...)
-	cmd = append(cmd, "--add-drop-database")
-	return [][]string{append(cmd, common...)}
+func (m mysqlDumper) DumpCmd(db string) (cmd, env []string) {
+	return []string{m.dump, "-uroot", "--single-transaction", "--routines", "--events", "--triggers", db}, nil
 }
 
-func (m mysqlDumper) RestoreCmd() []string { return []string{m.client, "-uroot"} }
+func (m mysqlDumper) RestoreCmd(target string) (cmd, env []string) {
+	return []string{m.client, "-uroot", "--database=" + target}, nil
+}
+
+func (m mysqlDumper) AdminCmd() []string { return []string{m.client, "-uroot", "-N"} }
 
 func (mysqlDumper) Env(password string) []string { return []string{"MYSQL_PWD=" + password} }
 
-// RestoreFailed is false: mysql and mariadb stop at the first error and exit
-// non-zero.
-func (mysqlDumper) RestoreFailed(string) bool { return false }
+func (mysqlDumper) InspectSQL(target string) string {
+	return "SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = " + myLit(target) + ";"
+}
+
+var charsetWord = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+
+func (mysqlDumper) ReplaceSQL(target, prev string) string {
+	out := "DROP DATABASE IF EXISTS " + myIdent(target) + ";\nCREATE DATABASE " + myIdent(target)
+	if cs, coll, ok := strings.Cut(strings.TrimSpace(prev), "\t"); ok && charsetWord.MatchString(cs) && charsetWord.MatchString(coll) {
+		out += " CHARACTER SET " + cs + " COLLATE " + coll
+	}
+	return out + ";\n"
+}
+
+// execEnv is the env of a command: the password, then the command's own.
+func execEnv(dp Dumper, password string, extra []string) []string {
+	return append(dp.Env(password), extra...)
+}
