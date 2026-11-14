@@ -20,6 +20,7 @@ import (
 	"relist-panel/internal/composes"
 	"relist-panel/internal/config"
 	"relist-panel/internal/database"
+	"relist-panel/internal/datadirlock"
 	"relist-panel/internal/dockerexec"
 	"relist-panel/internal/dockernet"
 	"relist-panel/internal/domains"
@@ -64,6 +65,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// Before anything touches Docker or the data directory: a second server
+	// on the same data dir must leave panel.db and the terminal shells alone.
+	dataLock, err := datadirlock.Acquire(cfg.DataDir)
+	if errors.Is(err, datadirlock.ErrHeld) {
+		log.Fatalf("%v; run a command such as `relist-panel help` instead of starting another server", err)
+	} else if err != nil {
+		log.Fatal(err)
+	}
+	defer dataLock.Release()
 
 	// Cancelled on SIGINT/SIGTERM: the sampling loop stops first, and the
 	// server shutdown below follows it.
