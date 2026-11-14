@@ -33,6 +33,8 @@ import type {
   DatabaseAction,
   DatabaseBackup,
   DatabaseRestore,
+  DatabaseSchedule,
+  DatabaseScheduleState,
   DatabaseCredentials,
   DatabaseEngine,
   DatabaseInput,
@@ -618,6 +620,11 @@ export const api = {
     request<DatabaseBackup[]>(`/api/databases/${id}/backups`, jsonInit('POST', body)),
   deleteDatabaseBackup: (id: number, backupId: number) =>
     request<void>(`/api/databases/${id}/backups/${backupId}`, { method: 'DELETE' }),
+  getDatabaseSchedule: (id: number) => request<DatabaseScheduleState>(`/api/databases/${id}/schedule`),
+  saveDatabaseSchedule: (id: number, input: Omit<DatabaseSchedule, 'lastError' | 'lastRunAt'>) =>
+    request<DatabaseScheduleState>(`/api/databases/${id}/schedule`, jsonInit('PUT', input)),
+  pinDatabaseBackup: (id: number, backupId: number, pinned: boolean) =>
+    request<void>(`/api/databases/${id}/backups/${backupId}/pin`, jsonInit('PUT', { pinned })),
   listDatabaseRestores: (id: number) => request<DatabaseRestore[]>(`/api/databases/${id}/restores`),
   restoreDatabase: (id: number, backupId: number, target: string, confirm: string) =>
     request<DatabaseRestore>(`/api/databases/${id}/restores`, jsonInit('POST', { backupId, confirm, target })),

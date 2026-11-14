@@ -1,0 +1,102 @@
+// @vitest-environment jsdom
+import '../test/dom-setup';
+
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { SWRConfig } from 'swr';
+import { App } from 'antd';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { Database, DatabaseScheduleState } from '../data/types';
+import { DatabaseScheduleCard } from './DatabaseScheduleCard';
+
+const api = vi.hoisted(() => ({
+  databaseLogicalDatabases: vi.fn(),
+  getDatabaseSchedule: vi.fn(),
+  saveDatabaseSchedule: vi.fn(),
+}));
+
+vi.mock('../data/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../data/api')>()),
+  api,
+}));
+
+const shop = { deleted: false, engine: 'postgres', id: 1, job: '', status: 'running' } as Database;
+
+function state(over: Partial<DatabaseScheduleState> = {}): DatabaseScheduleState {
+  return {
+    all: true,
+    databases: [],
+    days: ['mon', 'thu'],
+    enabled: false,
+    lastError: '',
+    lastRunAt: null,
+    localKeepCount: 7,
+    localKeepDays: null,
+    minute: 150,
+    next: null,
+    remoteKeepCount: 30,
+    remoteKeepDays: null,
+    timeZone: 'UTC (UTC+00:00)',
+    ...over,
+  };
+}
+
+function renderCard() {
+  return render(
+    <SWRConfig value={{ provider: () => new Map() }}>
+      <App>
+        <DatabaseScheduleCard db={shop} />
+      </App>
+    </SWRConfig>,
+  );
+}
+
+describe('DatabaseScheduleCard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getDatabaseSchedule.mockResolvedValue(state());
+    api.saveDatabaseSchedule.mockResolvedValue(state({ enabled: true }));
+    api.databaseLogicalDatabases.mockResolvedValue({ databases: ['a', 'app'] });
+  });
+
+  it('saves the schedule it shows, with the days, the time and the local keep rules', async () => {
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(await screen.findByRole('switch', { name: 'Scheduled backups' }));
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }));
+    await waitFor(() =>
+      expect(api.saveDatabaseSchedule).toHaveBeenCalledWith(1, {
+        all: true,
+        databases: [],
+        days: ['mon', 'thu'],
+        enabled: true,
+        localKeepCount: 7,
+        localKeepDays: null,
+        minute: 150,
+        remoteKeepCount: 30,
+        remoteKeepDays: null,
+      }),
+    );
+    expect(screen.getByText('Panel time zone: UTC (UTC+00:00)')).toBeTruthy();
+  });
+
+  it('sends null for a keep field that is cleared', async () => {
+    const user = userEvent.setup();
+    renderCard();
+    const field = await screen.findByRole('spinbutton', { name: 'Last N backups' });
+    await user.clear(field);
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }));
+    await waitFor(() => expect(api.saveDatabaseSchedule).toHaveBeenCalled());
+    expect(api.saveDatabaseSchedule.mock.calls[0][1].localKeepCount).toBeNull();
+  });
+
+  it('shows the last error as a warning and the next run', async () => {
+    api.getDatabaseSchedule.mockResolvedValue(
+      state({ enabled: true, lastError: 'skipped: the Database was not running', next: '2026-11-16T03:00:00Z' }),
+    );
+    renderCard();
+    expect(await screen.findByText('skipped: the Database was not running')).toBeTruthy();
+    expect(screen.getByText(/Next run/)).toBeTruthy();
+  });
+});
