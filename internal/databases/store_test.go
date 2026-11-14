@@ -107,3 +107,34 @@ func TestStoreSetters(t *testing.T) {
 		t.Fatalf("after delete err = %v", err)
 	}
 }
+
+// Two Databases answering to one readable alias would split connections
+// between them, so the store refuses a repeated slug; the fallback "x" has no
+// alias and may repeat.
+func TestStoreSlugUniqueExceptFallback(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	ins := func(name, slug string) error {
+		_, err := s.Insert(ctx, Database{Name: name, Slug: slug, Engine: "redis", Version: "8", Password: "x"})
+		return err
+	}
+	if err := ins("Shop", "shop"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ins("Shop!", "shop"); !errors.Is(err, ErrDuplicateName) {
+		t.Fatalf("repeated slug err = %v, want ErrDuplicateName", err)
+	}
+	if err := ins("ฐาน", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ins("ข้อมูล", "x"); err != nil {
+		t.Fatalf("second fallback slug: %v", err)
+	}
+	other, err := s.Insert(ctx, Database{Name: "Blog", Slug: "blog", Engine: "redis", Version: "8", Password: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Rename(ctx, other.ID, "Shop?", "shop"); !errors.Is(err, ErrDuplicateName) {
+		t.Fatalf("rename onto a taken slug err = %v", err)
+	}
+}
