@@ -225,6 +225,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	// registryCleaner is declared here so the update's WaitingOn can name a
 	// running cleanup; it is set further down, once the Registry is wired.
 	var registryCleaner *registry.Cleaner
+	var databaseService *databases.Service
 	puDeps := panelupdate.Deps{
 		Store: panelupdate.NewStore(db), Version: d.Version, ManifestURL: panelupdate.ManifestURLFromEnv(),
 		Self: d.PanelSelf, Runner: d.PanelRunner, Updater: d.PanelUpdater,
@@ -234,7 +235,11 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			if registryCleaner != nil { // set below, before any update can run
 				cleaning = registryCleaner.Running
 			}
-			return updateWaitingOn(ctx, db, queue, cleaning)
+			var databaseBusy func() bool
+			if databaseService != nil {
+				databaseBusy = databaseService.Busy
+			}
+			return updateWaitingOn(ctx, db, queue, cleaning, databaseBusy)
 		},
 		MigrationLocked: func(ctx context.Context) (bool, error) {
 			if migrationOptions == nil {
@@ -286,7 +291,12 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		})
 		puDeps.RegistryCleanup = registryCleaner
 	}
-	databaseService := newDatabaseService(db, d, puDeps.MigrationLocked)
+	databaseService = newDatabaseService(db, d, dataDir, puDeps.MigrationLocked, func() bool {
+		return panelUpdates != nil && panelUpdates.Locked() // assigned just below
+	})
+	if databaseService != nil {
+		puDeps.DatabaseJobs = databaseService
+	}
 	panelUpdates = panelupdate.New(puDeps)
 	if err := panelUpdates.StartLocked(ctx); err != nil {
 		log.Printf("panelupdate: start locked: %v", err)
@@ -376,6 +386,9 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		worker.Add(1)
 		go func() {
 			defer worker.Done()
+			if err := databaseService.Startup(ctx); err != nil {
+				log.Printf("databases: finish interrupted backups: %v", err)
+			}
 			if err := databaseService.ReconcileAll(ctx); err != nil {
 				log.Printf("databases: reconcile at start: %v", err)
 			}
@@ -539,12 +552,16 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 // updateWaitingOn says what a quiescing Panel update waits for. It is asked
 // only while the Deployment queue, the scan queue or a Registry cleanup is
 // not idle, so with no Deployment and no cleanup running the wait is the scan
-// worker's current task. cleaning is nil when there is no Registry.
-func updateWaitingOn(ctx context.Context, db *sql.DB, queue *deployments.Queue, cleaning func() bool) string {
+// worker's current task. cleaning is nil when there is no Registry, and
+// databaseBusy when there are no Databases.
+func updateWaitingOn(ctx context.Context, db *sql.DB, queue *deployments.Queue, cleaning, databaseBusy func() bool) string {
 	composeID, number, ok := queue.Running()
 	if !ok {
 		if cleaning != nil && cleaning() {
 			return "a Registry cleanup"
+		}
+		if databaseBusy != nil && databaseBusy() {
+			return "a Database backup or restore"
 		}
 		return "a vulnerability scan"
 	}

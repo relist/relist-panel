@@ -495,6 +495,13 @@ func (d *fakeDatabases) StopAll(context.Context) error {
 	return nil
 }
 
+func (d *fakeDatabases) WaitIdle(context.Context) error {
+	d.docker.mu.Lock()
+	defer d.docker.mu.Unlock()
+	d.docker.Calls = append(d.docker.Calls, "databases-wait-idle")
+	return nil
+}
+
 func (d *fakeDatabases) StartWanted(context.Context) error {
 	d.started++
 	if d.startWantedFn != nil {
@@ -517,6 +524,26 @@ func TestStartStopsDatabasesAfterComposes(t *testing.T) {
 		}
 	}
 	if want := []string{"compose-stop", "databases-stop-all", "run-maintenance"}; !slices.Equal(order, want) {
+		t.Fatalf("order = %q, want %q", order, want)
+	}
+}
+
+// A Database Backup or restore in progress finishes before any Compose is
+// stopped: queue idle, registry idle, database jobs idle, then the Composes.
+func TestStartWaitsForDatabaseJobs(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	f.src.d.Databases = &fakeDatabases{docker: f.docker}
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, c := range f.docker.Calls {
+		switch {
+		case strings.HasPrefix(c, "compose-stop"), c == "databases-wait-idle", c == "databases-stop-all":
+			order = append(order, strings.Fields(c)[0])
+		}
+	}
+	if want := []string{"databases-wait-idle", "compose-stop", "databases-stop-all"}; !slices.Equal(order, want) {
 		t.Fatalf("order = %q, want %q", order, want)
 	}
 }

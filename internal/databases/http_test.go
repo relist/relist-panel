@@ -19,6 +19,8 @@ type apiRig struct {
 	h      http.Handler
 	mu     sync.Mutex
 	events []audit.Event
+	// last is the audit event of the latest request, as the handler filled it.
+	last *audit.Pending
 }
 
 func newAPIRig(t *testing.T) *apiRig {
@@ -27,12 +29,15 @@ func newAPIRig(t *testing.T) *apiRig {
 	mux := http.NewServeMux()
 	NewAPI(a.svc).RegisterRoutes(mux)
 	a.h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, _ := audit.Begin(r.Context(), audit.Event{}, nil, func(_ context.Context, e audit.Event) error {
+		ctx, pending := audit.Begin(r.Context(), audit.Event{}, nil, func(_ context.Context, e audit.Event) error {
 			a.mu.Lock()
 			defer a.mu.Unlock()
 			a.events = append(a.events, e)
 			return nil
 		})
+		a.mu.Lock()
+		a.last = pending
+		a.mu.Unlock()
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	})
 	return a

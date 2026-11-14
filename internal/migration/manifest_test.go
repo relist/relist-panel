@@ -423,3 +423,23 @@ func TestManifestIncludesDatabaseVolumes(t *testing.T) {
 		t.Fatalf("no warning for the missing volume: %q", m.Warnings)
 	}
 }
+
+// Database Backups live under .databases/ in the data directory, so a
+// Migration carries them with it.
+func TestDataDirItemIncludesDatabaseBackups(t *testing.T) {
+	dir := t.TempDir()
+	backups := filepath.Join(dir, ".databases", "1", "backups")
+	if err := os.MkdirAll(backups, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backups, "20261114T000000Z-1.sql.gz"), make([]byte, 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if skipInDataDir(".databases") {
+		t.Fatal(".databases is left out of the data-dir item")
+	}
+	_, size, err := ManifestBuilder{DataDir: dir}.dataDirSizes()
+	if err != nil || size != 4096 {
+		t.Fatalf("data-dir size = %d, %v, want 4096", size, err)
+	}
+}

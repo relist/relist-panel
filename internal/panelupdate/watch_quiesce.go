@@ -120,6 +120,12 @@ func (s *Service) waitIdle(ctx context.Context, q *quiesceState) {
 			return
 		}
 	}
+	if s.d.DatabaseJobs != nil {
+		if err := s.d.DatabaseJobs.WaitIdle(ctx); err != nil {
+			log.Printf("panelupdate: wait for the running Database backup or restore: %v", err)
+			return
+		}
+	}
 	q.idle.Store(true)
 }
 

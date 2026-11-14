@@ -37,6 +37,14 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/databases/{id}/repair", a.action(a.s.Repair))
 	mux.HandleFunc("POST /api/databases/{id}/update-image", a.updateImage)
 	mux.HandleFunc("POST /api/databases/{id}/apply-settings", a.action(a.s.ApplySettings))
+	mux.HandleFunc("GET /api/databases/{id}/logical-databases", a.logicalDatabases)
+	mux.HandleFunc("GET /api/databases/{id}/backups", a.listBackups)
+	mux.HandleFunc("POST /api/databases/{id}/backups", a.startBackup)
+	mux.HandleFunc("GET /api/databases/{id}/backups/{backupID}/download", a.downloadBackup)
+	mux.HandleFunc("DELETE /api/databases/{id}/backups/{backupID}", a.deleteBackup)
+	mux.HandleFunc("GET /api/databases/{id}/restores", a.listRestores)
+	mux.HandleFunc("POST /api/databases/{id}/restores", a.startRestore)
+	mux.HandleFunc("POST /api/databases/{id}/restores/upload", a.uploadRestore)
 }
 
 // DatabaseJSON is a Database as the browser sees it. It never carries the
@@ -63,6 +71,10 @@ type DatabaseJSON struct {
 	User             string    `json:"user"`
 	DefaultDatabase  string    `json:"defaultDatabase"`
 	CreatedAt        time.Time `json:"createdAt"`
+	// Job is the job running on it ("backup", "restore", "update_image" or
+	// ""); Deleted marks a tombstone that only keeps its Backups.
+	Job     string `json:"job"`
+	Deleted bool   `json:"deleted"`
 }
 
 func toJSON(v View) DatabaseJSON {
@@ -70,7 +82,7 @@ func toJSON(v View) DatabaseJSON {
 		ID: v.ID, Name: v.Name, Slug: v.Slug, Engine: v.Engine, Version: v.Version,
 		Desired: v.Desired, Status: v.Status, SettingsOutdated: v.SettingsOutdated, LastError: v.LastError, Warnings: v.Warnings,
 		MemoryMB: v.MemoryMB, CPUs: v.CPUs, Host: ContainerName(v.ID), HostReadable: Alias(v.Slug),
-		CreatedAt: v.CreatedAt,
+		CreatedAt: v.CreatedAt, Job: v.Job, Deleted: v.Deleted,
 	}
 	if out.Warnings == nil {
 		out.Warnings = []string{}
@@ -261,6 +273,9 @@ func (a *API) credentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := a.s.d.Store.Get(r.Context(), n)
+	if err == nil && d.DeletedAt != nil {
+		err = ErrNotFound
+	}
 	if err != nil {
 		writeError(w, err)
 		return
@@ -314,12 +329,14 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 
 // writeError maps a service error to its status.
 func writeError(w http.ResponseWriter, err error) {
+	var unknownLogical ErrUnknownLogical
 	switch {
-	case errors.Is(err, ErrInvalidName), errors.Is(err, ErrUnknownEngine), errors.Is(err, ErrUnknownVersion), errors.Is(err, ErrConfirm), errors.Is(err, ErrInvalidLimits):
+	case errors.Is(err, ErrInvalidName), errors.Is(err, ErrUnknownEngine), errors.Is(err, ErrUnknownVersion), errors.Is(err, ErrConfirm), errors.Is(err, ErrInvalidLimits),
+		errors.Is(err, ErrNoBackups), errors.Is(err, ErrNoScope), errors.As(err, &unknownLogical):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, "Database not found")
-	case errors.Is(err, ErrDuplicateName), errors.Is(err, ErrLocked):
+	case errors.Is(err, ErrDuplicateName), errors.Is(err, ErrLocked), errors.Is(err, ErrBusy), errors.Is(err, ErrNotRunning), errors.Is(err, ErrChangedFile):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case strings.HasPrefix(err.Error(), "docker"):
 		writeJSONError(w, http.StatusBadGateway, err.Error())
