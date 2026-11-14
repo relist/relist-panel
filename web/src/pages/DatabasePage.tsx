@@ -1,5 +1,5 @@
 import { EyeInvisibleOutlined, EyeOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Descriptions, Flex, Input, Tabs, Tag, Tooltip, Typography } from 'antd';
+import { Alert, App, Button, Card, Checkbox, Descriptions, Flex, Input, Modal, Tabs, Tag, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import useSWR from 'swr';
@@ -9,7 +9,8 @@ import { DangerModal } from '../components/DangerModal';
 import { PageHeader } from '../components/primitives';
 import { api } from '../data/api';
 import type { Database, DatabaseAction, DatabaseCredentials } from '../data/types';
-import { canRepair, pollInterval, snippet, statusMeta } from './databases-view';
+import { DatabaseBackupsTab } from './DatabaseBackupsTab';
+import { canBackUp, canRepair, jobNotice, pollInterval, snippet, statusMeta } from './databases-view';
 
 const { Text } = Typography;
 
@@ -30,6 +31,8 @@ export function DatabasePage() {
   });
   const [busy, setBusy] = useState<DatabaseAction>();
   const [actionError, setActionError] = useState<string>();
+  const [updating, setUpdating] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
 
   const act = async (action: DatabaseAction, done: string) => {
     setBusy(action);
@@ -46,7 +49,31 @@ export function DatabasePage() {
     }
   };
 
+  // Back up first is on by default, and only offered where a Backup can run.
+  const [backupFirst, setBackupFirst] = useState(true);
+  const sql = data !== undefined && data.engine !== 'redis';
+  const canBackupFirst = data !== undefined && canBackUp(data);
+  const updateImage = async () => {
+    if (!data) return;
+    const withBackup = sql && canBackupFirst && backupFirst;
+    setUpdateBusy(true);
+    setActionError(undefined);
+    try {
+      await api.updateDatabaseImage(databaseId, withBackup);
+      void message.success(withBackup ? `Backing up ${data.name}, then updating its image` : `Updated the image of ${data.name}`);
+      setUpdating(false);
+      await mutate();
+    } catch (reason: unknown) {
+      setActionError(failure(reason, 'Something went wrong'));
+      setUpdating(false);
+      void mutate();
+    } finally {
+      setUpdateBusy(false);
+    }
+  };
+
   const name = data?.name ?? 'Database';
+  const jobRunning = Boolean(data?.job);
   const meta = data ? statusMeta(data.status) : undefined;
   const wantsRunning = data?.desired === 'running';
 
@@ -60,31 +87,37 @@ export function DatabasePage() {
         ]}
         description={data ? `${data.image}` : undefined}
         extra={
-          data && (
+          data && !data.deleted && (
             <Flex gap={8} wrap>
               {wantsRunning ? (
-                <Button loading={busy === 'stop'} onClick={() => void act('stop', `Stopped ${name}`)}>
+                <Button disabled={jobRunning} loading={busy === 'stop'} onClick={() => void act('stop', `Stopped ${name}`)}>
                   Stop
                 </Button>
               ) : (
-                <Button loading={busy === 'start'} onClick={() => void act('start', `Started ${name}`)} type="primary">
+                <Button disabled={jobRunning} loading={busy === 'start'} onClick={() => void act('start', `Started ${name}`)} type="primary">
                   Start
                 </Button>
               )}
               <Button
-                disabled={!wantsRunning}
+                disabled={!wantsRunning || jobRunning}
                 loading={busy === 'restart'}
                 onClick={() => void act('restart', `Restarted ${name}`)}
               >
                 Restart
               </Button>
               <Tooltip title="Pulls the tag again and applies this panel's container settings. Recreates the container on the same volume only if either changed; a stopped Database stays stopped.">
-                <Button loading={busy === 'update-image'} onClick={() => void act('update-image', `Updated the image of ${name}`)}>
+                <Button
+                  disabled={jobRunning}
+                  onClick={() => {
+                    setBackupFirst(true);
+                    setUpdating(true);
+                  }}
+                >
                   Update image
                 </Button>
               </Tooltip>
               {canRepair(data) && (
-                <Button loading={busy === 'repair'} onClick={() => void act('repair', `Repaired ${name}`)} type="primary">
+                <Button disabled={jobRunning} loading={busy === 'repair'} onClick={() => void act('repair', `Repaired ${name}`)} type="primary">
                   Repair
                 </Button>
               )}
@@ -113,6 +146,15 @@ export function DatabasePage() {
           type="error"
         />
       )}
+      {data?.deleted && (
+        <Alert
+          showIcon
+          style={{ marginBottom: 16 }}
+          title="This Database was deleted. Its backups are kept until you delete them."
+          type="info"
+        />
+      )}
+      {data && jobRunning && <Alert showIcon style={{ marginBottom: 16 }} title={jobNotice(data.job)} type="info" />}
       {data?.status === 'volume_missing' && (
         <Alert
           description="Nothing was recreated, because an empty new volume would look like the data had never been lost. Delete this Database, or restore its data into a new one."
@@ -126,6 +168,7 @@ export function DatabasePage() {
         <Alert
           action={
             <Button
+              disabled={jobRunning}
               loading={busy === 'apply-settings'}
               onClick={() => void act('apply-settings', `Applied the new settings to ${name}`)}
               size="small"
@@ -154,11 +197,13 @@ export function DatabasePage() {
         />
       )}
 
-      {data && (
+      {data?.deleted && <DatabaseBackupsTab db={data} />}
+      {data && !data.deleted && (
         <Tabs
           destroyOnHidden
           items={[
             { children: <ConnectionTab db={data} />, key: 'connection', label: 'Connection' },
+            ...(sql ? [{ children: <DatabaseBackupsTab db={data} />, key: 'backups', label: 'Backups' }] : []),
             { children: <LogsTab id={databaseId} />, key: 'logs', label: 'Logs' },
             {
               children: (
@@ -178,6 +223,38 @@ export function DatabasePage() {
         />
       )}
       {isLoading && !data && !error && <Text type="secondary">Loading…</Text>}
+      <Modal
+        confirmLoading={updateBusy}
+        destroyOnHidden
+        okText="Update image"
+        onCancel={() => setUpdating(false)}
+        onOk={() => void updateImage()}
+        open={updating}
+        title="Update image"
+      >
+        <Flex gap={12} vertical>
+          <Text>
+            Pulls the tag again and applies this panel's container settings. Recreates the container on the same volume
+            only if either changed; a stopped Database stays stopped.
+          </Text>
+          {sql && (
+            <div>
+              <Checkbox
+                checked={canBackupFirst && backupFirst}
+                disabled={!canBackupFirst}
+                onChange={(event) => setBackupFirst(event.target.checked)}
+              >
+                Back up first
+              </Checkbox>
+              {!canBackupFirst && (
+                <Text style={{ display: 'block', marginTop: 4 }} type="secondary">
+                  Start the Database to back up first
+                </Text>
+              )}
+            </div>
+          )}
+        </Flex>
+      </Modal>
     </>
   );
 }
@@ -308,6 +385,7 @@ function SettingsTab({ db, onDeleted, onRenamed }: { db: Database; onDeleted: ()
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteBackups, setDeleteBackups] = useState(false);
   const [error, setError] = useState<string>();
 
   const rename = async () => {
@@ -328,7 +406,7 @@ function SettingsTab({ db, onDeleted, onRenamed }: { db: Database; onDeleted: ()
     setDeleteBusy(true);
     setError(undefined);
     try {
-      await api.deleteDatabase(db.id, db.name);
+      await api.deleteDatabase(db.id, db.name, deleteBackups);
       onDeleted();
     } catch (reason: unknown) {
       setError(failure(reason, 'Could not delete the Database'));
@@ -359,14 +437,30 @@ function SettingsTab({ db, onDeleted, onRenamed }: { db: Database; onDeleted: ()
       </Card>
       <Card title="Delete" variant="outlined">
         <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-          Removes the container and its data volume. There are no backups yet, so the data is gone for good.
+          {db.engine === 'redis'
+            ? 'Removes the container and its data volume. A Redis Database has no backups, so the data is gone for good.'
+            : 'Removes the container and its data volume. Its backups are kept, and listed here, unless you also delete them.'}
         </Text>
-        <Button danger onClick={() => setDeleting(true)}>
+        <Button
+          danger
+          disabled={Boolean(db.job)}
+          onClick={() => {
+            setDeleteBackups(false);
+            setDeleting(true);
+          }}
+        >
           Delete database
         </Button>
       </Card>
       <DangerModal
         confirmWord={db.name}
+        consequences={
+          db.engine === 'redis' ? undefined : (
+            <Checkbox checked={deleteBackups} onChange={(event) => setDeleteBackups(event.target.checked)}>
+              Also delete its backups
+            </Checkbox>
+          )
+        }
         description="Removes the container and the data volume."
         loading={deleteBusy}
         okText="Delete database"
