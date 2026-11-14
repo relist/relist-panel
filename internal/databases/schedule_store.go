@@ -22,8 +22,11 @@ type Schedule struct {
 	Databases  []string
 	Local      Keep
 	Remote     Keep
-	LastRunAt  *time.Time
-	LastError  string
+	// DestinationID is the Backup destination its scheduled Backups are
+	// copied to; nil = none.
+	DestinationID *int64
+	LastRunAt     *time.Time
+	LastError     string
 }
 
 // DefaultSchedule is what a Database with no schedule row has: off, daily at
@@ -33,7 +36,7 @@ func DefaultSchedule(id int64) Schedule {
 		Local: Keep{Count: new(7)}, Remote: Keep{Count: new(30)}}
 }
 
-const scheduleColumns = `database_id, enabled, days, minute, all_databases, databases, local_keep_count, local_keep_days, remote_keep_count, remote_keep_days, last_run_at, last_error`
+const scheduleColumns = `database_id, enabled, days, minute, all_databases, databases, local_keep_count, local_keep_days, remote_keep_count, remote_keep_days, last_run_at, last_error, destination_id`
 
 func nullInt(v *int) any {
 	if v == nil {
@@ -53,8 +56,8 @@ func intFrom(n sql.NullInt64) *int {
 func scanSchedule(row interface{ Scan(...any) error }) (Schedule, error) {
 	var sc Schedule
 	var days, dbs string
-	var lc, ld, rc, rd, last sql.NullInt64
-	if err := row.Scan(&sc.DatabaseID, &sc.Enabled, &days, &sc.Minute, &sc.All, &dbs, &lc, &ld, &rc, &rd, &last, &sc.LastError); err != nil {
+	var lc, ld, rc, rd, last, dest sql.NullInt64
+	if err := row.Scan(&sc.DatabaseID, &sc.Enabled, &days, &sc.Minute, &sc.All, &dbs, &lc, &ld, &rc, &rd, &last, &sc.LastError, &dest); err != nil {
 		return Schedule{}, err
 	}
 	if err := json.Unmarshal([]byte(days), &sc.Days); err != nil {
@@ -68,6 +71,9 @@ func scanSchedule(row interface{ Scan(...any) error }) (Schedule, error) {
 	}
 	sc.Local = Keep{Count: intFrom(lc), Days: intFrom(ld)}
 	sc.Remote = Keep{Count: intFrom(rc), Days: intFrom(rd)}
+	if dest.Valid {
+		sc.DestinationID = &dest.Int64
+	}
 	if last.Valid {
 		t := time.UnixMilli(last.Int64)
 		sc.LastRunAt = &t
@@ -108,14 +114,14 @@ func (s *Store) SaveSchedule(ctx context.Context, sc Schedule) error {
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO database_backup_schedules (`+scheduleColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(database_id) DO UPDATE SET enabled = excluded.enabled, days = excluded.days, minute = excluded.minute,
 			all_databases = excluded.all_databases, databases = excluded.databases,
 			local_keep_count = excluded.local_keep_count, local_keep_days = excluded.local_keep_days,
 			remote_keep_count = excluded.remote_keep_count, remote_keep_days = excluded.remote_keep_days,
-			last_run_at = excluded.last_run_at`,
+			destination_id = excluded.destination_id, last_run_at = excluded.last_run_at`,
 		sc.DatabaseID, sc.Enabled, string(days), sc.Minute, sc.All, string(dbs),
-		nullInt(sc.Local.Count), nullInt(sc.Local.Days), nullInt(sc.Remote.Count), nullInt(sc.Remote.Days), last, sc.LastError); err != nil {
+		nullInt(sc.Local.Count), nullInt(sc.Local.Days), nullInt(sc.Remote.Count), nullInt(sc.Remote.Days), last, sc.LastError, sc.DestinationID); err != nil {
 		return err
 	}
 	return tx.Commit()

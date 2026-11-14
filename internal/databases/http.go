@@ -43,6 +43,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/databases/{id}/backups/{backupID}/download", a.downloadBackup)
 	mux.HandleFunc("DELETE /api/databases/{id}/backups/{backupID}", a.deleteBackup)
 	mux.HandleFunc("PUT /api/databases/{id}/backups/{backupID}/pin", a.pinBackup)
+	mux.HandleFunc("POST /api/databases/{id}/backups/{backupID}/retry-upload", a.retryUpload)
 	mux.HandleFunc("GET /api/databases/{id}/schedule", a.getSchedule)
 	mux.HandleFunc("PUT /api/databases/{id}/schedule", a.putSchedule)
 	mux.HandleFunc("GET /api/databases/{id}/restores", a.listRestores)
@@ -345,7 +346,7 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, "Database not found")
-	case errors.Is(err, ErrDuplicateName), errors.Is(err, ErrLocked), errors.Is(err, ErrBusy), errors.Is(err, ErrNotRunning), errors.Is(err, ErrChangedFile), errors.Is(err, ErrRemoteOnly), errors.Is(err, ErrNotScheduled):
+	case errors.Is(err, ErrDuplicateName), errors.Is(err, ErrLocked), errors.Is(err, ErrBusy), errors.Is(err, ErrNotRunning), errors.Is(err, ErrChangedFile), errors.Is(err, ErrRemoteOnly), errors.Is(err, ErrNotScheduled), errors.Is(err, ErrNoFailedUpload):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case strings.HasPrefix(err.Error(), "docker"):
 		writeJSONError(w, http.StatusBadGateway, err.Error())

@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"relist-panel/internal/backupdest"
 	"relist-panel/internal/slug"
 )
 
@@ -51,6 +52,9 @@ type Deps struct {
 	// DataDir is the panel's data dir; Backups live under .databases/<id>/.
 	DataDir string
 	Now     func() time.Time
+	// Destinations opens Backup destinations for uploads (nil = scheduled
+	// Backups cannot be copied anywhere).
+	Destinations backupdest.Opener
 }
 
 type CreateInput struct {
