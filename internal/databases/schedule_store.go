@@ -1,0 +1,176 @@
+package databases
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"time"
+)
+
+// ErrNotScheduled is a pin of a Backup Rotation never touches.
+var ErrNotScheduled = errors.New("only scheduled Backups can be pinned")
+
+// Schedule is when and what a Database backs up by itself, and how Rotation
+// keeps the results. A Database with no row reads DefaultSchedule.
+type Schedule struct {
+	DatabaseID int64
+	Enabled    bool
+	Days       []string // "daily" or "mon".."sun"
+	Minute     int      // minute of the day, panel time zone
+	All        bool
+	Databases  []string
+	Local      Keep
+	Remote     Keep
+	LastRunAt  *time.Time
+	LastError  string
+}
+
+// DefaultSchedule is what a Database with no schedule row has: off, daily at
+// 03:00, every database, keep the last 7 locally and the last 30 remotely.
+func DefaultSchedule(id int64) Schedule {
+	return Schedule{DatabaseID: id, Days: []string{"daily"}, Minute: 180, All: true, Databases: []string{},
+		Local: Keep{Count: new(7)}, Remote: Keep{Count: new(30)}}
+}
+
+const scheduleColumns = `database_id, enabled, days, minute, all_databases, databases, local_keep_count, local_keep_days, remote_keep_count, remote_keep_days, last_run_at, last_error`
+
+func nullInt(v *int) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func intFrom(n sql.NullInt64) *int {
+	if !n.Valid {
+		return nil
+	}
+	v := int(n.Int64)
+	return &v
+}
+
+func scanSchedule(row interface{ Scan(...any) error }) (Schedule, error) {
+	var sc Schedule
+	var days, dbs string
+	var lc, ld, rc, rd, last sql.NullInt64
+	if err := row.Scan(&sc.DatabaseID, &sc.Enabled, &days, &sc.Minute, &sc.All, &dbs, &lc, &ld, &rc, &rd, &last, &sc.LastError); err != nil {
+		return Schedule{}, err
+	}
+	if err := json.Unmarshal([]byte(days), &sc.Days); err != nil {
+		return Schedule{}, err
+	}
+	if err := json.Unmarshal([]byte(dbs), &sc.Databases); err != nil {
+		return Schedule{}, err
+	}
+	if sc.Databases == nil {
+		sc.Databases = []string{}
+	}
+	sc.Local = Keep{Count: intFrom(lc), Days: intFrom(ld)}
+	sc.Remote = Keep{Count: intFrom(rc), Days: intFrom(rd)}
+	if last.Valid {
+		t := time.UnixMilli(last.Int64)
+		sc.LastRunAt = &t
+	}
+	return sc, nil
+}
+
+// GetSchedule returns Database id's schedule, DefaultSchedule when it has none.
+func (s *Store) GetSchedule(ctx context.Context, id int64) (Schedule, error) {
+	sc, err := scanSchedule(s.db.QueryRowContext(ctx, `SELECT `+scheduleColumns+` FROM database_backup_schedules WHERE database_id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return DefaultSchedule(id), nil
+	}
+	return sc, err
+}
+
+// SaveSchedule upserts sc. Turning it on (off or absent before) arms it:
+// last_run_at is now, so it runs at the next due time, not at once.
+func (s *Store) SaveSchedule(ctx context.Context, sc Schedule) error {
+	days, _ := json.Marshal(sc.Days)
+	if sc.Databases == nil {
+		sc.Databases = []string{}
+	}
+	dbs, _ := json.Marshal(sc.Databases)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var wasEnabled bool
+	var last sql.NullInt64
+	err = tx.QueryRowContext(ctx, `SELECT enabled, last_run_at FROM database_backup_schedules WHERE database_id = ?`, sc.DatabaseID).Scan(&wasEnabled, &last)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if sc.Enabled && !wasEnabled {
+		last = sql.NullInt64{Int64: s.now().UnixMilli(), Valid: true}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO database_backup_schedules (`+scheduleColumns+`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(database_id) DO UPDATE SET enabled = excluded.enabled, days = excluded.days, minute = excluded.minute,
+			all_databases = excluded.all_databases, databases = excluded.databases,
+			local_keep_count = excluded.local_keep_count, local_keep_days = excluded.local_keep_days,
+			remote_keep_count = excluded.remote_keep_count, remote_keep_days = excluded.remote_keep_days,
+			last_run_at = excluded.last_run_at`,
+		sc.DatabaseID, sc.Enabled, string(days), sc.Minute, sc.All, string(dbs),
+		nullInt(sc.Local.Count), nullInt(sc.Local.Days), nullInt(sc.Remote.Count), nullInt(sc.Remote.Days), last, sc.LastError); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ListEnabledSchedules returns every enabled schedule, by database id.
+func (s *Store) ListEnabledSchedules(ctx context.Context) ([]Schedule, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+scheduleColumns+` FROM database_backup_schedules WHERE enabled = 1 ORDER BY database_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Schedule
+	for rows.Next() {
+		sc, err := scanSchedule(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sc)
+	}
+	return out, rows.Err()
+}
+
+// SetScheduleRun records when a schedule last ran and how it went ("" = fine).
+func (s *Store) SetScheduleRun(ctx context.Context, id int64, at time.Time, lastErr string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE database_backup_schedules SET last_run_at = ?, last_error = ? WHERE database_id = ?`, at.UnixMilli(), lastErr, id)
+	return err
+}
+
+// SetPinned marks a Backup as kept by Rotation, or not.
+func (s *Store) SetPinned(ctx context.Context, backupID int64, pinned bool) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE database_backups SET pinned = ? WHERE id = ?`, pinned, backupID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetLocalRemoved records that Rotation removed a Backup's file.
+func (s *Store) SetLocalRemoved(ctx context.Context, backupID int64, at time.Time) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE database_backups SET local_removed_at = ? WHERE id = ?`, at.UnixMilli(), backupID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteSchedule removes a Database's schedule row.
+func (s *Store) DeleteSchedule(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM database_backup_schedules WHERE database_id = ?`, id)
+	return err
+}

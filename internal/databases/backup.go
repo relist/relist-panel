@@ -349,8 +349,13 @@ func (s *Service) ListRestores(ctx context.Context, id int64) ([]Restore, error)
 	return s.d.Store.ListRestores(ctx, id)
 }
 
-// BackupPath is the file of a succeeded Backup, for download. Anything else,
-// including a file that is gone, is ErrNotFound.
+// ErrRemoteOnly is a download or restore of a Backup whose file Rotation
+// removed and whose only copy is in a Backup destination.
+var ErrRemoteOnly = errors.New("this Backup is only in its Backup destination; download it from the bucket")
+
+// BackupPath is the file of a succeeded Backup, for download. A Remote only
+// Backup is ErrRemoteOnly; anything else, including a file that is gone, is
+// ErrNotFound.
 func (s *Service) BackupPath(ctx context.Context, id, backupID int64) (string, Backup, error) {
 	if err := s.hasBackups(ctx, id); err != nil {
 		return "", Backup{}, err
@@ -358,6 +363,9 @@ func (s *Service) BackupPath(ctx context.Context, id, backupID int64) (string, B
 	b, err := s.d.Store.GetBackup(ctx, id, backupID)
 	if err != nil {
 		return "", Backup{}, err
+	}
+	if b.LocalRemovedAt != nil {
+		return "", Backup{}, ErrRemoteOnly
 	}
 	if b.Status != JobSucceeded || b.FileName == "" {
 		return "", Backup{}, ErrNotFound
