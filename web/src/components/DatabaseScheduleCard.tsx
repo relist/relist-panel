@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Checkbox, Flex, Form, InputNumber, Radio, Switch, Typography } from 'antd';
+import { Alert, Button, Card, Checkbox, Flex, Form, InputNumber, Radio, Select, Switch, Typography } from 'antd';
 import { useState } from 'react';
 import useSWR from 'swr';
 
@@ -15,10 +15,16 @@ interface ScheduleForm extends ScheduleFormValues {
   databases: string[];
   localKeepCount: number | null;
   localKeepDays: number | null;
+  /** 0 = none. */
+  destinationId: number;
+  remoteKeepCount: number | null;
+  remoteKeepDays: number | null;
 }
 
+type KeepName = 'localKeepCount' | 'localKeepDays' | 'remoteKeepCount' | 'remoteKeepDays';
+
 /** An InputNumber that is blank means no limit. */
-function KeepField({ label, name }: { label: string; name: 'localKeepCount' | 'localKeepDays' }) {
+function KeepField({ label, name }: { label: string; name: KeepName }) {
   return (
     <Form.Item label={label} name={name}>
       <InputNumber aria-label={label} min={1} placeholder="No limit" precision={0} />
@@ -35,6 +41,8 @@ export function DatabaseScheduleCard({ db }: { db: Database }) {
   const { data, error, mutate } = useSWR(key, () => api.getDatabaseSchedule(db.id));
   const [form] = Form.useForm<ScheduleForm>();
   const scope = Form.useWatch('scope', form);
+  const destinationId = Form.useWatch('destinationId', form);
+  const destinations = useSWR('/api/backup-destinations', () => api.listBackupDestinations());
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string>();
   const logical = useSWR(scope === 'selected' ? `${key}/logical` : null, () => api.databaseLogicalDatabases(db.id));
@@ -56,12 +64,15 @@ export function DatabaseScheduleCard({ db }: { db: Database }) {
         all: values.scope === 'all',
         databases: values.scope === 'all' ? [] : values.databases,
         days,
+        destinationId: values.destinationId || null,
         enabled: values.enabled,
         localKeepCount: values.localKeepCount ?? null,
         localKeepDays: values.localKeepDays ?? null,
         minute,
-        remoteKeepCount: data.remoteKeepCount,
-        remoteKeepDays: data.remoteKeepDays,
+        // The fields are only on screen with a destination; without one the
+        // stored values are sent back unchanged.
+        remoteKeepCount: values.destinationId ? (values.remoteKeepCount ?? null) : data.remoteKeepCount,
+        remoteKeepDays: values.destinationId ? (values.remoteKeepDays ?? null) : data.remoteKeepDays,
       });
       await mutate(saved, { revalidate: false });
     } catch (reason: unknown) {
@@ -84,9 +95,12 @@ export function DatabaseScheduleCard({ db }: { db: Database }) {
           form={form}
           initialValues={{
             databases: data.databases,
+            destinationId: data.destinationId ?? 0,
             enabled: data.enabled,
             localKeepCount: data.localKeepCount,
             localKeepDays: data.localKeepDays,
+            remoteKeepCount: data.remoteKeepCount,
+            remoteKeepDays: data.remoteKeepDays,
             scope: data.all ? 'all' : 'selected',
             ...scheduleFormValues(data.days, data.minute),
           }}
@@ -117,6 +131,30 @@ export function DatabaseScheduleCard({ db }: { db: Database }) {
             <KeepField label="Last N backups" name="localKeepCount" />
             <KeepField label="At most X days" name="localKeepDays" />
           </Flex>
+          <Form.Item
+            extra={
+              destinations.data && destinations.data.length === 0
+                ? 'No Backup destinations yet. Add one under Data → Backup destinations.'
+                : 'Scheduled backups are also copied to this bucket.'
+            }
+            label="Copy to"
+            name="destinationId"
+            style={{ marginTop: 12 }}
+          >
+            <Select
+              aria-label="Copy to"
+              options={[{ label: 'None', value: 0 }, ...(destinations.data ?? []).map((item) => ({ label: item.name, value: item.id }))]}
+            />
+          </Form.Item>
+          {destinationId ? (
+            <>
+              <Text strong>Keep in the destination</Text>
+              <Flex gap={16} style={{ marginTop: 8 }} wrap>
+                <KeepField label="Destination: last N backups" name="remoteKeepCount" />
+                <KeepField label="Destination: at most X days" name="remoteKeepDays" />
+              </Flex>
+            </>
+          ) : null}
           <Text style={{ display: 'block', marginBottom: 12 }} type="secondary">
             Rotation deletes only scheduled backups that are not pinned. The newest successful one of each database is
             always kept. Leave a field blank for no limit.

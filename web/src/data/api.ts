@@ -29,6 +29,8 @@ import type {
   SourceTestResult,
   SshKey,
   BackupRequest,
+  BackupDestination,
+  BackupDestinationInput,
   Database,
   DatabaseAction,
   DatabaseBackup,
@@ -625,6 +627,20 @@ export const api = {
     request<DatabaseScheduleState>(`/api/databases/${id}/schedule`, jsonInit('PUT', input)),
   pinDatabaseBackup: (id: number, backupId: number, pinned: boolean) =>
     request<void>(`/api/databases/${id}/backups/${backupId}/pin`, jsonInit('PUT', { pinned })),
+  retryDatabaseBackupUpload: (id: number, backupId: number) =>
+    request<void>(`/api/databases/${id}/backups/${backupId}/retry-upload`, { method: 'POST' }),
+  // Backup destinations: S3-compatible buckets scheduled Backups are copied to (ADR-0040).
+  listBackupDestinations: () => request<BackupDestination[]>('/api/backup-destinations'),
+  createBackupDestination: (input: BackupDestinationInput) =>
+    request<BackupDestination>('/api/backup-destinations', jsonInit('POST', input)),
+  updateBackupDestination: (id: number, input: BackupDestinationInput) =>
+    request<BackupDestination>(`/api/backup-destinations/${id}`, jsonInit('PUT', input)),
+  deleteBackupDestination: (id: number, confirmCopies?: number) =>
+    request<void>(
+      `/api/backup-destinations/${id}${confirmCopies === undefined ? '' : `?confirm=${confirmCopies}`}`,
+      { method: 'DELETE' },
+    ),
+  testBackupDestination: (id: number) => request<BackupDestination>(`/api/backup-destinations/${id}/test`, { method: 'POST' }),
   listDatabaseRestores: (id: number) => request<DatabaseRestore[]>(`/api/databases/${id}/restores`),
   restoreDatabase: (id: number, backupId: number, target: string, confirm: string) =>
     request<DatabaseRestore>(`/api/databases/${id}/restores`, jsonInit('POST', { backupId, confirm, target })),

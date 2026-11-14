@@ -50,6 +50,32 @@ function FailureDetail({ error, log }: { error: string; log: string }) {
   );
 }
 
+/** A Backup's copy in its Backup destination: Copied, Copying or Copy failed with Retry. */
+function CopyCell({ onRetry, row }: { onRetry: () => void; row: DatabaseBackup }) {
+  const upload = row.upload;
+  if (!upload) return <Text type="secondary">—</Text>;
+  if (upload.status === 'uploaded') {
+    return (
+      <Tooltip title={`Copied to ${upload.destination}`}>
+        <Tag color="success">Copied</Tag>
+      </Tooltip>
+    );
+  }
+  if (upload.status === 'running') return <Tag color="processing">Copying…</Tag>;
+  return (
+    <Flex align="center" gap={4}>
+      <Tooltip title={`${upload.destination}: ${upload.error}`}>
+        <Tag color="error">Copy failed</Tag>
+      </Tooltip>
+      {!row.localRemoved && (
+        <Button onClick={onRetry} size="small" type="link">
+          Retry
+        </Button>
+      )}
+    </Flex>
+  );
+}
+
 type RestoreSource = { backup: DatabaseBackup; kind: 'backup' } | { file: File; kind: 'upload' };
 
 /**
@@ -167,6 +193,19 @@ export function DatabaseBackupsTab({ db }: { db: Database }) {
     }
   };
 
+  const retry = async (backup: DatabaseBackup) => {
+    setActionError(undefined);
+    try {
+      await api.retryDatabaseBackupUpload(db.id, backup.id);
+      void message.success('Copy started');
+      await mutate();
+    } catch (reasonError: unknown) {
+      setActionError(failure(reasonError, 'Could not retry the copy'));
+    }
+  };
+
+  const hasCopies = (data?.backups ?? []).some((row) => row.upload);
+
   const columns: TableColumnsType<DatabaseBackup> = [
     {
       key: 'database',
@@ -186,6 +225,15 @@ export function DatabaseBackupsTab({ db }: { db: Database }) {
     },
     { key: 'size', render: (_, row) => (row.status === 'succeeded' ? formatBytes(row.size) : '—'), title: 'Size' },
     { key: 'status', render: (_, row) => <StatusTag status={row.status} />, title: 'Status' },
+    ...(hasCopies
+      ? [
+          {
+            key: 'copy',
+            render: (_: unknown, row: DatabaseBackup) => <CopyCell onRetry={() => void retry(row)} row={row} />,
+            title: 'Copy',
+          },
+        ]
+      : []),
     {
       key: 'actions',
       render: (_, row) => (
@@ -226,7 +274,12 @@ export function DatabaseBackupsTab({ db }: { db: Database }) {
             </Tooltip>
           )}
           <Popconfirm
-            description="The file is removed from the panel's disk."
+            description={
+              <Flex gap={4} vertical>
+                {!row.localRemoved && <span>The file is removed from the panel&apos;s disk.</span>}
+                {row.upload?.status === 'uploaded' && <span>Also deletes its copy in {row.upload.destination}.</span>}
+              </Flex>
+            }
             disabled={row.status === 'running'}
             okButtonProps={{ danger: true }}
             okText="Delete"

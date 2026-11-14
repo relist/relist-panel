@@ -38,7 +38,8 @@ type UploadJSON struct {
 
 func backupJSON(b Backup) BackupJSON {
 	var up *UploadJSON
-	if b.Upload != nil {
+	// A copy Rotation already deleted from its destination is not shown.
+	if b.Upload != nil && b.Upload.DeletedAt == nil {
 		up = &UploadJSON{Destination: b.Upload.DestinationName, Status: b.Upload.Status, Error: b.Upload.Error, UploadedAt: b.Upload.UploadedAt}
 	}
 	return BackupJSON{Upload: up, ID: b.ID, Trigger: b.Trigger, Database: b.LogicalName, Status: b.Status, Error: b.Error, Log: b.Log,

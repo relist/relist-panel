@@ -1,4 +1,4 @@
-import { AppstoreOutlined, AuditOutlined, BuildOutlined, CloudDownloadOutlined, CloudServerOutlined, ConsoleSqlOutlined, ContainerOutlined, DashboardOutlined, DatabaseOutlined, FolderOutlined, GlobalOutlined, KeyOutlined, LockOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined, TeamOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, AuditOutlined, BuildOutlined, CloudDownloadOutlined, CloudUploadOutlined, CloudServerOutlined, ConsoleSqlOutlined, ContainerOutlined, DashboardOutlined, DatabaseOutlined, FolderOutlined, GlobalOutlined, KeyOutlined, LockOutlined, MenuOutlined, RocketOutlined, SafetyCertificateOutlined, SafetyOutlined, SyncOutlined, TeamOutlined } from '@ant-design/icons';
 import {
   Alert,
   App,
@@ -133,6 +133,8 @@ export function AppShell() {
             ? 'registry'
           : resolved.pattern === 'databases' || resolved.pattern === 'databases/:databaseId'
             ? 'databases'
+          : resolved.pattern === 'backup-destinations'
+            ? 'backup-destinations'
           : resolved.pattern === 'ssh-keys'
             ? 'ssh-keys'
           : resolved.pattern === 'certificates'
@@ -216,6 +218,7 @@ export function AppShell() {
       type: 'group', label: 'Data',
       children: [
         { key: 'databases', icon: <ConsoleSqlOutlined />, label: 'Databases' },
+        { key: 'backup-destinations', icon: <CloudUploadOutlined />, label: 'Backup destinations' },
       ],
     },
     {
@@ -258,6 +261,7 @@ export function AppShell() {
     if (key === 'builders') return navigate(paths.builders);
     if (key === 'registry') return navigate(paths.registry);
     if (key === 'databases') return navigate(paths.databases);
+    if (key === 'backup-destinations') return navigate(paths.backupDestinations);
     if (key === 'ssh-keys') return navigate(paths.sshKeys);
     if (key === 'certificates') return navigate(paths.certificates);
     if (key === 'basic-auth') return navigate(paths.basicAuth);
@@ -292,6 +296,8 @@ export function AppShell() {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Registry' });
       } else if (resolved?.pattern === 'databases') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Databases' });
+      } else if (resolved?.pattern === 'backup-destinations') {
+        trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'Backup destinations' });
       } else if (resolved?.pattern === 'ssh-keys') {
         trail.push({ title: <Link to={paths.overview}>Overview</Link> }, { title: 'SSH keys' });
       } else if (resolved?.pattern === 'certificates') {
