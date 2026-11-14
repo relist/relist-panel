@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"sync/atomic"
+	"time"
 
 	"relist-panel/internal/backupdest"
 )
@@ -54,7 +57,27 @@ func (s *Service) upload(ctx context.Context, d Database, b Backup, destID int64
 	return u
 }
 
+// errStalled ends an upload that sent nothing for uploadStall.
+var errStalled = errors.New("stalled")
+
+// progressReader records when the upload last read from the file.
+type progressReader struct {
+	r    io.Reader
+	last atomic.Int64 // unix nanoseconds
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.last.Store(time.Now().UnixNano())
+	}
+	return n, err
+}
+
 // put sends the file with its exact size, so nothing is buffered in memory.
+// An upload that reads nothing for uploadStall, including the wait for the
+// bucket's answer after the last byte, is cut off: a bucket that stops
+// answering must not hold the job slot, and the scheduler, for ever.
 func (s *Service) put(ctx context.Context, remote backupdest.Remote, key, path string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -65,7 +88,32 @@ func (s *Service) put(ctx context.Context, remote backupdest.Remote, key, path s
 	if err != nil {
 		return err
 	}
-	return remote.Put(ctx, key, f, fi.Size())
+	pr := &progressReader{r: f}
+	pr.last.Store(time.Now().UnixNano())
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		t := time.NewTicker(s.uploadStall / 4)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				if time.Since(time.Unix(0, pr.last.Load())) > s.uploadStall {
+					cancel(errStalled)
+					return
+				}
+			}
+		}
+	}()
+	err = remote.Put(ctx, key, pr, fi.Size())
+	if errors.Is(context.Cause(ctx), errStalled) {
+		return fmt.Errorf("the upload made no progress for %s", s.uploadStall)
+	}
+	return err
 }
 
 // destinationName is the name to show for a destination, falling back to its ID.
@@ -158,7 +206,10 @@ func (s *Service) deleteCopy(ctx context.Context, remotes map[int64]backupdest.R
 		}
 		remotes[u.DestinationID], remote = r, r
 	}
-	if err := remote.Delete(ctx, u.ObjectKey); err != nil {
+	dctx, cancel := context.WithTimeout(ctx, s.remoteTimeout)
+	err := remote.Delete(dctx, u.ObjectKey)
+	cancel()
+	if err != nil {
 		return fmt.Errorf("%w %q: %s", ErrRemoteDelete, u.DestinationName, err)
 	}
 	return s.d.Store.MarkUploadDeleted(ctx, u.ID, s.d.Now())
