@@ -248,7 +248,7 @@ func TestRestoreMySQLKeepsCharset(t *testing.T) {
 	r := newRig(t)
 	d := r.create(t, "Shop", "mysql", "8.4")
 	admin := r.adminSQL("mysql -uroot -N", "utf8mb4\tutf8mb4_bin\n", nil)
-	stdin := r.captureRestore("mysql -uroot --database=app", "")
+	stdin := r.captureRestore("mysql -uroot --binary-mode --database=app", "")
 	if _, err := r.svc.RestoreFromUpload(context.Background(), d.ID, "app", "Shop", "a.sql", strings.NewReader("CREATE TABLE t (id int);")); err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestRestoreMySQLKeepsCharset(t *testing.T) {
 	if len(*admin) != 2 || (*admin)[1] != "DROP DATABASE IF EXISTS `app`;\nCREATE DATABASE `app` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;\n" {
 		t.Fatalf("admin = %q", *admin)
 	}
-	reqs := r.host.execs("mysql -uroot --database=app")
+	reqs := r.host.execs("mysql -uroot --binary-mode --database=app")
 	if len(reqs) != 1 || len(reqs[0].Env) != 1 || reqs[0].Env[0] != "MYSQL_PWD="+d.Password || len(*stdin) != 1 {
 		t.Fatalf("restore execs = %+v", reqs)
 	}
