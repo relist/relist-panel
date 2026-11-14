@@ -322,6 +322,7 @@ const StatusDeleted = "deleted"
 - [ ] **Step 1: Write failing tests:**
   - `TestLifecycleBusyDuringBackup`: while a scripted backup blocks, `Stop` returns `ErrBusy`, and so do `Restart`, `UpdateImage`, `ApplySettings` and `Delete`. `Rename` succeeds.
   - `TestUpdateImageBackupFirst`: the `pre_update` Backup runs before `pull`. If the backup fails, there is no pull, and `LastError` says so.
+  - `TestUpdateImageBackupFirstWhileStopped`: `UpdateImage(ctx,id,true)` on a Database that is not `running` returns `ErrNotRunning` at once, starts no job, makes no backup row and calls no `pull`. `UpdateImage(ctx,id,false)` on the same Database still works as in phase 1 and leaves it stopped.
   - `TestDeleteKeepsBackupsAsTombstone`:
     - the container and volume are removed;
     - the view status is `deleted` and the name is `Shop (deleted #1)`;
@@ -353,7 +354,7 @@ const StatusDeleted = "deleted"
 | `GET /api/databases/{id}/restores` | `[]RestoreJSON` | — |
 | `POST /api/databases/{id}/restores` | `{backupId, confirm}` → 202 | `database.restore` |
 | `POST /api/databases/{id}/restores/upload?confirm=<name>&name=<file name>` | the raw body → 202 | `database.restore` |
-| `POST /api/databases/{id}/update-image` | optional `{backupFirst}`; with it → 202, without it → 204 as before | unchanged |
+| `POST /api/databases/{id}/update-image` | optional `{backupFirst}`; `true` → 202 (409 `ErrNotRunning` if not running), `false` or absent → 204 as before | unchanged |
 | `DELETE /api/databases/{id}` | `{confirm, deleteBackups}` | unchanged |
 
 - **BackupJSON:** `{id, trigger, scope, status, error, log, size, sha256, startedAt, finishedAt}`.
@@ -407,6 +408,7 @@ const StatusDeleted = "deleted"
 - **DatabasePage:**
   - While `db.job` is set, disable Start/Stop/Restart/Update image/Apply settings/Delete and show an info `Alert` "A backup is running…" (or restore / update).
   - **Update image** becomes a small `Modal` with a "Back up first" `Checkbox`, **on by default** for SQL engines and absent for Redis.
+    While the Database is not `running`, the checkbox is unticked and disabled, with the hint "Start the Database to back up first" under it, and Update image posts `{backupFirst:false}`.
   - **Delete** modal gains an "Also delete its backups" `Checkbox`, off by default. The Settings tab copy replaces "There are no backups yet…".
   - A `deleted` tombstone page shows only the Backups tab and an info `Alert` "This Database was deleted. Its backups are kept until you delete them."
 - `databases-view.ts`:
@@ -429,6 +431,7 @@ const StatusDeleted = "deleted"
   - DatabasePage:
     - with `job: "backup"`, Stop is disabled and the alert shows;
     - Update image posts `{backupFirst:true}` by default;
+    - on a stopped Database the checkbox is disabled and unticked, the hint shows, and Update image posts `{backupFirst:false}`;
     - the delete checkbox is off by default and sends `deleteBackups`;
     - a tombstone shows only Backups.
 - [ ] **Step 3: Run** `cd web && pnpm vitest run src/pages/Database` → FAIL. **Step 4: Implement.** **Step 5: Run** `pnpm typecheck && pnpm vitest run --maxWorkers=6 && pnpm build` → PASS.

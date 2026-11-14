@@ -190,7 +190,7 @@ data under `/var/lib/postgresql`, while 17 and below use
 - **Update image** pulls the same tag again, applies the panel's current
   container settings, and recreates the container on the same volume only if
   the image or the settings changed. A stopped Database is not started: its
-  old container is removed, and the next Start creates the new one. From phase 2 on, a "Back up first" checkbox is on by default.
+  old container is removed, and the next Start creates the new one. From phase 2 on, a "Back up first" checkbox is on by default; it is unticked and disabled while the Database is not running, since a Backup needs it running.
   Changing the major version is not offered.
 - **Rename** changes the display name and the readable alias. The alias is
   swapped by disconnecting and reconnecting `relist-network`, and the Database
