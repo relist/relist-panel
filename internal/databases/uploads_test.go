@@ -1,6 +1,8 @@
 package databases
 
 import (
+	"time"
+
 	"context"
 	"errors"
 	"io"
@@ -19,6 +21,9 @@ type fakeRemote struct {
 	sizes   map[string]int64 // the size Put was told
 	putErr  error
 	delErr  error
+	// hang makes Put and Delete read nothing and wait for their context, as
+	// a bucket that stopped answering does.
+	hang    bool
 	deletes []string
 }
 
@@ -26,7 +31,11 @@ func newFakeRemote() *fakeRemote {
 	return &fakeRemote{objects: map[string][]byte{}, sizes: map[string]int64{}}
 }
 
-func (f *fakeRemote) Put(_ context.Context, key string, r io.Reader, size int64) error {
+func (f *fakeRemote) Put(ctx context.Context, key string, r io.Reader, size int64) error {
+	if f.hung() {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.putErr != nil {
@@ -40,7 +49,17 @@ func (f *fakeRemote) Put(_ context.Context, key string, r io.Reader, size int64)
 	return nil
 }
 
-func (f *fakeRemote) Delete(_ context.Context, key string) error {
+func (f *fakeRemote) hung() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hang
+}
+
+func (f *fakeRemote) Delete(ctx context.Context, key string) error {
+	if f.hung() {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.delErr != nil {
@@ -260,5 +279,61 @@ func TestUploadRoutes(t *testing.T) {
 	}
 	if w := a.do("POST", "/api/databases/1/backups/1/retry-upload", ""); w.Code != 409 {
 		t.Fatalf("retry again = %d %s", w.Code, w.Body)
+	}
+}
+
+// A bucket that stops answering mid-upload must not hold the Database's job
+// slot, and with it the host-wide scheduler, for ever.
+func TestUploadStallIsCutOff(t *testing.T) {
+	r := newRig(t)
+	r.svc.uploadStall = 50 * time.Millisecond
+	d := r.create(t, "Shop", "postgres", "18")
+	remote := r.withDestination(t)
+	remote.hang = true
+	r.dumps("pg_dump -U postgres", "SELECT 1;\n")
+	r.useClock(day(15, 3, 0))
+	r.schedule(t, d.ID, r.toDestination, day(14, 3, 0))
+	done := make(chan struct{})
+	go func() { r.svc.tick(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the tick is still waiting on a bucket that does not answer")
+	}
+	b := r.lastBackup(t, d.ID)
+	if b.Status != JobSucceeded || b.Upload == nil || b.Upload.Status != UploadFailed || !strings.Contains(b.Upload.Error, "no progress") {
+		t.Fatalf("backup = %+v upload = %+v", b, b.Upload)
+	}
+	if job := r.svc.Jobs(d.ID); job != "" {
+		t.Fatalf("job slot still held: %q", job)
+	}
+}
+
+// A delete the bucket never answers fails as a remote delete, in bounded time.
+func TestRemoteDeleteTimesOut(t *testing.T) {
+	r := newRig(t)
+	r.svc.remoteTimeout = 50 * time.Millisecond
+	d := r.create(t, "Shop", "postgres", "18")
+	remote := r.withDestination(t)
+	r.dumps("pg_dump -U postgres", "SELECT 1;\n")
+	r.useClock(day(15, 3, 0))
+	r.schedule(t, d.ID, r.toDestination, day(14, 3, 0))
+	r.svc.tick(context.Background())
+	b := r.lastBackup(t, d.ID)
+	remote.mu.Lock()
+	remote.hang = true
+	remote.mu.Unlock()
+	errc := make(chan error, 1)
+	go func() { errc <- r.svc.DeleteBackup(context.Background(), d.ID, b.ID) }()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, ErrRemoteDelete) {
+			t.Fatalf("err = %v, want ErrRemoteDelete", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("DeleteBackup is still waiting on a bucket that does not answer")
+	}
+	if _, err := os.Stat(r.svc.filePath(d.ID, b)); err != nil {
+		t.Fatalf("the file is gone: %v", err)
 	}
 }

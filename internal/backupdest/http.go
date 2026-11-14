@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,6 +34,9 @@ func New(store *Store, now func() time.Time) *Service {
 }
 
 // WithFileRemover sets what removes a deleted Database's files.
+// testTimeout bounds a destination Test.
+const testTimeout = time.Minute
+
 func (s *Service) WithFileRemover(fn func(databaseID int64) error) *Service {
 	s.removeFiles = fn
 	return s
@@ -243,8 +247,17 @@ func (s *Service) test(w http.ResponseWriter, r *http.Request) {
 	msg := ""
 	if remote, err := s.connect(d); err != nil {
 		msg = scrub(err.Error(), d.Secret)
-	} else if err := remote.Test(r.Context()); err != nil {
-		msg = scrub(err.Error(), d.Secret)
+	} else {
+		// A bucket that does not answer fails the test instead of hanging it.
+		ctx, cancel := context.WithTimeout(r.Context(), testTimeout)
+		err := remote.Test(ctx)
+		timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
+		cancel()
+		if err != nil && timedOut {
+			msg = fmt.Sprintf("no answer within %s", testTimeout)
+		} else if err != nil {
+			msg = scrub(err.Error(), d.Secret)
+		}
 	}
 	if err := s.store.SetTestResult(r.Context(), id, msg == "", msg, s.now()); err != nil {
 		writeStoreError(w, err, "could not record the test")
