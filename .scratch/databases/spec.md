@@ -118,6 +118,12 @@ Registry (ADR-0033) and Builders (ADR-0028):
   to `volume_missing` and stops. An empty new volume would look like data loss
   that happened silently. The Admin either restores from a backup into a fresh
   volume (an explicit action) or deletes the Database.
+- **Reserved names.** The Compose policy refuses a Service that answers on
+  `relist-network` to `relist-db-<n>` or to any `*.db.internal` name. Such a
+  Service would receive connections, and passwords, meant for a Database. The
+  check sits beside the existing `relist-registry` check.
+- **Docker cleanup** treats Database volumes and images as owned by the panel,
+  so it never offers to remove them.
 - **Image pull.** The panel pulls the engine image the Admin picked. This is the
   fifth exception to "the panel never pulls an image itself", after the Scanner
   (ADR-0021), the panel image (ADR-0024), BuildKit (ADR-0028) and `registry:3`
