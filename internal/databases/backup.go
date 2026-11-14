@@ -130,14 +130,97 @@ type BackupRequest struct {
 	Databases []string `json:"databases"`
 }
 
-// StartBackup is replaced in the next commit (plan-phase-2b Task 2).
+// StartBackup checks the request, inserts one running row per logical
+// database (names sorted), and dumps them one after another in one job. The
+// rows are returned at once.
 func (s *Service) StartBackup(ctx context.Context, id int64, req BackupRequest) ([]Backup, error) {
-	return nil, errors.New("not implemented")
+	d, dp, err := s.acquire(ctx, id, JobKindBackup)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.insertRun(ctx, d, dp, req)
+	if err != nil {
+		s.endJob(id)
+		return nil, err
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer s.endJob(id)
+		ctx := context.WithoutCancel(ctx)
+		for _, b := range rows {
+			s.executeBackup(ctx, d, dp, b)
+		}
+	}()
+	return rows, nil
 }
 
-// backupAll is replaced in the next commit (plan-phase-2b Task 2).
+// insertRun resolves req to logical database names and inserts a running
+// manual Backup row for each. Nothing is inserted when the request is wrong.
+func (s *Service) insertRun(ctx context.Context, d Database, dp Dumper, req BackupRequest) ([]Backup, error) {
+	if !req.All && len(req.Databases) == 0 {
+		return nil, ErrNoScope
+	}
+	if !req.All {
+		for _, n := range req.Databases {
+			if err := checkName(n); err != nil {
+				return nil, err
+			}
+		}
+	}
+	have, err := s.listLogical(ctx, d, dp)
+	if err != nil {
+		return nil, err
+	}
+	names := have
+	if !req.All {
+		names = slices.Clone(req.Databases)
+		slices.Sort(names)
+		names = slices.Compact(names)
+		var missing []string
+		for _, n := range names {
+			if !slices.Contains(have, n) {
+				missing = append(missing, n)
+			}
+		}
+		if len(missing) > 0 {
+			return nil, ErrUnknownLogical{Names: missing}
+		}
+	}
+	if len(names) == 0 {
+		return nil, ErrNothingToBackUp
+	}
+	var rows []Backup
+	for _, n := range names {
+		b, err := s.d.Store.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, LogicalName: n})
+		if err != nil {
+			for _, done := range rows { // none of them will run
+				_ = s.d.Store.FinishBackup(ctx, done.ID, Backup{Status: JobFailed, Error: err.Error()})
+			}
+			return nil, err
+		}
+		rows = append(rows, b)
+	}
+	return rows, nil
+}
+
+// backupAll backs up every logical database for pre_update, one after
+// another. ok is false if any failed, and firstErr names the first one.
 func (s *Service) backupAll(ctx context.Context, d Database, dp Dumper, trigger string) (ok bool, firstErr string) {
-	return false, "not implemented"
+	names, err := s.listLogical(ctx, d, dp)
+	if err != nil {
+		return false, err.Error()
+	}
+	ok = true
+	for _, n := range names {
+		if b := s.backupNow(ctx, d, dp, n, trigger, nil); b.Status != JobSucceeded {
+			if ok {
+				firstErr = n + ": " + b.Error
+			}
+			ok = false
+		}
+	}
+	return ok, firstErr
 }
 
 // backupNow records and runs a Backup of one logical database before

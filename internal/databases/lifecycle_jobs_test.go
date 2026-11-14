@@ -1,5 +1,3 @@
-//go:build phase2b_pending
-
 package databases
 
 import (
@@ -11,10 +9,10 @@ import (
 	"testing"
 )
 
-// blockBackup makes pg_dumpall wait for release; started closes when it runs.
+// blockBackup makes pg_dump wait for release; started closes when it runs.
 func (r *rig) blockBackup() (started, release chan struct{}) {
 	started, release = make(chan struct{}), make(chan struct{})
-	r.host.script("pg_dumpall", func(ExecRequest) (int, error) {
+	r.host.script("pg_dump -U postgres", func(ExecRequest) (int, error) {
 		close(started)
 		<-release
 		return 0, nil
@@ -27,7 +25,7 @@ func TestLifecycleBusyDuringBackup(t *testing.T) {
 	ctx := context.Background()
 	d := r.create(t, "Shop", "postgres", "18")
 	started, release := r.blockBackup()
-	if _, err := r.svc.StartBackup(ctx, d.ID, Scope{All: true}); err != nil {
+	if _, err := r.svc.StartBackup(ctx, d.ID, BackupRequest{All: true}); err != nil {
 		t.Fatal(err)
 	}
 	<-started
@@ -65,7 +63,7 @@ func TestUpdateImageBackupFirst(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
 	d := r.create(t, "Shop", "postgres", "18")
-	r.dumps("pg_dumpall", "X;\n")
+	r.dumps("pg_dump -U postgres", "X;\n")
 	r.host.reset()
 	if err := r.svc.UpdateImage(ctx, d.ID, true); err != nil {
 		t.Fatal(err)
@@ -75,13 +73,13 @@ func TestUpdateImageBackupFirst(t *testing.T) {
 	}
 	r.svc.Wait()
 	b := r.lastBackup(t, d.ID)
-	if b.Trigger != TriggerPreUpdate || b.Status != JobSucceeded || !b.Scope.All {
+	if b.Trigger != TriggerPreUpdate || b.Status != JobSucceeded || b.LogicalName != "app" {
 		t.Fatalf("backup = %+v", b)
 	}
 	calls := r.host.all()
 	dump, pull := -1, -1
 	for i, c := range calls {
-		if strings.Contains(c, "pg_dumpall") {
+		if strings.Contains(c, "pg_dump -U postgres") {
 			dump = i
 		}
 		if strings.HasPrefix(c, "pull ") {
@@ -97,7 +95,7 @@ func TestUpdateImageBackupFirstFailureStopsBeforePull(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
 	d := r.create(t, "Shop", "postgres", "18")
-	r.host.script("pg_dumpall", func(ExecRequest) (int, error) { return 1, nil })
+	r.host.script("pg_dump -U postgres", func(ExecRequest) (int, error) { return 1, nil })
 	r.host.reset()
 	if err := r.svc.UpdateImage(ctx, d.ID, true); err != nil {
 		t.Fatal(err)
@@ -148,8 +146,8 @@ func TestDeleteKeepsBackupsAsTombstone(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
 	d := r.create(t, "Shop", "postgres", "18")
-	r.dumps("pg_dumpall", "X;\n")
-	b := r.manualBackup(t, d.ID, Scope{All: true})
+	r.dumps("pg_dump -U postgres", "X;\n")
+	b := r.manualBackup(t, d.ID)
 	if err := r.svc.Delete(ctx, d.ID, "Shop", false); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +178,7 @@ func TestDeleteKeepsBackupsAsTombstone(t *testing.T) {
 		"Stop":   func() error { return r.svc.Stop(ctx, d.ID) },
 		"Rename": func() error { return r.svc.Rename(ctx, d.ID, "x") },
 		"Delete": func() error { return r.svc.Delete(ctx, d.ID, "Shop (deleted #1)", false) },
-		"Backup": func() error { _, err := r.svc.StartBackup(ctx, d.ID, Scope{All: true}); return err },
+		"Backup": func() error { _, err := r.svc.StartBackup(ctx, d.ID, BackupRequest{All: true}); return err },
 		"Logs":   func() error { _, err := r.svc.Logs(ctx, d.ID, 10); return err },
 	} {
 		if err := run(); !errors.Is(err, ErrNotFound) {
@@ -199,9 +197,9 @@ func TestDeletingLastBackupOfTombstoneDeletesRow(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
 	d := r.create(t, "Shop", "postgres", "18")
-	r.dumps("pg_dumpall", "X;\n")
-	a := r.manualBackup(t, d.ID, Scope{All: true})
-	b := r.manualBackup(t, d.ID, Scope{All: true})
+	r.dumps("pg_dump -U postgres", "X;\n")
+	a := r.manualBackup(t, d.ID)
+	b := r.manualBackup(t, d.ID)
 	if err := r.svc.Delete(ctx, d.ID, "Shop", false); err != nil {
 		t.Fatal(err)
 	}
@@ -226,8 +224,8 @@ func TestDeleteWithBackupsRemovesDir(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
 	d := r.create(t, "Shop", "postgres", "18")
-	r.dumps("pg_dumpall", "X;\n")
-	r.manualBackup(t, d.ID, Scope{All: true})
+	r.dumps("pg_dump -U postgres", "X;\n")
+	r.manualBackup(t, d.ID)
 	if err := r.svc.Delete(ctx, d.ID, "Shop", true); err != nil {
 		t.Fatal(err)
 	}
@@ -248,5 +246,69 @@ func TestDeleteWithoutBackupsRemovesRow(t *testing.T) {
 	}
 	if _, err := r.store.Get(ctx, d.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("row survived: %v", err)
+	}
+}
+
+func TestUpdateImageBackupFirstEveryDatabase(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	r.pgList("app\nother\n")
+	r.pgDumps()
+	r.host.reset()
+	if err := r.svc.UpdateImage(ctx, d.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	list, _ := r.store.ListBackups(ctx, d.ID)
+	if len(list) != 2 || list[0].Trigger != TriggerPreUpdate || list[1].Trigger != TriggerPreUpdate ||
+		list[0].Status != JobSucceeded || list[1].Status != JobSucceeded {
+		t.Fatalf("backups = %+v", list)
+	}
+	if r.host.count("pull ") != 1 {
+		t.Fatalf("calls = %v", r.host.all())
+	}
+}
+
+func TestUpdateImageBackupFirstOneFailureNamesIt(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	r.pgList("app\nother\n")
+	r.host.script("pg_dump -U postgres", func(req ExecRequest) (int, error) {
+		if pgDB(req) == "other" {
+			return 1, nil
+		}
+		return 0, nil
+	})
+	r.host.reset()
+	if err := r.svc.UpdateImage(ctx, d.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	if r.host.count("pull ") != 0 {
+		t.Fatalf("pulled after a failed backup: %v", r.host.all())
+	}
+	got, _ := r.store.Get(ctx, d.ID)
+	if !strings.Contains(got.LastError, "other") || !strings.Contains(got.LastError, "pre-update backup failed") {
+		t.Fatalf("LastError = %q", got.LastError)
+	}
+}
+
+func TestUpdateImageBackupFirstWithNoDatabases(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "mysql", "8.4")
+	r.dumps("mysql -uroot -N -e SHOW DATABASES", "information_schema\nmysql\n")
+	r.host.reset()
+	if err := r.svc.UpdateImage(ctx, d.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	if list, _ := r.store.ListBackups(ctx, d.ID); len(list) != 0 {
+		t.Fatalf("backups = %+v", list)
+	}
+	if r.host.count("pull ") != 1 {
+		t.Fatalf("the update did not run: %v", r.host.all())
 	}
 }
