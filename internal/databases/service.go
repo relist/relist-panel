@@ -601,6 +601,14 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBa
 	})
 }
 
+// RemoveFiles removes everything the panel keeps on disk for Database id.
+func (s *Service) RemoveFiles(id int64) error {
+	if s.d.DataDir == "" {
+		return nil
+	}
+	return os.RemoveAll(s.dbDir(id))
+}
+
 // removeRecord deletes a Database's row and its files.
 func (s *Service) removeRecord(ctx context.Context, id int64) error {
 	if s.d.DataDir != "" {
