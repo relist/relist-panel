@@ -24,10 +24,24 @@ type BackupJSON struct {
 	Pinned     bool       `json:"pinned"`
 	// LocalRemoved: Rotation removed the file; it cannot be downloaded or restored.
 	LocalRemoved bool `json:"localRemoved"`
+	// Upload is the latest copy to a Backup destination; null when none was tried.
+	Upload *UploadJSON `json:"upload"`
+}
+
+// UploadJSON is a Backup's copy in a Backup destination.
+type UploadJSON struct {
+	Destination string     `json:"destination"`
+	Status      string     `json:"status"`
+	Error       string     `json:"error"`
+	UploadedAt  *time.Time `json:"uploadedAt"`
 }
 
 func backupJSON(b Backup) BackupJSON {
-	return BackupJSON{ID: b.ID, Trigger: b.Trigger, Database: b.LogicalName, Status: b.Status, Error: b.Error, Log: b.Log,
+	var up *UploadJSON
+	if b.Upload != nil {
+		up = &UploadJSON{Destination: b.Upload.DestinationName, Status: b.Upload.Status, Error: b.Upload.Error, UploadedAt: b.Upload.UploadedAt}
+	}
+	return BackupJSON{Upload: up, ID: b.ID, Trigger: b.Trigger, Database: b.LogicalName, Status: b.Status, Error: b.Error, Log: b.Log,
 		Size: b.Size, SHA256: b.SHA256, StartedAt: b.StartedAt, FinishedAt: b.FinishedAt, Pinned: b.Pinned, LocalRemoved: b.LocalRemovedAt != nil}
 }
 

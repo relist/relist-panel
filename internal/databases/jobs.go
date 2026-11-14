@@ -103,6 +103,9 @@ func (s *Service) Startup(ctx context.Context) error {
 	if _, err := s.d.Store.FailRunning(ctx, interrupted); err != nil {
 		return err
 	}
+	if err := s.d.Store.FailRunningUploads(ctx, interrupted); err != nil {
+		return err
+	}
 	if s.d.DataDir == "" {
 		return nil
 	}

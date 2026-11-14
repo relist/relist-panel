@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"relist-panel/internal/backupdest"
 
 	"relist-panel/internal/databases"
 	"relist-panel/internal/imageref"
@@ -13,7 +14,7 @@ import (
 // Docker host for them. locked is the Migration lock; a lock it cannot read
 // counts as held, as the Registry's gate does. updateLocked is the Panel
 // update lock, read when a Backup or restore starts.
-func newDatabaseService(db *sql.DB, d Deps, dataDir string, locked func(ctx context.Context) (bool, error), updateLocked func() bool) *databases.Service {
+func newDatabaseService(db *sql.DB, d Deps, dataDir string, locked func(ctx context.Context) (bool, error), updateLocked func() bool, destinations backupdest.Opener) *databases.Service {
 	if d.DatabaseHost == nil {
 		return nil
 	}
@@ -21,6 +22,7 @@ func newDatabaseService(db *sql.DB, d Deps, dataDir string, locked func(ctx cont
 		Store:        databases.NewStore(db),
 		Host:         d.DatabaseHost,
 		DataDir:      dataDir,
+		Destinations: destinations,
 		UpdateLocked: updateLocked,
 		Locked: func(ctx context.Context) bool {
 			l, err := locked(ctx)

@@ -40,6 +40,24 @@ type Backup struct {
 	// still tracked: the Backup is "Remote only".
 	Pinned         bool
 	LocalRemovedAt *time.Time
+	// Upload is the latest copy to a Backup destination; ListBackups fills it.
+	Upload *Upload
+}
+
+// The state of an Upload.
+const (
+	UploadRunning  = "running"
+	UploadUploaded = "uploaded"
+	UploadFailed   = "failed"
+)
+
+// Upload is one Backup's copy in one Backup destination. It is live while it
+// is uploaded and DeletedAt is nil. DestinationName is read, never written.
+type Upload struct {
+	ID, BackupID, DestinationID int64
+	DestinationName             string
+	ObjectKey, Status, Error    string
+	UploadedAt, DeletedAt       *time.Time
 }
 
 // Restore is one restore of a Backup or of an uploaded file.
@@ -124,16 +142,29 @@ func (s *Store) ListBackups(ctx context.Context, databaseID int64) ([]Backup, er
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := []Backup{}
 	for rows.Next() {
 		b, err := scanBackup(rows)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
 		out = append(out, b)
 	}
-	return out, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	latest, err := s.latestUploads(ctx, databaseID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if u, ok := latest[out[i].ID]; ok {
+			out[i].Upload = &u
+		}
+	}
+	return out, nil
 }
 
 func (s *Store) DeleteBackup(ctx context.Context, id int64) error {
@@ -258,4 +289,128 @@ func (s *Store) FailRunning(ctx context.Context, msg string) ([]Backup, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+const uploadColumns = `u.id, u.backup_id, u.destination_id, d.name, u.object_key, u.status, u.error, u.uploaded_at, u.deleted_at`
+
+func scanUpload(row interface{ Scan(...any) error }) (Upload, error) {
+	var u Upload
+	var up, del sql.NullInt64
+	if err := row.Scan(&u.ID, &u.BackupID, &u.DestinationID, &u.DestinationName, &u.ObjectKey, &u.Status, &u.Error, &up, &del); err != nil {
+		return Upload{}, err
+	}
+	if up.Valid {
+		t := time.UnixMilli(up.Int64)
+		u.UploadedAt = &t
+	}
+	if del.Valid {
+		t := time.UnixMilli(del.Int64)
+		u.DeletedAt = &t
+	}
+	return u, nil
+}
+
+// latestUploads is each Backup of the Database's latest upload row.
+func (s *Store) latestUploads(ctx context.Context, databaseID int64) (map[int64]Upload, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+uploadColumns+` FROM database_backup_uploads u
+		JOIN backup_destinations d ON d.id = u.destination_id
+		JOIN database_backups b ON b.id = u.backup_id
+		WHERE b.database_id = ? ORDER BY u.id`, databaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]Upload{}
+	for rows.Next() {
+		u, err := scanUpload(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[u.BackupID] = u // later rows win: the latest attempt
+	}
+	return out, rows.Err()
+}
+
+// InsertUpload stores u (ID is set here) and returns the stored row.
+func (s *Store) InsertUpload(ctx context.Context, u Upload) (Upload, error) {
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO database_backup_uploads (backup_id, destination_id, object_key, status) VALUES (?, ?, ?, ?)`,
+		u.BackupID, u.DestinationID, u.ObjectKey, u.Status)
+	if err != nil {
+		return Upload{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return Upload{}, err
+	}
+	return scanUpload(s.db.QueryRowContext(ctx, `
+		SELECT `+uploadColumns+` FROM database_backup_uploads u JOIN backup_destinations d ON d.id = u.destination_id WHERE u.id = ?`, id))
+}
+
+// FinishUpload records how a running upload ended; at is when an uploaded one finished.
+func (s *Store) FinishUpload(ctx context.Context, id int64, status, errMsg string, at time.Time) error {
+	var uploaded any
+	if status == UploadUploaded {
+		uploaded = at.UnixMilli()
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE database_backup_uploads SET status = ?, error = ?, uploaded_at = ? WHERE id = ?`, status, errMsg, uploaded, id)
+	return err
+}
+
+// LiveUpload is a Backup's copy that is in a destination now: uploaded and
+// not deleted. nil when there is none.
+func (s *Store) LiveUpload(ctx context.Context, backupID int64) (*Upload, error) {
+	u, err := scanUpload(s.db.QueryRowContext(ctx, `
+		SELECT `+uploadColumns+` FROM database_backup_uploads u JOIN backup_destinations d ON d.id = u.destination_id
+		WHERE u.backup_id = ? AND u.status = 'uploaded' AND u.deleted_at IS NULL ORDER BY u.id DESC LIMIT 1`, backupID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// LiveUploads is every live copy of the Database's Backups, in the destination
+// destID when it is not 0, else in any.
+func (s *Store) LiveUploads(ctx context.Context, databaseID, destID int64) ([]Upload, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+uploadColumns+` FROM database_backup_uploads u
+		JOIN backup_destinations d ON d.id = u.destination_id
+		JOIN database_backups b ON b.id = u.backup_id
+		WHERE b.database_id = ? AND u.status = 'uploaded' AND u.deleted_at IS NULL AND (? = 0 OR u.destination_id = ?)
+		ORDER BY u.id`, databaseID, destID, destID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Upload
+	for rows.Next() {
+		u, err := scanUpload(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// MarkUploadDeleted records that a copy was removed from its destination.
+func (s *Store) MarkUploadDeleted(ctx context.Context, id int64, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE database_backup_uploads SET deleted_at = ? WHERE id = ?`, at.UnixMilli(), id)
+	return err
+}
+
+// DeleteUpload removes an upload row (a failed attempt that is being retried).
+func (s *Store) DeleteUpload(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM database_backup_uploads WHERE id = ?`, id)
+	return err
+}
+
+// FailRunningUploads marks every running upload failed with msg.
+func (s *Store) FailRunningUploads(ctx context.Context, msg string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE database_backup_uploads SET status = 'failed', error = ? WHERE status = 'running'`, msg)
+	return err
 }
