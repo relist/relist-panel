@@ -8,13 +8,15 @@ import { SWRConfig } from 'swr';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '../data/api';
-import type { BackupDestination } from '../data/types';
+import type { BackupDestination, SshKey } from '../data/types';
 import { BackupDestinationsPage } from './BackupDestinationsPage';
 
 const api = vi.hoisted(() => ({
   createBackupDestination: vi.fn(),
   deleteBackupDestination: vi.fn(),
   listBackupDestinations: vi.fn(),
+  listSshKeys: vi.fn(),
+  resetBackupDestinationHostKey: vi.fn(),
   testBackupDestination: vi.fn(),
   updateBackupDestination: vi.fn(),
 }));
@@ -34,6 +36,35 @@ const minio: BackupDestination = {
   type: 's3',
 };
 
+const deployKey: SshKey = {
+  createdAt: '2026-10-01T00:00:00Z',
+  id: 5,
+  name: 'deploy',
+  publicKey: 'ssh-ed25519 AAAAdeploy relist-deploy',
+  usedBy: [],
+  usedByDestinations: [],
+};
+
+const box: BackupDestination = {
+  id: 2,
+  lastTestAt: null,
+  lastTestError: '',
+  lastTestOk: false,
+  name: 'box',
+  sftp: {
+    auth: 'key',
+    host: 'box.example',
+    hostKey: 'ssh-ed25519 SHA256:abc123',
+    path: 'b',
+    port: 23,
+    publicKey: 'ssh-ed25519 AAAAdeploy relist-deploy',
+    sshKeyId: 5,
+    sshKeyName: 'deploy',
+    user: 'u',
+  },
+  type: 'sftp',
+};
+
 function show() {
   return render(
     <SWRConfig value={{ provider: () => new Map(), revalidateOnFocus: false, shouldRetryOnError: false }}>
@@ -47,6 +78,7 @@ function show() {
 beforeEach(() => {
   vi.resetAllMocks();
   api.listBackupDestinations.mockResolvedValue([minio]);
+  api.listSshKeys.mockResolvedValue([deployKey]);
 });
 
 describe('BackupDestinationsPage', () => {
@@ -160,5 +192,81 @@ describe('BackupDestinationsPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Test minio' }));
     expect(await screen.findByText('Failed')).toBeTruthy();
     expect(api.testBackupDestination).toHaveBeenCalledWith(1);
+  });
+  it('adds an SFTP destination with a key', async () => {
+    api.listBackupDestinations.mockResolvedValue([]);
+    api.createBackupDestination.mockResolvedValue(box);
+    const user = userEvent.setup();
+    show();
+    await user.click((await screen.findAllByRole('button', { name: /Add destination/ }))[0]);
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByText('SFTP'));
+    await user.type(within(dialog).getByLabelText('Name'), 'box');
+    await user.type(within(dialog).getByLabelText('Host'), 'box.example');
+    expect((within(dialog).getByLabelText('Port') as HTMLInputElement).value).toBe('22');
+    await user.type(within(dialog).getByLabelText('User'), 'u');
+    await user.type(within(dialog).getByLabelText('Base path'), 'backups');
+    await user.click(await within(dialog).findByRole('combobox', { name: 'SSH key' }));
+    await user.click(await screen.findByTitle('deploy'));
+    expect(await within(dialog).findByText('ssh-ed25519 AAAAdeploy relist-deploy')).toBeTruthy();
+    expect(within(dialog).getByText('Add this line to ~/.ssh/authorized_keys on the server.')).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(api.createBackupDestination).toHaveBeenCalledWith({
+        name: 'box',
+        secret: '',
+        sftp: { auth: 'key', host: 'box.example', path: 'backups', port: 22, sshKeyId: 5, user: 'u' },
+        type: 'sftp',
+      }),
+    );
+  });
+
+  it('asks for the password of an SFTP destination before calling the API', async () => {
+    api.listBackupDestinations.mockResolvedValue([]);
+    const user = userEvent.setup();
+    show();
+    await user.click((await screen.findAllByRole('button', { name: /Add destination/ }))[0]);
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByText('SFTP'));
+    await user.type(within(dialog).getByLabelText('Name'), 'box');
+    await user.type(within(dialog).getByLabelText('Host'), 'box.example');
+    await user.type(within(dialog).getByLabelText('User'), 'u');
+    await user.click(within(dialog).getByRole('radio', { name: 'Password' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByText('Enter the password')).toBeTruthy();
+    expect(api.createBackupDestination).not.toHaveBeenCalled();
+  });
+
+  it('shows the host key and resets it after confirmation', async () => {
+    api.listBackupDestinations.mockResolvedValue([box]);
+    api.resetBackupDestinationHostKey.mockResolvedValue({ ...box, sftp: { ...box.sftp, hostKey: '' } });
+    const user = userEvent.setup();
+    show();
+    await user.click(await screen.findByRole('button', { name: 'Edit box' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('ssh-ed25519 SHA256:abc123')).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Reset host key' }));
+    expect(await screen.findByText('Forget this host key? The next Test trusts whatever key the server presents.')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'OK' }));
+    await waitFor(() => expect(api.resetBackupDestinationHostKey).toHaveBeenCalledWith(2));
+  });
+
+  it('says a destination with no host key is not trusted yet', async () => {
+    api.listBackupDestinations.mockResolvedValue([{ ...box, sftp: { ...box.sftp, hostKey: '' } }]);
+    const user = userEvent.setup();
+    show();
+    await user.click(await screen.findByRole('button', { name: 'Edit box' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Not trusted yet. The next Test trusts the key the server presents.')).toBeTruthy();
+  });
+
+  it('shows where an SFTP destination is, leaving out port 22', async () => {
+    api.listBackupDestinations.mockResolvedValue([
+      { ...box, id: 2, name: 'box' },
+      { ...box, id: 3, name: 'plain', sftp: { ...box.sftp, host: 'box', port: 22 } },
+    ]);
+    show();
+    expect(await screen.findByText('sftp://u@box.example:23/b')).toBeTruthy();
+    expect(screen.getByText('sftp://u@box/b')).toBeTruthy();
   });
 });
