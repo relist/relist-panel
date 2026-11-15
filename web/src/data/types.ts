@@ -1353,3 +1353,47 @@ export interface BackupDestinationInput {
   s3: BackupDestinationS3;
   secret: string;
 }
+
+/** A query cell: NULL, a string (numbers keep every digit), or a value cut at 64 KB or not UTF-8. */
+export type QueryCell = null | string | { bytes: number; hex?: string; text?: string };
+
+export interface QueryColumn {
+  name: string;
+  type: string;
+}
+
+export interface QueryResult {
+  affected: number | null;
+  columns: QueryColumn[];
+  /** "SELECT 100", "UPDATE 3", "OK". */
+  command: string;
+  durationMs: number;
+  rows: QueryCell[][];
+  statementIndex: number;
+  truncated: boolean;
+}
+
+export interface QueryResponse {
+  cancelled: boolean;
+  durationMs: number;
+  error: null | {
+    message: string;
+    /** Character offset in the text that was sent, or null (MySQL gives none). */
+    position: number | null;
+    statementIndex: number;
+    statementStart: number;
+  };
+  results: QueryResult[];
+  stopped: null | string;
+}
+
+export interface QuerySchemaNode {
+  name: string;
+  tables: string[];
+}
+
+export interface QueryRequest {
+  database: string;
+  sql: string;
+  writes: boolean;
+}

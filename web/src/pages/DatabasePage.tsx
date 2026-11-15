@@ -10,6 +10,7 @@ import { PageHeader } from '../components/primitives';
 import { api } from '../data/api';
 import type { Database, DatabaseAction, DatabaseCredentials } from '../data/types';
 import { DatabaseBackupsTab } from './DatabaseBackupsTab';
+import { DatabaseQueryTab } from './DatabaseQueryTab';
 import { canBackUp, canRepair, jobNotice, pollInterval, snippet, statusMeta } from './databases-view';
 
 const { Text } = Typography;
@@ -203,6 +204,7 @@ export function DatabasePage() {
           destroyOnHidden
           items={[
             { children: <ConnectionTab db={data} />, key: 'connection', label: 'Connection' },
+            ...(sql ? [{ children: <DatabaseQueryTab db={data} />, key: 'query', label: 'Query' }] : []),
             ...(sql ? [{ children: <DatabaseBackupsTab db={data} />, key: 'backups', label: 'Backups' }] : []),
             { children: <LogsTab id={databaseId} />, key: 'logs', label: 'Logs' },
             {
