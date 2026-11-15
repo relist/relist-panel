@@ -51,6 +51,19 @@ export DOCKER_CONFIG="$OUT/dockercfg"
 host() { env -u DOCKER_HOST docker "$@"; }
 dind() { DOCKER_HOST="unix://$SOCK_DIR/docker.sock" docker "$@"; }
 
+# After a reboot the runtime dir (a tmpfs) is empty. Starting the existing dind
+# container then makes Docker create the bind-mount source itself, as root. So
+# recreate the dir before every start/run and refuse to go on if root owns it.
+ensure_sock_dir() {
+	mkdir -p "$SOCK_DIR" 2>/dev/null || true
+	local d
+	for d in "$(dirname "$SOCK_DIR")" "$SOCK_DIR"; do
+		if [ ! -d "$d" ] || [ ! -O "$d" ] || [ ! -w "$d" ]; then
+			fail "$d is missing, not owned by you or not writable. Docker created it as root after a reboot wiped $(dirname "$(dirname "$SOCK_DIR")"). Fix with: sudo rm -rf $(dirname "$SOCK_DIR")"
+		fi
+	done
+}
+
 wait_for() { # wait_for <seconds> <command...>
 	local n=$1; shift
 	for _ in $(seq 1 "$n"); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done
@@ -117,12 +130,14 @@ env)
 	;;
 down)
 	host rm -f -v "$NAME" >/dev/null 2>&1 || true
-	rm -rf "$SOCK_DIR" "$OUT/env" "$OUT/env.json" "$OUT/admin-pw.txt" "$OUT/admin-email.txt"
+	rm -rf "$SOCK_DIR" 2>/dev/null || fail "cannot remove $SOCK_DIR (Docker created it as root after a reboot). Fix with: sudo rm -rf $(dirname "$SOCK_DIR")"
+	rm -rf "$OUT/env" "$OUT/env.json" "$OUT/admin-pw.txt" "$OUT/admin-email.txt"
 	say "removed $NAME"
 	exit 0
 	;;
 reload)
 	host inspect "$NAME" >/dev/null 2>&1 || fail "no sandbox: run task e2e:serve"
+	ensure_sock_dir
 	host start "$NAME" >/dev/null
 	wait_for 60 dind info || fail "dind did not come up"
 	build
@@ -143,7 +158,9 @@ fi
 if ! host inspect "$NAME" >/dev/null 2>&1; then
 	say "starting $NAME"
 	rm -f "$OUT/admin-pw.txt" "$OUT/admin-email.txt" # a new dind has a new panel.db
-	rm -rf "$SOCK_DIR" && mkdir -p "$SOCK_DIR"
+	ensure_sock_dir
+	rm -rf "$SOCK_DIR" # a stale socket from an earlier run
+	ensure_sock_dir
 	host run -d --privileged --name "$NAME" \
 		--label "relist.e2e.root=$ROOT" \
 		-v "$SOCK_DIR:/e2e-sock" \
@@ -151,6 +168,7 @@ if ! host inspect "$NAME" >/dev/null 2>&1; then
 		docker:29-dind \
 		--host=unix:///var/run/docker.sock --host=unix:///e2e-sock/docker.sock --group="$(id -g)" >/dev/null
 else
+	ensure_sock_dir
 	host start "$NAME" >/dev/null
 fi
 wait_for 60 dind info || fail "dind did not come up on $SOCK_DIR/docker.sock"
