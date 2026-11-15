@@ -115,6 +115,7 @@ var Actions = map[string]string{
 	"PUT /api/backup-destinations/{id}":                        "backup_destination.update",
 	"DELETE /api/backup-destinations/{id}":                     "backup_destination.delete",
 	"POST /api/backup-destinations/{id}/test":                  "backup_destination.test",
+	"POST /api/backup-destinations/{id}/reset-host-key":        "backup_destination.reset_host_key",
 	"PUT /api/registry":                                        "registry.update",
 	"POST /api/registry/enable":                                "registry.enable",
 	"POST /api/registry/disable":                               "registry.disable",

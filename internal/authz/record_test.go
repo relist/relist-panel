@@ -418,7 +418,7 @@ func TestBackupDestinationAndScheduleChangesAreAudited(t *testing.T) {
 	f, c := recordingFixture(t, func(mux *http.ServeMux) {
 		for _, route := range []string{
 			"POST /api/backup-destinations", "PUT /api/backup-destinations/{id}", "DELETE /api/backup-destinations/{id}",
-			"POST /api/backup-destinations/{id}/test", "PUT /api/databases/{id}/schedule",
+			"POST /api/backup-destinations/{id}/test", "POST /api/backup-destinations/{id}/reset-host-key", "PUT /api/databases/{id}/schedule",
 			"PUT /api/databases/{id}/backups/{backupID}/pin", "POST /api/databases/{id}/backups/{backupID}/retry-upload",
 		} {
 			mux.HandleFunc(route, answer(http.StatusOK))
@@ -432,6 +432,7 @@ func TestBackupDestinationAndScheduleChangesAreAudited(t *testing.T) {
 		{http.MethodPut, "/api/backup-destinations/1", "backup_destination.update"},
 		{http.MethodDelete, "/api/backup-destinations/1", "backup_destination.delete"},
 		{http.MethodPost, "/api/backup-destinations/1/test", "backup_destination.test"},
+		{http.MethodPost, "/api/backup-destinations/1/reset-host-key", "backup_destination.reset_host_key"},
 		{http.MethodPut, "/api/databases/4/schedule", "database.schedule"},
 		{http.MethodPut, "/api/databases/4/backups/1/pin", "database.backup_pin"},
 		{http.MethodPost, "/api/databases/4/backups/1/retry-upload", "database.backup_upload"},
