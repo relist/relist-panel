@@ -25,8 +25,19 @@ func NewEngine(socketPath string) *Engine {
 }
 
 func (e *Engine) ProjectContainers(ctx context.Context, project string) ([]composes.EngineContainer, error) {
+	return e.listCompose(ctx, "com.docker.compose.project="+project)
+}
+
+// ComposeContainers lists every Compose-managed container in every state,
+// one-off ones (compose run) left out, each with its project.
+func (e *Engine) ComposeContainers(ctx context.Context) ([]composes.EngineContainer, error) {
+	return e.listCompose(ctx, "com.docker.compose.project")
+}
+
+// listCompose lists non-one-off containers carrying the project label filter.
+func (e *Engine) listCompose(ctx context.Context, projectLabel string) ([]composes.EngineContainer, error) {
 	filters, err := json.Marshal(map[string][]string{"label": {
-		"com.docker.compose.project=" + project,
+		projectLabel,
 		"com.docker.compose.oneoff=False",
 	}})
 	if err != nil {
@@ -44,7 +55,12 @@ func (e *Engine) ProjectContainers(ctx context.Context, project string) ([]compo
 	}
 	containers := make([]composes.EngineContainer, 0, len(listed))
 	for _, c := range listed {
-		container := composes.EngineContainer{ID: c.ID, Service: c.Labels["com.docker.compose.service"], Running: c.State == "running"}
+		container := composes.EngineContainer{
+			ID:      c.ID,
+			Service: c.Labels["com.docker.compose.service"],
+			Project: c.Labels["com.docker.compose.project"],
+			Running: c.State == "running",
+		}
 		if len(c.Names) > 0 {
 			container.Name = strings.TrimPrefix(c.Names[0], "/")
 		}
