@@ -1,9 +1,11 @@
 import { defineConfig } from '@playwright/test';
-import { sandbox } from './lib/sandbox.js';
+import { dockerEnv, sandbox } from './lib/sandbox.js';
 
 // Every spec runs against this checkout's e2e sandbox (task e2e:serve), read
 // from .data/e2e/env.json. Specs share one panel, so they run one at a time.
 const env = sandbox();
+// Workers and the docker CLI processes specs start inherit the sandbox's TLS env.
+Object.assign(process.env, dockerEnv());
 
 export default defineConfig({
   testDir: './tests',
