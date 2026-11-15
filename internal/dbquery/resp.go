@@ -37,6 +37,9 @@ type respConn struct {
 	conn net.Conn
 	br   *bufio.Reader
 	stop chan struct{}
+	// elemCap overrides redisMaxElems for a read that needs more flat
+	// elements (a hash's fields and values arrive in one array).
+	elemCap int
 }
 
 func newRespConn(c net.Conn) *respConn {
@@ -188,9 +191,12 @@ func (c *respConn) read(st *readState, depth int, keep bool) (Reply, error) {
 		if n == -1 {
 			return Reply{Type: "nil"}, nil
 		}
-		kept := n
-		if kept > redisMaxElems {
-			kept = redisMaxElems
+		kept, limit := n, int64(redisMaxElems)
+		if c.elemCap > 0 {
+			limit = int64(c.elemCap)
+		}
+		if kept > limit {
+			kept = limit
 		}
 		items := []Reply{}
 		for i := int64(0); i < n; i++ {

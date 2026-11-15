@@ -1,8 +1,11 @@
 package dbquery
 
 import (
+	"context"
 	"errors"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // SplitRedisArgs splits a console line the way redis-cli does (sdssplitargs):
@@ -244,4 +247,267 @@ func Classify(info CommandInfo, args []string, writes bool) Class {
 	}
 	out.Refused, out.Reason = true, "writes are off"
 	return out
+}
+
+// RedisResponse is a console run's outcome. Like every run it is data, never
+// an HTTP error, so the audit middleware records it.
+type RedisResponse struct {
+	Reply        *Reply `json:"reply"`
+	Refused      string `json:"refused,omitempty"`
+	NeedsConfirm bool   `json:"needsConfirm,omitempty"`
+	Error        string `json:"error,omitempty"`
+	// Cancelled: the request ended, or the batch passed 30 s.
+	Cancelled  bool  `json:"cancelled,omitempty"`
+	DurationMs int64 `json:"durationMs"`
+}
+
+// KeyInfo is one key of a scan.
+type KeyInfo struct {
+	Key   string `json:"key"`
+	Type  string `json:"type"`
+	TTLms int64  `json:"ttlMs"` // -1: no expiry, -2: gone
+}
+
+// KeyItem is one element of a key's value: a string's value, a hash field and
+// value, a list or set member, or a sorted set member and score.
+type KeyItem struct {
+	Field string `json:"field,omitempty"`
+	Value string `json:"value"`
+	Score string `json:"score,omitempty"`
+	// Bytes is the full size of a value that was cut.
+	Bytes int `json:"bytes,omitempty"`
+}
+
+// KeyValue is a key's value by type, at most 1,000 elements.
+type KeyValue struct {
+	Key         string    `json:"key"`
+	Type        string    `json:"type"`
+	TTLms       int64     `json:"ttlMs"`
+	Total       int64     `json:"total"`
+	More        bool      `json:"more"`
+	Unsupported bool      `json:"unsupported,omitempty"`
+	Items       []KeyItem `json:"items"`
+}
+
+// redisFail turns a connection error into the response: Cancelled when the
+// context ended, the error's words otherwise (never the password).
+func redisFail(resp *RedisResponse, ctx, parent context.Context, err error) {
+	switch {
+	case parent.Err() != nil:
+		resp.Cancelled, resp.Error = true, msgCancelled
+	case ctx.Err() != nil:
+		resp.Cancelled, resp.Error = true, msgTimedOut
+	default:
+		resp.Error = err.Error()
+	}
+}
+
+// RunRedis runs one console line on database db. It sends nothing the
+// classifier refuses, and nothing dangerous before confirmDangerous.
+func RunRedis(parent context.Context, t Target, db int, line string, writes, confirmDangerous bool) RedisResponse {
+	began := time.Now()
+	resp := RedisResponse{}
+	defer func() { resp.DurationMs = sinceMs(began) }()
+	args, err := SplitRedisArgs(line)
+	if err != nil {
+		resp.Error = err.Error()
+		return resp
+	}
+	if len(args) == 0 {
+		resp.Refused = "there is nothing to run"
+		return resp
+	}
+	ctx, cancel := context.WithTimeout(parent, runTimeout)
+	defer cancel()
+	c, err := dialRedis(ctx, t, db)
+	if err != nil {
+		redisFail(&resp, ctx, parent, err)
+		return resp
+	}
+	defer c.close()
+	infoReply, err := c.Do("COMMAND", "INFO", args[0])
+	if err != nil {
+		redisFail(&resp, ctx, parent, err)
+		return resp
+	}
+	class := Classify(ParseCommandInfo(infoReply), args, writes)
+	if class.Refused {
+		resp.Refused = class.Reason
+		return resp
+	}
+	if class.Dangerous && !confirmDangerous {
+		resp.NeedsConfirm = true
+		return resp
+	}
+	reply, err := c.Do(args...)
+	if err != nil {
+		redisFail(&resp, ctx, parent, err)
+		return resp
+	}
+	resp.Reply = &reply
+	return resp
+}
+
+func replyString(r Reply) string {
+	s, _ := r.Value.(string)
+	return s
+}
+
+func replyInt(r Reply) int64 {
+	n, _ := r.Value.(int64)
+	return n
+}
+
+func redisErr(r Reply) error {
+	if r.Type == "error" {
+		return errors.New(replyString(r))
+	}
+	return nil
+}
+
+// ScanKeys reads one SCAN page (COUNT 100) of database db with each key's
+// type and TTL. next is "0" when the scan is complete.
+func ScanKeys(parent context.Context, t Target, db int, pattern, cursor string) ([]KeyInfo, string, error) {
+	if pattern == "" {
+		pattern = "*"
+	}
+	if cursor == "" {
+		cursor = "0"
+	}
+	ctx, cancel := context.WithTimeout(parent, runTimeout)
+	defer cancel()
+	c, err := dialRedis(ctx, t, db)
+	if err != nil {
+		return nil, "", err
+	}
+	defer c.close()
+	r, err := c.Do("SCAN", cursor, "MATCH", pattern, "COUNT", "100")
+	if err != nil {
+		return nil, "", err
+	}
+	if err := redisErr(r); err != nil {
+		return nil, "", err
+	}
+	parts, _ := r.Value.([]Reply)
+	if len(parts) != 2 {
+		return nil, "", errors.New("unexpected SCAN reply")
+	}
+	names, _ := parts[1].Value.([]Reply)
+	keys := make([]KeyInfo, 0, len(names))
+	for _, n := range names {
+		key := replyString(n)
+		tr, err := c.Do("TYPE", key)
+		if err != nil {
+			return nil, "", err
+		}
+		pr, err := c.Do("PTTL", key)
+		if err != nil {
+			return nil, "", err
+		}
+		keys = append(keys, KeyInfo{Key: key, Type: replyString(tr), TTLms: replyInt(pr)})
+	}
+	return keys, replyString(parts[0]), nil
+}
+
+func item(r Reply) KeyItem { return KeyItem{Value: replyString(r), Bytes: r.Bytes} }
+
+// ReadKey reads the value of key by its type, at most 1,000 elements: a
+// string with GET, a hash with one HSCAN, a list with LRANGE, a set with one
+// SSCAN and a sorted set with ZRANGE. Another type is only named.
+func ReadKey(parent context.Context, t Target, db int, key string) (KeyValue, error) {
+	ctx, cancel := context.WithTimeout(parent, runTimeout)
+	defer cancel()
+	c, err := dialRedis(ctx, t, db)
+	if err != nil {
+		return KeyValue{}, err
+	}
+	defer c.close()
+	kv := KeyValue{Key: key, Items: []KeyItem{}}
+	tr, err := c.Do("TYPE", key)
+	if err != nil {
+		return kv, err
+	}
+	kv.Type = replyString(tr)
+	if pr, err := c.Do("PTTL", key); err == nil {
+		kv.TTLms = replyInt(pr)
+	} else {
+		return kv, err
+	}
+	// A hash's fields and values, or a sorted set's members and scores, come
+	// in one flat array: twice the elements.
+	c.elemCap = 2 * redisMaxElems
+	switch kv.Type {
+	case "string":
+		r, err := c.Do("GET", key)
+		if err != nil {
+			return kv, err
+		}
+		if r.Type != "nil" {
+			kv.Items, kv.Total = append(kv.Items, item(r)), 1
+		}
+	case "hash", "set":
+		scan, count := "HSCAN", "HLEN"
+		if kv.Type == "set" {
+			scan, count = "SSCAN", "SCARD"
+		}
+		r, err := c.Do(scan, key, "0", "COUNT", strconv.Itoa(redisMaxElems))
+		if err != nil {
+			return kv, err
+		}
+		parts, _ := r.Value.([]Reply)
+		if len(parts) == 2 {
+			flat, _ := parts[1].Value.([]Reply)
+			kv.More = replyString(parts[0]) != "0" || parts[1].More > 0
+			if kv.Type == "hash" {
+				for i := 0; i+1 < len(flat); i += 2 {
+					it := item(flat[i+1])
+					it.Field = replyString(flat[i])
+					kv.Items = append(kv.Items, it)
+				}
+			} else {
+				for _, m := range flat {
+					kv.Items = append(kv.Items, item(m))
+				}
+			}
+		}
+		n, err := c.Do(count, key)
+		if err != nil {
+			return kv, err
+		}
+		kv.Total = replyInt(n)
+	case "list", "zset":
+		var r, n Reply
+		if kv.Type == "list" {
+			r, err = c.Do("LRANGE", key, "0", strconv.Itoa(redisMaxElems-1))
+		} else {
+			r, err = c.Do("ZRANGE", key, "0", strconv.Itoa(redisMaxElems-1), "WITHSCORES")
+		}
+		if err != nil {
+			return kv, err
+		}
+		flat, _ := r.Value.([]Reply)
+		if kv.Type == "list" {
+			for _, m := range flat {
+				kv.Items = append(kv.Items, item(m))
+			}
+			n, err = c.Do("LLEN", key)
+		} else {
+			for i := 0; i+1 < len(flat); i += 2 {
+				it := item(flat[i])
+				it.Score = replyString(flat[i+1])
+				kv.Items = append(kv.Items, it)
+			}
+			n, err = c.Do("ZCARD", key)
+		}
+		if err != nil {
+			return kv, err
+		}
+		kv.Total = replyInt(n)
+		kv.More = kv.Total > int64(len(kv.Items))
+	case "none":
+		kv.Total = 0
+	default:
+		kv.Unsupported = true
+	}
+	return kv, nil
 }

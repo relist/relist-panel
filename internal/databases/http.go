@@ -51,6 +51,9 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/databases/{id}/restores/upload", a.uploadRestore)
 	mux.HandleFunc("POST /api/databases/{id}/query", a.query)
 	mux.HandleFunc("GET /api/databases/{id}/query/schema", a.querySchema)
+	mux.HandleFunc("POST /api/databases/{id}/redis/command", a.redisCommand)
+	mux.HandleFunc("GET /api/databases/{id}/redis/keys", a.redisKeys)
+	mux.HandleFunc("GET /api/databases/{id}/redis/key", a.redisKey)
 }
 
 // DatabaseJSON is a Database as the browser sees it. It never carries the
@@ -344,7 +347,7 @@ func writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrInvalidName), errors.Is(err, ErrUnknownEngine), errors.Is(err, ErrUnknownVersion), errors.Is(err, ErrConfirm), errors.Is(err, ErrInvalidLimits),
 		errors.Is(err, ErrNoBackups), errors.Is(err, ErrNoScope), errors.As(err, &unknownLogical),
 		errors.Is(err, ErrUnsafeName), errors.Is(err, ErrBadTarget), errors.Is(err, ErrNothingToBackUp), errors.Is(err, ErrNotRestorable),
-		errors.Is(err, ErrBadUpload), errors.Is(err, ErrNoQuery), errors.As(err, &forbidden):
+		errors.Is(err, ErrBadUpload), errors.Is(err, ErrNoQuery), errors.Is(err, ErrNoConsole), errors.As(err, &forbidden):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, "Database not found")
