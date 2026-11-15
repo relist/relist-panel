@@ -40,6 +40,8 @@ export const LAYOUT = {
    * document. `clamp` keeps it usable on a short laptop and on a tall monitor.
    */
   terminalHeight: 'clamp(420px, 65vh, 800px)',
+  /** The Query tab's SQL editor: a bounded box, short enough that the results stay on screen. */
+  queryEditorHeight: 'clamp(200px, 30vh, 360px)',
 } as const;
 
 export type ThemeMode = 'dark' | 'light';
