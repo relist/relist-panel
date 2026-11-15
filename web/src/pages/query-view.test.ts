@@ -47,6 +47,11 @@ describe('history', () => {
     expect(readHistory(2)).toEqual([]);
   });
 
+  it('does not keep a statement that carries a password', () => {
+    pushHistory(1, { at: 1, database: 'd', outcome: 'ok', sql: "ALTER USER u PASSWORD 'hunter2'", writes: true });
+    expect(readHistory(1)).toEqual([]);
+  });
+
   it('survives a localStorage that throws', () => {
     vi.stubGlobal('localStorage', {
       getItem: () => {

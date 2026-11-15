@@ -1398,3 +1398,50 @@ export interface QueryRequest {
   sql: string;
   writes: boolean;
 }
+
+/** A RESP2 reply; a bulk string cut at 64 KB carries its full size in `bytes`, a collection cut at 1,000 elements `more`. */
+export interface RedisReply {
+  bytes?: number;
+  more?: number;
+  type: 'array' | 'bulk' | 'error' | 'integer' | 'nil' | 'string';
+  value: number | string | RedisReply[] | null;
+}
+
+export interface RedisResponse {
+  cancelled?: boolean;
+  durationMs: number;
+  error?: string;
+  needsConfirm?: boolean;
+  refused?: string;
+  reply: RedisReply | null;
+}
+
+export interface RedisCommandRequest {
+  command: string;
+  confirmDangerous: boolean;
+  db: number;
+  writes: boolean;
+}
+
+export interface RedisKeyInfo {
+  key: string;
+  ttlMs: number;
+  type: string;
+}
+
+export interface RedisKeyItem {
+  bytes?: number;
+  field?: string;
+  score?: string;
+  value: string;
+}
+
+export interface RedisKeyValue {
+  items: RedisKeyItem[];
+  key: string;
+  more: boolean;
+  total: number;
+  ttlMs: number;
+  type: string;
+  unsupported?: boolean;
+}

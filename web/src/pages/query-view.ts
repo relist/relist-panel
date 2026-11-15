@@ -39,7 +39,11 @@ export function readHistory(id: number): HistoryEntry[] {
   }
 }
 
+// A statement that carries a password is not kept: browser storage is not a safe place for one.
+const SECRET = /\b(password|identified)\b/i;
+
 export function pushHistory(id: number, entry: HistoryEntry): void {
+  if (SECRET.test(entry.sql)) return;
   try {
     localStorage.setItem(historyKey(id), JSON.stringify([entry, ...readHistory(id)].slice(0, HISTORY_MAX)));
   } catch {
