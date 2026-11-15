@@ -19,6 +19,9 @@ type Key struct {
 	PublicKey  string
 	CreatedAt  time.Time
 	UsedBy     []Use
+	// UsedByDestinations are the names of the Backup destinations that log in
+	// with the key, sorted.
+	UsedByDestinations []string
 }
 
 // Use is a Git Source that has picked a key.
@@ -35,6 +38,14 @@ var (
 	ErrNameRequired = errors.New("name is required")
 	ErrNameInvalid  = errors.New("name must be at most 100 characters with no control characters")
 )
+
+// ErrKeyInUse is a key a Backup destination logs in with; it cannot be
+// deleted. (A Git Source's key can: the Source loses it.)
+type ErrKeyInUse struct{ Destinations []string }
+
+func (e ErrKeyInUse) Error() string {
+	return "used by Backup destinations: " + strings.Join(e.Destinations, ", ")
+}
 
 type Store struct {
 	db *sql.DB
@@ -72,6 +83,7 @@ func scanKey(row scanner) (Key, error) {
 	}
 	k.CreatedAt = time.Unix(createdAt, 0)
 	k.UsedBy = []Use{}
+	k.UsedByDestinations = []string{}
 	return k, nil
 }
 
@@ -97,8 +109,13 @@ func (s *Store) List(ctx context.Context) ([]Key, error) {
 	if err != nil {
 		return nil, err
 	}
+	dests, err := destinationUses(ctx, s.db, 0)
+	if err != nil {
+		return nil, err
+	}
 	for i := range keys {
 		keys[i].UsedBy = append(keys[i].UsedBy, uses[keys[i].ID]...)
+		keys[i].UsedByDestinations = append(keys[i].UsedByDestinations, dests[keys[i].ID]...)
 	}
 	return keys, nil
 }
@@ -114,6 +131,11 @@ func (s *Store) Get(ctx context.Context, id int64) (Key, error) {
 		return Key{}, err
 	}
 	k.UsedBy = append(k.UsedBy, uses[id]...)
+	dests, err := destinationUses(ctx, s.db, id)
+	if err != nil {
+		return Key{}, err
+	}
+	k.UsedByDestinations = append(k.UsedByDestinations, dests[id]...)
 	return k, nil
 }
 
@@ -164,14 +186,22 @@ func (s *Store) Rename(ctx context.Context, id int64, name string) (Key, error) 
 	return s.Get(ctx, id)
 }
 
-// Delete removes a key. The Sources using it keep no key, and their last test
-// result, which used that key, is cleared.
+// Delete removes a key, unless a Backup destination uses it (ErrKeyInUse).
+// The Sources using it keep no key, and their last test result, which used
+// that key, is cleared.
 func (s *Store) Delete(ctx context.Context, id int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	dests, err := destinationUses(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if names := dests[id]; len(names) > 0 {
+		return ErrKeyInUse{names}
+	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE compose_sources SET last_test_at = NULL, last_test_ok = NULL WHERE ssh_key_id = ?`, id); err != nil {
 		return err
@@ -213,6 +243,33 @@ func (s *Store) uses(ctx context.Context, keyID int64) (map[int64][]Use, error) 
 		uses[id] = append(uses[id], u)
 	}
 	return uses, rows.Err()
+}
+
+type queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+// destinationUses maps key id to the names of the Backup destinations using
+// it, sorted. A zero keyID means every key.
+func destinationUses(ctx context.Context, q queryer, keyID int64) (map[int64][]string, error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT ssh_key_id, name FROM backup_destinations
+		WHERE ssh_key_id IS NOT NULL AND (? = 0 OR ssh_key_id = ?)
+		ORDER BY name`, keyID, keyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64][]string{}
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		out[id] = append(out[id], name)
+	}
+	return out, rows.Err()
 }
 
 func isUniqueConstraint(err error) bool {

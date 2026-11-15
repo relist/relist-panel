@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"relist-panel/internal/backupdest"
 )
 
 func TestScheduleRoutes(t *testing.T) {
@@ -132,3 +134,26 @@ func TestRemoteOnlyBackupRoutes(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+func TestScheduleRefusesUntestedSFTP(t *testing.T) {
+	a := newAPIRig(t)
+	a.seed(t, "Shop", "postgres", "18")
+	a.withDestination(t)
+	body := `{"enabled":true,"days":["daily"],"minute":180,"all":true,"databases":[],"destinationId":1}`
+	// An S3 destination that was never tested saves, as before.
+	if w := a.do("PUT", "/api/databases/1/schedule", body); w.Code != 200 {
+		t.Fatalf("s3 = %d %s", w.Code, w.Body)
+	}
+	sftp := backupdest.Destination{ID: 1, Name: "box", Type: backupdest.TypeSFTP,
+		SFTP: backupdest.SFTPConfig{Host: "box", Port: 22, User: "u", Auth: backupdest.AuthPassword}}
+	a.svc.d.Destinations = fakeOpener{remote: newFakeRemote(), dest: &sftp}
+	w := a.do("PUT", "/api/databases/1/schedule", body)
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "test the Backup destination first: it has no trusted host key") {
+		t.Fatalf("untested sftp = %d %s", w.Code, w.Body)
+	}
+	sftp.HostKey = "ssh-ed25519 AAAA"
+	a.svc.d.Destinations = fakeOpener{remote: newFakeRemote(), dest: &sftp}
+	if w := a.do("PUT", "/api/databases/1/schedule", body); w.Code != 200 {
+		t.Fatalf("tested sftp = %d %s", w.Code, w.Body)
+	}
+}
