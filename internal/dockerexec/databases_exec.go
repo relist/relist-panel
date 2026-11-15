@@ -77,7 +77,9 @@ func (h *DatabaseHost) Exec(ctx context.Context, name string, req databases.Exec
 		return 0, err
 	}
 	if !ok(resp.StatusCode) {
-		return 0, apiError(createPath, resp.Status, body)
+		// An *engineError keeps the status, so a caller can tell a missing
+		// container (404) from a stopped one (409).
+		return 0, &engineError{status: resp.StatusCode, msg: apiError(createPath, resp.Status, body).Error()}
 	}
 	execID, err := createdExecID(body)
 	if err != nil {
