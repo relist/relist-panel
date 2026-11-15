@@ -29,8 +29,8 @@ is still missing, in the operator's order of value:
 - **Still out of scope:** failure notifications (the panel has no notification
   system; that needs its own spec covering Deployments and Certificates too),
   point-in-time recovery, grid editing and schema UI, more engines.
-- **Open question:** a "Preview" (dry-run) of data-changing statements in the
-  Query panel, offered on 2026-11-15 for phase 8, is not answered yet.
+- **Added to phase 8 (2026-11-15):** a **Preview** (dry-run) of
+  data-changing statements in the Query panel.
 
 ## Phases
 
@@ -291,6 +291,26 @@ gets a superuser session.
   always connects with the stored password.
 - Every Query panel run is audited as today, with the panel user and the DB
   user.
+
+### Preview (dry-run) in the SQL Query panel
+
+For Admins and grantees alike. It is a guard against mistakes, not a security
+boundary: security is the DB user's permissions above.
+
+- **Preview** sits beside Run when writes are allowed. It runs the batch in one
+  transaction, reports each statement's affected rows ("would delete 3,412 rows
+  from `orders`"), then rolls back. The person then clicks Run to do it.
+- **Only when every statement starts with `INSERT`, `UPDATE`, `DELETE` or
+  (MySQL / MariaDB) `REPLACE`.** Otherwise Preview is refused before anything
+  runs, naming the first other statement. DDL is excluded because MySQL
+  commits it implicitly.
+- **MySQL / MariaDB:** refused while any non-system schema holds a table whose
+  engine is not transactional (not InnoDB), listing up to five, because
+  MyISAM and Aria changes would not roll back.
+- **The page says what Preview cannot undo:** sequence values, and anything a
+  trigger or function does outside the database's tables.
+- The same limits, timeout and cancel as Run. Every Preview is audited with
+  `outcome: preview`.
 
 ## Phase 9: Rotation tiers and encryption
 
