@@ -26,12 +26,13 @@ vi.mock('../data/api', async (importOriginal) => ({
 const DUPLICATE = 'An SSH key with this name already exists';
 const FULL_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOnlyTheBodyWXYZ relist-ci';
 
-const unused: SshKey = { createdAt: '2026-01-02T03:04:05Z', id: 1, name: 'ci', publicKey: FULL_KEY, usedBy: [] };
+const unused: SshKey = { createdAt: '2026-01-02T03:04:05Z', id: 1, name: 'ci', publicKey: FULL_KEY, usedBy: [], usedByDestinations: [] };
 const inUse: SshKey = {
   createdAt: '2026-01-03T03:04:05Z',
   id: 2,
   name: 'shared',
   publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIShared1234 relist-shared',
+  usedByDestinations: [],
   usedBy: [
     { composeId: 7, composeName: 'shop', environmentId: 2, projectId: 1, projectName: 'Acme' },
     { composeId: 8, composeName: 'blog', environmentId: 2, projectId: 1, projectName: 'Acme' },
@@ -175,5 +176,13 @@ describe('SshKeysPage', () => {
     expect(within(dialog).getByText("These Sources will have no SSH key and can't deploy until you choose another.")).toBeTruthy();
     expect(within(dialog).getByText('shop')).toBeTruthy();
     expect(within(dialog).getByText('blog')).toBeTruthy();
+  });
+
+  it('lists the Backup destinations using a key and refuses to delete it', async () => {
+    api.listSshKeys.mockResolvedValue([{ ...unused, usedByDestinations: ['offsite'] }]);
+    show();
+    expect(await screen.findByText('Backup destination: offsite')).toBeTruthy();
+    const button = screen.getByRole('button', { name: /delete/i }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
   });
 });

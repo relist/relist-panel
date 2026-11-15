@@ -663,6 +663,8 @@ export const api = {
       { method: 'DELETE' },
     ),
   testBackupDestination: (id: number) => request<BackupDestination>(`/api/backup-destinations/${id}/test`, { method: 'POST' }),
+  resetBackupDestinationHostKey: (id: number) =>
+    request<BackupDestination>(`/api/backup-destinations/${id}/reset-host-key`, { method: 'POST' }),
   listDatabaseRestores: (id: number) => request<DatabaseRestore[]>(`/api/databases/${id}/restores`),
   restoreDatabase: (id: number, backupId: number, target: string, confirm: string) =>
     request<DatabaseRestore>(`/api/databases/${id}/restores`, jsonInit('POST', { backupId, confirm, target })),

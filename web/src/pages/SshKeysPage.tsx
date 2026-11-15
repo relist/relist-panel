@@ -11,7 +11,7 @@ import { DangerModal } from '../components/DangerModal';
 import { EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { ApiError, api } from '../data/api';
 import type { SshKey } from '../data/types';
-import { deleteWarning, shortPublicKey, usedByLabel } from './ssh-keys-view';
+import { deleteBlockedReason, deleteWarning, shortPublicKey, usedByLabel } from './ssh-keys-view';
 
 const { Paragraph, Text } = Typography;
 
@@ -59,19 +59,26 @@ export function SshKeysPage() {
     {
       key: 'usedBy',
       render: (_, sshKey) =>
-        sshKey.usedBy.length === 0 ? (
+        sshKey.usedBy.length === 0 && sshKey.usedByDestinations.length === 0 ? (
           <Text type="secondary">{usedByLabel(sshKey)}</Text>
         ) : (
           <Tooltip title={usedByLabel(sshKey)}>
-            <span>
-              {sshKey.usedBy.slice(0, SHOWN_USES).map((use, index) => (
-                <span key={use.composeId}>
-                  {index > 0 && ', '}
-                  <Link to={paths.compose(use.projectId, use.environmentId, use.composeId)}>{use.composeName}</Link>
+            <Flex gap={2} vertical>
+              {sshKey.usedBy.length > 0 && (
+                <span>
+                  {sshKey.usedBy.slice(0, SHOWN_USES).map((use, index) => (
+                    <span key={use.composeId}>
+                      {index > 0 && ', '}
+                      <Link to={paths.compose(use.projectId, use.environmentId, use.composeId)}>{use.composeName}</Link>
+                    </span>
+                  ))}
+                  {sshKey.usedBy.length > SHOWN_USES && ` +${sshKey.usedBy.length - SHOWN_USES} more`}
                 </span>
+              )}
+              {sshKey.usedByDestinations.map((name) => (
+                <span key={name}>Backup destination: {name}</span>
               ))}
-              {sshKey.usedBy.length > SHOWN_USES && ` +${sshKey.usedBy.length - SHOWN_USES} more`}
-            </span>
+            </Flex>
           </Tooltip>
         ),
       title: 'Used by',
@@ -93,13 +100,16 @@ export function SshKeysPage() {
             onClick={() => setDialog({ kind: 'rename', sshKey })}
             type="text"
           />
-          <Button
-            aria-label={`Delete ${sshKey.name}`}
-            danger
-            icon={<DeleteOutlined />}
-            onClick={() => setDialog({ kind: 'delete', sshKey })}
-            type="text"
-          />
+          <Tooltip title={deleteBlockedReason(sshKey)}>
+            <Button
+              aria-label={`Delete ${sshKey.name}`}
+              danger
+              disabled={deleteBlockedReason(sshKey) !== null}
+              icon={<DeleteOutlined />}
+              onClick={() => setDialog({ kind: 'delete', sshKey })}
+              type="text"
+            />
+          </Tooltip>
         </Flex>
       ),
       title: '',

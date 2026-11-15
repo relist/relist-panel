@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SshKey, SshKeyUse } from '../data/types';
-import { deleteWarning, shortPublicKey, usedByLabel } from './ssh-keys-view';
+import { deleteBlockedReason, deleteWarning, shortPublicKey, usedByLabel } from './ssh-keys-view';
 
 const use = (n: number): SshKeyUse => ({
   composeId: n,
@@ -16,6 +16,7 @@ const key = (uses: number): SshKey => ({
   id: 1,
   name: 'ci',
   publicKey: 'ssh-ed25519 AAAA relist-ci',
+  usedByDestinations: [],
   usedBy: Array.from({ length: uses }, (_, i) => use(i + 1)),
 });
 
@@ -51,5 +52,19 @@ describe('shortPublicKey', () => {
   it('returns a body of 12 characters or fewer whole', () => {
     expect(shortPublicKey('ssh-ed25519 AAAABBBBCCCC relist-ci')).toBe('ssh-ed25519 AAAABBBBCCCC relist-ci');
     expect(shortPublicKey('ssh-ed25519 AAAA')).toBe('ssh-ed25519 AAAA');
+  });
+});
+
+describe('destination use', () => {
+  it('blocks the delete and names the destinations', () => {
+    expect(deleteBlockedReason(key(0))).toBeNull();
+    expect(deleteBlockedReason({ ...key(0), usedByDestinations: ['a', 'b'] })).toBe(
+      'Used by Backup destinations: a, b. Change those destinations first.',
+    );
+  });
+
+  it('shows the destinations after the Composes', () => {
+    expect(usedByLabel({ ...key(1), usedByDestinations: ['a'] })).toBe('c1, Backup destination: a');
+    expect(usedByLabel({ ...key(0), usedByDestinations: ['a'] })).toBe('Backup destination: a');
   });
 });

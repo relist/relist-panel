@@ -1,4 +1,4 @@
-import type { BackupDestination } from '../data/types';
+import type { BackupDestination, BackupDestinationSftp } from '../data/types';
 
 export type DestinationTestState = 'failed' | 'passed' | 'untested';
 
@@ -10,8 +10,17 @@ export function destinationTestState(destination: BackupDestination): Destinatio
 
 /** Bucket, then the prefix when there is one: "backups/relist". */
 export function bucketLabel(destination: BackupDestination): string {
+  if (destination.type !== 's3') return '';
   const { bucket, prefix } = destination.s3;
   return prefix ? `${bucket}/${prefix}` : bucket;
+}
+
+/** Where an SFTP destination is: `sftp://user@host:port/path`, with `:port` left out for 22. */
+export function sftpLocation(sftp: BackupDestinationSftp): string {
+  const host = sftp.host.includes(':') ? `[${sftp.host}]` : sftp.host;
+  const port = sftp.port === 22 ? '' : `:${sftp.port}`;
+  const path = sftp.path === '' || sftp.path.startsWith('/') ? sftp.path : `/${sftp.path}`;
+  return `sftp://${sftp.user}@${host}${port}${path}`;
 }
 
 /** An endpoint the browser sends in the clear. */

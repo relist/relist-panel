@@ -143,7 +143,18 @@ export function DatabaseScheduleCard({ db }: { db: Database }) {
           >
             <Select
               aria-label="Copy to"
-              options={[{ label: 'None', value: 0 }, ...(destinations.data ?? []).map((item) => ({ label: item.name, value: item.id }))]}
+              options={[
+                { label: 'None', value: 0 },
+                ...(destinations.data ?? []).map((item) => {
+                  // A schedule can only copy to an SFTP server whose host key a Test trusted.
+                  const untested = item.type === 'sftp' && item.sftp.hostKey === '';
+                  return {
+                    disabled: untested,
+                    label: untested ? `${item.name} (Test this destination first)` : item.name,
+                    value: item.id,
+                  };
+                }),
+              ]}
             />
           </Form.Item>
           {destinationId ? (

@@ -7,12 +7,19 @@ export const DELETE_IN_USE_WARNING = "These Sources will have no SSH key and can
 
 /** Who uses the key: the first two Compose names, then how many more. */
 export function usedByLabel(key: SshKey): string {
+  const destinations = key.usedByDestinations.map((name) => `Backup destination: ${name}`);
   if (key.usedBy.length === 0) {
-    return 'Not used';
+    return destinations.length === 0 ? 'Not used' : destinations.join(', ');
   }
   const names = key.usedBy.slice(0, SHOWN_USES).map((use) => use.composeName).join(', ');
   const more = key.usedBy.length - SHOWN_USES;
-  return more > 0 ? `${names} +${more} more` : names;
+  return [more > 0 ? `${names} +${more} more` : names, ...destinations].join(', ');
+}
+
+/** Why a key cannot be deleted: a Backup destination logs in with it. Null when it can. */
+export function deleteBlockedReason(key: SshKey): string | null {
+  if (key.usedByDestinations.length === 0) return null;
+  return `Used by Backup destinations: ${key.usedByDestinations.join(', ')}. Change those destinations first.`;
 }
 
 /**
