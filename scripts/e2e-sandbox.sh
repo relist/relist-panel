@@ -64,6 +64,15 @@ ensure_sock_dir() {
 	done
 }
 
+# start_dind starts the existing dind container. A running one already has its
+# socket, so only a stopped one needs the dir made first.
+start_dind() {
+	if [ "$(host inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" != true ]; then
+		ensure_sock_dir
+		host start "$NAME" >/dev/null
+	fi
+}
+
 wait_for() { # wait_for <seconds> <command...>
 	local n=$1; shift
 	for _ in $(seq 1 "$n"); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done
@@ -137,8 +146,7 @@ down)
 	;;
 reload)
 	host inspect "$NAME" >/dev/null 2>&1 || fail "no sandbox: run task e2e:serve"
-	ensure_sock_dir
-	host start "$NAME" >/dev/null
+	start_dind
 	wait_for 60 dind info || fail "dind did not come up"
 	build
 	(cd "$OUT/install" && dind compose -p "$PROJECT" up -d panel >/dev/null 2>&1) || fail "compose up failed"
@@ -168,8 +176,7 @@ if ! host inspect "$NAME" >/dev/null 2>&1; then
 		docker:29-dind \
 		--host=unix:///var/run/docker.sock --host=unix:///e2e-sock/docker.sock --group="$(id -g)" >/dev/null
 else
-	ensure_sock_dir
-	host start "$NAME" >/dev/null
+	start_dind
 fi
 wait_for 60 dind info || fail "dind did not come up on $SOCK_DIR/docker.sock"
 
