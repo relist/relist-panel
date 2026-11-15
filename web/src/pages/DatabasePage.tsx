@@ -11,6 +11,7 @@ import { api } from '../data/api';
 import type { Database, DatabaseAction, DatabaseCredentials } from '../data/types';
 import { DatabaseBackupsTab } from './DatabaseBackupsTab';
 import { DatabaseQueryTab } from './DatabaseQueryTab';
+import { DatabaseRedisTab } from './DatabaseRedisTab';
 import { canBackUp, canRepair, jobNotice, pollInterval, snippet, statusMeta } from './databases-view';
 
 const { Text } = Typography;
@@ -205,6 +206,7 @@ export function DatabasePage() {
           items={[
             { children: <ConnectionTab db={data} />, key: 'connection', label: 'Connection' },
             ...(sql ? [{ children: <DatabaseQueryTab db={data} />, key: 'query', label: 'Query' }] : []),
+            ...(data.engine === 'redis' ? [{ children: <DatabaseRedisTab db={data} />, key: 'console', label: 'Console' }] : []),
             ...(sql ? [{ children: <DatabaseBackupsTab db={data} />, key: 'backups', label: 'Backups' }] : []),
             { children: <LogsTab id={databaseId} />, key: 'logs', label: 'Logs' },
             {

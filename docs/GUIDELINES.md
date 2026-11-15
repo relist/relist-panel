@@ -311,6 +311,17 @@ SQL console of a Postgres, MySQL or MariaDB Database, after Connection. Redis ha
 - **Stops and errors stay on screen:** a `warning` `Alert` names the limit that stopped the batch; an `error` `Alert` carries the server's words. Neither is a toast.
 - A Database that is not running shows why, and Run is disabled.
 
+### 4.6b Database Console tab (`/databases/:databaseId`, Console)
+
+Redis Databases only, after Connection (they have no Backups or Query).
+
+- **Top bar:** a `Select` of the 16 logical databases (`db 0` to `db 15`) and the **Allow writes** `Switch`, as in the Query tab.
+- **Console:** one `Input` with Enter to run and Up and Down to recall the last 50 lines (kept in this browser; a line carrying a password is not kept). Below it the log, newest first, in monospace. A reply reads as in `redis-cli`: `(integer) 1`, `"text"`, `(nil)`, numbered lines, `(error) …`, with `… <n> more` and `… cut, <size>` markers where the panel dropped part of it.
+- **Read-only by default:** the server's own command flags decide, so a refused command shows its reason in a `warning` `Alert` in the log, and is still recorded in the Audit log.
+- **Dangerous commands** (`FLUSHALL`, `CONFIG SET`, …) ask again even with writes on: a `Modal` with a danger **Run** button, "<CMD> can't be undone. Run it?". Nothing is sent until it is confirmed.
+- **Key browser:** a pattern `Input` (default `*`) with **Scan**, a `Table` of key, type `Tag` and TTL (`no expiry` for none), and **Load more** while the scan has a cursor. Clicking a key shows its value by type, at most 1,000 elements, and says so when there are more.
+- A Database that is not running shows why, and the console is disabled.
+
 #### Monitor tab (`…/compose/:composeId/monitor`)
 
 One service of this Compose, over the same 15m / 1h / 6h / 24h windows as the host screen, on the
