@@ -97,6 +97,12 @@ test('a scheduled backup is copied to an SFTP server, with a host key trusted on
     await expect(dialog.getByText(key.publicKey)).toBeVisible();
     await dialog.getByRole('button', { name: 'Save' }).click();
     await expect(page.getByText(keyDest)).toBeVisible();
+    // Edit straight after Save, while the Add dialog may still be closing,
+    // opens with this destination's values, not the Add form's.
+    await page.getByRole('button', { name: `Edit ${keyDest}` }).click();
+    await expect(page.getByRole('dialog').getByLabel('Name')).toHaveValue(keyDest);
+    await expect(page.getByRole('dialog').getByLabel('Host')).toHaveValue(server);
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
     await page.getByRole('button', { name: `Test ${keyDest}` }).click();
     await expect(page.getByRole('row').filter({ hasText: keyDest }).getByText('OK')).toBeVisible({ timeout: 60_000 });
     await page.getByRole('button', { name: `Edit ${keyDest}` }).click();

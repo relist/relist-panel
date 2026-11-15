@@ -50,6 +50,14 @@ interface DestinationForm {
 export function BackupDestinationsPage() {
   const { data, error, isLoading, mutate } = useSWR(BACKUP_DESTINATIONS_KEY, () => api.listBackupDestinations());
   const [dialog, setDialog] = useState<Dialog>();
+  // Each open gets a fresh modal and form: one opened while the last is still
+  // closing would otherwise keep that form's values. Closing keeps the key, so
+  // the close animation still plays.
+  const [dialogKey, setDialogKey] = useState(0);
+  const openDialog = (next: Dialog) => {
+    setDialogKey((key) => key + 1);
+    setDialog(next);
+  };
   const [testing, setTesting] = useState<ReadonlySet<number>>(new Set());
   const [failure, setFailure] = useState<string>();
   // A delete that needs the copies confirmed.
@@ -153,7 +161,7 @@ export function BackupDestinationsPage() {
           <Button
             aria-label={`Edit ${destination.name}`}
             icon={<EditOutlined />}
-            onClick={() => setDialog({ destination, kind: 'edit' })}
+            onClick={() => openDialog({ destination, kind: 'edit' })}
             type="text"
           />
           <Popconfirm
@@ -172,7 +180,7 @@ export function BackupDestinationsPage() {
   ];
 
   const addButton = (
-    <Button icon={<PlusOutlined />} onClick={() => setDialog({ kind: 'add' })} type="primary">
+    <Button icon={<PlusOutlined />} onClick={() => openDialog({ kind: 'add' })} type="primary">
       Add destination
     </Button>
   );
@@ -215,6 +223,7 @@ export function BackupDestinationsPage() {
         />
       </Card>
       <DestinationModal
+        key={dialogKey}
         destination={dialog?.kind === 'edit' ? dialog.destination : undefined}
         onClose={() => setDialog(undefined)}
         onSaved={() => {
