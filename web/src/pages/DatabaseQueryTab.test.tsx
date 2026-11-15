@@ -78,7 +78,7 @@ function answer(over: Partial<QueryResponse> = {}): QueryResponse {
         truncated: false,
       },
     ],
-    stopped: null,
+    stopped: '',
     ...over,
   };
 }

@@ -39,6 +39,8 @@ export type CallOptions = {
   body?: string;
   /** user:password for Basic auth. */
   auth?: string;
+  /** Hang up this long after sending, as a browser's AbortController does; the reply has status 0. */
+  abortAfterMs?: number;
 };
 
 // Node does not resolve *.localhost the way browsers and curl do; every
@@ -83,6 +85,12 @@ export function call(url: string, options: CallOptions = {}): Promise<Reply> {
       req.write(options.body);
     }
     req.end();
+    if (options.abortAfterMs !== undefined) {
+      setTimeout(() => {
+        req.destroy();
+        resolve({ status: 0, headers: {}, body: '' });
+      }, options.abortAfterMs);
+    }
   });
 }
 
@@ -120,7 +128,7 @@ export class Panel {
   }
 
   /** Any request; the reply is returned whatever its status. */
-  raw(method: string, pathname: string, body?: unknown): Promise<Reply> {
+  raw(method: string, pathname: string, body?: unknown, abortAfterMs?: number): Promise<Reply> {
     const headers: Record<string, string> = { Origin: this.base };
     if (this.cookie) {
       headers.Cookie = this.cookie;
@@ -132,6 +140,7 @@ export class Panel {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      abortAfterMs,
     });
   }
 

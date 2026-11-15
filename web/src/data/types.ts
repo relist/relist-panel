@@ -1384,7 +1384,8 @@ export interface QueryResponse {
     statementStart: number;
   };
   results: QueryResult[];
-  stopped: null | string;
+  /** Why the batch stopped, "" when it did not. */
+  stopped: string;
 }
 
 export interface QuerySchemaNode {
