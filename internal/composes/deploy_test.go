@@ -82,9 +82,6 @@ func (r *recordingRunner) DownWithVolumes(_ context.Context, req RunRequest) err
 	return r.downErr
 }
 func (r *recordingRunner) Restart(context.Context, RunRequest) error { return nil }
-func (r *recordingRunner) Status(context.Context, RunRequest) (ComposeStatus, error) {
-	return ComposeStatus{}, nil
-}
 func (r *recordingRunner) Config(_ context.Context, req RunRequest) ([]byte, error) {
 	r.calls = append(r.calls, "config")
 	if r.onConfig != nil {

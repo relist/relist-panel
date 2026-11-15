@@ -99,6 +99,7 @@ func (s *Service) destroyStack(ctx context.Context, c Compose, req RunRequest, t
 	if err != nil {
 		return VolumePlan{}, false, err
 	}
+	defer s.status.drop()
 	if !supported || len(plan.Keep) == 0 {
 		if tracked, ok := s.runner.(interface {
 			DownWithVolumesTracked(context.Context, RunRequest) (bool, error)

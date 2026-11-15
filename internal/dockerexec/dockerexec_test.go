@@ -79,24 +79,6 @@ func TestRunStreamsToOut(t *testing.T) {
 	}
 }
 
-// A Compose's Service names ride its status for the terminal listing, in
-// first-seen order and without duplicates across a Service's Containers.
-func TestParseStatusCollectsServiceNames(t *testing.T) {
-	output := `{"Service":"app","State":"running"}
-{"Service":"worker","State":"exited"}
-{"Service":"app","State":"running"}`
-	status, err := parseStatus(output)
-	if err != nil {
-		t.Fatalf("parseStatus() error = %v", err)
-	}
-	if status.Running != 2 || status.Total != 3 {
-		t.Fatalf("status counts = %+v, want running 2 of 3", status)
-	}
-	if want := []string{"app", "worker"}; !reflect.DeepEqual(status.Services, want) {
-		t.Fatalf("Services = %v, want %v", status.Services, want)
-	}
-}
-
 // A killed CLI whose grandchild keeps the output pipes open must not hang the
 // caller: WaitDelay lets Wait give up on the pipes.
 func TestRunReturnsWhenAGrandchildHoldsThePipes(t *testing.T) {
@@ -156,7 +138,7 @@ func TestBuilderEnvOnlyOnBuildCapableCalls(t *testing.T) {
 		}, true},
 		"up --no-build":    {func() error { return r.Up(ctx, req, composes.UpOptions{}) }, false},
 		"scale --no-build": {func() error { return r.Scale(ctx, req, composes.ScaleOptions{Service: "web", Replicas: 2}) }, false},
-		"status":           {func() error { _, err := r.Status(ctx, req); return err }, false},
+		"restart":          {func() error { return r.Restart(ctx, req) }, false},
 		"docker default": {func() error {
 			return r.Build(ctx, composes.RunRequest{}, composes.BuildOptions{Service: "web"})
 		}, false},

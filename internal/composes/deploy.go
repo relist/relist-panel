@@ -309,7 +309,9 @@ func (s *Service) RunDeploy(ctx context.Context, t DeployTarget, opts DeployOpti
 		}
 		return files.warnings, nil
 	}
-	if err := s.runner.Up(ctx, req, UpOptions{NoPull: true, Out: opts.Out}); err != nil {
+	upErr := s.runner.Up(ctx, req, UpOptions{NoPull: true, Out: opts.Out})
+	s.status.drop()
+	if err := upErr; err != nil {
 		line, more := errorLine(err)
 		return nil, failure(FailureRunner, "deploy failed"+suffix+": "+line+volumesAdvice(removed)+more, err)
 	}
@@ -699,6 +701,7 @@ func (s *Service) deploySubset(ctx context.Context, req RunRequest, yamlContent 
 	if len(rest) == 0 {
 		return s.removeOrphans(ctx, req.ProjectName, yamlContent)
 	}
+	defer s.status.drop()
 	return s.runner.Up(ctx, req, UpOptions{NoPull: true, Services: rest, Out: opts.Out})
 }
 
