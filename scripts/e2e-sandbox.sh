@@ -152,6 +152,7 @@ down)
 	exit 0
 	;;
 reload)
+	host info >/dev/null 2>&1 || fail "cannot reach the host's Docker (is it running? a sourced DOCKER_* env?)"
 	host inspect "$NAME" >/dev/null 2>&1 || fail "no sandbox: run task e2e:serve"
 	require_tls_port
 	host start "$NAME" >/dev/null
@@ -167,6 +168,7 @@ serve) ;;
 *) fail "unknown command $1 (serve, reload, env, ls, down)" ;;
 esac
 
+host info >/dev/null 2>&1 || fail "cannot reach the host's Docker (is it running? a sourced DOCKER_* env?)"
 if [ -n "$SEED_DB" ]; then
 	[ -s "$SEED_DB" ] || fail "SEED_DB $SEED_DB is missing or empty"
 	host inspect "$NAME" >/dev/null 2>&1 && fail "SEED_DB needs a new sandbox: run task e2e:down first"
