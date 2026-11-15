@@ -281,7 +281,8 @@ func (s *Service) CloseTarget(ctx context.Context, kind string, id int64) error 
 // the expires label is never read, because Extend cannot change it.
 //   - a container with no row is removed;
 //   - a row past its expiry loses its container and the row;
-//   - a row with no running container loses the row.
+//   - a row with no running container loses the row;
+//   - an access whose target no longer exists loses both.
 func (s *Service) Reconcile(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -306,7 +307,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	}
 	for _, p := range proxies {
 		a, ok := byID[p.AccessID]
-		if !ok || s.expired(a) || !p.Running {
+		if !ok || s.expired(a) || !p.Running || s.targetGone(ctx, a) {
 			note(s.d.Host.RemoveProxy(ctx, p.AccessID))
 			continue
 		}
@@ -319,6 +320,15 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		note(s.d.Store.Delete(ctx, a.ID))
 	}
 	return first
+}
+
+// targetGone reports a target that no longer exists. An Open can slip in
+// between a Database delete's CloseTarget and the container's removal; this
+// ends such an access at the next reconcile rather than at its expiry. Any
+// other resolve error keeps the access.
+func (s *Service) targetGone(ctx context.Context, a Access) bool {
+	_, err := s.d.Targets.Resolve(ctx, a.Target.Kind, a.Target.ID)
+	return errors.Is(err, ErrTargetNotFound)
 }
 
 // Run reconciles at start and every minute until ctx ends.
