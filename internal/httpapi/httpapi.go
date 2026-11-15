@@ -414,6 +414,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			databaseService.RunScheduler(ctx)
 		}()
 		if directAccessService != nil {
+			directaccess.NewAPI(directAccessService).RegisterRoutes(mux)
 			worker.Add(1)
 			go func() {
 				defer worker.Done()
