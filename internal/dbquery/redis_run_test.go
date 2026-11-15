@@ -218,3 +218,30 @@ func TestReadKeyUnsupportedType(t *testing.T) {
 		t.Fatalf("kv = %+v err %v", kv, err)
 	}
 }
+
+func TestReadKeyCutsASetAtAThousand(t *testing.T) {
+	// SSCAN's COUNT is only a hint: a page can hold more than 1,000 members.
+	page := new(strings.Builder)
+	page.WriteString("*2\r\n$1\r\n0\r\n*1200\r\n")
+	for i := 0; i < 1200; i++ {
+		fmt.Fprintf(page, "$%d\r\nm%d\r\n", len(fmt.Sprint(i))+1, i)
+	}
+	f := newFakeRedis(t, func(a []string) string {
+		switch a[0] {
+		case "TYPE":
+			return "+set\r\n"
+		case "SSCAN":
+			return page.String()
+		case "SCARD":
+			return ":1200\r\n"
+		}
+		return ":-1\r\n"
+	})
+	kv, err := ReadKey(context.Background(), f.Target, 0, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kv.Items) != 1000 || !kv.More || kv.Total != 1200 {
+		t.Fatalf("items %d more %v total %d", len(kv.Items), kv.More, kv.Total)
+	}
+}

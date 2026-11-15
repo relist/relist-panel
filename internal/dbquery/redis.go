@@ -475,6 +475,11 @@ func ReadKey(parent context.Context, t Target, db int, key string) (KeyValue, er
 			return kv, err
 		}
 		kv.Total = replyInt(n)
+		// COUNT is only a hint: a page can hold more than the 1,000 shown.
+		if len(kv.Items) > redisMaxElems {
+			kv.Items = kv.Items[:redisMaxElems]
+		}
+		kv.More = kv.More || kv.Total > int64(len(kv.Items))
 	case "list", "zset":
 		var r, n Reply
 		if kv.Type == "list" {
