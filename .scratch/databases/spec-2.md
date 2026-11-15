@@ -34,7 +34,7 @@ is still missing, in the operator's order of value:
 
 ## Phases
 
-5. Temporary access.
+5. Direct access (a Database on a host port first).
 6. SFTP (6a) and WebDAV (6b) Backup destinations.
 7. Logical databases and users, and superuser password reset.
 8. Per-Database access for non-Admins.
@@ -43,23 +43,58 @@ is still missing, in the operator's order of value:
 
 ---
 
-## Phase 5: Temporary access
+## Phase 5: Direct access
 
-A short-lived TCP proxy that publishes one Database on a host port, for
-desktop tools over an SSH tunnel. This withdraws `spec.md`'s success criterion
-"No host port is opened for any Database" for this one, timed, Admin-opened
-case; ADR-0041 amends ADR-0039.
+A **Direct access** is a way into one container's port that skips Traefik:
+a small proxy the panel runs, with a **target**, a **channel** and an
+optional expiry. The panel checks nothing on the channel itself; whoever can
+reach the channel can use the target as if they were on its network. The
+channel's own control (SSH to the host, a tailnet ACL, a Cloudflare Access
+policy) is the guard.
 
-- **The proxy.** A container `relist-dbaccess-<id>` (`<id>` = the Database's)
-  from the panel's own image, resolved the way the Volume helper resolves it.
-  Its entrypoint is a new program `relist-dbproxy`, not a `relist-volhelper`
-  subcommand: the Volume helper has no network by design (ADR-0010).
-  - `relist-dbproxy` forwards every accepted connection to one fixed target,
-    `relist-db-<id>:<engine port>`, given in argv. It has no other mode.
+Phase 5 ships one target kind and one channel: a Database, published on a host
+port for desktop tools over an SSH tunnel. The model is built so later phases
+add kinds and channels without a new table. This withdraws `spec.md`'s
+success criterion "No host port is opened for any Database" for this one
+timed, Admin-opened case; ADR-0041 amends ADR-0039.
+
+### The model
+
+- **Target** (`target_kind`, `target_id`, `target_port`):
+  - `database` (phase 5): `relist-db-<id>` on `relist-network`, at the
+    engine's port.
+  - Later: `service`, a Service in a Compose, reached by joining that
+    Compose's network (for example an API without its Domain's auth).
+- **Channel** (`channel`, `channel_config` JSON):
+  - `host_port` (phase 5): `{"bind": "127.0.0.1" | "0.0.0.0", "hostPort": n}`.
+  - Later: `tailscale` (the proxy joins a tailnet; no host port) and
+    `cloudflare` (through `cloudflared`, for WARP or Zero Trust).
+- **Expiry** (`expires_at`, nullable). A `host_port` channel always has one;
+  only later channels with their own access control may be permanent.
+- **Table** `direct_accesses`: `id`, `target_kind`, `target_id`,
+  `target_port`, `channel`, `channel_config`, `expires_at`, `opened_by` (user
+  ID), `opened_at`. It is the panel's truth, because Extend cannot change a
+  container's labels.
+- **Names** come from the access's own ID, so one target may have several
+  accesses later: container `relist-access-<id>`, labels
+  `relist.access.id=<id>`, `relist.access.target=<kind>:<id>` and
+  `relist.access.expires=<unix>` (informational).
+  The program is `relist-proxy`.
+
+### Phase 5 rules (target `database`, channel `host_port`)
+
+- **The proxy.** The container runs the panel's own image, resolved the way the
+  Volume helper resolves it. Its entrypoint is `relist-proxy`, not a
+  `relist-volhelper` subcommand: the Volume helper has no network by design
+  (ADR-0010).
+  - `relist-proxy` forwards every accepted connection to one fixed target
+    given in argv. It has no other mode.
   - At most 64 connections at once; the 65th is closed at accept.
   - The container joins `relist-network`, has `AutoRemove`, restart policy
-    `no`, a 32 MiB memory limit and a PID limit. It is labelled with the
-    Database ID and the expiry time.
+    `no`, a 32 MiB memory limit, a PID limit, no capabilities and a read-only
+    root filesystem.
+- **One Direct access per Database** in phase 5, as a rule in the service, not
+  a table constraint. Opening a second answers 409.
 - **Bind.** `127.0.0.1` by default: the Admin reaches it with
   `ssh -N -L <local port>:127.0.0.1:<host port> <user>@<server>`. **All
   interfaces** (`0.0.0.0`) is a tick box with a red warning: Docker's published
@@ -70,36 +105,34 @@ case; ADR-0041 amends ADR-0039.
 - **Duration.** 15 minutes, 1 hour (default), 4 hours or 8 hours.
   - **Extend** sets the expiry to now + the chosen duration, at most 8 hours
     from now. It does not restart the proxy or drop connections: the panel
-    runs `relist-dbproxy extend <unix time>` in the container, which writes the
+    runs `relist-proxy extend <unix time>` in the container, which writes the
     new deadline to a file the proxy rereads every few seconds.
   - **Close now** removes the container.
   - **At expiry** the proxy closes its listener and every open connection and
     exits by itself, so it closes on time even when the panel is down.
     `AutoRemove` removes the container.
-- **One access per Database.** Opening a second answers 409.
-- **Who and what.** Admin only. Open (with bind, port and duration), Extend and
-  Close are audited. Expiry is not.
-- **What the page shows.** A **Temporary access** card on the Connection tab:
-  state, bind address, host port, time left, the `ssh -L` command (server name
-  from the browser's address, user as a placeholder), and the connection URL
-  with `127.0.0.1:<local port>`.
+- **Who and what.** Admin only. Open (with target, channel, bind, port and
+  duration), Extend and Close are audited. Expiry is not.
+- **What the page shows.** A **Direct access** card on the Database's
+  Connection tab: state, bind address, host port, time left, the `ssh -L`
+  command (server name from the browser's address, user as a placeholder),
+  and the connection URL with `127.0.0.1:<local port>`. A host-wide Direct
+  access page listing every access comes with the second target kind or
+  channel.
 - **Lifecycle around it.**
-  - Deleting a Database closes its access first.
-  - Stop, Restart, Update image, Repair and restore leave the access alone;
-    the target name is stable, so connections fail only while the Database
-    is down.
-  - Opening is refused while a server Migration holds its lock. Accesses are
-    not carried by a Migration: the old host's proxies expire there.
+  - Deleting a Database closes its Direct accesses first.
+  - Stop, Restart, Update image, Repair and restore leave them alone; the
+    target name is stable, so connections fail only while the Database is
+    down.
+  - Opening is refused while a server Migration holds its lock. Direct
+    accesses are not carried by a Migration: the old host's proxies expire
+    there.
+  - At panel start and on each scheduler tick the panel reconciles both ways:
+    a container with no row, or a row past `expires_at`: the container is
+    removed and the row deleted; a row with no running container: the row is
+    deleted.
   - Docker cleanup needs no change: the proxy runs the panel's own image, which
     is in use, and `AutoRemove` leaves no stopped container to prune.
-- **State.** New table `database_accesses` (one row per Database:
-  `database_id`, `bind`, `host_port`, `expires_at`, `opened_by`, `opened_at`)
-  is the panel's truth, because Extend cannot change a container's labels. The
-  proxy's own deadline file is the safety net while the panel is down.
-  At panel start and on each scheduler tick the panel reconciles both ways:
-  - a container with no row, or a row past `expires_at`: the container is
-    removed and the row deleted;
-  - a row with no running container: the row is deleted.
 
 ## Phase 6: SFTP and WebDAV Backup destinations
 
@@ -246,7 +279,7 @@ gets a superuser session.
   user: the URL and the password, revealing audited. A Redis grantee gets no
   Connection tab, because the only Redis credential is the superuser's, which
   a non-Admin never sees. Logs, Backups, restore,
-  Start / Stop, Update image, users, Temporary access and settings stay
+  Start / Stop, Update image, users, Direct access and settings stay
   Admin-only.
 - **Storage:** new table `database_grants`: `database_id`, `user_id`,
   `db_user` (SQL) or `level` (Redis), `created_at`. One grant per user per
@@ -335,7 +368,7 @@ Each phase follows `spec.md`'s Testing section: unit tests for pure parts,
 integration in the dind sandbox, and a Playwright spec through the panel URL.
 Phase-specific checks:
 
-- **5:** connect through the proxy with each engine's client; Extend keeps an
+- **5:** connect through the Direct access proxy with each engine's client; Extend keeps an
   open connection; expiry closes open connections; the proxy exits on its own
   with the panel stopped; a restart of the panel removes an expired proxy.
 - **6:** SFTP against an OpenSSH server container with key and with password,

@@ -47,7 +47,7 @@ setup.
 
 ## Out of scope
 
-Planned in `.scratch/databases/spec-2.md` (2026-11-15): Temporary access, SFTP
+Planned in `.scratch/databases/spec-2.md` (2026-11-15): Direct access, SFTP
 and WebDAV Backup destinations, logical database and user management,
 superuser password reset, per-Database access for non-Admins, GFS Rotation,
 backup encryption and changing the major version.
