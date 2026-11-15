@@ -17,21 +17,32 @@ type Store struct {
 
 func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 
-const columns = `id, name, type, config, secret, last_test_at, last_test_ok, last_test_error`
+const columns = `d.id, d.name, d.type, d.config, d.secret, d.last_test_at, d.last_test_ok, d.last_test_error,
+	d.ssh_key_id, COALESCE(k.name, ''), COALESCE(k.private_key, ''), COALESCE(k.public_key, ''), d.host_key`
+
+const from = ` FROM backup_destinations d LEFT JOIN ssh_keys k ON k.id = d.ssh_key_id`
 
 func scan(row interface{ Scan(...any) error }) (Destination, error) {
 	var d Destination
 	var cfg string
-	var at sql.NullInt64
-	err := row.Scan(&d.ID, &d.Name, &d.Type, &cfg, &d.Secret, &at, &d.LastTestOK, &d.LastTestError)
+	var at, keyID sql.NullInt64
+	err := row.Scan(&d.ID, &d.Name, &d.Type, &cfg, &d.Secret, &at, &d.LastTestOK, &d.LastTestError,
+		&keyID, &d.SSHKeyName, &d.PrivateKey, &d.PublicKey, &d.HostKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Destination{}, ErrNotFound
 	}
 	if err != nil {
 		return Destination{}, err
 	}
-	if err := json.Unmarshal([]byte(cfg), &d.S3); err != nil {
+	target := any(&d.S3)
+	if d.Type == TypeSFTP {
+		target = &d.SFTP
+	}
+	if err := json.Unmarshal([]byte(cfg), target); err != nil {
 		return Destination{}, fmt.Errorf("backup destination %d: %w", d.ID, err)
+	}
+	if keyID.Valid {
+		d.SSHKeyID = &keyID.Int64
 	}
 	if at.Valid {
 		t := time.Unix(at.Int64, 0)
@@ -42,7 +53,7 @@ func scan(row interface{ Scan(...any) error }) (Destination, error) {
 
 // List is every destination, ordered by name.
 func (s *Store) List(ctx context.Context) ([]Destination, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM backup_destinations ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+from+` ORDER BY d.name`)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +70,7 @@ func (s *Store) List(ctx context.Context) ([]Destination, error) {
 }
 
 func (s *Store) Get(ctx context.Context, id int64) (Destination, error) {
-	return scan(s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM backup_destinations WHERE id = ?`, id))
+	return scan(s.db.QueryRowContext(ctx, `SELECT `+columns+from+` WHERE d.id = ?`, id))
 }
 
 func duplicate(err error) error {
@@ -69,11 +80,32 @@ func duplicate(err error) error {
 	return err
 }
 
+// configJSON is the settings of d that live in the config column.
+func configJSON(d Destination) string {
+	var b []byte
+	if d.Type == TypeSFTP {
+		b, _ = json.Marshal(d.SFTP)
+	} else {
+		b, _ = json.Marshal(d.S3)
+	}
+	return string(b)
+}
+
+func sameID(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 func (s *Store) Create(ctx context.Context, d Destination, now time.Time) (Destination, error) {
-	cfg, _ := json.Marshal(d.S3)
+	secret := d.Secret
+	if d.Type == TypeSFTP && d.SFTP.Auth == AuthKey {
+		secret = ""
+	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO backup_destinations (name, type, config, secret, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		d.Name, d.Type, string(cfg), d.Secret, now.Unix(), now.Unix())
+		`INSERT INTO backup_destinations (name, type, config, secret, ssh_key_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		d.Name, d.Type, configJSON(d), secret, d.SSHKeyID, now.Unix(), now.Unix())
 	if err != nil {
 		return Destination{}, duplicate(err)
 	}
@@ -91,11 +123,21 @@ func (s *Store) Update(ctx context.Context, d Destination, now time.Time) error 
 	if err != nil {
 		return err
 	}
-	cfg, _ := json.Marshal(d.S3)
-	changed := old.S3 != d.S3 || d.Secret != ""
+	d.Type = old.Type
+	changed := old.S3 != d.S3 || old.SFTP != d.SFTP || !sameID(old.SSHKeyID, d.SSHKeyID) || d.Secret != ""
 	secret := old.Secret
 	if d.Secret != "" {
 		secret = d.Secret
+	}
+	hostKey := old.HostKey
+	if d.Type == TypeSFTP {
+		if d.SFTP.Auth == AuthKey {
+			secret = ""
+		}
+		// A key trusted for one host says nothing about another.
+		if old.SFTP.Host != d.SFTP.Host || old.SFTP.Port != d.SFTP.Port {
+			hostKey = ""
+		}
 	}
 	testAt, testOK, testErr := any(nil), false, ""
 	if !changed {
@@ -105,9 +147,28 @@ func (s *Store) Update(ctx context.Context, d Destination, now time.Time) error 
 		testOK, testErr = old.LastTestOK, old.LastTestError
 	}
 	_, err = s.db.ExecContext(ctx, `
-		UPDATE backup_destinations SET name = ?, config = ?, secret = ?, last_test_at = ?, last_test_ok = ?, last_test_error = ?, updated_at = ?
-		WHERE id = ?`, d.Name, string(cfg), secret, testAt, testOK, testErr, now.Unix(), d.ID)
+		UPDATE backup_destinations SET name = ?, config = ?, secret = ?, ssh_key_id = ?, host_key = ?, last_test_at = ?, last_test_ok = ?, last_test_error = ?, updated_at = ?
+		WHERE id = ?`, d.Name, configJSON(d), secret, d.SSHKeyID, hostKey, testAt, testOK, testErr, now.Unix(), d.ID)
 	return duplicate(err)
+}
+
+// SetHostKey records the trusted host key line, only when none is recorded.
+func (s *Store) SetHostKey(ctx context.Context, id int64, line string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE backup_destinations SET host_key = ? WHERE id = ? AND host_key = ''`, line, id)
+	return err
+}
+
+// ResetHostKey forgets the trusted host key and the last Test result.
+func (s *Store) ResetHostKey(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE backup_destinations SET host_key = '', last_test_at = NULL, last_test_ok = 0, last_test_error = '' WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) SetTestResult(ctx context.Context, id int64, ok bool, msg string, at time.Time) error {
@@ -166,7 +227,7 @@ func (s *Store) Delete(ctx context.Context, id int64, confirm int) (removedDatab
 		return nil, err
 	}
 	defer tx.Rollback()
-	if _, err := scan(tx.QueryRowContext(ctx, `SELECT `+columns+` FROM backup_destinations WHERE id = ?`, id)); err != nil {
+	if _, err := scan(tx.QueryRowContext(ctx, `SELECT `+columns+from+` WHERE d.id = ?`, id)); err != nil {
 		return nil, err
 	}
 	u, err := usage(ctx, tx, id)
