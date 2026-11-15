@@ -55,6 +55,8 @@ type Deps struct {
 	// Destinations opens Backup destinations for uploads (nil = scheduled
 	// Backups cannot be copied anywhere).
 	Destinations backupdest.Opener
+	// Querier runs the Query panel's statements (nil = the real drivers).
+	Querier Querier
 }
 
 type CreateInput struct {
@@ -101,6 +103,9 @@ type Service struct {
 func New(d Deps) *Service {
 	if d.Now == nil {
 		d.Now = time.Now
+	}
+	if d.Querier == nil {
+		d.Querier = engineQuerier{}
 	}
 	return &Service{d: d, locks: map[int64]*sync.Mutex{}, inflight: map[int64]bool{}, jobs: map[int64]string{}, jobsChanged: make(chan struct{}),
 		uploadStall: 5 * time.Minute, remoteTimeout: time.Minute}
