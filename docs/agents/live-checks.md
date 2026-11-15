@@ -12,7 +12,7 @@ How an agent runs this checkout for real: browser checks, curl through Traefik, 
    - The sandbox's Docker API is TLS on a loopback port. `source .data/e2e/env` sets `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`, `DOCKER_CONFIG` (an empty config) and `NO_PROXY`. Setting `DOCKER_HOST` alone fails with a TLS error.
    - The cert files are in `.data/e2e/certs`. Anyone who can read them controls that sandbox's dind, so never copy them out of `.data/`.
    - A sandbox made before this change has no TLS port, and `serve` and `reload` refuse it. Ask the user, then `task e2e:down` and `task e2e:serve` (rule 4 still holds).
-   - Docker Desktop on macOS and on Windows (from a WSL shell) is supported. Plain Windows shells are not, because the script is bash.
+   - It is designed to work on Docker Desktop (macOS, and Windows from a WSL shell), but that has not been tested yet. Plain Windows shells are not supported, because the script is bash.
    - The host's default Docker runs the user's live install (`relist-panel-panel-1`, `relist-panel-traefik-1`) and other projects.
    - Never run `docker compose` in a checkout directory.
    - Never run the `relist-panel` binary inside the live container: old builds start a second server on any argument, `--help` included.
