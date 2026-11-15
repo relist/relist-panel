@@ -839,7 +839,32 @@ func (s *Service) statusFresh(ctx context.Context, req RunRequest) (ComposeStatu
 	if err != nil {
 		return ComposeStatus{}, err
 	}
-	return statusOf(containers), nil
+	return statusOf(s.inConfig(ctx, req, containers)), nil
+}
+
+// inConfig keeps the containers of the Services in `docker compose config`,
+// which is what `docker compose ps --all` counted: the Containers of a
+// Service the file no longer has (orphans) were left out. Only a single
+// Compose's status asks, so the list stays one Engine call. When the config
+// can't be read, or names no Service, the Engine's numbers stand.
+func (s *Service) inConfig(ctx context.Context, req RunRequest, containers []EngineContainer) []EngineContainer {
+	out, err := s.runner.Config(ctx, req)
+	if err != nil {
+		return containers
+	}
+	var config struct {
+		Services map[string]json.RawMessage `json:"services"`
+	}
+	if json.Unmarshal(out, &config) != nil || len(config.Services) == 0 {
+		return containers
+	}
+	kept := make([]EngineContainer, 0, len(containers))
+	for _, c := range containers {
+		if _, ok := config.Services[c.Service]; ok {
+			kept = append(kept, c)
+		}
+	}
+	return kept
 }
 
 // withRefreshedStatus re-reads a Compose's live status immediately after a

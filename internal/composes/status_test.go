@@ -361,3 +361,36 @@ func TestDeployDropsSnapshot(t *testing.T) {
 		t.Fatalf("calls = %d, want a second one after the deploy", n)
 	}
 }
+
+// docker compose ps --all leaves out the Containers of a Service the file no
+// longer has (an orphan); a single Compose's status keeps those numbers by
+// counting only the Services of `docker compose config`.
+func TestSingleStatusCountsOnlyConfigServices(t *testing.T) {
+	f := newStatusFixture(t, []int64{1})
+	runner := f.svc.runner.(*recordingRunner)
+	runner.config = []byte(`{"services":{"a":{},"c":{}}}`)
+	f.engine.all = []EngineContainer{ec("relist-c1", "a", true), ec("relist-c1", "b", true), ec("relist-c1", "c", false)}
+	compose := f.composes(t)[0]
+
+	got := f.svc.withStatus(context.Background(), compose).Status
+	if got.Running != 1 || got.Total != 2 || !reflect.DeepEqual(got.Services, []string{"a", "c"}) {
+		t.Fatalf("withStatus = %+v, want 1 of 2 over a and c (orphan b left out)", got)
+	}
+	names, err := f.svc.ServiceNames(context.Background(), runRequestFor(f.dataDir, compose))
+	if err != nil || !reflect.DeepEqual(names, []string{"a", "c"}) {
+		t.Fatalf("ServiceNames = %v, %v, want [a c]", names, err)
+	}
+
+	// The list reads no config: it is one Engine call and nothing else.
+	runner.calls = nil
+	list := f.svc.withStatuses(context.Background(), f.composes(t))
+	if list[0].Status.Total != 3 || len(runner.calls) != 0 {
+		t.Fatalf("list = %+v, runner calls = %v, want 3 containers and no CLI call", list[0].Status, runner.calls)
+	}
+
+	// A config that cannot be read keeps the Engine's numbers.
+	runner.configErr = errors.New("no env file")
+	if got := f.svc.withStatus(context.Background(), compose).Status; got.Total != 3 {
+		t.Fatalf("withStatus without config = %+v, want all 3", got)
+	}
+}
