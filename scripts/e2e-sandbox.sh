@@ -52,7 +52,7 @@ chmod 700 "$OUT"
 export DOCKER_CONFIG="$OUT/dockercfg"
 # A proxy in the user's shell must not catch the loopback Docker API or curl.
 export NO_PROXY="${NO_PROXY:+$NO_PROXY,}127.0.0.1,localhost"
-host() { env -u DOCKER_HOST docker "$@"; }
+host() { env -u DOCKER_HOST -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH docker "$@"; }
 dind() { DOCKER_HOST="tcp://127.0.0.1:$(host_port 2376)" DOCKER_TLS_VERIFY=1 DOCKER_CERT_PATH="$OUT/certs" docker "$@"; }
 
 wait_for() { # wait_for <seconds> <command...>
