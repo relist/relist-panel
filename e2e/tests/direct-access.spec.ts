@@ -49,8 +49,9 @@ async function password(panel: Panel, id: number): Promise<string> {
   return (await panel.json<{ password: string }>('GET', `/api/databases/${id}/credentials`)).password;
 }
 
-function accessContainers(): string {
-  return docker('ps', '-a', '--filter', 'name=relist-access-', '--format', '{{.Names}}');
+// This run's proxy only: a failed earlier run may have left another one.
+function accessContainers(accessId: number): string {
+  return docker('ps', '-a', '--filter', `name=^relist-access-${accessId}$`, '--format', '{{.Names}}');
 }
 
 test.describe('direct access', () => {
@@ -81,6 +82,9 @@ test.describe('direct access', () => {
     await expect(card.getByText(`postgres://postgres@127.0.0.1:${port}/postgres`)).toBeVisible();
     await expect(card.getByText(pw)).toHaveCount(0);
 
+    const [{ id: accessId }] = (await panel.json<{ accesses: { id: number }[] }>('GET', `/api/direct-accesses?targetKind=database&targetId=${id}`)).accesses;
+    expect(accessContainers(accessId)).toBe(`relist-access-${accessId}`);
+
     // 2. A real client gets through the proxy.
     expect(docker(...psqlArgs(port, pw, 'select 1'))).toBe('1');
 
@@ -105,7 +109,7 @@ test.describe('direct access', () => {
     await page.getByRole('button', { name: 'Close', exact: true }).click();
     await expect(card.getByRole('button', { name: 'Open', exact: true })).toBeVisible();
     expect(() => docker(...psqlArgs(port, pw, 'select 1'))).toThrow();
-    expect(accessContainers()).toBe('');
+    expect(accessContainers(accessId)).toBe('');
 
     // 6. Open, extend and close are in the audit log.
     for (const action of ['direct_access.open', 'direct_access.extend', 'direct_access.close']) {
@@ -131,10 +135,10 @@ test.describe('direct access', () => {
     expect(opened.bind).toBe('127.0.0.1');
     const out = docker('run', '--rm', '--network', 'host', REDIS, 'redis-cli', '-h', '127.0.0.1', '-p', String(opened.hostPort), '-a', pw, '--no-auth-warning', 'ping');
     expect(out).toBe('PONG');
-    expect(accessContainers()).toContain(`relist-access-${opened.id}`);
+    expect(accessContainers(opened.id)).toBe(`relist-access-${opened.id}`);
 
     await panel.json('DELETE', `/api/databases/${id}`, { confirm: name, deleteBackups: true });
-    expect(accessContainers()).toBe('');
+    expect(accessContainers(opened.id)).toBe('');
     const { accesses } = await panel.json<{ accesses: unknown[] }>('GET', `/api/direct-accesses?targetKind=database&targetId=${id}`);
     expect(accesses).toHaveLength(0);
   });
