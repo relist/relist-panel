@@ -14,11 +14,14 @@
 **Architecture:**
 - `internal/dockerexec.Engine` gains `ComposeContainers(ctx)`: one `GET /containers/json?all=1` filtered to non-one-off Compose containers, with each container's project.
 - `internal/composes` computes `ComposeStatus` from Engine containers with a pure function:
-  - `withStatuses` makes one Engine call for the whole list;
-  - `currentStatus`, `withRefreshedStatus` and `ServiceNames` call `ProjectContainers`.
+  - `withStatuses` reads one shared **snapshot** of all Compose containers.
+    - The snapshot is one Engine call. List requests that arrive at once share it (singleflight), and it is reused for 2 s.
+    - So a page load that lists 20 Environments makes one Docker call, not 20.
+    - There is no background loop: nothing runs while nobody is looking. Host monitoring already reads the Engine on its own sampler (`internal/hostmetrics`), and Compose status follows the same rule of no CLI.
+  - `currentStatus`, `withRefreshedStatus` and `ServiceNames` call `ProjectContainers`, which always reads fresh. A deploy, stop or restart also drops the snapshot.
 - `Runner.Status` and `parseStatus` are deleted, so no code path can shell out for status again.
 
-**Delivery:** one PR, branch `claude/compose-status-engine` on `main`. It is independent of the Databases stack.
+**Delivery:** one PR, branch `claude/compose-status-from-engine` on `main` (the plan commit e3e83ed is its base). It is independent of the Databases stack.
 
 **Tech Stack:** Go only. No new dependency, no migration, no frontend change.
 
@@ -37,7 +40,13 @@
   - A Compose with no resolved compose file on disk is still a zero status, with no Docker call for it.
   - `requireUniqueIdentity` failing is still a zero status.
 - **Best-effort as today.** An Engine error, or a nil engine, gives a zero status and never fails the request.
-- **One Engine call per list request,** whatever the number of Composes in it.
+- **The snapshot.**
+  - **Sharing.** List requests within 2 s of each other share one Engine call, whatever the number of Composes or of concurrent requests. Use `snapshotTTL = 2 * time.Second` and no new dependency; hand-roll it with a mutex and a done channel.
+  - **Errors are not cached.** The next request tries again.
+  - **Caller contexts.**
+    - The shared call runs on `context.WithoutCancel(ctx)` with a 10 s timeout, so one cancelled request never fails the others.
+    - Each waiting caller still returns when its own `ctx` ends.
+  - **Invalidation.** After a runner action (Up, Down, DownWithVolumes, Restart, Scale), the snapshot is dropped. The list then shows the outcome at once, not up to 2 s later.
 - **Docker.** Only through the sandbox `DOCKER_HOST` from `.data/e2e/env`.
 - **Go tests** run as `env -u DOCKER_CONFIG -u DOCKER_HOST go test ./...`.
 - **Commits.** Conventional Commits, no scope, with the repo's `Co-Authored-By` trailer.
@@ -45,6 +54,7 @@
 
 ## Review Focus
 
+0. **Twenty Environments listed at once** by the web store's `Promise.all`. They make exactly one Engine call. Test in Task 2: `TestSnapshotSharedAcrossConcurrentLists`.
 1. **Project names that are prefixes of each other** (`relist-c1` and `relist-c19`). Grouping is by exact label value, never by prefix or filter substring. Test in Task 2: `TestStatusesGroupByExactProject`.
 2. **One-off containers** from `docker compose run`. They are not counted, as `compose ps --all` leaves them out. Test in Task 1: `TestComposeContainersSkipsOneOff`.
 3. **Docker unreachable.** The list still answers 200 with zero statuses, and makes one failed Engine call, not one per Compose. Test in Task 2: `TestStatusesEngineDownIsZero`.
@@ -109,12 +119,17 @@
   ```go
   // statusOf is the ComposeStatus of one project's containers.
   func statusOf(containers []EngineContainer) ComposeStatus
+  // snapshot shares one ComposeContainers call between list requests (see Global Constraints).
+  type snapshot struct{ /* mu, at, byProject, inflight chan, now func() time.Time */ }
+  func (n *snapshot) get(ctx context.Context, engine ContainerEngine) (map[string][]EngineContainer, error)
+  func (n *snapshot) drop()
   ```
+  `Service` gains `status *snapshot`, created in `New` with `now = time.Now`; tests set the clock.
 - **`withStatuses(ctx, composes)`:**
   - keep the per-Compose `withDeployIdentity`, the file check and `requireUniqueIdentity`;
-  - then call `ComposeContainers` once, and only if at least one Compose is deployed;
+  - then call `s.status.get` once, and only if at least one Compose is deployed;
   - group by `Project`, and give each deployed Compose `statusOf(group[req.ProjectName])`.
-- **The single-Compose paths** (`currentStatus`, `withRefreshedStatus`, `ServiceNames`) use `ProjectContainers(ctx, req.ProjectName)`. `ServiceNames` keeps returning the error, as it does today.
+- **The single-Compose paths** (`currentStatus`, `withRefreshedStatus`, `ServiceNames`) use `ProjectContainers(ctx, req.ProjectName)`. `ServiceNames` keeps returning the error, as it does today. `withRefreshedStatus` calls `s.status.drop()` first.
 
 - [ ] **Step 1: Write the failing tests**
   - `TestStatusOf`: containers `{web running}`, `{web exited}`, `{db running}` give `{Running:2, Total:3, Services:["db","web"]}`. An empty input gives a zero value with `Services` nil.
@@ -124,6 +139,13 @@
   - `TestStatusesOneEngineCall`:
     - a list of 5 deployed Composes gives `ComposeContainers` called exactly once and `ProjectContainers` 0 times;
     - the fake runner's methods fail the test if a status-like CLI call is made. After deletion this is a compile-time guarantee; keep a call counter on the fake engine.
+  - `TestSnapshotSharedAcrossConcurrentLists`: the fake engine blocks until released. 20 goroutines list at once, the engine is released, and there is exactly 1 `ComposeContainers` call. Every list has the right statuses.
+  - `TestSnapshotExpires`: with a fake clock, a list at t=0 and one at t=1.9 s make 1 call; one at t=2.1 s makes a 2nd call.
+  - `TestSnapshotErrorNotCached`: the 1st call errors and the next list makes a new call.
+  - `TestSnapshotCallerCancel`:
+    - caller A's ctx is cancelled while the shared call is blocked; A returns `ctx.Err()` promptly;
+    - caller B, waiting on the same call, gets the result once it is released.
+  - `TestRefreshedStatusDropsSnapshot`: list (1 call), then a deploy action through `withRefreshedStatus`, then list within 2 s: a 2nd `ComposeContainers` call.
   - `TestStatusesUndeployedNoCall`: an all-undeployed list makes 0 Engine calls.
   - `TestStatusesEngineDownIsZero`: `ComposeContainers` returns an error. The list handler answers 200, every status is zero, and there is 1 call.
   - `TestServiceNamesFromEngine`: `ServiceNames` returns the sorted services of the project, and the Engine's error is passed through.
@@ -174,7 +196,7 @@
   - **Why:** the OOM measurement above;
   - **Considered and rejected:**
     - a semaphore around CLI calls (it still forks, and it serialises page loads behind slow `compose ps`);
-    - caching status (stale after deploys, and the memory spike still happens on a cold cache);
+    - a background loop running `docker compose ps` into a central cache. It still forks 2 processes per Compose every round, rounds slow down as Composes grow, it works while nobody looks, and it is stale after deploys. The shared 2 s Engine snapshot gives the same "one source" without any of that.
   - **Consequence:** the orphan parity result from Step 1.
 
 - [ ] **Step 5: Commit**: `docs: record compose status from the engine`
