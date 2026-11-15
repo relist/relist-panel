@@ -297,3 +297,90 @@ func TestNoCopiesNeedsNoConfirm(t *testing.T) {
 		t.Fatalf("delete = %d %s", w.Code, w.Body)
 	}
 }
+
+func TestValidateSFTP(t *testing.T) {
+	ok := func(in SFTPConfig) SFTPConfig {
+		t.Helper()
+		if in.Host == "" {
+			in.Host = "box"
+		}
+		if in.User == "" {
+			in.User = "u"
+		}
+		if in.Auth == "" {
+			in.Auth = AuthKey
+		}
+		got, err := ValidateSFTP(in)
+		if err != nil {
+			t.Fatalf("ValidateSFTP(%+v) = %v", in, err)
+		}
+		return got
+	}
+	if got := ok(SFTPConfig{Host: " box.example "}); got.Host != "box.example" || got.Port != 22 {
+		t.Fatalf("got %+v", got)
+	}
+	if got := ok(SFTPConfig{Host: "::1"}); got.Host != "::1" {
+		t.Fatalf("ipv6 = %+v", got)
+	}
+	for in, want := range map[string]string{"backups/": "backups", "/srv//b/": "/srv/b", ".": "", "": "", " /x ": "/x"} {
+		if got := ok(SFTPConfig{Path: in}); got.Path != want {
+			t.Errorf("path %q = %q, want %q", in, got.Path, want)
+		}
+	}
+	base := SFTPConfig{Host: "box", User: "u", Auth: AuthKey}
+	for field, mut := range map[string]func(*SFTPConfig){
+		"path": func(c *SFTPConfig) { c.Path = "/" },
+		"host": func(c *SFTPConfig) { c.Host = "" },
+		"port": func(c *SFTPConfig) { c.Port = 70000 },
+		"user": func(c *SFTPConfig) { c.User = "" },
+		"auth": func(c *SFTPConfig) { c.Auth = "cert" },
+	} {
+		c := base
+		mut(&c)
+		_, err := ValidateSFTP(c)
+		var fe *FieldError
+		if !errors.As(err, &fe) || fe.Field != field {
+			t.Errorf("%s: err = %v", field, err)
+		}
+	}
+	for _, p := range []string{"a/../../x", "../x", "a/.."} {
+		c := base
+		c.Path = p
+		if _, err := ValidateSFTP(c); err == nil {
+			t.Errorf("path %q accepted", p)
+		}
+	}
+	for _, h := range []string{"a b", "a/b", "a\tb"} {
+		c := base
+		c.Host = h
+		if _, err := ValidateSFTP(c); err == nil {
+			t.Errorf("host %q accepted", h)
+		}
+	}
+	c := base
+	c.User = "a b"
+	if _, err := ValidateSFTP(c); err == nil {
+		t.Error("user with space accepted")
+	}
+	c = base
+	c.Path = "/"
+	if _, err := ValidateSFTP(c); err == nil || !strings.Contains(err.Error(), "base path cannot be /") {
+		t.Errorf("slash error = %v", err)
+	}
+	c.Path = "a/../../x"
+	if _, err := ValidateSFTP(c); err == nil || !strings.Contains(err.Error(), "base path cannot contain ..") {
+		t.Errorf("dotdot error = %v", err)
+	}
+}
+
+func TestKeyPrefix(t *testing.T) {
+	if got := (Destination{Type: TypeS3, S3: S3Config{Prefix: "p"}}).KeyPrefix(); got != "p" {
+		t.Fatalf("s3 = %q", got)
+	}
+	if got := (Destination{Type: TypeSFTP, SFTP: SFTPConfig{Path: "/srv/b"}}).KeyPrefix(); got != "/srv/b" {
+		t.Fatalf("sftp = %q", got)
+	}
+	if got := ObjectKey("/srv/b", "app", 3, "main", "x.sql.gz"); got != "/srv/b/app-3/main/x.sql.gz" {
+		t.Fatalf("key = %q", got)
+	}
+}

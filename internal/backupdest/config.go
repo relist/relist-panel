@@ -10,12 +10,23 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"path"
 	"strings"
 	"time"
+	"unicode"
 )
 
-// TypeS3 is the only destination type phase 3 ships.
-const TypeS3 = "s3"
+// The destination types.
+const (
+	TypeS3   = "s3"
+	TypeSFTP = "sftp"
+)
+
+// How an SFTP destination logs in.
+const (
+	AuthKey      = "key"
+	AuthPassword = "password"
+)
 
 // S3Config is where an S3-compatible bucket is and how to reach it. The
 // secret access key is not part of it: Destination keeps it apart.
@@ -28,16 +39,50 @@ type S3Config struct {
 	PathStyle   bool   `json:"pathStyle"`
 }
 
+// SFTPConfig is where an SFTP server is and how to reach it. The password is
+// not part of it: Destination keeps it apart as Secret.
+type SFTPConfig struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+	User string `json:"user"`
+	Path string `json:"path"`
+	Auth string `json:"auth"`
+}
+
 // Destination is one stored Backup destination.
 type Destination struct {
-	ID            int64
-	Name, Type    string
-	S3            S3Config
+	ID         int64
+	Name, Type string
+	S3         S3Config
+	SFTP       SFTPConfig
+	// SSHKeyID is the library key of an SFTP destination with key auth.
+	SSHKeyID *int64
+	// SSHKeyName, PrivateKey and PublicKey are joined from ssh_keys; the
+	// store never saves them.
+	SSHKeyName, PrivateKey, PublicKey string
+	// HostKey is the trusted server host key, one authorized_keys line, or "".
+	HostKey       string
 	Secret        string
 	LastTestAt    *time.Time
 	LastTestOK    bool
 	LastTestError string
 }
+
+// KeyPrefix is the part of an object key that comes before the Database's
+// directory: the S3 prefix, or the SFTP base path.
+func (d Destination) KeyPrefix() string {
+	if d.Type == TypeSFTP {
+		return d.SFTP.Path
+	}
+	return d.S3.Prefix
+}
+
+// ErrHostKeyChanged is a server that presents another host key than the one
+// recorded on its first successful Test.
+var ErrHostKeyChanged = errors.New("the server's host key changed; if you expected this, use Reset host key and Test again")
+
+// ErrNoHostKey is an SFTP destination that no Test has trusted yet.
+var ErrNoHostKey = errors.New("this SFTP destination has no trusted host key yet: run Test first")
 
 // Remote is a connection to a destination's bucket.
 type Remote interface {
@@ -101,6 +146,45 @@ func ValidateS3(c S3Config) (S3Config, error) {
 	}
 	if c.AccessKeyID == "" {
 		return S3Config{}, &FieldError{"accessKeyId", "access key ID is required"}
+	}
+	return c, nil
+}
+
+// ValidateSFTP trims and checks c. A zero port becomes 22. The base path is
+// cleaned: "" and "." mean the login directory, a leading "/" is kept, "/"
+// and ".." are refused.
+func ValidateSFTP(c SFTPConfig) (SFTPConfig, error) {
+	c.Host = strings.TrimSpace(c.Host)
+	c.User = strings.TrimSpace(c.User)
+	c.Path = strings.TrimSpace(c.Path)
+	if c.Host == "" || strings.ContainsFunc(c.Host, func(r rune) bool { return r == '/' || unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return SFTPConfig{}, &FieldError{"host", "host is required and takes no slash or space"}
+	}
+	if c.Port == 0 {
+		c.Port = 22
+	}
+	if c.Port < 1 || c.Port > 65535 {
+		return SFTPConfig{}, &FieldError{"port", "port must be between 1 and 65535"}
+	}
+	if c.User == "" || strings.ContainsFunc(c.User, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return SFTPConfig{}, &FieldError{"user", "user is required and takes no space"}
+	}
+	if c.Auth != AuthKey && c.Auth != AuthPassword {
+		return SFTPConfig{}, &FieldError{"auth", `auth must be "key" or "password"`}
+	}
+	if c.Path != "" {
+		for _, el := range strings.Split(c.Path, "/") {
+			if el == ".." {
+				return SFTPConfig{}, &FieldError{"path", "base path cannot contain .."}
+			}
+		}
+		c.Path = path.Clean(c.Path)
+		if c.Path == "." {
+			c.Path = ""
+		}
+		if c.Path == "/" {
+			return SFTPConfig{}, &FieldError{"path", "base path cannot be /"}
+		}
 	}
 	return c, nil
 }
