@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"relist-panel/internal/authz"
+	"relist-panel/internal/grants"
 	"strconv"
 	"strings"
 	"testing"
@@ -121,3 +123,50 @@ func TestStatusCodes(t *testing.T) {
 }
 
 func itoa(id int64) string { return strconv.FormatInt(id, 10) }
+
+func TestDeleteKeyUsedByDestination(t *testing.T) {
+	db, _, _ := newDB(t)
+	mux := http.NewServeMux()
+	New(db).RegisterRoutes(mux)
+	rec := do(mux, "POST", "/api/ssh-keys", `{"name":"ci"}`)
+	var k struct{ ID int64 }
+	_ = json.Unmarshal(rec.Body.Bytes(), &k)
+	addDestination(t, db, "offsite", k.ID)
+	rec = do(mux, "DELETE", "/api/ssh-keys/"+itoa(k.ID), "")
+	var got struct {
+		Error        string   `json:"error"`
+		Destinations []string `json:"destinations"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if rec.Code != 409 || got.Error != "used by Backup destinations: offsite" || len(got.Destinations) != 1 || got.Destinations[0] != "offsite" {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(mux, "GET", "/api/ssh-keys", ""); !strings.Contains(rec.Body.String(), `"name":"ci"`) {
+		t.Fatalf("the key is gone: %s", rec.Body)
+	}
+	// The destination still has its key, so a detach never happened.
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM backup_destinations WHERE ssh_key_id = ?`, k.ID).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("destination key rows = %d, %v", n, err)
+	}
+}
+
+func TestListShowsDestinationUseToAdminsOnly(t *testing.T) {
+	db, _, _ := newDB(t)
+	mux := http.NewServeMux()
+	New(db).RegisterRoutes(mux)
+	rec := do(mux, "POST", "/api/ssh-keys", `{"name":"ci"}`)
+	var k struct{ ID int64 }
+	_ = json.Unmarshal(rec.Body.Bytes(), &k)
+	addDestination(t, db, "offsite", k.ID)
+	if rec := do(mux, "GET", "/api/ssh-keys", ""); !strings.Contains(rec.Body.String(), `"usedByDestinations":["offsite"]`) {
+		t.Fatalf("admin list = %s", rec.Body)
+	}
+	req := httptest.NewRequest("GET", "/api/ssh-keys", nil)
+	req = req.WithContext(authz.WithAccess(req.Context(), grants.Access{}))
+	member := httptest.NewRecorder()
+	mux.ServeHTTP(member, req)
+	if member.Code != 200 || strings.Contains(member.Body.String(), "usedByDestinations") || strings.Contains(member.Body.String(), "offsite") {
+		t.Fatalf("member list = %d %s", member.Code, member.Body)
+	}
+}

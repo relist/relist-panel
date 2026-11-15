@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -85,11 +86,18 @@ func (f *fakeRemote) count() int {
 	return len(f.objects)
 }
 
-type fakeOpener struct{ remote *fakeRemote }
+type fakeOpener struct {
+	remote *fakeRemote
+	// dest replaces the default S3 destination "minio" when set.
+	dest *backupdest.Destination
+}
 
 func (o fakeOpener) Open(_ context.Context, id int64) (backupdest.Destination, backupdest.Remote, error) {
 	if id != 1 {
 		return backupdest.Destination{}, nil, backupdest.ErrNotFound
+	}
+	if o.dest != nil {
+		return *o.dest, o.remote, nil
 	}
 	return backupdest.Destination{ID: 1, Name: "minio", Type: "s3", S3: backupdest.S3Config{Prefix: "pfx"}}, o.remote, nil
 }
@@ -101,7 +109,7 @@ func (r *rig) withDestination(t *testing.T) *fakeRemote {
 		t.Fatal(err)
 	}
 	remote := newFakeRemote()
-	r.svc.d.Destinations = fakeOpener{remote}
+	r.svc.d.Destinations = fakeOpener{remote: remote}
 	return remote
 }
 
@@ -156,6 +164,35 @@ func TestScheduledRunUploads(t *testing.T) {
 	}
 	if remote.count() != 1 {
 		t.Fatalf("bucket has %d objects", remote.count())
+	}
+}
+
+// The object key's prefix comes from the destination's type: an SFTP
+// destination's base path, kept in the recorded key.
+func TestUploadKeyUsesSFTPPath(t *testing.T) {
+	r := newRig(t)
+	d := r.create(t, "Shop", "postgres", "18")
+	remote := r.withDestination(t)
+	r.svc.d.Destinations = fakeOpener{remote: remote, dest: &backupdest.Destination{
+		ID: 1, Name: "box", Type: backupdest.TypeSFTP, HostKey: "ssh-ed25519 AAAA",
+		SFTP: backupdest.SFTPConfig{Host: "box", Port: 22, User: "u", Path: "/srv/b", Auth: backupdest.AuthPassword}}}
+	r.host.script("psql -U postgres -At -c SELECT datname", func(req ExecRequest) (int, error) {
+		_, err := req.Stdout.Write([]byte("app\n"))
+		return 0, err
+	})
+	r.host.script("pg_dump -U postgres", func(req ExecRequest) (int, error) {
+		_, err := req.Stdout.Write([]byte("SELECT 1;\n"))
+		return 0, err
+	})
+	r.useClock(day(15, 3, 0))
+	r.schedule(t, d.ID, r.toDestination, day(14, 3, 0))
+	r.svc.tick(context.Background())
+	bs := r.backups(t, d.ID)
+	if len(bs) != 1 || bs[0].Upload == nil || bs[0].Upload.Status != UploadUploaded {
+		t.Fatalf("backups = %+v", bs)
+	}
+	if want := "/srv/b/" + "shop-" + strconv.FormatInt(d.ID, 10) + "/"; !strings.HasPrefix(bs[0].Upload.ObjectKey, want) {
+		t.Fatalf("object key = %q, want prefix %q", bs[0].Upload.ObjectKey, want)
 	}
 }
 

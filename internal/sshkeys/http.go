@@ -42,6 +42,8 @@ type keyResponse struct {
 	PublicKey string        `json:"publicKey"`
 	CreatedAt time.Time     `json:"createdAt"`
 	UsedBy    []useResponse `json:"usedBy"`
+	// UsedByDestinations names the Backup destinations using the key.
+	UsedByDestinations []string `json:"usedByDestinations"`
 }
 
 func toResponse(k Key) keyResponse {
@@ -49,7 +51,7 @@ func toResponse(k Key) keyResponse {
 	for _, u := range k.UsedBy {
 		used = append(used, useResponse(u))
 	}
-	return keyResponse{ID: k.ID, Name: k.Name, PublicKey: k.PublicKey, CreatedAt: k.CreatedAt, UsedBy: used}
+	return keyResponse{ID: k.ID, Name: k.Name, PublicKey: k.PublicKey, CreatedAt: k.CreatedAt, UsedBy: used, UsedByDestinations: k.UsedByDestinations}
 }
 
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +144,10 @@ func readName(w http.ResponseWriter, r *http.Request) (string, bool) {
 }
 
 func writeStoreError(w http.ResponseWriter, err error, fallback string) {
+	var inUse ErrKeyInUse
 	switch {
+	case errors.As(err, &inUse):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": inUse.Error(), "destinations": inUse.Destinations})
 	case errors.Is(err, ErrNameRequired), errors.Is(err, ErrNameInvalid):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNameTaken):

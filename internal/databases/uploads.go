@@ -40,7 +40,7 @@ func (s *Service) upload(ctx context.Context, d Database, b Backup, destID int64
 	if err != nil {
 		return Upload{BackupID: b.ID, DestinationID: destID, Status: UploadFailed, Error: err.Error()}
 	}
-	key := backupdest.ObjectKey(dest.S3.Prefix, d.Slug, d.ID, b.LogicalName, b.FileName)
+	key := backupdest.ObjectKey(dest.KeyPrefix(), d.Slug, d.ID, b.LogicalName, b.FileName)
 	u, err := s.d.Store.InsertUpload(ctx, Upload{BackupID: b.ID, DestinationID: destID, ObjectKey: key, Status: UploadRunning})
 	if err != nil {
 		return Upload{BackupID: b.ID, DestinationID: destID, DestinationName: dest.Name, Status: UploadFailed, Error: err.Error()}
