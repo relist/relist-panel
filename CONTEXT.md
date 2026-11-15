@@ -65,7 +65,7 @@ One gzipped plain-SQL dump of one logical database of a Database; never users or
 What a backup run covers; a run makes one Backup per logical database.
 
 **Backup destination**:
-A named, host-wide S3-compatible bucket (AWS S3, Cloudflare R2, Backblaze B2, MinIO) that a Database's schedule copies its scheduled Backups to, managed on Data → Backup destinations. Its secret access key stays in the panel database and is never returned (ADR-0040). _Avoid_: Remote storage, Bucket (the bucket is only part of a destination).
+A named, host-wide off-site store that a Database's schedule copies its scheduled Backups to, managed on Data → Backup destinations: an S3-compatible bucket (AWS S3, Cloudflare R2, Backblaze B2, MinIO) or an SFTP server. Its secret (S3 secret access key, SFTP password) stays in the panel database and is never returned (ADR-0040); an SFTP destination trusts the server's host key on its first successful Test (ADR-0042). _Avoid_: Remote storage, Bucket (the bucket is only part of a destination).
 
 **Rotation**:
 The rule that deletes a Database's old scheduled Backups, locally and in its Backup destination, keeping the last N or those from the last X days per logical database; the newest successful Backup of each is always kept. Manual and `pre_restore` Backups are never rotated.
