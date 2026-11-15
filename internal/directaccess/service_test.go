@@ -260,3 +260,18 @@ func TestCloseTarget(t *testing.T) {
 		t.Fatalf("another target's access closed: %v", err)
 	}
 }
+
+// An Open that slipped in while its Database was being deleted leaves a live
+// proxy whose target is gone; reconcile ends it instead of waiting for expiry.
+func TestReconcileRemovesAccessOfGoneTarget(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	a := r.open(t)
+	delete(r.targets.eps, KindDatabase+":"+itoa(a.Target.ID))
+	if err := r.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.store.Get(ctx, a.ID); !errors.Is(err, ErrNotFound) || r.host.proxies[a.ID] {
+		t.Fatalf("access of a gone target kept: %v %v", err, r.host.proxies)
+	}
+}
