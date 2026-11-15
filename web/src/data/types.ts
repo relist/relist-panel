@@ -1445,3 +1445,29 @@ export interface RedisKeyValue {
   type: string;
   unsupported?: boolean;
 }
+
+/** A Direct access (ADR-0041): a timed way into one container's port. */
+export interface DirectAccess {
+  id: number;
+  targetKind: 'database';
+  targetId: number;
+  targetPort: number;
+  channel: 'host_port';
+  /** `127.0.0.1`, or `0.0.0.0` when opened on all interfaces. */
+  bind: string;
+  hostPort: number;
+  /** RFC 3339; null only for a channel with its own access control. */
+  expiresAt: string | null;
+  openedAt: string;
+}
+
+export interface DirectAccessOpenInput {
+  targetKind: 'database';
+  targetId: number;
+  channel: 'host_port';
+  allInterfaces: boolean;
+  /** 0 lets Docker pick a free port. */
+  hostPort: number;
+  /** 15, 60, 240 or 480. */
+  minutes: number;
+}

@@ -38,6 +38,8 @@ import type {
   DatabaseSchedule,
   DatabaseScheduleState,
   DatabaseCredentials,
+  DirectAccess,
+  DirectAccessOpenInput,
   DatabaseEngine,
   DatabaseInput,
   QueryRequest,
@@ -674,6 +676,13 @@ export const api = {
   databaseBackupUrl: (id: number, backupId: number) => `/api/databases/${id}/backups/${backupId}/download`,
   databaseCredentials: (id: number) => request<DatabaseCredentials>(`/api/databases/${id}/credentials`),
   databaseLogs: (id: number, tail = 200) => request<{ logs: string }>(`/api/databases/${id}/logs?tail=${tail}`),
+  // Direct access (ADR-0041): a timed host port into one container.
+  listDirectAccesses: (targetKind: string, targetId: number) =>
+    request<{ accesses: DirectAccess[] }>(`/api/direct-accesses?targetKind=${targetKind}&targetId=${targetId}`),
+  openDirectAccess: (input: DirectAccessOpenInput) => request<DirectAccess>('/api/direct-accesses', jsonInit('POST', input)),
+  extendDirectAccess: (id: number, minutes: number) =>
+    request<DirectAccess>(`/api/direct-accesses/${id}/extend`, jsonInit('POST', { minutes })),
+  closeDirectAccess: (id: number) => request<void>(`/api/direct-accesses/${id}`, { method: 'DELETE' }),
   // Builders: resource-limited buildx builders, and the BuildKit image they run.
   listBuilders: () => request<BuildersResponse>('/api/builders'),
   setBuildKitImage: (buildkitImage: string) =>
