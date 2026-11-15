@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"relist-panel/internal/backupdest"
+	"relist-panel/internal/directaccess"
 	"relist-panel/internal/slug"
 )
 
@@ -57,6 +58,9 @@ type Deps struct {
 	Destinations backupdest.Opener
 	// Querier runs the Query panel's statements (nil = the real drivers).
 	Querier Querier
+	// DirectAccess closes a Database's Direct accesses before it is deleted
+	// (nil = it has none).
+	DirectAccess DirectAccessCloser
 }
 
 type CreateInput struct {
@@ -592,6 +596,12 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBa
 	return s.opIdle(ctx, id, func(d Database) error {
 		if confirm != d.Name {
 			return ErrConfirm
+		}
+		// The proxy goes before the container it points at.
+		if s.d.DirectAccess != nil {
+			if err := s.d.DirectAccess.CloseTarget(ctx, directaccess.KindDatabase, id); err != nil {
+				return err
+			}
 		}
 		if deleteBackups {
 			// Remote copies first: if one stays, nothing else is deleted.

@@ -26,6 +26,7 @@ import (
 	"relist-panel/internal/composevariables"
 	"relist-panel/internal/databases"
 	"relist-panel/internal/deployments"
+	"relist-panel/internal/directaccess"
 	"relist-panel/internal/dockerhost"
 	"relist-panel/internal/domains"
 	"relist-panel/internal/environments"
@@ -129,6 +130,9 @@ type Deps struct {
 	// DatabaseHost drives the panel's Databases (ADR-0039). Nil leaves the
 	// Databases routes out.
 	DatabaseHost databases.Host
+	// DirectAccessHost runs the proxy containers of Direct access (ADR-0041).
+	// Nil leaves them out; it needs DatabaseHost too.
+	DirectAccessHost directaccess.Host
 }
 
 // NewHandler builds the top-level HTTP handler for the panel.
@@ -293,9 +297,20 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		})
 		puDeps.RegistryCleanup = registryCleaner
 	}
+	var directAccessService *directaccess.Service
+	var directAccessCloser databases.DirectAccessCloser
+	if d.DatabaseHost != nil && d.DirectAccessHost != nil {
+		// A Database is its first target, and the Database service needs the
+		// Direct access service to close accesses on delete: the target is
+		// looked up late.
+		directAccessService = newDirectAccessService(db, d, puDeps.MigrationLocked, func() directaccess.Targets {
+			return databaseService.DirectTarget()
+		})
+		directAccessCloser = directAccessService
+	}
 	databaseService = newDatabaseService(db, d, dataDir, puDeps.MigrationLocked, func() bool {
 		return panelUpdates != nil && panelUpdates.Locked() // assigned just below
-	}, backupDestinations)
+	}, backupDestinations, directAccessCloser)
 	if databaseService != nil {
 		puDeps.DatabaseJobs = databaseService
 		backupDestinations.WithFileRemover(databaseService.RemoveFiles)
@@ -398,6 +413,13 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			}
 			databaseService.RunScheduler(ctx)
 		}()
+		if directAccessService != nil {
+			worker.Add(1)
+			go func() {
+				defer worker.Done()
+				directAccessService.Run(ctx) // reconciles at start and every minute
+			}()
+		}
 	}
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
