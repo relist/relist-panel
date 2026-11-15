@@ -76,6 +76,9 @@ A mark on one scheduled Backup that keeps Rotation from deleting it.
 **Remote only**:
 A Backup whose local file Rotation removed while its copy in a Backup destination is still tracked; it cannot be downloaded or restored from the panel.
 
+**Direct access**:
+A timed way into one container's port that skips Traefik: a small proxy the panel runs, defined by a target (a Database in phase 5), a channel (`host_port` in phase 5) and an expiry. The panel checks nothing on the channel; its own control (SSH to the host, a tailnet ACL) is the guard (ADR-0041). _Avoid_: tunnel, port forward, gateway (a tunnel is one possible channel, not the thing).
+
 **Restore**:
 Replaying a Backup, or an uploaded `.sql`/`.sql.gz` of one database, into a target logical database the Admin picks, replacing it (after a `pre_restore` Backup of it) or creating it. _Avoid_: Rollback.
 
