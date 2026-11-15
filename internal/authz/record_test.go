@@ -390,6 +390,7 @@ func TestDatabaseBackupDownloadIsAudited(t *testing.T) {
 		mux.HandleFunc("GET /api/databases/{id}/backups/{backupID}/download", answer(http.StatusOK))
 		mux.HandleFunc("POST /api/databases/{id}/restores", answer(http.StatusAccepted))
 		mux.HandleFunc("POST /api/databases/{id}/query", answer(http.StatusOK))
+		mux.HandleFunc("POST /api/databases/{id}/redis/command", answer(http.StatusOK))
 	})
 	if _, err := f.db.Exec(`INSERT INTO databases (id, name, slug, engine, version, password, created_at, updated_at) VALUES (4, 'Shop', 'shop', 'postgres', '18', 'x', 1, 1)`); err != nil {
 		t.Fatal(err)
@@ -398,6 +399,7 @@ func TestDatabaseBackupDownloadIsAudited(t *testing.T) {
 		{http.MethodGet, "/api/databases/4/backups/1/download", "database.backup_download"},
 		{http.MethodPost, "/api/databases/4/restores", "database.restore"},
 		{http.MethodPost, "/api/databases/4/query", "database.query"},
+		{http.MethodPost, "/api/databases/4/redis/command", "database.redis_command"},
 	} {
 		if got := f.serve(admin, call.method, call.path).Code; got >= 300 {
 			t.Fatalf("%s %s = %d", call.method, call.path, got)

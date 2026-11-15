@@ -8,12 +8,20 @@ import (
 	"relist-panel/internal/dbquery"
 )
 
-var ErrNoQuery = errors.New("this Database has no SQL console")
+var (
+	ErrNoQuery   = errors.New("this Database has no SQL console")
+	ErrNoConsole = errors.New("this Database has no Redis console")
+)
 
 // Querier runs the Query panel's statements; tests fake it.
 type Querier interface {
 	Run(ctx context.Context, t dbquery.Target, r dbquery.Request) dbquery.QueryResponse
 	Schema(ctx context.Context, t dbquery.Target, engine, database string) ([]dbquery.SchemaNode, error)
+	// RunRedis never sends a refused command, nor a dangerous one before
+	// confirmDangerous.
+	RunRedis(ctx context.Context, t dbquery.Target, db int, line string, writes, confirmDangerous bool) dbquery.RedisResponse
+	ScanKeys(ctx context.Context, t dbquery.Target, db int, pattern, cursor string) ([]dbquery.KeyInfo, string, error)
+	ReadKey(ctx context.Context, t dbquery.Target, db int, key string) (dbquery.KeyValue, error)
 }
 
 // engineQuerier is the real Querier: one driver per engine.
@@ -24,6 +32,18 @@ func (engineQuerier) Run(ctx context.Context, t dbquery.Target, r dbquery.Reques
 		return dbquery.RunPostgres(ctx, t, r)
 	}
 	return dbquery.RunMySQL(ctx, t, r)
+}
+
+func (engineQuerier) RunRedis(ctx context.Context, t dbquery.Target, db int, line string, writes, confirm bool) dbquery.RedisResponse {
+	return dbquery.RunRedis(ctx, t, db, line, writes, confirm)
+}
+
+func (engineQuerier) ScanKeys(ctx context.Context, t dbquery.Target, db int, pattern, cursor string) ([]dbquery.KeyInfo, string, error) {
+	return dbquery.ScanKeys(ctx, t, db, pattern, cursor)
+}
+
+func (engineQuerier) ReadKey(ctx context.Context, t dbquery.Target, db int, key string) (dbquery.KeyValue, error) {
+	return dbquery.ReadKey(ctx, t, db, key)
 }
 
 func (engineQuerier) Schema(ctx context.Context, t dbquery.Target, engine, database string) ([]dbquery.SchemaNode, error) {
@@ -49,6 +69,9 @@ func (s *Service) queryTarget(ctx context.Context, id int64, wantRedis bool) (Da
 		return Database{}, dbquery.Target{}, err
 	}
 	if (d.Engine == "redis") != wantRedis {
+		if wantRedis {
+			return Database{}, dbquery.Target{}, ErrNoConsole
+		}
 		return Database{}, dbquery.Target{}, ErrNoQuery
 	}
 	if s.locked(ctx) {
@@ -101,4 +124,41 @@ func scrub(s, password string) string {
 		return s
 	}
 	return strings.ReplaceAll(s, password, "***")
+}
+
+// RedisCommand runs one console line on logical database db.
+func (s *Service) RedisCommand(ctx context.Context, id int64, db int, line string, writes, confirmDangerous bool) (dbquery.RedisResponse, error) {
+	d, t, err := s.queryTarget(ctx, id, true)
+	if err != nil {
+		return dbquery.RedisResponse{}, err
+	}
+	resp := s.d.Querier.RunRedis(ctx, t, db, line, writes, confirmDangerous)
+	resp.Error = scrub(resp.Error, d.Password)
+	return resp, nil
+}
+
+// RedisKeys reads one page of a key scan.
+func (s *Service) RedisKeys(ctx context.Context, id int64, db int, pattern, cursor string) ([]dbquery.KeyInfo, string, error) {
+	d, t, err := s.queryTarget(ctx, id, true)
+	if err != nil {
+		return nil, "", err
+	}
+	keys, next, err := s.d.Querier.ScanKeys(ctx, t, db, pattern, cursor)
+	if err != nil {
+		return nil, "", errors.New(scrub(err.Error(), d.Password))
+	}
+	return keys, next, nil
+}
+
+// RedisKey reads one key's value.
+func (s *Service) RedisKey(ctx context.Context, id int64, db int, key string) (dbquery.KeyValue, error) {
+	d, t, err := s.queryTarget(ctx, id, true)
+	if err != nil {
+		return dbquery.KeyValue{}, err
+	}
+	kv, err := s.d.Querier.ReadKey(ctx, t, db, key)
+	if err != nil {
+		return dbquery.KeyValue{}, errors.New(scrub(err.Error(), d.Password))
+	}
+	return kv, nil
 }

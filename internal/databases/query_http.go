@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -109,4 +110,121 @@ func (a *API) querySchema(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, nodes)
+}
+
+// redisDB reads the logical database number: 0 to 15.
+func redisDB(w http.ResponseWriter, raw string) (int, bool) {
+	n, err := strconv.Atoi(raw)
+	if raw == "" {
+		n, err = 0, nil
+	}
+	if err != nil || n < 0 || n > 15 {
+		writeJSONError(w, http.StatusBadRequest, "db must be a number from 0 to 15")
+		return 0, false
+	}
+	return n, true
+}
+
+// auditStatement is a console line as the audit log records it: split like
+// the console splits it, passwords replaced, cut. A line that cannot be split
+// is not recorded: it might carry a password the redaction cannot find.
+func auditStatement(line string) string {
+	args, err := dbquery.SplitRedisArgs(line)
+	if err != nil {
+		return "(a line with unbalanced quotes)"
+	}
+	return cutText(strings.Join(dbquery.RedactRedis(args), " "), auditText)
+}
+
+// redisCommand runs one console line. Like a SQL run, every outcome answers
+// 200 (ok, error, refused, cancelled) so the audit middleware records it.
+func (a *API) redisCommand(w http.ResponseWriter, r *http.Request) {
+	n, ok := id(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		DB               int    `json:"db"`
+		Command          string `json:"command"`
+		Writes           bool   `json:"writes"`
+		ConfirmDangerous bool   `json:"confirmDangerous"`
+	}
+	if !decodeBig(w, r, maxQueryBody, &in) {
+		return
+	}
+	if _, ok := redisDB(w, strconv.Itoa(in.DB)); !ok {
+		return
+	}
+	if strings.TrimSpace(in.Command) == "" {
+		writeJSONError(w, http.StatusBadRequest, "there is nothing to run")
+		return
+	}
+	a.target(r, n)
+	resp, err := a.s.RedisCommand(r.Context(), n, in.DB, in.Command, in.Writes, in.ConfirmDangerous)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	outcome, failure := "ok", resp.Error
+	switch {
+	case resp.Cancelled:
+		outcome = "cancelled"
+	case resp.Error != "":
+		outcome = "error"
+	case resp.Refused != "":
+		outcome, failure = "refused", resp.Refused
+	case resp.NeedsConfirm:
+		outcome, failure = "refused", "needs confirmation"
+	case resp.Reply != nil && resp.Reply.Type == "error":
+		outcome = "error"
+		failure, _ = resp.Reply.Value.(string)
+	}
+	ctx := r.Context()
+	audit.Detail(ctx, "database", in.DB)
+	audit.Detail(ctx, "statement", auditStatement(in.Command))
+	audit.Detail(ctx, "writes", in.Writes)
+	audit.Detail(ctx, "durationMs", resp.DurationMs)
+	audit.Detail(ctx, "error", cutText(failure, auditText))
+	audit.Detail(ctx, "outcome", outcome)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *API) redisKeys(w http.ResponseWriter, r *http.Request) {
+	n, ok := id(w, r)
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	db, ok := redisDB(w, q.Get("db"))
+	if !ok {
+		return
+	}
+	keys, cursor, err := a.s.RedisKeys(r.Context(), n, db, q.Get("pattern"), q.Get("cursor"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"keys": keys, "cursor": cursor})
+}
+
+func (a *API) redisKey(w http.ResponseWriter, r *http.Request) {
+	n, ok := id(w, r)
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	db, ok := redisDB(w, q.Get("db"))
+	if !ok {
+		return
+	}
+	if q.Get("key") == "" {
+		writeJSONError(w, http.StatusBadRequest, "key is required")
+		return
+	}
+	kv, err := a.s.RedisKey(r.Context(), n, db, q.Get("key"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, kv)
 }

@@ -23,6 +23,18 @@ type fakeQuerier struct {
 	targets []dbquery.Target
 	resp    map[string]dbquery.QueryResponse
 	schema  []dbquery.SchemaNode
+
+	// Redis: calls records every console run; sent only those the contract
+	// lets reach the server (a dangerous command waits for its confirmation).
+	calls []redisCall
+	sent  []string
+	redis func(line string) dbquery.RedisResponse
+}
+
+type redisCall struct {
+	db                int
+	line              string
+	writes, confirmed bool
 }
 
 func (f *fakeQuerier) Run(ctx context.Context, t dbquery.Target, r dbquery.Request) dbquery.QueryResponse {
@@ -263,5 +275,176 @@ func TestQuerySchemaRoute(t *testing.T) {
 	}
 	if len(qr.take()) != 0 {
 		t.Error("the schema read is not audited")
+	}
+}
+
+func (f *fakeQuerier) RunRedis(_ context.Context, _ dbquery.Target, db int, line string, writes, confirm bool) dbquery.RedisResponse {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, redisCall{db, line, writes, confirm})
+	if strings.HasPrefix(line, "FLUSHALL") && !confirm {
+		return dbquery.RedisResponse{NeedsConfirm: true}
+	}
+	if strings.HasPrefix(line, "SET ") && !writes {
+		return dbquery.RedisResponse{Refused: "writes are off"}
+	}
+	f.sent = append(f.sent, line)
+	if f.redis != nil {
+		return f.redis(line)
+	}
+	return dbquery.RedisResponse{Reply: &dbquery.Reply{Type: "string", Value: "OK"}}
+}
+
+func (f *fakeQuerier) ScanKeys(_ context.Context, _ dbquery.Target, db int, pattern, cursor string) ([]dbquery.KeyInfo, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, redisCall{db: db, line: "SCAN " + cursor + " " + pattern})
+	return []dbquery.KeyInfo{{Key: "a", Type: "string", TTLms: -1}}, "7", nil
+}
+
+func (f *fakeQuerier) ReadKey(_ context.Context, _ dbquery.Target, db int, key string) (dbquery.KeyValue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, redisCall{db: db, line: "KEY " + key})
+	return dbquery.KeyValue{Key: key, Type: "string", Items: []dbquery.KeyItem{{Value: "v"}}}, nil
+}
+
+func (qr *queryRig) redisCmd(body string) *httptest.ResponseRecorder {
+	return qr.do(context.Background(), "POST", "/api/databases/2/redis/command", body)
+}
+
+func newRedisRig(t *testing.T) *queryRig {
+	t.Helper()
+	qr := newQueryRig(t)
+	qr.create(t, "Shop", "postgres", "18")
+	qr.create(t, "Cache", "redis", "8")
+	return qr
+}
+
+func TestRedisRouteNeedsConfirm(t *testing.T) {
+	qr := newRedisRig(t)
+	w := qr.redisCmd(`{"db":0,"command":"FLUSHALL","writes":true}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"needsConfirm":true`) {
+		t.Fatalf("FLUSHALL = %d %s", w.Code, w.Body)
+	}
+	if len(qr.q.sent) != 0 || qr.q.calls[0].confirmed {
+		t.Fatalf("sent %v calls %+v: nothing may be sent before the confirmation", qr.q.sent, qr.q.calls)
+	}
+	w = qr.redisCmd(`{"db":3,"command":"FLUSHALL","writes":true,"confirmDangerous":true}`)
+	if w.Code != 200 || strings.Contains(w.Body.String(), "needsConfirm") || len(qr.q.sent) != 1 {
+		t.Fatalf("confirmed = %d %s sent %v", w.Code, w.Body, qr.q.sent)
+	}
+	if c := qr.q.calls[1]; c.db != 3 || !c.writes || !c.confirmed {
+		t.Fatalf("call = %+v", c)
+	}
+}
+
+func TestRedisAuditsRefused(t *testing.T) {
+	qr := newRedisRig(t)
+	w := qr.redisCmd(`{"db":1,"command":"SET k v"}`)
+	ev := qr.take()
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"refused":"writes are off"`) || len(ev) != 1 {
+		t.Fatalf("SET = %d %s, %d audit rows", w.Code, w.Body, len(ev))
+	}
+	d := ev[0].Detail
+	if ev[0].Action != "database.redis_command" || ev[0].Target != "Cache" || d["outcome"] != "refused" || d["statement"] != "SET k v" ||
+		d["writes"] != false || d["database"] != 1 {
+		t.Fatalf("event %+v", ev[0])
+	}
+	qr.redisCmd(`{"db":0,"command":"GET k"}`)
+	if ev := qr.take(); len(ev) != 1 || ev[0].Detail["outcome"] != "ok" || ev[0].Detail["error"] != "" {
+		t.Fatalf("GET event %+v", ev)
+	}
+	qr.q.redis = func(string) dbquery.RedisResponse {
+		return dbquery.RedisResponse{Reply: &dbquery.Reply{Type: "error", Value: "WRONGTYPE nope"}}
+	}
+	qr.redisCmd(`{"db":0,"command":"LPUSH k x","writes":true}`)
+	if ev := qr.take(); len(ev) != 1 || ev[0].Detail["outcome"] != "error" || ev[0].Detail["error"] != "WRONGTYPE nope" {
+		t.Fatalf("error event %+v", ev)
+	}
+}
+
+func TestRedisAuditsACancelledRun(t *testing.T) {
+	qr := newRedisRig(t)
+	qr.q.redis = func(string) dbquery.RedisResponse {
+		return dbquery.RedisResponse{Cancelled: true, Error: "Cancelled."}
+	}
+	w := qr.redisCmd(`{"db":0,"command":"BLPOP q 0","writes":true}`)
+	ev := qr.take()
+	if w.Code != 200 || len(ev) != 1 || ev[0].Detail["outcome"] != "cancelled" {
+		t.Fatalf("status %d events %+v", w.Code, ev)
+	}
+}
+
+func TestRedisRedactsAuth(t *testing.T) {
+	qr := newRedisRig(t)
+	qr.redisCmd(`{"db":0,"command":"CONFIG SET requirepass hunter2","writes":true,"confirmDangerous":true}`)
+	qr.redisCmd(`{"db":0,"command":"AUTH \"un closed hunter2","writes":true}`)
+	ev := qr.take()
+	if len(ev) != 2 || ev[0].Detail["statement"] != "CONFIG SET requirepass ***" {
+		t.Fatalf("events %+v", ev)
+	}
+	if s, _ := ev[1].Detail["statement"].(string); strings.Contains(s, "hunter2") {
+		t.Fatalf("a line that cannot be split must not be recorded raw: %q", s)
+	}
+}
+
+func TestRedisGates(t *testing.T) {
+	qr := newRedisRig(t)
+	post := func(id, body string) int {
+		return qr.do(context.Background(), "POST", "/api/databases/"+id+"/redis/command", body).Code
+	}
+	if c := post("2", `{"db":16,"command":"GET k"}`); c != 400 {
+		t.Errorf("db 16 = %d", c)
+	}
+	if c := post("2", `{"db":-1,"command":"GET k"}`); c != 400 {
+		t.Errorf("db -1 = %d", c)
+	}
+	if c := post("2", `{"db":0,"command":" "}`); c != 400 {
+		t.Errorf("empty = %d", c)
+	}
+	if c := post("1", `{"db":0,"command":"GET k"}`); c != 400 {
+		t.Errorf("a SQL engine = %d", c)
+	}
+	if c := post("9", `{"db":0,"command":"GET k"}`); c != 404 {
+		t.Errorf("unknown = %d", c)
+	}
+	if c := qr.do(context.Background(), "POST", "/api/databases/1/query", `{"sql":"SELECT 1"}`).Code; c != 200 {
+		t.Errorf("the SQL route still serves SQL = %d", c)
+	}
+	qr.locked = true
+	if c := post("2", `{"db":0,"command":"GET k"}`); c != 409 {
+		t.Errorf("locked = %d", c)
+	}
+	qr.locked = false
+	qr.host.containers["relist-db-2"].Running = false
+	if c := post("2", `{"db":0,"command":"GET k"}`); c != 409 {
+		t.Errorf("stopped = %d", c)
+	}
+	if len(qr.q.calls) != 0 {
+		t.Errorf("refused requests reached the Querier: %+v", qr.q.calls)
+	}
+}
+
+func TestRedisKeyRoutes(t *testing.T) {
+	qr := newRedisRig(t)
+	w := qr.do(context.Background(), "GET", "/api/databases/2/redis/keys?db=2&pattern=user:*&cursor=5", "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"cursor":"7"`) || !strings.Contains(w.Body.String(), `"key":"a"`) {
+		t.Fatalf("keys = %d %s", w.Code, w.Body)
+	}
+	if c := qr.q.calls[0]; c.db != 2 || c.line != "SCAN 5 user:*" {
+		t.Fatalf("call %+v", c)
+	}
+	if w := qr.do(context.Background(), "GET", "/api/databases/2/redis/key?db=0&key=a", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"type":"string"`) {
+		t.Fatalf("key = %d %s", w.Code, w.Body)
+	}
+	if w := qr.do(context.Background(), "GET", "/api/databases/2/redis/keys?db=99", ""); w.Code != 400 {
+		t.Fatalf("db 99 = %d", w.Code)
+	}
+	if w := qr.do(context.Background(), "GET", "/api/databases/2/redis/key?db=0", ""); w.Code != 400 {
+		t.Fatalf("no key = %d", w.Code)
+	}
+	if len(qr.take()) != 0 {
+		t.Error("browsing keys is not a run")
 	}
 }
