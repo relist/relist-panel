@@ -7,6 +7,7 @@ import (
 	"relist-panel/internal/backupdest"
 
 	"relist-panel/internal/databases"
+	"relist-panel/internal/directaccess"
 	"relist-panel/internal/imageref"
 )
 
@@ -14,7 +15,7 @@ import (
 // Docker host for them. locked is the Migration lock; a lock it cannot read
 // counts as held, as the Registry's gate does. updateLocked is the Panel
 // update lock, read when a Backup or restore starts.
-func newDatabaseService(db *sql.DB, d Deps, dataDir string, locked func(ctx context.Context) (bool, error), updateLocked func() bool, destinations backupdest.Opener) *databases.Service {
+func newDatabaseService(db *sql.DB, d Deps, dataDir string, locked func(ctx context.Context) (bool, error), updateLocked func() bool, destinations backupdest.Opener, direct databases.DirectAccessCloser) *databases.Service {
 	if d.DatabaseHost == nil {
 		return nil
 	}
@@ -23,6 +24,7 @@ func newDatabaseService(db *sql.DB, d Deps, dataDir string, locked func(ctx cont
 		Host:         d.DatabaseHost,
 		DataDir:      dataDir,
 		Destinations: destinations,
+		DirectAccess: direct,
 		UpdateLocked: updateLocked,
 		Locked: func(ctx context.Context) bool {
 			l, err := locked(ctx)
@@ -78,4 +80,26 @@ func beforeDeploy(registryStart func(context.Context) error, svc *databases.Serv
 		}
 		return errors.Join(errs...)
 	}
+}
+
+// lateTargets resolves its Targets when first used: the Database service and
+// the Direct access service need each other, and one is built first.
+type lateTargets func() directaccess.Targets
+
+func (l lateTargets) Resolve(ctx context.Context, kind string, id int64) (directaccess.Endpoint, error) {
+	return l().Resolve(ctx, kind, id)
+}
+
+// newDirectAccessService builds Direct access (ADR-0041). locked is the
+// Migration lock, read as for Databases: a lock it cannot read counts as held.
+func newDirectAccessService(db *sql.DB, d Deps, locked func(ctx context.Context) (bool, error), targets func() directaccess.Targets) *directaccess.Service {
+	return directaccess.New(directaccess.Deps{
+		Store:   directaccess.NewStore(db),
+		Host:    d.DirectAccessHost,
+		Targets: lateTargets(targets),
+		Locked: func(ctx context.Context) bool {
+			l, err := locked(ctx)
+			return l || err != nil
+		},
+	})
 }
