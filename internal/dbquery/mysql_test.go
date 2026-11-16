@@ -44,11 +44,13 @@ func (c *fakeCursor) Close() error               { return nil }
 
 type fakeQueryer struct {
 	script map[string]*fakeCursor
+	log    []string
 	errs   map[string]error
 	ran    []string
 }
 
 func (f *fakeQueryer) query(_ context.Context, stmt string) (cursor, error) {
+	f.log = append(f.log, stmt)
 	f.ran = append(f.ran, stmt)
 	if err := f.errs[stmt]; err != nil {
 		return nil, err

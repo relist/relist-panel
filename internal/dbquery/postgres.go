@@ -77,6 +77,25 @@ func RunPostgres(ctx context.Context, t Target, r Request) QueryResponse {
 		_ = conn.Close(cctx)
 	}()
 
+	if r.Restricted {
+		rows, err := conn.Query(runCtx, PgServerWideQuery("session_user"))
+		if err != nil {
+			finishPg(&resp, runCtx, ctx, err, began)
+			return resp
+		}
+		wide := rows.Next()
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			finishPg(&resp, runCtx, ctx, err, began)
+			return resp
+		}
+		if wide {
+			resp.Error = &QueryError{Message: ServerWideMessage(t.User)}
+			resp.DurationMs = sinceMs(began)
+			return resp
+		}
+	}
+
 	var budget Budget
 	mrr := conn.PgConn().Exec(runCtx, r.SQL)
 	types := conn.TypeMap()

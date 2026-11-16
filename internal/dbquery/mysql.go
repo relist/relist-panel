@@ -295,6 +295,16 @@ func RunMySQL(ctx context.Context, t Target, r Request) QueryResponse {
 			return failed(err)
 		}
 	}
+	if r.Restricted {
+		refusal, err := refuseServerWide(runCtx, sqlConn{conn}, t.User)
+		if err != nil {
+			return failed(err)
+		}
+		if refusal != nil {
+			refusal.DurationMs = sinceMs(began)
+			return *refusal
+		}
+	}
 	var id uint64
 	if err := conn.QueryRowContext(runCtx, "SELECT CONNECTION_ID()").Scan(&id); err != nil {
 		return failed(err)

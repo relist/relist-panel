@@ -16,10 +16,14 @@ type Target struct {
 }
 
 // Request is one run. Engine is "postgres", "mysql" or "mariadb".
+// Restricted runs the server-wide check on the run's own session before the
+// first statement: a non-Admin's user must have no powers beyond its
+// databases (serverwide.go).
 type Request struct {
 	Database, SQL string
 	Writes        bool
 	Engine        string
+	Restricted    bool
 }
 
 // Column is a result column.
