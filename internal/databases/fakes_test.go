@@ -290,8 +290,9 @@ type fakeAdmin struct {
 	// execErr, when set, decides each Exec's error before it is recorded as
 	// done; the call is recorded either way.
 	execErr func(database string, stmts []string) error
-	// pingOK says which passwords log in; any other fails.
+	// pingOK says which passwords log in; any other gets pingDefault.
 	pingOK      map[string]bool
+	pingDefault bool
 	pings       []string
 	redisSet    []string
 	redisSetErr error
@@ -326,7 +327,7 @@ func (f *fakeAdmin) Ping(_ context.Context, t dbquery.Target, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pings = append(f.pings, t.Password)
-	if !f.pingOK[t.Password] {
+	if ok, known := f.pingOK[t.Password]; (known && !ok) || (!known && !f.pingDefault) {
 		return errors.New("password authentication failed")
 	}
 	return nil
