@@ -129,6 +129,9 @@ func granteeJSON(v View, g authz.DatabaseGrant) DatabaseJSON {
 	out.SettingsOutdated = false
 	out.MemoryMB, out.CPUs = 0, 0
 	out.User = g.DBUser
+	// The engine's default database is the superuser's home; a grantee's
+	// Query panel starts on their own databases instead.
+	out.DefaultDatabase = ""
 	out.Access = &AccessJSON{DBUser: g.DBUser, Level: g.Level}
 	return out
 }

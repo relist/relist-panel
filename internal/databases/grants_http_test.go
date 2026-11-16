@@ -154,6 +154,9 @@ func TestGranteeListAndGet(t *testing.T) {
 	if list[0].User != "shop_ro" || list[0].Access == nil || list[0].Access.DBUser != "shop_ro" {
 		t.Errorf("pg row = %+v, want user shop_ro with its access", list[0])
 	}
+	if list[0].DefaultDatabase != "" {
+		t.Errorf("defaultDatabase = %q: a grantee's query panel must not default to the engine's database", list[0].DefaultDatabase)
+	}
 	if list[1].User != "" || list[1].Access == nil || list[1].Access.Level != "read" {
 		t.Errorf("redis row = %+v, want no user and level read", list[1])
 	}
