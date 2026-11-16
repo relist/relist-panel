@@ -1,8 +1,8 @@
 import { EyeInvisibleOutlined, EyeOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Checkbox, Descriptions, Flex, Input, Modal, Tabs, Tag, Tooltip, Typography } from 'antd';
+import { Alert, App, Button, Card, Checkbox, Descriptions, Flex, Input, Modal, Select, Tabs, Tag, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
-import useSWR from 'swr';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import useSWR, { useSWRConfig } from 'swr';
 
 import { paths } from '../app/paths';
 import { DangerModal } from '../components/DangerModal';
@@ -10,10 +10,12 @@ import { PageHeader } from '../components/primitives';
 import { api } from '../data/api';
 import type { Database, DatabaseAction, DatabaseCredentials } from '../data/types';
 import { DatabaseBackupsTab } from './DatabaseBackupsTab';
+import { DatabaseDatabasesTab } from './DatabaseDatabasesTab';
+import { DatabaseUsersTab } from './DatabaseUsersTab';
 import { DatabaseQueryTab } from './DatabaseQueryTab';
 import { DatabaseRedisTab } from './DatabaseRedisTab';
 import { DirectAccessCard } from './DirectAccessCard';
-import { canBackUp, canRepair, jobNotice, pollInterval, snippet, statusMeta } from './databases-view';
+import { canBackUp, canRepair, credentialsDatabase, jobNotice, pollInterval, snippet, statusMeta } from './databases-view';
 
 const { Text } = Typography;
 
@@ -32,6 +34,7 @@ export function DatabasePage() {
   const { data, error, isLoading, mutate } = useSWR(key, () => api.getDatabase(databaseId), {
     refreshInterval: (row) => pollInterval(row ? [row] : undefined),
   });
+  const [params, setParams] = useSearchParams();
   const [busy, setBusy] = useState<DatabaseAction>();
   const [actionError, setActionError] = useState<string>();
   const [updating, setUpdating] = useState(false);
@@ -75,6 +78,7 @@ export function DatabasePage() {
     }
   };
 
+  const openTab = (tab: string) => setParams({ tab }, { replace: true });
   const name = data?.name ?? 'Database';
   const jobRunning = Boolean(data?.job);
   const meta = data ? statusMeta(data.status) : undefined;
@@ -203,12 +207,20 @@ export function DatabasePage() {
       {data?.deleted && <DatabaseBackupsTab db={data} />}
       {data && !data.deleted && (
         <Tabs
+          activeKey={tabKeys(data).includes(params.get('tab') ?? '') ? (params.get('tab') ?? 'connection') : 'connection'}
           destroyOnHidden
+          onChange={openTab}
           items={[
             { children: <ConnectionTab db={data} />, key: 'connection', label: 'Connection' },
+            ...(sql
+              ? [
+                  { children: <DatabaseDatabasesTab db={data} />, key: 'databases', label: 'Databases' },
+                  { children: <DatabaseUsersTab db={data} />, key: 'users', label: 'Users' },
+                ]
+              : []),
             ...(sql ? [{ children: <DatabaseQueryTab db={data} />, key: 'query', label: 'Query' }] : []),
             ...(data.engine === 'redis' ? [{ children: <DatabaseRedisTab db={data} />, key: 'console', label: 'Console' }] : []),
-            ...(sql ? [{ children: <DatabaseBackupsTab db={data} />, key: 'backups', label: 'Backups' }] : []),
+            ...(sql ? [{ children: <DatabaseBackupsTab db={data} onOpenUsers={() => openTab('users')} />, key: 'backups', label: 'Backups' }] : []),
             { children: <LogsTab id={databaseId} />, key: 'logs', label: 'Logs' },
             {
               children: (
@@ -264,10 +276,44 @@ export function DatabasePage() {
   );
 }
 
+/** The tab keys a Database shows: SQL engines add Databases and Users. */
+function tabKeys(db: Database): string[] {
+  const sqlEngine = db.engine !== 'redis';
+  return ['connection', ...(sqlEngine ? ['databases', 'users', 'query', 'backups'] : ['console']), 'logs', 'settings'];
+}
+
 function ConnectionTab({ db }: { db: Database }) {
+  const { message } = App.useApp();
+  const { mutate: refresh } = useSWRConfig();
   const [creds, setCreds] = useState<DatabaseCredentials>();
   const [busy, setBusy] = useState(false);
   const [revealError, setRevealError] = useState<string>();
+  // '' is the superuser; otherwise the name of a managed user.
+  const [login, setLogin] = useState('');
+  const [resetting, setResetting] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState<string>();
+  const sqlEngine = db.engine !== 'redis';
+  const users = useSWR(sqlEngine ? `/api/databases/${db.id}/users` : null, () => api.listDatabaseUsers(db.id), { shouldRetryOnError: false });
+  const managed = (users.data?.users ?? []).filter((row) => row.managed);
+  const picked = managed.find((row) => row.name === login);
+  const shownUser = picked ? picked.name : db.user;
+
+  const reset = async () => {
+    setResetBusy(true);
+    setResetError(undefined);
+    try {
+      await api.resetSuperuserPassword(db.id, db.name);
+      void message.success(`Resetting the superuser password of ${db.name}`);
+      setCreds(undefined);
+      setResetting(false);
+      void refresh(`/api/databases/${db.id}`);
+    } catch (reason: unknown) {
+      setResetError(failure(reason, 'Could not reset the password'));
+    } finally {
+      setResetBusy(false);
+    }
+  };
 
   // The password is fetched only on Reveal: every read is audited.
   const toggle = async () => {
@@ -278,7 +324,11 @@ function ConnectionTab({ db }: { db: Database }) {
     setBusy(true);
     setRevealError(undefined);
     try {
-      setCreds(await api.databaseCredentials(db.id));
+      setCreds(
+        picked
+          ? await api.databaseCredentials(db.id, picked.name, credentialsDatabase(picked, db.defaultDatabase))
+          : await api.databaseCredentials(db.id, undefined, undefined),
+      );
     } catch (reason: unknown) {
       setRevealError(failure(reason, 'Could not reveal the password'));
     } finally {
@@ -309,7 +359,31 @@ function ConnectionTab({ db }: { db: Database }) {
               label: 'Host (readable)',
             },
             { children: <Text code copyable>{String(db.port)}</Text>, key: 'port', label: 'Port' },
-            { children: <Text code copyable>{db.user}</Text>, key: 'user', label: 'User' },
+            {
+              children: sqlEngine ? (
+                <Flex align="center" gap={8} wrap>
+                  <Select
+                    aria-label="User"
+                    onChange={(value: string) => {
+                      setLogin(value);
+                      setCreds(undefined);
+                      setRevealError(undefined);
+                    }}
+                    options={[
+                      { label: `${db.user} (superuser)`, value: '' },
+                      ...managed.map((row) => ({ label: row.name, value: row.name })),
+                    ]}
+                    style={{ minWidth: 200 }}
+                    value={login}
+                  />
+                  <Text code copyable>{shownUser}</Text>
+                </Flex>
+              ) : (
+                <Text code copyable>{db.user}</Text>
+              ),
+              key: 'user',
+              label: 'User',
+            },
             ...(db.defaultDatabase
               ? [{ children: <Text code copyable>{db.defaultDatabase}</Text>, key: 'db', label: 'Default database' }]
               : []),
@@ -348,6 +422,38 @@ function ConnectionTab({ db }: { db: Database }) {
           hidden
         )}
       </Card>
+      <Card title="Reset superuser password" variant="outlined">
+        <Text style={{ display: 'block', marginBottom: 12 }} type="secondary">
+          Generates a new password for {db.user} and recreates the container with it. Apps using the superuser password
+          stop connecting until given the new one.
+        </Text>
+        {resetError && <Alert showIcon style={{ marginBottom: 12 }} title={resetError} type="error" />}
+        <Button
+          danger
+          disabled={Boolean(db.job) || !(db.status === 'running' || db.status === 'starting' || db.status === 'unhealthy')}
+          onClick={() => {
+            setResetError(undefined);
+            setResetting(true);
+          }}
+        >
+          Reset superuser password
+        </Button>
+      </Card>
+      <DangerModal
+        confirmWord={db.name}
+        description={
+          <>
+            Apps using the superuser password stop connecting until given the new one. The Database restarts once, briefly,
+            and its Query and Backups wait until it is back.
+          </>
+        }
+        loading={resetBusy}
+        okText="Reset password"
+        onCancel={() => setResetting(false)}
+        onConfirm={() => void reset()}
+        open={resetting}
+        title="Reset superuser password?"
+      />
       <DirectAccessCard db={db} />
     </Flex>
   );

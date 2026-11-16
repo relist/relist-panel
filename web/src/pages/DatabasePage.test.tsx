@@ -24,6 +24,10 @@ const api = vi.hoisted(() => ({
   listDatabaseRestores: vi.fn(),
   databaseLogicalDatabases: vi.fn(),
   listDirectAccesses: vi.fn(),
+  listDatabaseUsers: vi.fn(),
+  databaseLogicalDetails: vi.fn(),
+  getDatabaseSchedule: vi.fn(),
+  resetSuperuserPassword: vi.fn(),
 }));
 
 vi.mock('../data/api', async (importOriginal) => ({
@@ -55,11 +59,11 @@ const shop: Database = {
   warnings: [],
 };
 
-function renderPage() {
+function renderPage(entry = '/databases/1') {
   return render(
     <SWRConfig value={{ provider: () => new Map() }}>
       <App>
-        <MemoryRouter initialEntries={['/databases/1']}>
+        <MemoryRouter initialEntries={[entry]}>
           <Routes>
             <Route element={<DatabasePage />} path="/databases/:databaseId" />
             <Route element={<h1>Databases list</h1>} path="/databases" />
@@ -79,6 +83,69 @@ describe('DatabasePage', () => {
     api.listDatabaseRestores.mockResolvedValue([]);
     api.listDirectAccesses.mockResolvedValue({ accesses: [] });
     api.updateDatabaseImage.mockResolvedValue(undefined);
+    api.listDatabaseUsers.mockResolvedValue({
+      users: [
+        { access: { app: 'full', postgres: 'none' }, managed: true, name: 'app', owns: ['app'] },
+        { access: { app: 'none', postgres: 'read' }, managed: false, name: 'legacy', owns: [] },
+      ],
+    });
+    api.databaseLogicalDetails.mockResolvedValue({ databases: [] });
+    api.getDatabaseSchedule.mockResolvedValue({ all: true, databases: [], enabled: false });
+    api.resetSuperuserPassword.mockResolvedValue(undefined);
+  });
+
+  it('orders the tabs of a SQL Database', async () => {
+    renderPage();
+    await screen.findByText('Host (stable)');
+    const names = screen.getAllByRole('tab').map((tab) => tab.textContent);
+    expect(names).toEqual(['Connection', 'Databases', 'Users', 'Query', 'Backups', 'Logs', 'Settings']);
+  });
+
+  it('opens the tab named by ?tab=', async () => {
+    renderPage('/databases/1?tab=users');
+    expect(await screen.findByRole('button', { name: /Create user/ })).toBeTruthy();
+  });
+
+  it('shows Redis neither the Databases nor the Users tab', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, engine: 'redis', user: 'default', defaultDatabase: '0', port: 6379 });
+    renderPage();
+    await screen.findByText('Host (stable)');
+    const names = screen.getAllByRole('tab').map((tab) => tab.textContent);
+    expect(names).not.toContain('Users');
+    expect(names).not.toContain('Databases');
+  });
+
+  it('reveals the password of the user picked on the Connection tab', async () => {
+    api.databaseCredentials.mockResolvedValue({
+      env: 'DATABASE_URL=postgres://app:pw@relist-db-1:5432/app', password: 'pw', url: 'postgres://app:pw@relist-db-1:5432/app',
+      urlReadable: '', user: 'app',
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Host (stable)');
+    const picker = await screen.findByRole('combobox', { name: 'User' });
+    await user.click(picker);
+    const options = await screen.findAllByText('app');
+    await user.click(options[options.length - 1]);
+    expect(screen.queryByText('legacy')).toBeNull(); // only managed users are offered
+    await user.click(screen.getByRole('button', { name: /Reveal/ }));
+    await waitFor(() => expect(api.databaseCredentials).toHaveBeenCalledWith(1, 'app', 'app'));
+  });
+
+  it('keeps Reset superuser password disabled until the name is typed, and warns', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Host (stable)');
+    await user.click(await screen.findByRole('button', { name: 'Reset superuser password' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/stop connecting until given the new one/)).toBeTruthy();
+    expect(within(dialog).getByText(/restarts/)).toBeTruthy();
+    const ok = within(dialog).getByRole('button', { name: 'Reset password' }) as HTMLButtonElement;
+    expect(ok.disabled).toBe(true);
+    await user.type(within(dialog).getByRole('textbox'), 'Shop');
+    expect(ok.disabled).toBe(false);
+    await user.click(ok);
+    await waitFor(() => expect(api.resetSuperuserPassword).toHaveBeenCalledWith(1, 'Shop'));
   });
 
   it('asks for the password only when Reveal is clicked', async () => {
@@ -95,7 +162,7 @@ describe('DatabasePage', () => {
     expect(screen.queryByText('s3cret')).toBeNull();
     await user.click(screen.getByRole('button', { name: /Reveal/ }));
     expect(await screen.findByText('s3cret')).toBeTruthy();
-    expect(api.databaseCredentials).toHaveBeenCalledWith(1);
+    expect(api.databaseCredentials).toHaveBeenCalledWith(1, undefined, undefined);
     expect(screen.getByText(/networks: \[relist-network\]/)).toBeTruthy();
   });
 
