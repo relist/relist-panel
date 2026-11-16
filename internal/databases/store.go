@@ -30,9 +30,12 @@ type Database struct {
 	Engine     string // "postgres" | "mysql" | "mariadb" | "redis"
 	Version    string // a tag from the engine's Versions
 	Password   string
-	MemoryMB   int64   // 0 = no limit
-	CPUs       float64 // 0 = no limit
-	Desired    string  // DesiredRunning | DesiredStopped
+	// PendingPassword is a superuser password a reset has set live but not
+	// yet made current; "" when no reset is unsettled (ADR-0044).
+	PendingPassword string
+	MemoryMB        int64   // 0 = no limit
+	CPUs            float64 // 0 = no limit
+	Desired         string  // DesiredRunning | DesiredStopped
 	// Initialized: the container has started once on this volume.
 	Initialized bool
 	LastError   string
@@ -54,13 +57,13 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db, now: time.Now}
 }
 
-const columns = `id, name, slug, engine, version, password, memory_mb, cpus, desired, initialized, last_error, applied_spec, created_at, updated_at, deleted_at`
+const columns = `id, name, slug, engine, version, password, pending_password, memory_mb, cpus, desired, initialized, last_error, applied_spec, created_at, updated_at, deleted_at`
 
 func scan(row interface{ Scan(...any) error }) (Database, error) {
 	var d Database
 	var created, updated int64
 	var deleted sql.NullInt64
-	err := row.Scan(&d.ID, &d.Name, &d.Slug, &d.Engine, &d.Version, &d.Password, &d.MemoryMB, &d.CPUs,
+	err := row.Scan(&d.ID, &d.Name, &d.Slug, &d.Engine, &d.Version, &d.Password, &d.PendingPassword, &d.MemoryMB, &d.CPUs,
 		&d.Desired, &d.Initialized, &d.LastError, &d.AppliedSpec, &created, &updated, &deleted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Database{}, ErrNotFound
@@ -175,5 +178,8 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 // Tombstone marks a Database deleted but keeps its row, and so its Backups.
 // The name and slug are rewritten so the name is free for a new Database.
 func (s *Store) Tombstone(ctx context.Context, id int64) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM database_users WHERE database_id = ?`, id); err != nil {
+		return err
+	}
 	return s.update(ctx, id, `deleted_at = ?, name = name || ' (deleted #' || id || ')', slug = 'deleted-' || id`, s.now().UnixMilli())
 }

@@ -61,6 +61,9 @@ type Deps struct {
 	// DirectAccess closes a Database's Direct accesses before it is deleted
 	// (nil = it has none).
 	DirectAccess DirectAccessCloser
+	// Admin runs the Databases and Users tabs' statements and the superuser
+	// reset as the superuser (nil = the real drivers).
+	Admin Admin
 }
 
 type CreateInput struct {
@@ -110,6 +113,9 @@ func New(d Deps) *Service {
 	}
 	if d.Querier == nil {
 		d.Querier = engineQuerier{}
+	}
+	if d.Admin == nil {
+		d.Admin = engineAdmin{}
 	}
 	return &Service{d: d, locks: map[int64]*sync.Mutex{}, inflight: map[int64]bool{}, jobs: map[int64]string{}, jobsChanged: make(chan struct{}),
 		uploadStall: 5 * time.Minute, remoteTimeout: time.Minute}
