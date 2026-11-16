@@ -354,14 +354,29 @@ func (s *Service) SetUserAccess(ctx context.Context, id int64, name string, acce
 }
 
 // DeleteUser drops a user. Postgres refuses while the role owns a database or
-// objects, naming them; otherwise what it was granted is dropped first.
-func (s *Service) DeleteUser(ctx context.Context, id int64, name string) error {
+// objects, naming them; otherwise what it was granted is dropped first. A
+// user that backs Database grants needs confirmGrants: deleting it deletes
+// those panel users' access too (the store cascades the rows).
+func (s *Service) DeleteUser(ctx context.Context, id int64, name string, confirmGrants bool) error {
 	d, t, a, err := s.adminTarget(ctx, id)
 	if err != nil {
 		return err
 	}
 	if err := s.requireUser(ctx, d, t, a, name); err != nil {
 		return err
+	}
+	if !confirmGrants {
+		used, err := s.d.Store.GrantsForDBUser(ctx, id, name)
+		if err != nil {
+			return err
+		}
+		if len(used) > 0 {
+			inUse := ErrUserInUse{User: name}
+			for _, g := range used {
+				inUse.Emails = append(inUse.Emails, g.Email)
+			}
+			return inUse
+		}
 	}
 	if q := a.OwnedQuery(name); q != "" {
 		rows, err := s.d.Admin.Rows(ctx, t, d.Engine, "", q)

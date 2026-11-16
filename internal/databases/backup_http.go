@@ -71,6 +71,24 @@ func (a *API) logicalDatabases(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	c, ok := callerOf(r)
+	if !ok {
+		writeError(w, ErrNotFound)
+		return
+	}
+	if !c.Admin {
+		if c.Grant.DBUser == "" {
+			writeError(w, ErrNoQuery)
+			return
+		}
+		names, err := a.s.GranteeDatabases(r.Context(), n, c.Grant.DBUser)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string][]string{"databases": names})
+		return
+	}
 	names, err := a.s.ListLogicalDatabases(r.Context(), n)
 	if err != nil {
 		writeError(w, err)
