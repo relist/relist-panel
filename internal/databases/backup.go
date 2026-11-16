@@ -36,10 +36,47 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 // String is the kept tail, with a cut-in-half character dropped.
 func (t *tailBuffer) String() string { return strings.ToValidUTF8(string(t.buf), "") }
 
-// acquire checks the preconditions of a job on Database id and takes its
-// slot: no Migration or Panel update lock, a live Database, an engine with
-// Backups, a free slot, and a running container. It holds the Database's
-// lock only for this check, so Rename keeps working during the job.
+// begin checks the preconditions of a job on Database id and takes its slot:
+// no Migration or Panel update lock, a live Database, a free slot, and a
+// running container. pre, when set, runs after the Database is read and
+// before the slot is checked. It holds the Database's lock only for this
+// check, so Rename keeps working during the job.
+func (s *Service) begin(ctx context.Context, id int64, kind string, pre func(Database) error) (Database, error) {
+	if err := s.gate(ctx); err != nil {
+		return Database{}, err
+	}
+	unlock := s.lock(id)
+	defer unlock()
+	d, err := s.d.Store.Get(ctx, id)
+	if err != nil {
+		return Database{}, err
+	}
+	if d.DeletedAt != nil {
+		return Database{}, ErrNotFound
+	}
+	if pre != nil {
+		if err := pre(d); err != nil {
+			return Database{}, err
+		}
+	}
+	if s.Jobs(id) != "" {
+		return Database{}, ErrBusy
+	}
+	st, err := s.d.Host.Inspect(ctx, ContainerName(id))
+	if err != nil {
+		return Database{}, err
+	}
+	if !st.Exists || !st.Running {
+		return Database{}, ErrNotRunning
+	}
+	if err := s.beginJob(id, kind); err != nil {
+		return Database{}, err
+	}
+	return d, nil
+}
+
+// acquire is begin for a job that dumps: it also needs the data dir and an
+// engine with Backups.
 func (s *Service) acquire(ctx context.Context, id int64, kind string) (Database, Dumper, error) {
 	if err := s.gate(ctx); err != nil {
 		return Database{}, nil, err
@@ -47,30 +84,12 @@ func (s *Service) acquire(ctx context.Context, id int64, kind string) (Database,
 	if s.d.DataDir == "" {
 		return Database{}, nil, errors.New("backups are not configured")
 	}
-	unlock := s.lock(id)
-	defer unlock()
-	d, err := s.d.Store.Get(ctx, id)
+	var dp Dumper
+	d, err := s.begin(ctx, id, kind, func(d Database) (err error) {
+		dp, err = DumperFor(d.Engine)
+		return err
+	})
 	if err != nil {
-		return Database{}, nil, err
-	}
-	if d.DeletedAt != nil {
-		return Database{}, nil, ErrNotFound
-	}
-	dp, err := DumperFor(d.Engine)
-	if err != nil {
-		return Database{}, nil, err
-	}
-	if s.Jobs(id) != "" {
-		return Database{}, nil, ErrBusy
-	}
-	st, err := s.d.Host.Inspect(ctx, ContainerName(id))
-	if err != nil {
-		return Database{}, nil, err
-	}
-	if !st.Exists || !st.Running {
-		return Database{}, nil, ErrNotRunning
-	}
-	if err := s.beginJob(id, kind); err != nil {
 		return Database{}, nil, err
 	}
 	return d, dp, nil
