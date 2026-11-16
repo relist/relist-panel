@@ -411,3 +411,40 @@ func TestSetAccessRefusesLoweringWhenUserOwnsObjects(t *testing.T) {
 		})
 	}
 }
+
+// Full's SET role would hide the tables a user already owns in a database, so
+// giving Full there is refused too. An unchanged level on such a database is
+// left alone, and a Save that changes another database still applies it.
+func TestSetAccessOwnedObjectsBlockChangesOnly(t *testing.T) {
+	r := newPgUsersRig(t)
+	ctx := context.Background()
+	r.users("report")
+	r.databases([]string{"shop", "1", "shop", "f"}, []string{"web", "1", "web", "f"})
+	r.admin.answer(r.pg.AccessQuery(), [][]string{{"report", "shop", "read"}})
+	r.admin.answer(r.pg.OwnsInQuery("report"), [][]string{{"shop"}})
+
+	var oe ErrUserOwnsIn
+	if err := r.svc.SetUserAccess(ctx, r.d.ID, "report", map[string]Access{"shop": AccessFull}); !errors.As(err, &oe) {
+		t.Fatalf("Full on a database it owns objects in: err = %v", err)
+	}
+	if len(r.admin.calls()) != 0 {
+		t.Fatalf("statements sent despite the refusal: %q", r.admin.stmts())
+	}
+
+	if err := r.svc.SetUserAccess(ctx, r.d.ID, "report", map[string]Access{"shop": AccessRead, "web": AccessRead}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range r.admin.calls() {
+		if c.Database == "shop" {
+			t.Fatalf("statements sent to shop, whose level did not change: %q", c.Stmts)
+		}
+		for _, s := range c.Stmts {
+			if strings.Contains(s, `"shop"`) {
+				t.Fatalf("statement about shop: %q", s)
+			}
+		}
+	}
+	if !slices.ContainsFunc(r.admin.stmts(), func(s string) bool { return s == `GRANT CONNECT ON DATABASE "web" TO "report"` }) {
+		t.Fatalf("web was not applied: %q", r.admin.stmts())
+	}
+}

@@ -34,8 +34,9 @@ func (e ErrFullOnSuperuserDB) Error() string {
 	return e.Database + " is owned by a superuser, so Full access would make the user one; give it Read-only, or create the database with an owning user"
 }
 
-// ErrUserOwnsIn is lowering a non-owner on a Postgres database where it still
-// owns tables or other objects: Read-only and None would lock it out of them.
+// ErrUserOwnsIn is changing the access of a non-owner on a Postgres database
+// where it still owns tables or other objects: Read-only and None would revoke
+// them, and Full's SET role would hide them.
 type ErrUserOwnsIn struct{ User, Database, Owner string }
 
 func (e ErrUserOwnsIn) Error() string {
@@ -287,35 +288,44 @@ func (s *Service) SetUserAccess(ctx context.Context, id int64, name string, acce
 			return ErrFullOnSuperuserDB{Database: n}
 		}
 	}
-	if q := a.OwnsInQuery(name); q != "" {
-		lowering := false
-		for _, n := range names {
-			lowering = lowering || (byName[n].Owner != name && access[n] != AccessFull)
+	fromOf := func(n string) Access {
+		if l := acc[name][n]; l != "" {
+			return l
 		}
-		if lowering {
-			rows, err := s.d.Admin.Rows(ctx, t, d.Engine, "", q)
-			if err != nil {
-				return scrubErr(err, d.Password)
+		return AccessNone
+	}
+	// A non-owner that owns objects in a database keeps its level there: None
+	// and Read-only would revoke its own tables, and Full's SET role would hide
+	// them. A change is refused; an unchanged level is left alone, so a Save
+	// that changes other databases still works.
+	keep := map[string]bool{}
+	if q := a.OwnsInQuery(name); q != "" {
+		rows, err := s.d.Admin.Rows(ctx, t, d.Engine, "", q)
+		if err != nil {
+			return scrubErr(err, d.Password)
+		}
+		ownsIn := map[string]bool{}
+		for _, r := range rows {
+			if len(r) > 0 {
+				ownsIn[r[0]] = true
 			}
-			ownsIn := map[string]bool{}
-			for _, r := range rows {
-				if len(r) > 0 {
-					ownsIn[r[0]] = true
-				}
+		}
+		for _, n := range names {
+			if byName[n].Owner == name || !ownsIn[n] {
+				continue
 			}
-			for _, n := range names {
-				if byName[n].Owner != name && access[n] != AccessFull && ownsIn[n] {
-					return ErrUserOwnsIn{User: name, Database: n, Owner: byName[n].Owner}
-				}
+			if access[n] != fromOf(n) {
+				return ErrUserOwnsIn{User: name, Database: n, Owner: byName[n].Owner}
 			}
+			keep[n] = true
 		}
 	}
 	for _, n := range names {
-		owner := byName[n].Owner
-		from := acc[name][n]
-		if from == "" {
-			from = AccessNone
+		if keep[n] {
+			continue
 		}
+		owner := byName[n].Owner
+		from := fromOf(n)
 		if stmts := a.ServerAccess(name, n, owner, from, access[n]); len(stmts) > 0 {
 			if err := s.d.Admin.Exec(ctx, t, d.Engine, defaultDB(d.Engine), stmts); err != nil {
 				return scrubErr(err, d.Password)
