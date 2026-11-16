@@ -46,6 +46,7 @@ const TRIGGERS: Record<BackupTrigger, string> = {
   scheduled: 'Scheduled',
   pre_restore: 'Before restore',
   pre_update: 'Before update',
+  pre_drop: 'Before drop',
 };
 
 /** The Tag text of what started a Backup. */
@@ -102,9 +103,45 @@ export function jobNotice(job: Database['job']): string {
       return 'A restore is running. Start, Stop, Restart, Update image, Apply settings and Delete wait until it ends.';
     case 'update_image':
       return 'An image update is running: it backs up first, then updates. Other changes wait until it ends.';
+    case 'drop_database':
+      return 'A database is being dropped: it backs up first, then drops. Other changes wait until it ends.';
+    case 'reset_password':
+      return 'The superuser password is being reset and the Database restarted. Other changes wait until it ends.';
     case 'rotate':
       return 'Old scheduled backups are being deleted. Other changes wait until it ends.';
     default:
       return '';
   }
+}
+
+const JOBS: Record<string, string> = {
+  backup: 'Backing up',
+  restore: 'Restoring',
+  update_image: 'Updating the image',
+  rotate: 'Rotating backups',
+  drop_database: 'Dropping a database',
+  reset_password: 'Resetting the password',
+};
+
+/** The short name of a running job. */
+export function jobLabel(job: Database['job']): string {
+  return JOBS[job] ?? job;
+}
+
+/** The database a failed restore says is missing a role: `role "app" does not exist`. */
+export function missingRole(text: string): string | undefined {
+  return /role "([^"]+)" does not exist/.exec(text)?.[1];
+}
+
+/**
+ * The database a credentials read opens: the user's same-named one when it has
+ * access to it, else the first it can access, else the default.
+ */
+export function credentialsDatabase(
+  user: { name: string; access: Record<string, string> },
+  fallback: string,
+): string {
+  const has = (name: string) => (user.access[name] ?? 'none') !== 'none';
+  if (has(user.name)) return user.name;
+  return Object.keys(user.access).sort().find(has) ?? fallback;
 }

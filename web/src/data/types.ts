@@ -1195,7 +1195,7 @@ export type DatabaseStatus =
   | 'deleted';
 
 /** The job running on a Database; while one runs, lifecycle actions answer 409. */
-export type DatabaseJob = '' | 'backup' | 'restore' | 'update_image' | 'rotate';
+export type DatabaseJob = '' | 'backup' | 'restore' | 'update_image' | 'rotate' | 'drop_database' | 'reset_password';
 
 export interface Database {
   id: number;
@@ -1244,6 +1244,8 @@ export interface DatabaseInput {
 export type DatabaseAction = 'start' | 'stop' | 'restart' | 'repair' | 'apply-settings';
 
 export interface DatabaseCredentials {
+  /** The login the password belongs to. */
+  user: string;
   password: string;
   /** With the stable host. */
   url: string;
@@ -1259,7 +1261,7 @@ export interface BackupRequest {
   databases?: string[];
 }
 
-export type BackupTrigger = 'manual' | 'scheduled' | 'pre_restore' | 'pre_update';
+export type BackupTrigger = 'manual' | 'scheduled' | 'pre_restore' | 'pre_update' | 'pre_drop';
 export type JobStatus = 'running' | 'succeeded' | 'failed';
 
 export interface DatabaseBackup {
@@ -1487,4 +1489,30 @@ export interface DirectAccessOpenInput {
   hostPort: number;
   /** 15, 60, 240 or 480. */
   minutes: number;
+}
+
+/** One database inside a SQL Database (phase 7). */
+export interface LogicalDatabase {
+  name: string;
+  sizeBytes: number;
+  /** Postgres. */
+  owner: string;
+  /** MySQL and MariaDB. */
+  charset: string;
+  /** Postgres only: the default ACL, where every user may connect. */
+  anyUserCanConnect: boolean;
+  /** Never offered for Drop. */
+  protected: boolean;
+}
+
+export type DatabaseAccess = 'none' | 'read' | 'full';
+
+/** A login user of a SQL Database. Its password is never in this shape. */
+export interface DatabaseUser {
+  name: string;
+  /** The panel stores its password. */
+  managed: boolean;
+  owns: string[];
+  /** One level for every logical database. */
+  access: Record<string, DatabaseAccess>;
 }

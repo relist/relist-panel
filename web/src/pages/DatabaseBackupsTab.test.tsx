@@ -73,11 +73,11 @@ function backup(over: Partial<DatabaseBackup>): DatabaseBackup {
   };
 }
 
-function renderTab(db: Database = shop) {
+function renderTab(db: Database = shop, onOpenUsers?: () => void) {
   return render(
     <SWRConfig value={{ provider: () => new Map() }}>
       <App>
-        <DatabaseBackupsTab db={db} />
+        <DatabaseBackupsTab db={db} onOpenUsers={onOpenUsers} />
       </App>
     </SWRConfig>,
   );
@@ -235,6 +235,30 @@ describe('DatabaseBackupsTab', () => {
     const expanders = screen.getAllByRole('button', { name: /Expand row/i });
     await user.click(expanders[expanders.length - 1]);
     expect(await screen.findByText(/ERROR: syntax error/)).toBeTruthy();
+  });
+
+  it('links a restore that needs a missing role to the Users tab', async () => {
+    const restore: DatabaseRestore = {
+      backupId: 1, error: 'the restore command exited with code 3', finishedAt: '2026-11-14T11:00:05Z', id: 4,
+      log: 'psql:dump.sql:12: ERROR:  role "shop_app" does not exist', preBackupId: null, source: 'backup', target: 'app',
+      startedAt: '2026-11-14T11:00:00Z', status: 'failed', uploadName: '',
+    };
+    api.listDatabaseRestores.mockResolvedValue([restore]);
+    const onOpenUsers = vi.fn();
+    const user = userEvent.setup();
+    renderTab(shop, onOpenUsers);
+    const expanders = await screen.findAllByRole('button', { name: /Expand row/i });
+    await user.click(expanders[expanders.length - 1]);
+    const link = await screen.findByRole('link', { name: 'Create the user shop_app on the Users tab' });
+    expect(link.getAttribute('href')).toBe('?tab=users');
+    await user.click(link);
+    expect(onOpenUsers).toHaveBeenCalled();
+  });
+
+  it('labels a pre_drop Backup', async () => {
+    api.listDatabaseBackups.mockResolvedValue([backup({ trigger: 'pre_drop' })]);
+    renderTab();
+    expect(await screen.findByText('Before drop')).toBeTruthy();
   });
 
   it('disables Back up now while a job runs or the Database is stopped', async () => {

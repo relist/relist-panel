@@ -38,6 +38,9 @@ import type {
   DatabaseSchedule,
   DatabaseScheduleState,
   DatabaseCredentials,
+  DatabaseAccess,
+  DatabaseUser,
+  LogicalDatabase,
   DirectAccess,
   DirectAccessOpenInput,
   DatabaseEngine,
@@ -676,7 +679,36 @@ export const api = {
     ),
   /** Reveals the password; every call is audited. */
   databaseBackupUrl: (id: number, backupId: number) => `/api/databases/${id}/backups/${backupId}/download`,
-  databaseCredentials: (id: number) => request<DatabaseCredentials>(`/api/databases/${id}/credentials`),
+  databaseCredentials: (id: number, user?: string, database?: string) => {
+    const query = new URLSearchParams();
+    if (user) query.set('user', user);
+    if (user && database) query.set('database', database);
+    const text = query.toString();
+    return request<DatabaseCredentials>(`/api/databases/${id}/credentials${text ? `?${text}` : ''}`);
+  },
+  // Logical databases and users of a SQL Database (phase 7).
+  databaseLogicalDetails: (id: number) =>
+    request<{ databases: LogicalDatabase[] }>(`/api/databases/${id}/logical-databases/details`),
+  createLogicalDatabase: (id: number, name: string, createOwner: boolean) =>
+    request<{ name: string }>(`/api/databases/${id}/logical-databases`, jsonInit('POST', { name, createOwner })),
+  restrictLogicalDatabase: (id: number, name: string) =>
+    request<void>(`/api/databases/${id}/logical-databases/${encodeURIComponent(name)}/restrict`, { method: 'POST' }),
+  dropLogicalDatabase: (id: number, name: string, confirm: string, backupFirst: boolean) =>
+    request<void>(
+      `/api/databases/${id}/logical-databases/${encodeURIComponent(name)}`,
+      jsonInit('DELETE', { confirm, backupFirst }),
+    ),
+  listDatabaseUsers: (id: number) => request<{ users: DatabaseUser[] }>(`/api/databases/${id}/users`),
+  createDatabaseUser: (id: number, name: string) =>
+    request<{ name: string }>(`/api/databases/${id}/users`, jsonInit('POST', { name })),
+  setDatabaseUserAccess: (id: number, name: string, access: Record<string, DatabaseAccess>) =>
+    request<void>(`/api/databases/${id}/users/${encodeURIComponent(name)}/access`, jsonInit('PUT', { access })),
+  resetDatabaseUserPassword: (id: number, name: string) =>
+    request<void>(`/api/databases/${id}/users/${encodeURIComponent(name)}/reset-password`, { method: 'POST' }),
+  deleteDatabaseUser: (id: number, name: string) =>
+    request<void>(`/api/databases/${id}/users/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  resetSuperuserPassword: (id: number, confirm: string) =>
+    request<void>(`/api/databases/${id}/reset-password`, jsonInit('POST', { confirm })),
   databaseLogs: (id: number, tail = 200) => request<{ logs: string }>(`/api/databases/${id}/logs?tail=${tail}`),
   // Direct access (ADR-0041): a timed host port into one container.
   listDirectAccesses: (targetKind: string, targetId: number) =>
