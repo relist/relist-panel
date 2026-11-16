@@ -12,9 +12,11 @@ import type { Database, DatabaseEngine } from '../data/types';
 import { DatabasesPage } from './DatabasesPage';
 
 const api = vi.hoisted(() => ({
+  authStatus: vi.fn(),
   createDatabase: vi.fn(),
   listDatabaseEngines: vi.fn(),
   listDatabases: vi.fn(),
+  listProjects: vi.fn(),
 }));
 
 vi.mock('../data/api', async (importOriginal) => ({
@@ -96,5 +98,28 @@ describe('DatabasesPage', () => {
     await user.type(await screen.findByLabelText('Name'), 'Shop');
     await user.click(screen.getByRole('button', { name: 'Create' }));
     expect(await screen.findByText('a Database with this name already exists')).toBeTruthy();
+  });
+});
+
+describe('DatabasesPage as a member', () => {
+  it('shows their rows without Create database', async () => {
+    const { PanelProvider } = await import('../data/store');
+    api.authStatus.mockResolvedValue({
+      authenticated: true, user: { id: 3, email: 'bob@example.com', isAdmin: false, isOwner: false }, access: { projects: [] },
+    });
+    api.listProjects.mockResolvedValue([]);
+    api.listDatabaseEngines.mockResolvedValue(engines);
+    api.listDatabases.mockResolvedValue([{ ...shop, access: { dbUser: 'shop_ro' }, user: 'shop_ro' }]);
+    render(
+      <SWRConfig value={{ provider: () => new Map() }}>
+        <PanelProvider>
+          <MemoryRouter>
+            <DatabasesPage />
+          </MemoryRouter>
+        </PanelProvider>
+      </SWRConfig>,
+    );
+    expect(await screen.findByRole('link', { name: 'Shop' })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Create database/ })).toBeNull());
   });
 });

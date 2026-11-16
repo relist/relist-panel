@@ -24,9 +24,18 @@ function failure(reason: unknown): string {
 }
 
 function outcomeOf(response: QueryResponse): string {
+  if (response.preview) return 'preview';
   if (response.cancelled) return 'cancelled';
   if (response.error) return 'error';
   return response.stopped ? 'stopped' : 'ok';
+}
+
+/** "Would delete 3,412 rows from orders" — one Preview statement's effect. */
+function previewLine(result: QueryResult): string {
+  const verb = result.verb || 'change';
+  const count = (result.affected ?? 0).toLocaleString('en-US');
+  const rows = result.affected === 1 ? 'row' : 'rows';
+  return result.target ? `Would ${verb} ${count} ${rows} from ${result.target}` : `Would ${verb} ${count} ${rows}`;
 }
 
 function CellView({ cell }: { cell: QueryCell }) {
@@ -170,7 +179,7 @@ export function DatabaseQueryTab({ db }: { db: Database }) {
   }, []);
 
   const run = useCallback(
-    async (explicit?: string) => {
+    async (explicit?: string, preview = false) => {
       if (busy || !running) return;
       let text = explicit ?? sql;
       let offset = 0;
@@ -192,7 +201,7 @@ export function DatabaseQueryTab({ db }: { db: Database }) {
       mark(null, '');
       const entry = { at: Date.now(), database, sql: text, writes };
       try {
-        const answer = await api.runDatabaseQuery(db.id, { database, sql: text, writes }, controller.signal);
+        const answer = await api.runDatabaseQuery(db.id, { database, preview, sql: text, writes }, controller.signal);
         setResponse(answer);
         setActive('0');
         pushHistory(db.id, { ...entry, outcome: outcomeOf(answer) });
@@ -269,6 +278,11 @@ export function DatabaseQueryTab({ db }: { db: Database }) {
             History
           </Button>
           {busy && <Button onClick={() => abort.current?.abort()}>Cancel</Button>}
+          {writes && (
+            <Button disabled={!running || busy} onClick={() => void run(undefined, true)}>
+              Preview
+            </Button>
+          )}
           <Button disabled={!running || busy} onClick={() => void run()} type="primary">
             Run
           </Button>
@@ -328,7 +342,25 @@ export function DatabaseQueryTab({ db }: { db: Database }) {
               type="error"
             />
           )}
-          {response && response.results.length > 0 && (
+          {response?.preview && !response.error && (
+            <Alert
+              description={
+                <Flex gap={4} vertical>
+                  {response.results.map((result) => (
+                    <span key={result.statementIndex}>{previewLine(result)}</span>
+                  ))}
+                  <Text type="secondary">
+                    Preview rolls everything back. It cannot undo sequence values, or anything a trigger or function does
+                    outside this database&apos;s tables.
+                  </Text>
+                </Flex>
+              }
+              showIcon
+              title="Preview: nothing was changed."
+              type="info"
+            />
+          )}
+          {response && !response.preview && response.results.length > 0 && (
             <Tabs
               activeKey={active}
               items={response.results.map((result, i) => ({

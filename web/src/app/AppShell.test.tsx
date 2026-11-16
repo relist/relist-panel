@@ -240,3 +240,52 @@ describe('Mobile navigation trigger', () => {
     expect(header.style.paddingInlineStart).toBe('56px');
   });
 });
+
+describe('Member databases', () => {
+  const member = { id: 3, email: 'bob@example.com', isAdmin: false, isOwner: false };
+  const granteeDb = {
+    access: { dbUser: 'shop_ro' },
+    cpus: 0, createdAt: '2026-11-14T00:00:00Z', defaultDatabase: 'postgres', deleted: false,
+    desired: 'running', engine: 'postgres', host: 'relist-db-1', hostReadable: '', id: 1,
+    image: 'postgres:18', job: '', lastError: '', memoryMb: 0, name: 'Shop', port: 5432,
+    settingsOutdated: false, slug: 'shop', status: 'running', user: 'shop_ro', version: '18', warnings: [],
+  } as never;
+
+  function renderMember(path: string) {
+    const router = createMemoryRouter(
+      [{ element: <AppShell />, children: [
+        { path: '/', element: <h1>Home</h1> },
+        { path: '/projects', element: <h1>Projects screen</h1> },
+        { path: '/databases', element: <h1>Databases screen</h1> },
+        { path: '/databases/:databaseId', element: <h1>Database screen</h1> },
+      ] }],
+      { initialEntries: [path] },
+    );
+    render(<SWRConfig value={{ provider: () => new Map() }}><App><PanelProvider><RouterProvider router={router} /></PanelProvider></App></SWRConfig>);
+    return router;
+  }
+
+  beforeEach(() => {
+    vi.spyOn(api, 'listProjects').mockResolvedValue([]);
+    vi.spyOn(api, 'globalDeploymentQueue').mockResolvedValue([]);
+  });
+
+  it('shows a member with grants the Data group and opens their Database page', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member, access: { projects: [] } });
+    vi.spyOn(api, 'listDatabases').mockResolvedValue([granteeDb]);
+    renderMember('/databases/1');
+    expect(await screen.findByRole('menuitem', { name: /Databases/ })).toBeTruthy();
+    expect(screen.getByText('Data', { selector: '.ant-menu-item-group-title' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Database screen' })).toBeTruthy();
+    expect(screen.queryByText("You don't have permission")).toBeNull();
+  });
+
+  it('hides the Data group from a member without grants', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member, access: { projects: [] } });
+    vi.spyOn(api, 'listDatabases').mockResolvedValue([]);
+    renderMember('/');
+    expect(await screen.findByRole('heading', { name: 'Projects screen' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: /Databases/ })).toBeNull();
+    expect(screen.queryByText('Data', { selector: '.ant-menu-item-group-title' })).toBeNull();
+  });
+});
