@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -296,6 +297,151 @@ func TestResolvePendingWaitsForTheContainer(t *testing.T) {
 	r.svc.resolvePending(ctx, d.ID)
 	if got, _ := r.store.Get(ctx, d.ID); got.Password != "new" || got.PendingPassword != "" {
 		t.Fatalf("database = %+v", got)
+	}
+}
+
+// pendingRig is a running Database with the new password pending and working.
+func pendingRig(t *testing.T) (*adminRig, Database) {
+	t.Helper()
+	r := newAdminRig(t)
+	r.fast()
+	d := r.create(t, "Shop", "postgres", "18")
+	if err := r.store.SetPendingPassword(context.Background(), d.ID, "new"); err != nil {
+		t.Fatal(err)
+	}
+	r.admin.pingOK = map[string]bool{"new": true}
+	r.host.reset()
+	return r, d
+}
+
+// runResolve runs resolvePending in the background; the returned func waits
+// for it to end.
+func runResolve(r *adminRig, id int64) (wait func()) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.svc.resolvePending(context.Background(), id)
+	}()
+	return func() { <-done }
+}
+
+func (r *adminRig) pings() int {
+	r.admin.mu.Lock()
+	defer r.admin.mu.Unlock()
+	return len(r.admin.pings)
+}
+
+// Settling recreates the container, so it waits for a Backup or Restore on the
+// same Database, and the wait does not use up a try.
+func TestResolvePendingWaitsForJob(t *testing.T) {
+	r, d := pendingRig(t)
+	ctx := context.Background()
+	if err := r.svc.beginJob(d.ID, JobKindBackup); err != nil {
+		t.Fatal(err)
+	}
+	wait := runResolve(r, d.ID)
+	time.Sleep(40 * time.Millisecond) // far more polls than the 3 tries
+	if got, _ := r.store.Get(ctx, d.ID); got.PendingPassword != "new" || got.Password != d.Password {
+		t.Fatalf("settled under a backup: %+v", got)
+	}
+	if n := r.host.count("create relist-db-1"); n != 0 || r.pings() != 0 {
+		t.Fatalf("creates = %d, pings = %d while the slot was held", n, r.pings())
+	}
+	if j := r.svc.Jobs(d.ID); j != JobKindBackup {
+		t.Fatalf("job = %q, the backup's slot was taken", j)
+	}
+	r.svc.endJob(d.ID)
+	wait()
+	got, _ := r.store.Get(ctx, d.ID)
+	if got.Password != "new" || got.PendingPassword != "" {
+		t.Fatalf("database = %+v", got)
+	}
+	if n := r.host.count("create relist-db-1"); n != 1 {
+		t.Fatalf("creates = %d, want 1", n)
+	}
+	if j := r.svc.Jobs(d.ID); j != "" {
+		t.Fatalf("slot still held: %q", j)
+	}
+}
+
+// A reset in progress settles the password itself: resolve stands down.
+func TestResolvePendingStandsDownForReset(t *testing.T) {
+	r, d := pendingRig(t)
+	if err := r.svc.beginJob(d.ID, JobKindResetPassword); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.resolvePending(context.Background(), d.ID)
+	if got, _ := r.store.Get(context.Background(), d.ID); got.PendingPassword != "new" {
+		t.Fatalf("database = %+v", got)
+	}
+	if n := r.host.count("create relist-db-1"); n != 0 || r.pings() != 0 {
+		t.Fatalf("creates = %d, pings = %d", n, r.pings())
+	}
+	if j := r.svc.Jobs(d.ID); j != JobKindResetPassword {
+		t.Fatalf("job = %q, the reset's slot was released", j)
+	}
+}
+
+// A Migration or Panel update lock is waited out, not given up on.
+func TestResolvePendingWaitsForLock(t *testing.T) {
+	r, d := pendingRig(t)
+	var locked atomic.Bool
+	locked.Store(true)
+	r.svc.d.Locked = func(context.Context) bool { return locked.Load() }
+	wait := runResolve(r, d.ID)
+	time.Sleep(40 * time.Millisecond)
+	if got, _ := r.store.Get(context.Background(), d.ID); got.PendingPassword != "new" {
+		t.Fatalf("settled under the lock: %+v", got)
+	}
+	if n := r.host.count("create relist-db-1"); n != 0 || r.pings() != 0 {
+		t.Fatalf("creates = %d, pings = %d under the lock", n, r.pings())
+	}
+	locked.Store(false)
+	wait()
+	if got, _ := r.store.Get(context.Background(), d.ID); got.Password != "new" || got.PendingPassword != "" {
+		t.Fatalf("database = %+v", got)
+	}
+	if n := r.host.count("create relist-db-1"); n != 1 {
+		t.Fatalf("creates = %d, want 1", n)
+	}
+}
+
+// While the container is recreated the slot is held: other jobs are refused
+// and a Panel update's WaitIdle waits.
+func TestResolvePendingHoldsSlot(t *testing.T) {
+	r, d := pendingRig(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	r.host.mu.Lock()
+	r.host.onCreate = func() {
+		close(entered)
+		<-release
+	}
+	r.host.mu.Unlock()
+	wait := runResolve(r, d.ID)
+	<-entered
+	// StartBackup would queue behind the Database's lock, which the recreate
+	// holds; the slot itself is what refuses it once it gets the lock.
+	for _, kind := range []string{JobKindBackup, JobKindRestore, JobKindUpdateImage, JobKindResetPassword} {
+		if err := r.svc.beginJob(d.ID, kind); !errors.Is(err, ErrBusy) {
+			t.Fatalf("beginJob(%s) err = %v, want ErrBusy", kind, err)
+		}
+	}
+	if j := r.svc.Jobs(d.ID); j != JobKindResetPassword {
+		t.Fatalf("job = %q", j)
+	}
+	idle := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		idle <- r.svc.WaitIdle(ctx)
+	}()
+	if err := <-idle; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitIdle returned %v while settling", err)
+	}
+	close(release)
+	wait()
+	if j := r.svc.Jobs(d.ID); j != "" {
+		t.Fatalf("slot still held: %q", j)
 	}
 }
 

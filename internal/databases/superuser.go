@@ -162,10 +162,8 @@ func swapEnv(env, want []string) []string {
 // ResolvePendingPasswords settles, in the background, every running Database
 // that has a pending password. Call it after ReconcileAll: it must not hold
 // up what follows, since a container that is still starting is waited for.
+// Each Database waits on its own for a Migration or Panel update lock to end.
 func (s *Service) ResolvePendingPasswords(ctx context.Context) error {
-	if s.locked(ctx) {
-		return nil
-	}
 	all, err := s.d.Store.List(ctx)
 	if err != nil {
 		return err
@@ -189,34 +187,25 @@ func (s *Service) goResolve(ctx context.Context, id int64) {
 }
 
 // resolvePending finds which of a Database's two passwords works. It waits
-// for the container, up to pendingTries times pendingRetry. The new one
+// for the container, up to pendingTries probes pendingRetry apart. The new one
 // working makes it current and recreates the container; the old one working
 // drops the pending one; neither keeps it pending, with a warning on the
 // Database.
+//
+// Each attempt holds the Database's job slot, like a reset does: settling
+// recreates the container, which must not happen under a Backup or Restore.
+// Waiting for the slot, or for a Migration or Panel update lock to end, polls
+// every pendingRetry until ctx ends and does not use up a try; only a probe
+// does. A reset_password job running makes it stand down: the reset itself
+// settles the password.
 func (s *Service) resolvePending(ctx context.Context, id int64) {
-	for i := 0; i < s.pendingTries; i++ {
-		d, err := s.d.Store.Get(ctx, id)
-		if err != nil || d.DeletedAt != nil || d.PendingPassword == "" || s.Jobs(id) == JobKindResetPassword {
+	for tries := 0; tries < s.pendingTries; {
+		done, probed := s.resolveAttempt(ctx, id)
+		if done {
 			return
 		}
-		if st, err := s.d.Host.Inspect(ctx, ContainerName(id)); err == nil && st.Exists && st.Running {
-			if eng, err := Lookup(d.Engine, d.Version); err == nil {
-				t := dbquery.Target{Host: ContainerName(id), Port: eng.Port(), User: eng.User(), Password: d.PendingPassword}
-				if s.d.Admin.Ping(ctx, t, d.Engine) == nil {
-					if err := s.d.Store.PromotePending(ctx, id); err != nil {
-						return
-					}
-					if err := s.applyPassword(ctx, id); err != nil {
-						_ = s.d.Store.SetLastError(ctx, id, scrubAll(err.Error(), d.Password, d.PendingPassword))
-					}
-					return
-				}
-				t.Password = d.Password
-				if s.d.Admin.Ping(ctx, t, d.Engine) == nil {
-					_ = s.d.Store.ClearPending(ctx, id)
-					return
-				}
-			}
+		if probed {
+			tries++
 		}
 		select {
 		case <-ctx.Done():
@@ -224,4 +213,40 @@ func (s *Service) resolvePending(ctx context.Context, id int64) {
 		case <-time.After(s.pendingRetry):
 		}
 	}
+}
+
+// resolveAttempt is one attempt of resolvePending. done ends the loop; probed
+// says the attempt reached a probe that failed, which uses up a try.
+func (s *Service) resolveAttempt(ctx context.Context, id int64) (done, probed bool) {
+	if s.gate(ctx) != nil {
+		return false, false
+	}
+	if err := s.beginJob(id, JobKindResetPassword); err != nil {
+		return s.Jobs(id) == JobKindResetPassword, false
+	}
+	defer s.endJob(id)
+	d, err := s.d.Store.Get(ctx, id)
+	if err != nil || d.DeletedAt != nil || d.PendingPassword == "" {
+		return true, false
+	}
+	if st, err := s.d.Host.Inspect(ctx, ContainerName(id)); err == nil && st.Exists && st.Running {
+		if eng, err := Lookup(d.Engine, d.Version); err == nil {
+			t := dbquery.Target{Host: ContainerName(id), Port: eng.Port(), User: eng.User(), Password: d.PendingPassword}
+			if s.d.Admin.Ping(ctx, t, d.Engine) == nil {
+				if err := s.d.Store.PromotePending(ctx, id); err != nil {
+					return true, false
+				}
+				if err := s.applyPassword(ctx, id); err != nil {
+					_ = s.d.Store.SetLastError(ctx, id, scrubAll(err.Error(), d.Password, d.PendingPassword))
+				}
+				return true, false
+			}
+			t.Password = d.Password
+			if s.d.Admin.Ping(ctx, t, d.Engine) == nil {
+				_ = s.d.Store.ClearPending(ctx, id)
+				return true, false
+			}
+		}
+	}
+	return false, true
 }
