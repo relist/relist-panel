@@ -84,9 +84,14 @@ func (s *Service) runReset(ctx context.Context, d Database) {
 		liveErr = s.d.Admin.Exec(ctx, oldT, d.Engine, defaultDB(d.Engine), a.SuperuserPassword(pw))
 	}
 	if pingErr := s.d.Admin.Ping(ctx, newT, d.Engine); pingErr != nil {
-		_ = s.d.Store.ClearPending(ctx, d.ID)
 		if liveErr == nil {
 			liveErr = pingErr
+		}
+		// Only a working old password proves the change did not happen.
+		// Otherwise the new one may be live: it stays pending, and
+		// resolvePending settles it at the next start.
+		if s.d.Admin.Ping(ctx, oldT, d.Engine) == nil {
+			_ = s.d.Store.ClearPending(ctx, d.ID)
 		}
 		fail(liveErr, d.Password, pw)
 		return
