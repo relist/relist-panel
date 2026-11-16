@@ -23,6 +23,9 @@ type fakeHost struct {
 	images     map[string]string // ref -> image ID after a pull
 	failOn     map[string]error  // call prefix -> error
 	logs       string
+	// onCreate, when set, runs before each Create (outside the lock), so a
+	// test can hold a recreate half-way.
+	onCreate func()
 
 	// Exec scripts: the first script whose prefix starts the joined command
 	// answers; an unscripted command exits 0 with no output.
@@ -139,6 +142,12 @@ func (f *fakeHost) VolumeExists(_ context.Context, name string) (bool, error) {
 }
 
 func (f *fakeHost) Create(_ context.Context, spec ContainerSpec) error {
+	f.mu.Lock()
+	hook := f.onCreate
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.record("create " + spec.Name); err != nil {
