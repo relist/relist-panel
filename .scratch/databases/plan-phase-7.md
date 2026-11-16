@@ -60,7 +60,7 @@
   - MySQL / MariaDB schema grants escape `_` as `\_` inside the backquotes (`myGrantDB`), because `_` and `%` are wildcards in `GRANT … ON db.*`.
   - Reading grants back un-escapes `\_`. Names can never hold `%` or `\`.
 - **Access levels.** `type Access string`, with the values `"none"`, `"read"` and `"full"`. The statements are the spec's verbatim:
-  - **Postgres Full:** owner, or for another user `GRANT <owner> TO <user>` plus `ALTER ROLE <user> IN DATABASE <db> SET role = '<owner>'`, plus `GRANT CONNECT ON DATABASE`. Lowering a non-owner from Full runs `ALTER ROLE … RESET role` before `REVOKE <owner> FROM <user>`, and is refused (`ErrUserOwnsIn`, 409) while the user owns objects in that database.
+  - **Postgres Full:** owner, or for another user `GRANT <owner> TO <user>` plus `ALTER ROLE <user> IN DATABASE <db> SET role = '<owner>'`, plus `GRANT CONNECT ON DATABASE`. Lowering a non-owner from Full runs `ALTER ROLE … RESET role` before `REVOKE <owner> FROM <user>`, Any change of a non-owner's level (Full included) on a database where it owns objects is refused (`ErrUserOwnsIn`, 409); an unchanged level there is skipped.
   - **Postgres Read-only:**
     - `CONNECT`;
     - in that database, for every schema except `pg_catalog`, `information_schema`, and those starting `pg_toast` or `pg_temp`: `USAGE`, `SELECT ON ALL TABLES`, `SELECT ON ALL SEQUENCES`;
