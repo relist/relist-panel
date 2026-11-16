@@ -121,7 +121,7 @@ func SplitMySQL(sql string) ([]Statement, error) {
 			}
 		case r == '/' && hasPrefix(i, []rune("/*")):
 			begin := i
-			keep := i+2 < len(rs) && rs[i+2] == '!'
+			keep := (i+2 < len(rs) && rs[i+2] == '!') || hasPrefix(i, []rune("/*M!"))
 			end := -1
 			for j := i + 2; j+1 < len(rs); j++ {
 				if rs[j] == '*' && rs[j+1] == '/' {

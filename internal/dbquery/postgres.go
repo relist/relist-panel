@@ -96,6 +96,10 @@ func RunPostgres(ctx context.Context, t Target, r Request) QueryResponse {
 		}
 	}
 
+	if r.Preview {
+		return pgPreview(runCtx, ctx, conn, r, began)
+	}
+
 	var budget Budget
 	mrr := conn.PgConn().Exec(runCtx, r.SQL)
 	types := conn.TypeMap()
@@ -156,6 +160,58 @@ func RunPostgres(ctx context.Context, t Target, r Request) QueryResponse {
 	if err := mrr.Close(); err != nil {
 		finishPg(&resp, runCtx, ctx, err, began)
 		return resp
+	}
+	resp.DurationMs = sinceMs(began)
+	return resp
+}
+
+// pgPreview runs the batch's statements one at a time over the extended
+// protocol, between BEGIN and a ROLLBACK that always runs. ExecParams
+// carries exactly one statement, so a statement the splitter misread fails
+// instead of smuggling a COMMIT through. Rows are read and dropped: a
+// Preview reports commands and affected counts, never data.
+func pgPreview(runCtx, parent context.Context, conn *pgx.Conn, r Request, began time.Time) QueryResponse {
+	resp := QueryResponse{Results: []QueryResult{}, Preview: true}
+	stmts, qe := PreviewStatements(r.Engine, r.SQL)
+	if qe != nil {
+		resp.Error = qe
+		resp.DurationMs = sinceMs(began)
+		return resp
+	}
+	fail := func(err error, i, start int) {
+		finishPg(&resp, runCtx, parent, err, began)
+		if resp.Error != nil {
+			resp.Error.StatementIndex, resp.Error.StatementStart = i, start
+		}
+	}
+	if _, err := conn.Exec(runCtx, "BEGIN"); err != nil {
+		fail(err, 0, 0)
+		return resp
+	}
+	defer func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = conn.Exec(cctx, "ROLLBACK")
+	}()
+	var budget Budget
+	for i, st := range stmts {
+		if !budget.Result() {
+			resp.Stopped = budget.Stopped()
+			break
+		}
+		start := time.Now()
+		rr := conn.PgConn().ExecParams(runCtx, st.Text, nil, nil, nil, nil)
+		for rr.NextRow() {
+		}
+		tag, err := rr.Close()
+		if err != nil {
+			fail(err, i, st.Start)
+			return resp
+		}
+		res := QueryResult{StatementIndex: i, Columns: []Column{}, Rows: [][]Cell{}, Command: tag.String(), DurationMs: sinceMs(start)}
+		res.Affected = countAffected(res.Command)
+		res.Verb, res.Target = PreviewTarget(st.Text)
+		resp.Results = append(resp.Results, res)
 	}
 	resp.DurationMs = sinceMs(began)
 	return resp

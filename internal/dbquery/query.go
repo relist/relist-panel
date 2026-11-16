@@ -24,6 +24,9 @@ type Request struct {
 	Writes        bool
 	Engine        string
 	Restricted    bool
+	// Preview runs the batch inside a transaction that is rolled back; only
+	// plain DML is allowed (PreviewStatements). It implies Writes.
+	Preview bool
 }
 
 // Column is a result column.
@@ -41,6 +44,9 @@ type QueryResult struct {
 	Command        string   `json:"command"`
 	Affected       *int64   `json:"affected"`
 	DurationMs     int64    `json:"durationMs"`
+	// Verb and Target are set on Preview results: "delete" from "orders".
+	Verb   string `json:"verb,omitempty"`
+	Target string `json:"target,omitempty"`
 }
 
 // QueryError is the server's error, placed in the text that was sent.
@@ -59,6 +65,8 @@ type QueryResponse struct {
 	Error      *QueryError   `json:"error"`
 	Stopped    string        `json:"stopped"`
 	Cancelled  bool          `json:"cancelled"`
+	// Preview: the run was a Preview, and nothing was kept.
+	Preview bool `json:"preview,omitempty"`
 }
 
 // SchemaNode is a schema and its tables and views.
