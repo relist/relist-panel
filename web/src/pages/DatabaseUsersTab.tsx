@@ -94,7 +94,8 @@ export function DatabaseUsersTab({ db }: { db: Database }) {
     }
   };
 
-  const picksFull = databases.some((row) => levelOf(row) === 'full' && !(postgres && row.owner === editing?.name));
+  const fullRows = databases.filter((row) => levelOf(row) === 'full' && !(postgres && row.owner === editing?.name));
+  const picksFull = fullRows.length > 0;
 
   return (
     <Flex gap={16} vertical>
@@ -237,6 +238,11 @@ export function DatabaseUsersTab({ db }: { db: Database }) {
           {postgres && picksFull && (
             <Alert
               showIcon
+              description={fullRows.map((row) => (
+                <div key={row.name}>
+                  Inside {row.name} the user acts as {row.owner}, so what it creates belongs to {row.owner}.
+                </div>
+              ))}
               title="A member gets everything the owner role has, in every database it owns."
               type="warning"
             />

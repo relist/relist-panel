@@ -230,7 +230,7 @@ func TestSetAccessReadPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []adminCall{
-		{"postgres", []string{`GRANT CONNECT ON DATABASE "app" TO "reader"`}},
+		{"postgres", []string{`ALTER ROLE "reader" IN DATABASE "app" RESET role`, `GRANT CONNECT ON DATABASE "app" TO "reader"`}},
 		{"app", r.pg.InDatabaseAccess("reader", "owner", []string{"public"}, AccessRead)},
 	}
 	got := r.admin.calls()
@@ -249,7 +249,7 @@ func TestSetAccessUsesCurrentLevel(t *testing.T) {
 	if err := r.svc.SetUserAccess(ctx, r.d.ID, "w", map[string]Access{"app": AccessNone}); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.admin.calls()[0].Stmts; !slices.Equal(got, []string{`REVOKE "owner" FROM "w"`, `REVOKE ALL ON DATABASE "app" FROM "w"`}) {
+	if got := r.admin.calls()[0].Stmts; !slices.Equal(got, []string{`ALTER ROLE "w" IN DATABASE "app" RESET role`, `REVOKE "owner" FROM "w"`, `REVOKE ALL ON DATABASE "app" FROM "w"`}) {
 		t.Fatalf("full -> none = %q", got)
 	}
 }
@@ -357,5 +357,57 @@ func TestUserCredentials(t *testing.T) {
 	}
 	if _, err := r.svc.UserCredentials(ctx, 99, "app"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing database = %v", err)
+	}
+}
+
+// A Full member acts as the owner in the database, may own tables of its own,
+// and every Save of its access re-applies it: nothing may be revoked from it.
+func TestSetAccessFullKeepsMemberTables(t *testing.T) {
+	r := newPgUsersRig(t)
+	ctx := context.Background()
+	r.users("report")
+	r.databases([]string{"shop", "1", "shop", "f"})
+	r.admin.answer(r.pg.AccessQuery(), [][]string{{"report", "shop", "full"}})
+	r.admin.answerOn("shop", r.pg.SchemasQuery(), [][]string{{"public"}})
+	if err := r.svc.SetUserAccess(ctx, r.d.ID, "report", map[string]Access{"shop": AccessFull}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`GRANT CONNECT ON DATABASE "shop" TO "report"`, `GRANT "shop" TO "report"`, `ALTER ROLE "report" IN DATABASE "shop" SET role = 'shop'`}
+	if got := r.admin.stmts(); !slices.Equal(got, want) {
+		t.Fatalf("statements = %q, want %q", got, want)
+	}
+	for _, c := range r.admin.calls() {
+		if c.Database == "shop" {
+			t.Fatalf("in-database statements for a Full member: %+v", c)
+		}
+	}
+}
+
+// Read-only and None would lock a user out of tables it owns.
+func TestSetAccessRefusesLoweringWhenUserOwnsObjects(t *testing.T) {
+	for _, to := range []Access{AccessRead, AccessNone} {
+		t.Run(string(to), func(t *testing.T) {
+			r := newPgUsersRig(t)
+			ctx := context.Background()
+			r.users("report")
+			r.databases([]string{"shop", "1", "shop", "f"})
+			r.admin.answer(r.pg.AccessQuery(), [][]string{{"report", "shop", "full"}})
+			r.admin.answer(r.pg.OwnsInQuery("report"), [][]string{{"shop"}})
+			err := r.svc.SetUserAccess(ctx, r.d.ID, "report", map[string]Access{"shop": to})
+			var oe ErrUserOwnsIn
+			if !errors.As(err, &oe) || oe.Database != "shop" {
+				t.Fatalf("err = %v", err)
+			}
+			if want := "report owns tables or other objects in shop; give them to shop first, then change its access"; err.Error() != want {
+				t.Fatalf("text = %q", err)
+			}
+			if len(r.admin.calls()) != 0 {
+				t.Fatalf("statements sent despite the refusal: %q", r.admin.stmts())
+			}
+			// Full is not affected.
+			if err := r.svc.SetUserAccess(ctx, r.d.ID, "report", map[string]Access{"shop": AccessFull}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

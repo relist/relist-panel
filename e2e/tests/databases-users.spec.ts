@@ -133,6 +133,29 @@ test.describe('database users', () => {
     expect(tryDocker(psqlArgs(id, 'app1', app1.password, 'app2', 'SELECT 1'))).toBeUndefined();
     expect(docker(psqlArgs(id, 'app2', app2.password, 'app2', 'SELECT 1'))).toBe('1');
 
+    // 4b. A non-owner with Full acts as the owner in that database: what it
+    // creates belongs to the owner, survives a Save of its access, and a
+    // Read-only user sees it.
+    await panel.json('POST', `/api/databases/${id}/logical-databases`, { name: 'shop', createOwner: true });
+    await panel.json('POST', `/api/databases/${id}/users`, { name: 'report' });
+    await panel.json('POST', `/api/databases/${id}/users`, { name: 'viewer' });
+    const fullAccess = { access: { shop: 'full', app1: 'none', app2: 'none' } };
+    await panel.json('PUT', `/api/databases/${id}/users/report/access`, fullAccess);
+    await panel.json('PUT', `/api/databases/${id}/users/viewer/access`, { access: { shop: 'read', app1: 'none', app2: 'none' } });
+    const report = await creds(panel, id, 'report', 'shop');
+    const viewer = await creds(panel, id, 'viewer', 'shop');
+    docker(psqlArgs(id, 'report', report.password, 'shop', 'CREATE TABLE sales (a int); INSERT INTO sales VALUES (1)'));
+    // Saving the same access again must not strip report of its own table.
+    await panel.json('PUT', `/api/databases/${id}/users/report/access`, fullAccess);
+    docker(psqlArgs(id, 'report', report.password, 'shop', 'INSERT INTO sales VALUES (2)'));
+    expect(docker(psqlArgs(id, 'report', report.password, 'shop', 'SELECT count(*) FROM sales'))).toBe('2');
+    expect(docker(psqlArgs(id, 'viewer', viewer.password, 'shop', 'SELECT count(*) FROM sales'))).toBe('2');
+    expect(docker(psqlArgs(id, 'report', report.password, 'shop', `SELECT tableowner FROM pg_tables WHERE tablename = 'sales'`))).toBe('shop');
+    // Lowering report to Read-only: it still logs in to shop, reads, cannot write.
+    await panel.json('PUT', `/api/databases/${id}/users/report/access`, { access: { shop: 'read', app1: 'none', app2: 'none' } });
+    expect(docker(psqlArgs(id, 'report', report.password, 'shop', 'SELECT count(*) FROM sales'))).toBe('2');
+    expect(tryDocker(psqlArgs(id, 'report', report.password, 'shop', 'INSERT INTO sales VALUES (3)'))).toBeUndefined();
+
     // 5. A user that owns a database cannot be deleted; reader can.
     const refused = await panel.raw('DELETE', `/api/databases/${id}/users/app1`);
     expect(refused.status).toBe(409);

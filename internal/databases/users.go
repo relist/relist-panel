@@ -34,6 +34,14 @@ func (e ErrFullOnSuperuserDB) Error() string {
 	return e.Database + " is owned by a superuser, so Full access would make the user one; give it Read-only, or create the database with an owning user"
 }
 
+// ErrUserOwnsIn is lowering a non-owner on a Postgres database where it still
+// owns tables or other objects: Read-only and None would lock it out of them.
+type ErrUserOwnsIn struct{ User, Database, Owner string }
+
+func (e ErrUserOwnsIn) Error() string {
+	return e.User + " owns tables or other objects in " + e.Database + "; give them to " + e.Owner + " first, then change its access"
+}
+
 // ErrUserOwns is a Delete user of a Postgres role that still owns databases
 // or objects.
 type ErrUserOwns struct {
@@ -277,6 +285,29 @@ func (s *Service) SetUserAccess(ctx context.Context, id int64, name string, acce
 		}
 		if d.Engine == "postgres" && access[n] == AccessFull && owner != name && slices.Contains(supers, owner) {
 			return ErrFullOnSuperuserDB{Database: n}
+		}
+	}
+	if q := a.OwnsInQuery(name); q != "" {
+		lowering := false
+		for _, n := range names {
+			lowering = lowering || (byName[n].Owner != name && access[n] != AccessFull)
+		}
+		if lowering {
+			rows, err := s.d.Admin.Rows(ctx, t, d.Engine, "", q)
+			if err != nil {
+				return scrubErr(err, d.Password)
+			}
+			ownsIn := map[string]bool{}
+			for _, r := range rows {
+				if len(r) > 0 {
+					ownsIn[r[0]] = true
+				}
+			}
+			for _, n := range names {
+				if byName[n].Owner != name && access[n] != AccessFull && ownsIn[n] {
+					return ErrUserOwnsIn{User: name, Database: n, Owner: byName[n].Owner}
+				}
+			}
 		}
 	}
 	for _, n := range names {

@@ -148,6 +148,7 @@ describe('DatabaseUsersTab', () => {
     expect(within(dialog).queryByText(/A member gets everything the owner role has/)).toBeNull();
     await user.click(within(group(dialog, 'app')).getByText('Full'));
     expect(within(dialog).getByText('A member gets everything the owner role has, in every database it owns.')).toBeTruthy();
+    expect(within(dialog).getByText('Inside app the user acts as app, so what it creates belongs to app.')).toBeTruthy();
   });
 
   it('notes that MySQL lists only accounts on host %', async () => {

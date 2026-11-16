@@ -76,6 +76,9 @@ type accountSQL interface {
 	InDatabaseAccess(user, owner string, schemas []string, to Access) []string
 	// OwnedQuery: Postgres rows kind ("database" | "objects"), database.
 	OwnedQuery(user string) string
+	// OwnsInQuery: Postgres rows database, one for each database where the
+	// user owns objects.
+	OwnsInQuery(user string) string
 	// PrivilegedDatabasesQuery: Postgres rows database where DROP OWNED has
 	// something to remove.
 	PrivilegedDatabasesQuery(user string) string
@@ -148,28 +151,35 @@ func (pgAccounts) DropDatabase(name string) []string {
 	return []string{"DROP DATABASE " + pgIdent(name) + " WITH (FORCE)"}
 }
 
+// ServerAccess, Postgres. Full for a non-owner is membership in the owner
+// role plus a per-database setting that makes every session of the user in
+// that database act as the owner (SET role), so what it creates belongs to the
+// owner and the owner's default privileges cover it. Leaving Full resets the
+// setting first: a role setting naming a role the user is no longer a member
+// of would break its logins. The reset is also sent when from is not Full,
+// which cleans a stale setting and does nothing otherwise.
 func (pgAccounts) ServerAccess(user, db, owner string, from, to Access) []string {
 	u, d, o := pgIdent(user), pgIdent(db), pgIdent(owner)
 	connect := "GRANT CONNECT ON DATABASE " + d + " TO " + u
 	var out []string
-	switch to {
-	case AccessFull:
+	if to == AccessFull {
 		out = append(out, connect)
 		if user != owner {
-			out = append(out, "GRANT "+o+" TO "+u)
+			out = append(out, "GRANT "+o+" TO "+u,
+				"ALTER ROLE "+u+" IN DATABASE "+d+" SET role = "+pgLit(owner))
 		}
-	case AccessRead:
-		if from == AccessFull && user != owner {
-			out = append(out, "REVOKE "+o+" FROM "+u)
-		}
-		out = append(out, connect)
-	default:
-		if from == AccessFull && user != owner {
-			out = append(out, "REVOKE "+o+" FROM "+u)
-		}
-		out = append(out, "REVOKE ALL ON DATABASE "+d+" FROM "+u)
+		return out
 	}
-	return out
+	if user != owner {
+		out = append(out, "ALTER ROLE "+u+" IN DATABASE "+d+" RESET role")
+		if from == AccessFull {
+			out = append(out, "REVOKE "+o+" FROM "+u)
+		}
+	}
+	if to == AccessRead {
+		return append(out, connect)
+	}
+	return append(out, "REVOKE ALL ON DATABASE "+d+" FROM "+u)
 }
 
 func (pgAccounts) SchemasQuery() string {
@@ -177,6 +187,11 @@ func (pgAccounts) SchemasQuery() string {
 }
 
 func (pgAccounts) InDatabaseAccess(user, owner string, schemas []string, to Access) []string {
+	if to == AccessFull {
+		// A Full member acts as the owner in this database and may own
+		// tables of its own: nothing is revoked from it.
+		return nil
+	}
 	u, o := pgIdent(user), pgIdent(owner)
 	var out []string
 	if to == AccessRead {
@@ -189,8 +204,8 @@ func (pgAccounts) InDatabaseAccess(user, owner string, schemas []string, to Acce
 		}
 		return append(out, "ALTER DEFAULT PRIVILEGES FOR ROLE "+o+" GRANT SELECT ON TABLES TO "+u)
 	}
-	// None, and Full: a member gets everything through the owner role, so the
-	// Read-only grants it may still hold go.
+	// None: the Read-only grants go. Grants on objects a Full member lost
+	// ownership of stay with the owner.
 	for _, s := range schemas {
 		sc := pgIdent(s)
 		out = append(out,
@@ -210,6 +225,12 @@ func (pgAccounts) OwnedQuery(user string) string {
  UNION ALL
  SELECT 'objects', d.datname FROM pg_database d WHERE EXISTS (SELECT 1 FROM pg_shdepend s
  WHERE s.dbid = d.oid AND s.refclassid = 'pg_authid'::regclass AND s.refobjid = ` + pgRoleOID(user) + ` AND s.deptype = 'o')`
+}
+
+func (pgAccounts) OwnsInQuery(user string) string {
+	return `SELECT d.datname FROM pg_database d WHERE EXISTS (SELECT 1 FROM pg_shdepend s
+ WHERE s.dbid = d.oid AND s.refclassid = 'pg_authid'::regclass AND s.refobjid = ` + pgRoleOID(user) + ` AND s.deptype = 'o')
+ ORDER BY d.datname`
 }
 
 func (pgAccounts) PrivilegedDatabasesQuery(user string) string {
@@ -311,6 +332,8 @@ func (myAccounts) SchemasQuery() string { return "" }
 func (myAccounts) InDatabaseAccess(string, string, []string, Access) []string { return nil }
 
 func (myAccounts) OwnedQuery(string) string { return "" }
+
+func (myAccounts) OwnsInQuery(string) string { return "" }
 
 func (myAccounts) PrivilegedDatabasesQuery(string) string { return "" }
 
