@@ -85,16 +85,16 @@ func TestRoleMatrix(t *testing.T) {
 	subjects := []struct {
 		name string
 		user auth.User
-		want [6]int
+		want [7]int
 	}{
-		{"no grant", auth.User{ID: 10}, [6]int{gone, gone, gone, gone, gone, denied}},
-		{"no access on the environment", auth.User{ID: 11}, [6]int{gone, gone, gone, gone, gone, denied}},
-		{"viewer", auth.User{ID: 12}, [6]int{passed, denied, denied, denied, denied, denied}},
-		{"operator", auth.User{ID: 13}, [6]int{passed, passed, denied, denied, denied, denied}},
-		{"editor", auth.User{ID: 14}, [6]int{passed, passed, passed, denied, denied, denied}},
-		{"project editor, viewer on the environment", auth.User{ID: 15}, [6]int{passed, denied, denied, passed, denied, denied}},
-		{"admin", auth.User{ID: 3, IsAdmin: true}, [6]int{passed, passed, passed, passed, passed, passed}},
-		{"owner", auth.User{ID: auth.OwnerID, IsAdmin: true}, [6]int{passed, passed, passed, passed, passed, passed}},
+		{"no grant", auth.User{ID: 10}, [7]int{gone, gone, gone, gone, gone, denied, gone}},
+		{"no access on the environment", auth.User{ID: 11}, [7]int{gone, gone, gone, gone, gone, denied, gone}},
+		{"viewer", auth.User{ID: 12}, [7]int{passed, denied, denied, denied, denied, denied, gone}},
+		{"operator", auth.User{ID: 13}, [7]int{passed, passed, denied, denied, denied, denied, gone}},
+		{"editor", auth.User{ID: 14}, [7]int{passed, passed, passed, denied, denied, denied, gone}},
+		{"project editor, viewer on the environment", auth.User{ID: 15}, [7]int{passed, denied, denied, passed, denied, denied, gone}},
+		{"admin", auth.User{ID: 3, IsAdmin: true}, [7]int{passed, passed, passed, passed, passed, passed, passed}},
+		{"owner", auth.User{ID: auth.OwnerID, IsAdmin: true}, [7]int{passed, passed, passed, passed, passed, passed, passed}},
 	}
 	column := func(pattern string) int {
 		switch Routes[pattern].Level {
@@ -106,6 +106,9 @@ func TestRoleMatrix(t *testing.T) {
 			return 2
 		case LevelProjectEditor:
 			return 3
+		case LevelDatabase:
+			// No matrix subject holds a database grant: 404 for members.
+			return 6
 		case LevelPublic, LevelSignedIn:
 			return -1
 		}
@@ -155,6 +158,7 @@ func TestKeyRoutesHaveTheSpecLevel(t *testing.T) {
 		"POST /api/projects/{projectID}/environments":                           LevelProjectEditor,
 		"PUT /api/projects/{id}":                                                LevelProjectEditor,
 		"GET /api/projects":                                                     LevelSignedIn,
+		"POST /api/databases/{id}/query":                                        LevelDatabase,
 	}
 	for pattern, want := range pins {
 		rule, ok := Routes[pattern]

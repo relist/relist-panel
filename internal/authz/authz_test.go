@@ -38,6 +38,7 @@ var testRoutes = map[string]Rule{
 	"POST /api/projects/{projectID}/environments":        {Level: LevelProjectEditor},
 	"DELETE /api/projects/{projectID}/environments/{id}": {Level: LevelProjectEditor},
 	"GET /api/projects/{projectID}/environments/{environmentID}/variables": {Level: LevelViewer},
+	"GET /api/databases/{id}": {Level: LevelDatabase},
 }
 
 func testDB(t *testing.T) *sql.DB {
@@ -76,6 +77,9 @@ func stubMux() *http.ServeMux {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		scope, _ := ScopeFrom(r.Context())
 		w.Header().Set("X-Scope", fmt.Sprintf("%d/%d/%d", scope.ProjectID, scope.EnvironmentID, scope.ComposeID))
+		if g, ok := DatabaseGrantFrom(r.Context()); ok {
+			w.Header().Set("X-Grant", fmt.Sprintf("%d:%s:%s", g.DatabaseID, g.DBUser, g.Level))
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 	for pattern := range testRoutes {
@@ -83,6 +87,7 @@ func stubMux() *http.ServeMux {
 	}
 	mux.HandleFunc("GET /api/admin-only", handler)
 	mux.HandleFunc("DELETE /api/projects/{id}", handler)
+	mux.HandleFunc("GET /api/databases/{id}/logs", handler)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
 	return mux
 }
@@ -296,4 +301,31 @@ func TestCanReadSecrets(t *testing.T) {
 	if CanReadSecrets(ctx, eA1) || !CanReadSecrets(ctx, eA2) {
 		t.Fatalf("operator on A1 / editor on A2 = %v / %v", CanReadSecrets(ctx, eA1), CanReadSecrets(ctx, eA2))
 	}
+}
+
+func TestDatabaseLevel(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.db.Exec(`
+		INSERT INTO databases (id, name, slug, engine, version, password, created_at, updated_at) VALUES
+			(1, 'Shop', 'shop', 'postgres', '18', 'p', 1, 1), (2, 'Blog', 'blog', 'mysql', '8.4', 'p', 1, 1);
+		INSERT INTO database_users (database_id, name, password, created_at) VALUES (1, 'shop_ro', 'pw', 1);
+		INSERT INTO database_grants (database_id, user_id, db_user, level, created_at) VALUES (1, 2, 'shop_ro', NULL, 1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	got := f.serve(admin, http.MethodGet, "/api/databases/1")
+	if got.Code != http.StatusNoContent || got.Header().Get("X-Grant") != "" {
+		t.Fatalf("admin = %d, grant %q; want 204 with no grant", got.Code, got.Header().Get("X-Grant"))
+	}
+	got = f.serve(member, http.MethodGet, "/api/databases/1")
+	if got.Code != http.StatusNoContent || got.Header().Get("X-Grant") != "1:shop_ro:" {
+		t.Fatalf("member = %d, grant %q; want 204 with 1:shop_ro:", got.Code, got.Header().Get("X-Grant"))
+	}
+	expect(t, f, member, http.MethodGet, "/api/databases/2", http.StatusNotFound)
+	expect(t, f, member, http.MethodGet, "/api/databases/1/logs", http.StatusForbidden)
+	expect(t, f, member, http.MethodGet, "/api/databases/x", http.StatusNotFound)
+	if _, err := f.db.Exec("UPDATE databases SET deleted_at = 1 WHERE id = 1"); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, f, member, http.MethodGet, "/api/databases/1", http.StatusNotFound)
 }

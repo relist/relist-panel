@@ -6,10 +6,10 @@ import (
 	"strings"
 )
 
-// Scope is the Project, Environment and Compose a request's path names; zero
-// where the pattern names none.
+// Scope is the Project, Environment, Compose and Database a request's path
+// names; zero where the pattern names none.
 type Scope struct {
-	ProjectID, EnvironmentID, ComposeID int64
+	ProjectID, EnvironmentID, ComposeID, DatabaseID int64
 }
 
 // scopeOf aligns path with the ServeMux pattern it matched and reads the
@@ -44,6 +44,8 @@ func scopeOf(pattern, path string) (Scope, bool) {
 			target = &scope.EnvironmentID
 		case name == "composeID":
 			target = &scope.ComposeID
+		case name == "id" && prev == "databases":
+			target = &scope.DatabaseID
 		default:
 			continue
 		}
