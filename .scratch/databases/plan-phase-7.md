@@ -60,7 +60,7 @@
   - MySQL / MariaDB schema grants escape `_` as `\_` inside the backquotes (`myGrantDB`), because `_` and `%` are wildcards in `GRANT … ON db.*`.
   - Reading grants back un-escapes `\_`. Names can never hold `%` or `\`.
 - **Access levels.** `type Access string`, with the values `"none"`, `"read"` and `"full"`. The statements are the spec's verbatim:
-  - **Postgres Full:** owner, or `GRANT <owner> TO <user>`, plus `GRANT CONNECT ON DATABASE`.
+  - **Postgres Full:** owner, or for another user `GRANT <owner> TO <user>` plus `ALTER ROLE <user> IN DATABASE <db> SET role = '<owner>'`, plus `GRANT CONNECT ON DATABASE`. Lowering a non-owner from Full runs `ALTER ROLE … RESET role` before `REVOKE <owner> FROM <user>`, and is refused (`ErrUserOwnsIn`, 409) while the user owns objects in that database.
   - **Postgres Read-only:**
     - `CONNECT`;
     - in that database, for every schema except `pg_catalog`, `information_schema`, and those starting `pg_toast` or `pg_temp`: `USAGE`, `SELECT ON ALL TABLES`, `SELECT ON ALL SEQUENCES`;
@@ -190,15 +190,16 @@
 | `DropOwned(name string) []string` | PG `DROP OWNED BY "n"` (run in each privileged database); My nil |
 
 - **`ServerAccess`, Postgres:**
-  - to `full`: `GRANT CONNECT ON DATABASE`, then `GRANT "owner" TO "user"`.
-  - to `read`: `REVOKE "owner" FROM "user"` (only when `from` is `full`), then `GRANT CONNECT`.
-  - to `none`: `REVOKE "owner" FROM "user"` (only when `from` is `full`), then `REVOKE ALL ON DATABASE … FROM "user"`.
+  - to `full`: `GRANT CONNECT ON DATABASE`, then (non-owner) `GRANT "owner" TO "user"` and `ALTER ROLE "user" IN DATABASE "db" SET role = 'owner'`.
+  - to `read`: (non-owner) `ALTER ROLE … IN DATABASE … RESET role`, then `REVOKE "owner" FROM "user"` (only when `from` is `full`), then `GRANT CONNECT`.
+  - to `none`: (non-owner) `ALTER ROLE … IN DATABASE … RESET role`, then `REVOKE "owner" FROM "user"` (only when `from` is `full`), then `REVOKE ALL ON DATABASE … FROM "user"`.
 - **`ServerAccess`, MySQL:**
   - `REVOKE ALL PRIVILEGES ON <g>.* FROM 'u'@'%'` only when `from` is not `none`;
   - then the spec's `GRANT` for `read` or `full`.
 - **`InDatabaseAccess`, Postgres:**
   - `read`: for each schema, `GRANT USAGE ON SCHEMA`, `GRANT SELECT ON ALL TABLES IN SCHEMA` and `GRANT SELECT ON ALL SEQUENCES IN SCHEMA`; then once, `ALTER DEFAULT PRIVILEGES FOR ROLE "owner" GRANT SELECT ON TABLES TO "user"`.
-  - `none` and `full`: the matching `REVOKE ALL` on tables, sequences and schemas, and `ALTER DEFAULT PRIVILEGES FOR ROLE "owner" REVOKE ALL ON TABLES FROM "user"`. A Full member gets everything through the owner role, so the leftover Read-only grants go.
+  - `none`: the matching `REVOKE ALL` on tables, sequences and schemas, and `ALTER DEFAULT PRIVILEGES FOR ROLE "owner" REVOKE ALL ON TABLES FROM "user"`.
+  - `full`: nothing. A Full member acts as the owner in that database and may own tables of its own; revoking would strip them.
 
 - [ ] **Step 1: Write the failing table tests.**
   - `TestCheckUserName`:
