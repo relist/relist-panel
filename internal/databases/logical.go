@@ -2,7 +2,6 @@ package databases
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"strconv"
 
@@ -45,13 +44,19 @@ func scrubAll(text string, passwords ...string) string {
 	return text
 }
 
+// adminError is what the server answered to an admin call, scrubbed. It is a
+// bad gateway to the browser, not a fault of the panel.
+type adminError struct{ msg string }
+
+func (e adminError) Error() string { return e.msg }
+
 // scrubErr is err with every password removed; nil stays nil. The error
 // loses its type, which is fine: only the server's text is left.
 func scrubErr(err error, passwords ...string) error {
 	if err == nil {
 		return nil
 	}
-	return errors.New(scrubAll(err.Error(), passwords...))
+	return adminError{scrubAll(err.Error(), passwords...)}
 }
 
 // adminRead checks a Database can take an admin read and says where it is:
