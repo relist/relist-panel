@@ -114,6 +114,7 @@ func TestResetSuperuserLiveFails(t *testing.T) {
 		sent = stmts[0]
 		return errors.New("failed: " + stmts[0] + " as " + d.Password)
 	}
+	r.admin.pingOK[d.Password] = true // the old password still works
 	r.host.reset()
 	if err := r.svc.ResetSuperuserPassword(ctx, d.ID, "Shop"); err != nil {
 		t.Fatal(err)
@@ -130,6 +131,21 @@ func TestResetSuperuserLiveFails(t *testing.T) {
 	}
 	if r.host.count("create ") != 0 {
 		t.Fatal("the container was recreated for a password that never took")
+	}
+}
+
+// Neither password logs in after the change (the server went away): the new
+// one may be live, so it stays pending for resolvePending.
+func TestResetSuperuserUnprovenKeepsPending(t *testing.T) {
+	r := newAdminRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	r.admin.execErr = func(string, []string) error { return errors.New("connection reset") }
+	_ = r.svc.ResetSuperuserPassword(ctx, d.ID, "Shop")
+	r.svc.Wait()
+	got, _ := r.store.Get(ctx, d.ID)
+	if got.Password != d.Password || got.PendingPassword == "" {
+		t.Fatalf("want old password kept and new one pending: %+v", got)
 	}
 }
 
