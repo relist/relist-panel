@@ -482,8 +482,8 @@
   - **Superuser reset, Postgres, MySQL and Redis:**
     - write a row (or key), reset, and wait for the job to end;
     - the old URL is refused, the new URL from Reveal works, and the row is still there;
-    - the Databases list shows no warning.
-  - **Logs tab:** after a failed Create user (the name already exists), the Logs tab text does not contain the attempted password. The test reads the password with `credentials?user=` before the second attempt, which then fails.
+    - the Databases list shows no warning;
+    - the Logs tab text contains neither password.
 - [ ] **Step 2: Run** `task e2e -- databases-users`. Expected: PASS. Then run the whole `task e2e` once.
 - [ ] **Step 3: Commit.** `test: cover database users and superuser reset end to end`
 
