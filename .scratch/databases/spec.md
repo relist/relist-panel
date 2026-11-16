@@ -48,11 +48,12 @@ setup.
 ## Out of scope
 
 Planned in `.scratch/databases/spec-2.md` (2026-11-15): Direct access, SFTP
-and WebDAV Backup destinations, logical database and user management,
+Backup destinations, logical database and user management,
 superuser password reset, per-Database access for non-Admins, GFS Rotation,
 backup encryption and changing the major version.
 
-Dropped: Redis backup and restore, and Attach.
+Dropped: Redis backup and restore, Attach, and (2026-11-16) WebDAV Backup
+destinations.
 
 Still out of scope: failure notifications, point-in-time recovery, editing data
 in a grid and schema-editing UI, more engines.
