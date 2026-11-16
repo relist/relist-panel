@@ -78,6 +78,28 @@ func TestGranteeCredentialsForcedToOwnUser(t *testing.T) {
 	}
 }
 
+func TestGranteeCredentialsRefusedForServerWideUser(t *testing.T) {
+	r := newAdminRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	if err := r.store.UpsertUser(ctx, d.ID, "shop_ro", "pw"); err != nil {
+		t.Fatal(err)
+	}
+	r.admin.answer(mustAccounts(t, "postgres").ServerWideQuery("shop_ro"), [][]string{{"postgres"}})
+	mux := plainMux(r)
+	alice := auth.User{ID: 2, Email: "alice@example.com"}
+	grant := authz.DatabaseGrant{DatabaseID: d.ID, DBUser: "shop_ro"}
+	got := doCtx(mux, granteeCtx(alice, grant), http.MethodGet, "/api/databases/1/credentials", "")
+	if got.Code != http.StatusUnprocessableEntity || !strings.Contains(got.Body.String(), "server-wide privileges") {
+		t.Fatalf("credentials of a server-wide user = %d: %s", got.Code, got.Body)
+	}
+	// An Admin still reveals it.
+	admin := doCtx(mux, context.Background(), http.MethodGet, "/api/databases/1/credentials?user=shop_ro", "")
+	if admin.Code != http.StatusOK {
+		t.Fatalf("admin credentials = %d: %s", admin.Code, admin.Body)
+	}
+}
+
 func TestNonAdminWithoutGrantIs404(t *testing.T) {
 	qr := newQueryRig(t)
 	qr.create(t, "Shop", "postgres", "18")

@@ -352,6 +352,12 @@ func (a *API) credentials(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		want = c.Grant.DBUser
+		// The password works outside the panel's restricted sessions, so a
+		// user that has grown server-wide powers is not revealed either.
+		if err := a.s.refuseServerWide(r.Context(), n, want); err != nil {
+			writeError(w, err)
+			return
+		}
 		if r.URL.Query().Get("database") == "" {
 			if own, err := a.s.GranteeDatabases(r.Context(), n, want); err == nil && len(own) > 0 {
 				database = own[0]

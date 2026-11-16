@@ -103,7 +103,18 @@ func (s *Service) SetGrant(ctx context.Context, id, userID int64, dbUser string,
 		}
 		return err
 	}
-	_, t, a, err := s.adminRead(ctx, id)
+	if err := s.refuseServerWide(ctx, id, dbUser); err != nil {
+		return err
+	}
+	return s.d.Store.SetGrant(ctx, Grant{DatabaseID: id, UserID: userID, DBUser: dbUser})
+}
+
+// refuseServerWide is ErrServerWideUser when managed user dbUser has powers
+// beyond its own databases, read over the admin path. It runs at grant time,
+// before a grantee's credentials reveal, and (in the run's own session)
+// before every grantee statement.
+func (s *Service) refuseServerWide(ctx context.Context, id int64, dbUser string) error {
+	d, t, a, err := s.adminRead(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -114,7 +125,7 @@ func (s *Service) SetGrant(ctx context.Context, id, userID int64, dbUser string,
 	if a.ServerWide(rows) {
 		return ErrServerWideUser{User: dbUser}
 	}
-	return s.d.Store.SetGrant(ctx, Grant{DatabaseID: id, UserID: userID, DBUser: dbUser})
+	return nil
 }
 
 // GranteeDatabases lists the logical databases a grant's user can work in:

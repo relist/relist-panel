@@ -18,8 +18,9 @@ func ServerWideMessage(user string) string {
 func PgServerWideQuery(role string) string {
 	return `SELECT r.rolname FROM pg_roles r
 		WHERE pg_has_role(` + role + `, r.oid, 'MEMBER')
-		  AND (r.rolsuper OR r.rolcreaterole
-		       OR r.rolname IN ('pg_read_server_files','pg_write_server_files','pg_execute_server_program'))`
+		  AND (r.rolsuper OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls
+		       OR r.rolname IN ('pg_read_server_files','pg_write_server_files','pg_execute_server_program',
+		                        'pg_read_all_data','pg_write_all_data','pg_signal_backend'))`
 }
 
 // MySQLServerWide reads SHOW GRANTS lines. It is false only when every line
@@ -65,7 +66,34 @@ func mysqlGrantClean(line string) bool {
 		return strings.EqualFold(privs, "USAGE")
 	}
 	db, ok := grantTargetDB(target)
-	return ok && db != "" && db != "*"
+	return ok && db != "" && db != "*" && !schemaWildcard(db) && !systemSchema(db)
+}
+
+// schemaWildcard: an unescaped % or _ in a grant's schema is a wildcard over
+// other schemas, mysql included. The panel's own grants escape _ as \_.
+func schemaWildcard(db string) bool {
+	for i := 0; i < len(db); i++ {
+		if db[i] == '\\' {
+			i++
+			continue
+		}
+		if db[i] == '%' || db[i] == '_' {
+			return true
+		}
+	}
+	return false
+}
+
+// systemSchema: a grant on the server's own schemas is server-wide — writing
+// mysql.* is global privileges at the next FLUSH PRIVILEGES, and reading
+// mysql.user is the root password hash.
+func systemSchema(db string) bool {
+	plain := strings.NewReplacer(`\_`, "_", `\%`, "%").Replace(db)
+	switch strings.ToLower(plain) {
+	case "mysql", "sys", "performance_schema", "information_schema":
+		return true
+	}
+	return false
 }
 
 // grantTargetDB reads the schema of a grant target: `db`.* , db.`t` , db.t.

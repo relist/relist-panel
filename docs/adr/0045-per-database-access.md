@@ -24,13 +24,19 @@ grantees alike.
   (`LevelDatabase` reads `database_grants`), and the handler turns the grant
   into the caller; a non-Admin without a grant is 404, never the superuser.
 - **The server-wide check.** A managed user with powers beyond its own
-  databases cannot back a grant: Postgres superuser, `CREATEROLE`, or
-  membership in `pg_read_server_files`, `pg_write_server_files` or
-  `pg_execute_server_program`; MySQL / MariaDB any `SHOW GRANTS` line other
-  than `USAGE ON *.*` or a one-schema grant, or any `WITH GRANT OPTION`.
-  The check runs at grant time (422) over the admin path, and again on the
-  run's own session before the first statement, because privileges change
-  later. The Postgres query reads `session_user`, never `current_user`:
+  databases cannot back a grant: Postgres superuser, `CREATEROLE`,
+  `REPLICATION`, `BYPASSRLS`, or membership in `pg_read_server_files`,
+  `pg_write_server_files`, `pg_execute_server_program`, `pg_read_all_data`,
+  `pg_write_all_data` or `pg_signal_backend`; MySQL / MariaDB any
+  `SHOW GRANTS` line other than `USAGE ON *.*` or a one-schema grant, or any
+  `WITH GRANT OPTION`. A schema grant whose name holds an unescaped `%` or
+  `_` is server-wide too — those are wildcards over other schemas — and so
+  is a grant on `mysql`, `sys`, `performance_schema` or
+  `information_schema`, since writing `mysql.*` is global privileges at the
+  next `FLUSH PRIVILEGES` and reading `mysql.user` is the root hash.
+  The check runs at grant time (422) over the admin path, again before a
+  grantee's credentials reveal, and again on the run's own session before
+  the first statement, because privileges change later. The Postgres query reads `session_user`, never `current_user`:
   phase 7's per-database `SET role` makes `current_user` the owner from the
   first statement on, which would let a superuser login pass. The grant-time
   check needs the Database running; that is why a SQL grant does.
@@ -85,6 +91,12 @@ protocol.
   PASSWORD`, `SET PASSWORD`): stopping that would need statement filtering.
   Their runs then fail to log in until an Admin uses Reset password, which
   re-stores a known password and keeps the grant.
+- A revealed password works outside the panel — through a Direct access, or
+  from any container on relist-network — so removing a grant does not cut
+  off a member who copied it, and the run-time server-wide check guards
+  only the panel's own sessions. The Remove confirm says so and points at
+  Reset password; credentials of a user that has grown server-wide powers
+  are refused outright.
 - Deleting a managed user that backs grants asks for confirmation naming the
   panel users; confirming deletes their access too (the phase 7 ADR's open
   end).

@@ -22,6 +22,17 @@ func TestMySQLServerWide(t *testing.T) {
 	}
 	wide := []string{
 		"GRANT FILE ON *.* TO `a`@`%`",
+		// Schema wildcards: % and unescaped _ match other schemas, mysql
+		// included; the panel's own grants always escape _ as \_.
+		"GRANT ALL PRIVILEGES ON `%`.* TO `a`@`%`",
+		"GRANT SELECT ON `_____`.* TO `a`@`%`",
+		"GRANT ALL PRIVILEGES ON `app%`.* TO `a`@`%`",
+		// System schemas: writing mysql.* is global privileges at the next
+		// FLUSH PRIVILEGES, and reading mysql.user is the root hash.
+		"GRANT ALL PRIVILEGES ON `mysql`.* TO `a`@`%`",
+		"GRANT SELECT ON `mysql`.`user` TO `a`@`%`",
+		"GRANT SELECT ON sys.* TO `a`@`%`",
+		"GRANT SELECT ON `performance_schema`.* TO `a`@`%`",
 		"GRANT SELECT ON *.* TO `a`@`%`",
 		"GRANT BACKUP_ADMIN ON *.* TO `a`@`%`",
 		"GRANT `r`@`%` TO `a`@`%`",
@@ -47,8 +58,9 @@ func TestPgServerWideQuery(t *testing.T) {
 	q := PgServerWideQuery("session_user")
 	for _, want := range []string{
 		"pg_has_role(session_user, r.oid, 'MEMBER')",
-		"rolsuper", "rolcreaterole",
+		"rolsuper", "rolcreaterole", "rolreplication", "rolbypassrls",
 		"pg_read_server_files", "pg_write_server_files", "pg_execute_server_program",
+		"pg_read_all_data", "pg_write_all_data", "pg_signal_backend",
 	} {
 		if !strings.Contains(q, want) {
 			t.Errorf("query is missing %q:\n%s", want, q)

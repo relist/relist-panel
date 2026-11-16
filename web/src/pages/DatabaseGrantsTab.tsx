@@ -70,7 +70,7 @@ export function DatabaseGrantsTab({ db }: { db: Database }) {
               key: 'actions',
               render: (_, row) => (
                 <Popconfirm
-                  description="They lose this Database at once."
+                  description="They lose the panel's access at once. If they ever revealed the password, Reset it on the Users tab: the password itself still works."
                   okButtonProps={{ danger: true }}
                   okText="Remove"
                   onConfirm={() => void remove(row)}
