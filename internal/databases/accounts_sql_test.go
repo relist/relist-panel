@@ -85,6 +85,8 @@ func TestPgServerAccess(t *testing.T) {
 	const (
 		connect = `GRANT CONNECT ON DATABASE "d" TO "u"`
 		member  = `GRANT "o" TO "u"`
+		actAs   = `ALTER ROLE "u" IN DATABASE "d" SET role = 'o'`
+		reset   = `ALTER ROLE "u" IN DATABASE "d" RESET role`
 		leave   = `REVOKE "o" FROM "u"`
 		revoke  = `REVOKE ALL ON DATABASE "d" FROM "u"`
 	)
@@ -92,15 +94,17 @@ func TestPgServerAccess(t *testing.T) {
 		from, to Access
 		want     []string
 	}{
-		{AccessNone, AccessNone, []string{revoke}},
-		{AccessNone, AccessRead, []string{connect}},
-		{AccessNone, AccessFull, []string{connect, member}},
-		{AccessRead, AccessNone, []string{revoke}},
-		{AccessRead, AccessRead, []string{connect}},
-		{AccessRead, AccessFull, []string{connect, member}},
-		{AccessFull, AccessNone, []string{leave, revoke}},
-		{AccessFull, AccessRead, []string{leave, connect}},
-		{AccessFull, AccessFull, []string{connect, member}},
+		{AccessNone, AccessNone, []string{reset, revoke}},
+		{AccessNone, AccessRead, []string{reset, connect}},
+		{AccessNone, AccessFull, []string{connect, member, actAs}},
+		{AccessRead, AccessNone, []string{reset, revoke}},
+		{AccessRead, AccessRead, []string{reset, connect}},
+		{AccessRead, AccessFull, []string{connect, member, actAs}},
+		// The setting goes before the membership: a role setting naming a
+		// role the user is not a member of would break its logins.
+		{AccessFull, AccessNone, []string{reset, leave, revoke}},
+		{AccessFull, AccessRead, []string{reset, leave, connect}},
+		{AccessFull, AccessFull, []string{connect, member, actAs}},
 	} {
 		if got := a.ServerAccess("u", "d", "o", tc.from, tc.to); !slices.Equal(got, tc.want) {
 			t.Errorf("%s->%s = %q, want %q", tc.from, tc.to, got, tc.want)
@@ -129,21 +133,29 @@ func TestPgInDatabaseRead(t *testing.T) {
 	}
 }
 
-func TestPgInDatabaseNoneAndFullRevoke(t *testing.T) {
+func TestPgInDatabaseNoneRevokesFullDoesNot(t *testing.T) {
 	a, _ := accountsFor("postgres")
-	for _, lvl := range []Access{AccessNone, AccessFull} {
-		got := a.InDatabaseAccess("u", "o", []string{"public"}, lvl)
-		want := []string{
-			`REVOKE ALL ON ALL TABLES IN SCHEMA "public" FROM "u"`,
-			`REVOKE ALL ON ALL SEQUENCES IN SCHEMA "public" FROM "u"`,
-			`REVOKE ALL ON SCHEMA "public" FROM "u"`,
-			`ALTER DEFAULT PRIVILEGES FOR ROLE "o" REVOKE ALL ON TABLES FROM "u"`,
-		}
-		if !slices.Equal(got, want) {
-			t.Errorf("%s: got %q", lvl, got)
-		}
+	got := a.InDatabaseAccess("u", "o", []string{"public"}, AccessNone)
+	want := []string{
+		`REVOKE ALL ON ALL TABLES IN SCHEMA "public" FROM "u"`,
+		`REVOKE ALL ON ALL SEQUENCES IN SCHEMA "public" FROM "u"`,
+		`REVOKE ALL ON SCHEMA "public" FROM "u"`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "o" REVOKE ALL ON TABLES FROM "u"`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("none: got %q", got)
+	}
+	// A Full member owns tables of its own: nothing is revoked from it.
+	if got := a.InDatabaseAccess("u", "o", []string{"public"}, AccessFull); len(got) != 0 {
+		t.Errorf("full: got %q", got)
+	}
+	if got := a.OwnsInQuery("u"); !strings.Contains(got, "deptype = 'o'") || !strings.Contains(got, "'u'") {
+		t.Errorf("OwnsInQuery = %q", got)
 	}
 	m, _ := accountsFor("mysql")
+	if got := m.OwnsInQuery("u"); got != "" {
+		t.Errorf("mysql OwnsInQuery = %q", got)
+	}
 	if got := m.InDatabaseAccess("u", "", []string{"x"}, AccessRead); got != nil {
 		t.Errorf("mysql has no in-database step: %q", got)
 	}

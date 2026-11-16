@@ -249,6 +249,7 @@ func TestUsersRoutesErrorCodes(t *testing.T) {
 		{ErrOwnerAccess{User: "u", Database: "d"}, 422},
 		{ErrProtectedDatabase{Name: "postgres"}, 422},
 		{ErrUserOwns{User: "u", Databases: []string{"d"}}, 409},
+		{ErrUserOwnsIn{User: "u", Database: "d", Owner: "o"}, 409},
 		{ErrUserExists{Name: "u"}, 409},
 		{ErrDatabaseExists{Name: "d"}, 409},
 		{ErrPendingPassword, 409},
