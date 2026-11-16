@@ -55,12 +55,14 @@ test.describe('database access for non-admins', () => {
     const b = await createRunning(admin, other, 'postgres', '18');
     docker('pull', '-q', PG);
 
-    // shop with its owner; shop_ro Read-only on it; 10 rows as shop.
+    // shop with its owner, 10 rows, then shop_ro Read-only on it. The seed
+    // goes first: Read-only grants SELECT on the tables that exist when it
+    // is saved (plus the owner's later ones).
     await admin.json('POST', `/api/databases/${a}/logical-databases`, { name: 'shop', createOwner: true });
-    await admin.json('POST', `/api/databases/${a}/users`, { name: 'shop_ro' });
-    await admin.json('PUT', `/api/databases/${a}/users/shop_ro/access`, { access: { shop: 'read' } });
     const seed = await query(admin, a, 'shop', 'CREATE TABLE t (id int); INSERT INTO t SELECT generate_series(1, 10)', { writes: true });
     expect(seed.error).toBeNull();
+    await admin.json('POST', `/api/databases/${a}/users`, { name: 'shop_ro' });
+    await admin.json('PUT', `/api/databases/${a}/users/shop_ro/access`, { access: { shop: 'read' } });
 
     // A superuser role made in the Query panel, then managed by a reset.
     const madeBoss = await query(admin, a, 'postgres', 'CREATE ROLE boss SUPERUSER LOGIN', { writes: true });
@@ -124,7 +126,7 @@ test.describe('database access for non-admins', () => {
     // The audit log names the panel user and the database user.
     const audit = await admin.json<{ items: { action: string; actor: string; detail: { dbUser?: string } }[] }>(
       'GET', '/api/audit?action=database.query');
-    const hers = audit.items.find((event) => event.actor.startsWith('alice-') && event.detail.dbUser === 'shop_ro');
+    const hers = audit.items.find((event) => event.actor === email && event.detail.dbUser === 'shop_ro');
     expect(hers).toBeTruthy();
 
     // Preview, as Admin: reports, then rolls back.
@@ -162,9 +164,10 @@ test.describe('database access for non-admins', () => {
     const id = await createRunning(admin, name, 'mysql', '8.4');
 
     await admin.json('POST', `/api/databases/${id}/logical-databases`, { name: 'app', createOwner: true });
-    const alice = await createMember(admin, `amy-${runId()}@example.com`, MEMBER_PASSWORD);
+    const email = `amy-${runId()}@example.com`;
+    const alice = await createMember(admin, email, MEMBER_PASSWORD);
     const aliceId = (await admin.json<{ id: number; email: string }[]>('GET', '/api/users'))
-      .find((row) => row.email.startsWith('amy-'))!.id;
+      .find((row) => row.email === email)!.id;
     expect((await admin.raw('PUT', `/api/databases/${id}/grants/${aliceId}`, { dbUser: 'app' })).status).toBe(204);
 
     // The server itself refuses the file write: app holds no FILE privilege.
@@ -236,11 +239,11 @@ test.describe('database access for non-admins', () => {
     const admin = await Panel.signIn();
     const id = await createRunning(admin, name, 'postgres', '18');
     await admin.json('POST', `/api/databases/${id}/logical-databases`, { name: 'shop', createOwner: true });
-    await admin.json('POST', `/api/databases/${id}/users`, { name: 'shop_ro' });
-    await admin.json('PUT', `/api/databases/${id}/users/shop_ro/access`, { access: { shop: 'read' } });
     expect((await admin.json<QueryAnswer>('POST', `/api/databases/${id}/query`, {
       database: 'shop', sql: 'CREATE TABLE t (id int); INSERT INTO t SELECT generate_series(1, 10)', writes: true,
     })).error).toBeNull();
+    await admin.json('POST', `/api/databases/${id}/users`, { name: 'shop_ro' });
+    await admin.json('PUT', `/api/databases/${id}/users/shop_ro/access`, { access: { shop: 'read' } });
     const email = `aui-${runId()}@example.com`;
     await createMember(admin, email, MEMBER_PASSWORD);
     const aliceId = (await admin.json<{ id: number; email: string }[]>('GET', '/api/users'))
@@ -263,7 +266,7 @@ test.describe('database access for non-admins', () => {
 
     // A Preview as shop_ro is refused by its own permissions.
     await page.getByRole('switch', { name: 'Allow writes' }).click();
-    await page.locator('.monaco-editor .inputarea').first().click({ force: true });
+    await page.getByRole('textbox', { name: 'Editor content' }).focus();
     await page.keyboard.type('DELETE FROM t WHERE id <= 3');
     await page.getByRole('button', { name: 'Preview' }).click();
     await expect(page.getByText(/permission denied/)).toBeVisible();

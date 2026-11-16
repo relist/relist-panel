@@ -71,10 +71,8 @@ for (const version of ['8', '7.4']) {
       if (id) await panel.raw('DELETE', `/api/databases/${id}`, { confirm: name, deleteBackups: true });
     });
 
-    test('read-only refuses EVAL, FCALL, SET and CONFIG SET', async () => {
+    test('read-only refuses SET and CONFIG SET; scripts never run', async () => {
       const refused = [
-        `EVAL "return redis.call('set','x','1')" 0`,
-        'FCALL myfunc 0',
         'SET x 1',
         'CONFIG SET maxmemory 1mb',
         'FLUSHALL',
@@ -85,6 +83,19 @@ for (const version of ['8', '7.4']) {
         expect(r.refused, line).toBe('writes are off');
         expect(r.reply).toBeNull();
       }
+      // A script is a built-up command, so it would get around the
+      // classifier: never in the console, writes or not (ADR-0045).
+      const scripts = [
+        `EVAL "return redis.call('set','x','1')" 0`,
+        `EVAL_RO "return 1" 0`,
+        'FCALL myfunc 0',
+        'SCRIPT LOAD "return 1"',
+      ];
+      for (const line of scripts) {
+        const r = await run(line, { writes: true });
+        expect(r.refused, line).toContain('not available in the console');
+        expect(r.reply).toBeNull();
+      }
       expect(redisCli(container, 'DBSIZE')).toBe('0');
       expect(redisCli(container, 'CONFIG', 'GET', 'maxmemory')).not.toContain('1048576');
 
@@ -92,7 +103,6 @@ for (const version of ['8', '7.4']) {
       expect(get.reply).toMatchObject({ type: 'nil' });
       expect((await run('PING')).reply).toMatchObject({ type: 'string', value: 'PONG' });
       expect((await run('CONFIG GET maxmemory')).reply?.type).toBe('array');
-      expect((await run(`EVAL_RO "return 1" 0`)).reply).toMatchObject({ type: 'integer', value: 1 });
     });
 
     test('commands that never run in the console', async () => {
@@ -130,17 +140,14 @@ for (const version of ['8', '7.4']) {
       expect(r.reply?.bytes).toBe(100000);
       expect(String(r.reply?.value)).toHaveLength(65536);
       // And a collection of 1,500 is cut at 1,000 with the rest counted.
-      await run(`EVAL "for i=1,1500 do redis.call('rpush','long',i) end" 0`, { writes: true });
+      redisCli(container, 'EVAL', 'for i=1,1500 do redis.call("rpush","long",i) end', '0');
       const all = await run('LRANGE long 0 -1');
       expect(all.reply?.value).toHaveLength(1000);
       expect(all.reply?.more).toBe(500);
     });
 
     test('the key browser reads each type up to 1,000 elements', async () => {
-      await run(
-        `EVAL "for i=1,1500 do redis.call('hset','hh',i,i); redis.call('sadd','ss',i); redis.call('zadd','zz',i,i) end" 0`,
-        { writes: true },
-      );
+      redisCli(container, 'EVAL', 'for i=1,1500 do redis.call("hset","hh",i,i); redis.call("sadd","ss",i); redis.call("zadd","zz",i,i) end', '0');
       for (const [key, type, field] of [
         ['hh', 'hash', true],
         ['long', 'list', false],
