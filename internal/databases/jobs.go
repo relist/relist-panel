@@ -25,6 +25,10 @@ const (
 	JobKindBackup      = "backup"
 	JobKindRestore     = "restore"
 	JobKindUpdateImage = "update_image"
+	// JobKindDropDatabase is a drop of a logical database with Back up first.
+	JobKindDropDatabase = "drop_database"
+	// JobKindResetPassword is a superuser password reset.
+	JobKindResetPassword = "reset_password"
 )
 
 // interrupted is the error of a job the panel lost by stopping.
@@ -49,8 +53,8 @@ func (s *Service) endJob(id int64) {
 	s.jobsChanged = make(chan struct{})
 }
 
-// Jobs names the job running on Database id: "", "backup", "restore" or
-// "update_image".
+// Jobs names the job running on Database id: "", "backup", "restore",
+// "update_image", "drop_database" or "reset_password".
 func (s *Service) Jobs(id int64) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

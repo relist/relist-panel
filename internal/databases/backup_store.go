@@ -13,6 +13,7 @@ const (
 	TriggerScheduled  = "scheduled"
 	TriggerPreRestore = "pre_restore"
 	TriggerPreUpdate  = "pre_update"
+	TriggerPreDrop    = "pre_drop"
 )
 
 // The state of a Backup or a restore.
