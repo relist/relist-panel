@@ -20,6 +20,9 @@ func TestSplitPostgres(t *testing.T) {
 		{"nested comment", "/* a /* b; */ c; */ select 1", []string{"/* a /* b; */ c; */ select 1"}},
 		{"line comment", "-- c;\nselect 1", []string{"-- c;\nselect 1"}},
 		{"quoted identifier", `select "a;b"`, []string{`select "a;b"`}},
+		{"dollar inside an identifier", "update t set a$b$c = 1; select 2", []string{"update t set a$b$c = 1", "select 2"}},
+		{"identifier dollar never opens a quote", "select a$x$; delete from t; select b$x$",
+			[]string{"select a$x$", "delete from t", "select b$x$"}},
 		{"empty statements dropped", "select 1;;  ;", []string{"select 1"}},
 	}
 	for _, c := range cases {

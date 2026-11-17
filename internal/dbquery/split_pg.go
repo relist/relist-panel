@@ -102,7 +102,9 @@ func SplitPostgres(sql string) ([]Statement, error) {
 			if !closed {
 				return nil, fmt.Errorf("unterminated quote starting on line %d", lineOf(begin))
 			}
-		case r == '$':
+		case r == '$' && (i == 0 || !isIdentRune(rs[i-1])):
+			// A $ right after an identifier rune is part of that identifier
+			// (a$b$c is one name), never a dollar-quote opener.
 			tag, ok := dollarTag(i)
 			if !ok {
 				put(i, r, true)
