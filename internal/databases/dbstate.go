@@ -21,7 +21,8 @@ func (s *Service) captureState(ctx context.Context, d Database, dp Dumper, name 
 		return dbState{}, log, err
 	}
 	st := dbState{Name: name, Prev: strings.TrimSpace(prev)}
-	if d.Engine == "postgres" {
+	// A database that does not exist yet has no settings to keep.
+	if d.Engine == "postgres" && st.Prev != "" {
 		settings, log, err := s.admin(ctx, d, dp, dbSettingsQuery(name))
 		if err != nil {
 			return dbState{}, log, err

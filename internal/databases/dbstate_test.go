@@ -97,3 +97,37 @@ func TestRestoreIntoAppliesSettingsLast(t *testing.T) {
 		t.Fatalf("last admin SQL = %q", last)
 	}
 }
+
+// DROP DATABASE deletes a database's ALTER ROLE … IN DATABASE … SET rows, and
+// a one-database dump does not carry them: a replace restore puts them back,
+// or a Full user would stop acting as the owner (ADR-0044).
+func TestReplaceRestoreKeepsRoleSettings(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	r.dumps("pg_dump -U postgres", "ORIGINAL;\n")
+	b := r.manualBackup(t, d.ID)
+	setting := `ALTER ROLE "full_u" IN DATABASE "app" SET role TO 'app_owner';`
+	admin := r.stateAdmin("app_owner\n", setting+"\n")
+	r.captureRestore(pgRestore, "")
+	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop"); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	if got := r.lastRestore(t, d.ID); got.Status != JobSucceeded {
+		t.Fatalf("restore = %+v", got)
+	}
+	sqls := *admin
+	drop := -1
+	for i, s := range sqls {
+		if strings.HasPrefix(s, `DROP DATABASE IF EXISTS "app"`) {
+			drop = i
+		}
+	}
+	if drop < 1 || !strings.Contains(strings.Join(sqls[:drop], "\n"), "pg_db_role_setting") {
+		t.Fatalf("settings not read before the drop: %q", sqls)
+	}
+	if last := sqls[len(sqls)-1]; strings.TrimSpace(last) != setting {
+		t.Fatalf("last admin SQL = %q, want the setting", last)
+	}
+}
