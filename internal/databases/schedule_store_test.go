@@ -124,3 +124,33 @@ func TestBackupPathRemoteOnly(t *testing.T) {
 		t.Fatalf("restore = %v, want ErrRemoteOnly", err)
 	}
 }
+
+func TestScheduleGFSRoundTrip(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	d := seedDB(t, s, "Shop")
+	sc := Schedule{DatabaseID: d.ID, Days: []string{"daily"}, Minute: 60, All: true, Databases: []string{},
+		Local:  Keep{Mode: RotateGFS, Count: intp(3), GFSDays: intp(7), GFSWeeks: intp(4), GFSMonths: intp(12), GFSYears: intp(2)},
+		Remote: Keep{Mode: RotateGFS, GFSDays: intp(14)}}
+	if err := s.SaveSchedule(ctx, sc); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetSchedule(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Local, sc.Local) {
+		t.Fatalf("local = %+v, want %+v", got.Local, sc.Local)
+	}
+	if !reflect.DeepEqual(got.Remote, sc.Remote) {
+		t.Fatalf("remote = %+v, want %+v", got.Remote, sc.Remote)
+	}
+	// A Database with no row still reads DefaultSchedule, mode "".
+	def, err := s.GetSchedule(ctx, d.ID+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.Local.Mode != "" || def.Remote.Mode != "" {
+		t.Fatalf("default modes = %q / %q, want empty", def.Local.Mode, def.Remote.Mode)
+	}
+}
