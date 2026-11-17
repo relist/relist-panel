@@ -79,6 +79,12 @@ A named, host-wide off-site store that a Database's schedule copies its schedule
 **Rotation**:
 The rule that deletes a Database's old scheduled Backups, locally and in its Backup destination, keeping the last N or those from the last X days per logical database; the newest successful Backup of each is always kept. Manual, `pre_restore`, `pre_update` and `pre_drop` Backups are never rotated.
 
+**GFS Rotation**:
+A Rotation set's calendar mode (ADR-0046): a Backup is kept when any rule keeps it — last N, or being the newest successful Backup of a calendar day, ISO week, month or year within the last D/W/M/Y buckets, in the host's time zone. Failed Backups never fill a tier slot. _Avoid_: grandfather-father-son spelled out (the UI says GFS).
+
+**Encrypted copy**:
+A copy whose Backup destination has **Encrypt copies with a passphrase** on: the object is `<key>.age`, an age file under the destination's stored scrypt passphrase (work factor 2^15, ADR-0046), and opens anywhere with `age -d`. Local Backups stay plain; Restore from file takes a `.age` upload with its passphrase.
+
 **Pin**:
 A mark on one scheduled Backup that keeps Rotation from deleting it.
 
