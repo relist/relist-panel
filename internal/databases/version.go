@@ -61,7 +61,9 @@ func filterRoles(dump string) string {
 	return strings.Join(out, "\n")
 }
 
-var passwordLiteral = regexp.MustCompile(`(?i)(PASSWORD\s+)'(?:[^']|'')*'`)
+// psql cuts a long LINE echo with "...", so the closing quote may be
+// missing: then the literal runs to the end of the line.
+var passwordLiteral = regexp.MustCompile(`(?i)(PASSWORD\s+)'(?:[^'\n]|'')*'?`)
 
 // redactPasswords hides every PASSWORD '…' literal: psql echoes a failing
 // statement, and a roles dump's statements carry the SCRAM hashes.

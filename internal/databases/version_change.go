@@ -233,7 +233,14 @@ func (r *versionRun) dumpRestore(ctx context.Context) {
 			return "", err
 		}
 		created = newSpec.Volume
-		if err := s.withLock(d.ID, func() error { return s.d.Host.Create(ctx, newSpec) }); err != nil {
+		// Create attaches relist-network; the new server stays off it until
+		// the switch, or apps would write into it during the restore.
+		if err := s.withLock(d.ID, func() error {
+			if err := s.d.Host.Create(ctx, newSpec); err != nil {
+				return err
+			}
+			return s.d.Host.Disconnect(ctx, name)
+		}); err != nil {
 			return "", err
 		}
 		return "", s.waitHealthy(ctx, name)
@@ -271,7 +278,18 @@ func (r *versionRun) dumpRestore(ctx context.Context) {
 		})
 	}); err != nil {
 		rollback(err)
+		return
 	}
+	// Switched: the new volume is live, so a failure here must neither roll
+	// back nor fail the row. Reconcile reconnects a container that is off
+	// the network on the next start.
+	if err := s.withLock(d.ID, func() error { return s.d.Host.Realias(ctx, name, newSpec.Alias) }); err != nil {
+		msg := "reconnect the clients after the version change: " + err.Error()
+		r.note(ctx, "✗ "+msg)
+		_ = s.d.Store.SetLastError(ctx, d.ID, msg)
+		return
+	}
+	r.note(ctx, "Clients reconnected to "+newSpec.Image)
 }
 
 // dumpRoles writes pg_dumpall --roles-only to path, readable by the panel

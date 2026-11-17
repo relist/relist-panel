@@ -491,3 +491,55 @@ func TestInterruptedChangeRecovers(t *testing.T) {
 		t.Fatalf("target volume kept: %v", r.host.all())
 	}
 }
+
+// Review: the new server joins relist-network only after the switch, or apps
+// would write into it while the restore still runs, and those writes would
+// be lost on a rollback or collide with the restored rows.
+func TestChangeVersionNewServerOffNetworkUntilSwitch(t *testing.T) {
+	r := newPGChangeRig(t)
+	name := ContainerName(r.d.ID)
+	var onNetwork []bool
+	r.host.override(pgRestore, func(req ExecRequest) (int, error) {
+		_, _ = io.ReadAll(req.Stdin)
+		r.host.mu.Lock()
+		onNetwork = append(onNetwork, r.host.containers[name].OnNetwork)
+		r.host.mu.Unlock()
+		return 0, nil
+	})
+	c := r.change(t, "18")
+	if c.Status != JobSucceeded {
+		t.Fatalf("row = %+v", c)
+	}
+	if len(onNetwork) != 2 || onNetwork[0] || onNetwork[1] {
+		t.Fatalf("on the network during the restores: %v", onNetwork)
+	}
+	calls := r.host.all()
+	if lastIndex(calls, "realias "+name) < lastIndex(calls, "exec "+name+" "+pgRestore) || !r.host.containers[name].OnNetwork {
+		t.Fatalf("not reconnected after the switch: %v", calls)
+	}
+}
+
+// Review: a Rename re-aliases the container, which would put the old server
+// back on the network in the middle of the dumps.
+func TestRenameRefusedDuringChange(t *testing.T) {
+	r := newPGChangeRig(t)
+	ctx := context.Background()
+	release := make(chan struct{})
+	r.host.override("pg_dump -U postgres", func(req ExecRequest) (int, error) {
+		<-release
+		_, err := io.WriteString(req.Stdout, "x;\n")
+		return 0, err
+	})
+	if _, err := r.svc.ChangeVersion(ctx, r.d.ID, "18", false); err != nil {
+		t.Fatal(err)
+	}
+	err := r.svc.Rename(ctx, r.d.ID, "Blog")
+	close(release)
+	r.svc.Wait()
+	if !errors.Is(err, ErrBusy) {
+		t.Fatalf("Rename = %v, want ErrBusy", err)
+	}
+	if got, _ := r.store.Get(ctx, r.d.ID); got.Name != "Shop" {
+		t.Fatalf("renamed to %q", got.Name)
+	}
+}

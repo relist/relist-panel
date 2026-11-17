@@ -503,6 +503,11 @@ func (s *Service) Rename(ctx context.Context, id int64, name string) error {
 		return err
 	}
 	return s.op(ctx, id, func(d Database) error {
+		// A rename re-aliases the container, which would put a Postgres
+		// server a version change cut off back on the network (ADR-0047).
+		if s.Jobs(id) == JobKindChangeVersion {
+			return ErrBusy
+		}
 		sl := slug.Slugify(name)
 		if free, err := s.slugFree(ctx, sl, id); err != nil {
 			return err
