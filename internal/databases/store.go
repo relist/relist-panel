@@ -41,7 +41,10 @@ type Database struct {
 	LastError   string
 	// AppliedSpec is the JSON ContainerSpec the container was last created
 	// with; "" until the first reconcile fills it.
-	AppliedSpec          string
+	AppliedSpec string
+	// Volume holds the data: relist-db-<id> until a major version change
+	// moves it to relist-db-<id>-v<change id> (ADR-0047).
+	Volume               string
 	CreatedAt, UpdatedAt time.Time
 	// DeletedAt is set on a tombstone: a Database deleted while keeping its
 	// Backups. It has no container or volume; only its Backups remain.
@@ -57,14 +60,14 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db, now: time.Now}
 }
 
-const columns = `id, name, slug, engine, version, password, pending_password, memory_mb, cpus, desired, initialized, last_error, applied_spec, created_at, updated_at, deleted_at`
+const columns = `id, name, slug, engine, version, password, pending_password, memory_mb, cpus, desired, initialized, last_error, applied_spec, volume, created_at, updated_at, deleted_at`
 
 func scan(row interface{ Scan(...any) error }) (Database, error) {
 	var d Database
 	var created, updated int64
 	var deleted sql.NullInt64
 	err := row.Scan(&d.ID, &d.Name, &d.Slug, &d.Engine, &d.Version, &d.Password, &d.PendingPassword, &d.MemoryMB, &d.CPUs,
-		&d.Desired, &d.Initialized, &d.LastError, &d.AppliedSpec, &created, &updated, &deleted)
+		&d.Desired, &d.Initialized, &d.LastError, &d.AppliedSpec, &d.Volume, &created, &updated, &deleted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Database{}, ErrNotFound
 	}
@@ -90,7 +93,12 @@ func (s *Store) Insert(ctx context.Context, d Database) (Database, error) {
 		d.Desired = DesiredRunning
 	}
 	now := s.now().UnixMilli()
-	res, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Database{}, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `
 		INSERT INTO databases (name, slug, engine, version, password, memory_mb, cpus, desired, initialized, last_error, applied_spec, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.Name, d.Slug, d.Engine, d.Version, d.Password, d.MemoryMB, d.CPUs, d.Desired, d.Initialized, d.LastError, d.AppliedSpec, now, now)
@@ -102,6 +110,12 @@ func (s *Store) Insert(ctx context.Context, d Database) (Database, error) {
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
+		return Database{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE databases SET volume = ? WHERE id = ?`, VolumeName(id), id); err != nil {
+		return Database{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return Database{}, err
 	}
 	return s.Get(ctx, id)
