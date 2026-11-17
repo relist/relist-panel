@@ -263,6 +263,13 @@ func (f *fakeHost) script(prefix string, fn func(req ExecRequest) (int, error)) 
 	f.scripts = append(f.scripts, execScript{prefix, fn})
 }
 
+// override is script for a prefix that already has one: it answers first.
+func (f *fakeHost) override(prefix string, fn func(req ExecRequest) (int, error)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scripts = append([]execScript{{prefix, fn}}, f.scripts...)
+}
+
 // execs returns the recorded Exec requests whose command starts with prefix.
 func (f *fakeHost) execs(prefix string) []ExecRequest {
 	f.mu.Lock()

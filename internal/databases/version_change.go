@@ -1,0 +1,325 @@
+package databases
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// ErrNotHigher refuses a Change version to the same or a lower version:
+// downgrades are never offered (ADR-0047).
+var ErrNotHigher = errors.New("pick a version higher than the current one")
+
+// ChangeVersion moves Database id to a higher version of its engine as a
+// job, and returns the running record at once. Postgres is dumped and
+// restored onto a new volume and rolled back on any failure; MariaDB and
+// Redis change the image in place. backupFirst matters only for MariaDB:
+// Postgres always backs up, Redis has no Backups.
+func (s *Service) ChangeVersion(ctx context.Context, id int64, version string, backupFirst bool) (VersionChange, error) {
+	if err := s.gate(ctx); err != nil {
+		return VersionChange{}, err
+	}
+	var dp Dumper
+	d, err := s.begin(ctx, id, JobKindChangeVersion, func(d Database) error {
+		if _, err := Lookup(d.Engine, version); err != nil {
+			return err
+		}
+		if compareTags(version, d.Version) <= 0 {
+			return ErrNotHigher
+		}
+		if d.PendingPassword != "" {
+			return ErrPendingPassword
+		}
+		if d.Engine == "redis" {
+			return nil
+		}
+		if s.d.DataDir == "" {
+			return errors.New("backups are not configured")
+		}
+		var err error
+		dp, err = DumperFor(d.Engine)
+		return err
+	})
+	if err != nil {
+		return VersionChange{}, err
+	}
+	method := VersionMethodInPlace
+	if d.Engine == "postgres" {
+		method = VersionMethodDumpRestore
+	}
+	c, err := s.d.Store.InsertVersionChange(ctx, VersionChange{DatabaseID: id, FromVersion: d.Version, ToVersion: version, Method: method})
+	if err != nil {
+		s.endJob(id)
+		return VersionChange{}, err
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer s.endJob(id)
+		ctx := context.WithoutCancel(ctx)
+		run := &versionRun{s: s, d: d, dp: dp, c: c}
+		if method == VersionMethodDumpRestore {
+			run.dumpRestore(ctx)
+		} else {
+			run.inPlace(ctx, backupFirst)
+		}
+	}()
+	return c, nil
+}
+
+// withLock runs fn under Database id's lock: each host change of a version
+// change takes it, but never a dump or a restore, so other actions are
+// refused with ErrBusy by the job slot instead of waiting.
+func (s *Service) withLock(id int64, fn func() error) error {
+	unlock := s.lock(id)
+	defer unlock()
+	return fn()
+}
+
+// versionRun is one running version change and its step log.
+type versionRun struct {
+	s   *Service
+	d   Database
+	dp  Dumper
+	c   VersionChange
+	log strings.Builder
+}
+
+func (r *versionRun) logText() string {
+	out := r.log.String()
+	if len(out) > logLimit {
+		out = out[len(out)-logLimit:]
+	}
+	return strings.ToValidUTF8(out, "")
+}
+
+func (r *versionRun) note(ctx context.Context, line string) {
+	r.log.WriteString(line + "\n")
+	_ = r.s.d.Store.SetVersionChangeLog(ctx, r.c.ID, r.logText())
+}
+
+// step runs fn as one named line of the log. On failure the log gets the
+// cause and detail (a stderr tail), and the error is "<name>: <cause>".
+// Both go through redactPasswords.
+func (r *versionRun) step(ctx context.Context, name string, fn func() (detail string, err error)) error {
+	r.note(ctx, "→ "+name)
+	detail, err := fn()
+	if err == nil {
+		return nil
+	}
+	r.log.WriteString("✗ " + name + ": " + redactPasswords(err.Error()) + "\n")
+	if detail = strings.TrimSpace(redactPasswords(detail)); detail != "" {
+		r.log.WriteString(detail + "\n")
+	}
+	_ = r.s.d.Store.SetVersionChangeLog(ctx, r.c.ID, r.logText())
+	return fmt.Errorf("%s: %w", name, err)
+}
+
+// fail ends the change as failed. A rollback that failed too is also the
+// Database's last error: it may be down.
+func (r *versionRun) fail(ctx context.Context, stepErr, rollbackErr error) {
+	msg := redactPasswords(stepErr.Error())
+	if rollbackErr != nil {
+		msg += "; the rollback failed too: " + redactPasswords(rollbackErr.Error())
+		r.note(ctx, "✗ Rollback: "+redactPasswords(rollbackErr.Error()))
+		_ = r.s.d.Store.SetLastError(ctx, r.d.ID, msg)
+	}
+	_ = r.s.d.Store.FailVersionChange(ctx, r.c.ID, msg, r.logText())
+}
+
+// dumpRestore is the Postgres flow: pull, cut the clients off, back up every
+// database with the roles and the per-database settings, stop, start the new
+// version on a new volume, restore, switch. Any failure from the disconnect
+// on puts the old server back as it was.
+func (r *versionRun) dumpRestore(ctx context.Context) {
+	s, d := r.s, r.d
+	name := ContainerName(d.ID)
+	oldSpec, err := appliedSpec(d)
+	if err != nil {
+		r.fail(ctx, err, nil)
+		return
+	}
+	next := d
+	next.Version, next.Volume = r.c.ToVersion, targetVolume(d.ID, r.c.ID)
+	newSpec, _, err := specFor(next)
+	if err != nil {
+		r.fail(ctx, err, nil)
+		return
+	}
+	if err := r.step(ctx, "Pull "+newSpec.Image, func() (string, error) {
+		_, err := s.d.Host.PullImage(ctx, newSpec.Image)
+		return "", err
+	}); err != nil {
+		r.fail(ctx, err, nil)
+		return
+	}
+
+	stopped, created := false, ""
+	rollback := func(stepErr error) {
+		var rbErr error
+		if !stopped {
+			rbErr = s.withLock(d.ID, func() error { return s.d.Host.Realias(ctx, name, oldSpec.Alias) })
+			if rbErr == nil {
+				r.note(ctx, "Clients reconnected to "+oldSpec.Image)
+			}
+		} else if rbErr = r.restoreOld(ctx, oldSpec, created); rbErr == nil {
+			r.note(ctx, fmt.Sprintf("Rolled back to %s on %s", oldSpec.Image, oldSpec.Volume))
+		}
+		r.fail(ctx, stepErr, rbErr)
+	}
+
+	if err := r.step(ctx, "Disconnect clients", func() (string, error) {
+		return "", s.withLock(d.ID, func() error { return s.d.Host.Disconnect(ctx, name) })
+	}); err != nil {
+		rollback(err)
+		return
+	}
+	var names []string
+	if err := r.step(ctx, "List the databases", func() (string, error) {
+		names, err = s.listLogical(ctx, d, r.dp)
+		return "", err
+	}); err != nil {
+		rollback(err)
+		return
+	}
+	files := map[string]string{}
+	for _, n := range names {
+		if err := r.step(ctx, "Back up "+n, func() (string, error) {
+			b := s.backupNow(ctx, d, r.dp, n, TriggerPreUpdate, nil)
+			if b.Status != JobSucceeded {
+				return b.Log, errors.New(b.Error)
+			}
+			files[n] = filepath.Join(s.dbDir(d.ID), "backups", b.FileName)
+			return "", nil
+		}); err != nil {
+			rollback(err)
+			return
+		}
+	}
+	rolesPath := filepath.Join(s.dbDir(d.ID), "backups", fmt.Sprintf("version-change-%d-roles.sql", r.c.ID))
+	if err := r.step(ctx, "Back up the roles", func() (string, error) { return r.dumpRoles(ctx, rolesPath) }); err != nil {
+		rollback(err)
+		return
+	}
+	states := map[string]dbState{}
+	for _, n := range names {
+		if err := r.step(ctx, "Read the settings of "+n, func() (string, error) {
+			st, log, err := s.captureState(ctx, d, r.dp, n)
+			states[n] = st
+			return log, err
+		}); err != nil {
+			rollback(err)
+			return
+		}
+	}
+
+	stopped = true
+	if err := r.step(ctx, "Stop "+oldSpec.Image, func() (string, error) {
+		return "", s.withLock(d.ID, func() error { return s.d.Host.Stop(ctx, name) })
+	}); err != nil {
+		rollback(err)
+		return
+	}
+	if err := r.step(ctx, fmt.Sprintf("Start %s on %s", newSpec.Image, newSpec.Volume), func() (string, error) {
+		if err := s.d.Store.SetVersionChangeTarget(ctx, r.c.ID, newSpec.Volume); err != nil {
+			return "", err
+		}
+		created = newSpec.Volume
+		if err := s.withLock(d.ID, func() error { return s.d.Host.Create(ctx, newSpec) }); err != nil {
+			return "", err
+		}
+		return "", s.waitHealthy(ctx, name)
+	}); err != nil {
+		rollback(err)
+		return
+	}
+	if err := r.step(ctx, "Restore the roles", func() (string, error) {
+		raw, err := os.ReadFile(rolesPath)
+		if err != nil {
+			return "", err
+		}
+		_, log, err := s.admin(ctx, d, r.dp, filterRoles(string(raw)))
+		return log, err
+	}); err != nil {
+		rollback(err)
+		return
+	}
+	for _, n := range names {
+		if err := r.step(ctx, "Restore "+n, func() (string, error) {
+			return s.restoreInto(ctx, d, r.dp, states[n], files[n])
+		}); err != nil {
+			rollback(err)
+			return
+		}
+	}
+	if err := r.step(ctx, "Switch to "+newSpec.Image, func() (string, error) {
+		raw, err := json.Marshal(newSpec)
+		if err != nil {
+			return "", err
+		}
+		return "", s.withLock(d.ID, func() error {
+			return s.d.Store.CommitVersionChange(ctx, VersionCommit{ChangeID: r.c.ID, DatabaseID: d.ID, Version: r.c.ToVersion,
+				Volume: newSpec.Volume, AppliedSpec: string(raw), FromVolume: oldSpec.Volume, Log: r.logText()})
+		})
+	}); err != nil {
+		rollback(err)
+	}
+}
+
+// dumpRoles writes pg_dumpall --roles-only to path, readable by the panel
+// only: it holds the roles' password hashes.
+func (r *versionRun) dumpRoles(ctx context.Context, path string) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", err
+	}
+	errOut := &tailBuffer{max: logLimit}
+	code, err := r.s.d.Host.Exec(ctx, ContainerName(r.d.ID), ExecRequest{
+		Cmd: []string{"pg_dumpall", "-U", "postgres", "--roles-only"}, Env: r.dp.Env(r.d.Password), Stdout: f, Stderr: errOut})
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil && code != 0 {
+		err = fmt.Errorf("pg_dumpall exited with code %d", code)
+	}
+	if err != nil {
+		_ = os.Remove(path)
+		return errOut.String(), err
+	}
+	return "", nil
+}
+
+// restoreOld removes the new container and its volume and starts the old
+// container from its applied settings on its own volume.
+func (r *versionRun) restoreOld(ctx context.Context, old ContainerSpec, created string) error {
+	var errs []error
+	err := r.s.withLock(r.d.ID, func() error {
+		if err := r.s.d.Host.Remove(ctx, old.Name); err != nil {
+			errs = append(errs, err)
+		}
+		if created != "" {
+			if err := r.s.d.Host.RemoveVolume(ctx, created); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return r.s.d.Host.Create(ctx, old)
+	})
+	if err != nil {
+		errs = append(errs, err)
+	} else if err := r.s.waitHealthy(ctx, old.Name); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// inPlace is the MariaDB and Redis flow (Task 7).
+func (r *versionRun) inPlace(ctx context.Context, backupFirst bool) {
+	r.fail(ctx, errors.New("changing the version in place is not available yet"), nil)
+}

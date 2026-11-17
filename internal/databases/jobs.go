@@ -29,6 +29,8 @@ const (
 	JobKindDropDatabase = "drop_database"
 	// JobKindResetPassword is a superuser password reset.
 	JobKindResetPassword = "reset_password"
+	// JobKindChangeVersion is a Change version to a higher major version.
+	JobKindChangeVersion = "change_version"
 )
 
 // interrupted is the error of a job the panel lost by stopping.
@@ -54,7 +56,7 @@ func (s *Service) endJob(id int64) {
 }
 
 // Jobs names the job running on Database id: "", "backup", "restore",
-// "update_image", "drop_database" or "reset_password".
+// "update_image", "drop_database", "reset_password" or "change_version".
 func (s *Service) Jobs(id int64) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
