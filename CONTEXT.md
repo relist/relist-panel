@@ -97,6 +97,12 @@ A timed way into one container's port that skips Traefik: a small proxy the pane
 **Restore**:
 Replaying a Backup, or an uploaded `.sql`/`.sql.gz` of one database, into a target logical database the Admin picks, replacing it (after a `pre_restore` Backup of it) or creating it. _Avoid_: Rollback.
 
+**Change version**:
+Moving a Database to a higher version of its engine from its page (ADR-0047). Postgres is dumped and restored onto a new volume `relist-db-<id>-v<change id>`, with its clients cut off from the first backup, and is rolled back on any failure; MariaDB and Redis change the image in place and do not roll back once the new version has started. Downgrades are never offered. _Avoid_: Upgrade (Update image re-pulls the same tag), Migration (that moves the whole panel to another server).
+
+**Previous version data**:
+The volume a Postgres Change version left behind, kept until the Admin deletes it from the Database's Settings tab. A server Migration copies it; deleting the Database removes it.
+
 **Container**:
 One running instance of a Service, created by a deploy. Its identity is not stable: every deploy mints a new one, so anything that outlives a single deploy — metric history, for one — is keyed by Service, never by Container.
 _Avoid_: Instance
