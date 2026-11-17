@@ -464,3 +464,31 @@ func TestUploadPlainStaysPlain(t *testing.T) {
 		t.Fatalf("key = %q", b.Upload.ObjectKey)
 	}
 }
+
+// Review: a restart during an encrypted upload must not strand the full-size
+// temp file for good.
+func TestStartupSweepsAgeTemps(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	dir := filepath.Join(r.svc.dbDir(d.ID), "backups")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(dir, "f.sql.gz-123.age.tmp")
+	keep := filepath.Join(dir, "f.sql.gz")
+	for _, p := range []string{tmp, keep} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := r.svc.Startup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Fatalf("age temp survived Startup: %v", err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("the Backup file is gone: %v", err)
+	}
+}

@@ -684,7 +684,8 @@ export const api = {
       `/api/databases/${id}/restores/upload?${new URLSearchParams({ confirm, name: file.name, target })}`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream', ...(passphrase ? { 'X-Passphrase': passphrase } : {}) },
+        // Header values are byte strings: percent-encode, the server decodes.
+        headers: { 'Content-Type': 'application/octet-stream', ...(passphrase ? { 'X-Passphrase': encodeURIComponent(passphrase) } : {}) },
         body: file,
       },
     ),

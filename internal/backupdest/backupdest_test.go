@@ -698,3 +698,20 @@ func TestEncryptionAPI(t *testing.T) {
 		t.Fatalf("reveal on plain = %d %s", w.Code, w.Body)
 	}
 }
+
+// Review: turning encryption on over the API without any passphrase, stored
+// or sent, must refuse — the row would otherwise encrypt with '' and every
+// copy would fail.
+func TestEncryptOnNeedsAPassphrase(t *testing.T) {
+	r := newRig(t)
+	if w := r.do("POST", "/api/backup-destinations", encForm(false, "")); w.Code != 201 {
+		t.Fatalf("create = %d %s", w.Code, w.Body)
+	}
+	w := r.do("PUT", "/api/backup-destinations/1", encForm(true, ""))
+	if w.Code != 422 || !strings.Contains(w.Body.String(), `"field":"passphrase"`) {
+		t.Fatalf("encrypt on without passphrase = %d %s", w.Code, w.Body)
+	}
+	if d, _ := r.svc.store.Get(context.Background(), 1); d.Encrypt {
+		t.Fatalf("refused update changed the row: %+v", d)
+	}
+}

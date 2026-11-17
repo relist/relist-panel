@@ -672,3 +672,20 @@ describe('audit log', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ retentionDays: 30, keepForever: false });
   });
 });
+
+/**
+ * fetch header values are byte strings: a Thai passphrase sent raw would make
+ * fetch throw. The client percent-encodes it; the server decodes.
+ */
+describe('restoreDatabaseUpload', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('percent-encodes the X-Passphrase header', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{}', { status: 202 }));
+    vi.stubGlobal('fetch', fetch);
+    const thai = 'รหัสลับ-0123456789-ยาว';
+    await api.restoreDatabaseUpload(1, new File(['x'], 'a.sql.age'), 'app', 'Shop', thai);
+    const [, init] = fetch.mock.calls[0];
+    expect((init?.headers as Record<string, string>)['X-Passphrase']).toBe(encodeURIComponent(thai));
+  });
+});

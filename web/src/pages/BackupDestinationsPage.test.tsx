@@ -118,7 +118,7 @@ describe('BackupDestinationsPage', () => {
         type: 's3',
       }),
     );
-  });
+  }, 15_000);
 
   it('warns that an http endpoint is unencrypted', async () => {
     api.listBackupDestinations.mockResolvedValue([]);

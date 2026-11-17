@@ -2,6 +2,7 @@ package databases
 
 import (
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -249,8 +250,14 @@ func (a *API) uploadRestore(w http.ResponseWriter, r *http.Request) {
 	a.target(r, n)
 	audit.Detail(r.Context(), "file", q.Get("name"))
 	// The passphrase of an encrypted file rides in a header: a query string
-	// can end up in access logs.
-	rs, err := a.s.RestoreFromUpload(r.Context(), n, q.Get("target"), q.Get("confirm"), q.Get("name"), r.Header.Get("X-Passphrase"), r.Body)
+	// can end up in access logs. fetch header values are byte strings, so the
+	// browser percent-encodes it; a value that does not decode is taken as
+	// sent, for hand-written clients.
+	pass := r.Header.Get("X-Passphrase")
+	if dec, perr := url.PathUnescape(pass); perr == nil {
+		pass = dec
+	}
+	rs, err := a.s.RestoreFromUpload(r.Context(), n, q.Get("target"), q.Get("confirm"), q.Get("name"), pass, r.Body)
 	if err != nil {
 		writeError(w, err)
 		return

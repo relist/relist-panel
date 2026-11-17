@@ -166,6 +166,14 @@ describe('DatabaseScheduleCard', () => {
     expect(sent.localGfsDays).toBeNull();
   });
 
+  it('says a blank GFS field keeps nothing, not "no limit"', async () => {
+    api.getDatabaseSchedule.mockResolvedValue(state({ localKeepCount: 3, localMode: 'gfs' }));
+    renderCard();
+    const daily = await screen.findByRole('spinbutton', { name: 'Daily for D days' });
+    expect((daily as HTMLInputElement).placeholder).toBe('Keep none');
+    expect((screen.getByRole('spinbutton', { name: 'Last N backups' }) as HTMLInputElement).placeholder).toBe('Keep none');
+  });
+
   it('saves a GFS set with its tiers and no keep-days', async () => {
     const user = userEvent.setup();
     renderCard();

@@ -259,6 +259,12 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = id
+	// Encryption without any passphrase, sent or stored, would encrypt with
+	// '' and fail every copy: refuse it here, not only in the form.
+	if in.Encrypt && in.Passphrase == "" && old.Passphrase == "" {
+		writeFieldError(w, http.StatusUnprocessableEntity, "passphrase", "the passphrase must be at least 20 characters")
+		return
+	}
 	// A kept secret stays with the endpoint it was given for: it is never
 	// sent to another host.
 	if old.Type == TypeS3 && in.Secret == "" && old.S3.Endpoint != in.S3.Endpoint {
