@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -114,6 +115,8 @@ type Service struct {
 	pendingTries int
 	// healthPoll and healthTimeout pace waitHealthy.
 	healthPoll, healthTimeout time.Duration
+	// holding refuses new jobs until the start-up recovery has run.
+	holding atomic.Bool
 }
 
 func New(d Deps) *Service {
@@ -816,6 +819,11 @@ func (s *Service) ReconcileAll(ctx context.Context) error {
 		err := func() error {
 			unlock := s.lock(d.ID)
 			defer unlock()
+			// A running job owns its container: a version change has it
+			// half-way between two versions.
+			if s.Jobs(d.ID) != "" {
+				return nil
+			}
 			fresh, err := s.d.Store.Get(ctx, d.ID)
 			if err != nil {
 				return err

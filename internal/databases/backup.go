@@ -408,6 +408,10 @@ func (s *Service) DeleteBackup(ctx context.Context, id, backupID int64) error {
 	if b.Status == JobRunning {
 		return ErrBusy
 	}
+	// A running version change restores from its pre-update Backups.
+	if b.Trigger == TriggerPreUpdate && s.Jobs(id) == JobKindChangeVersion {
+		return ErrBusy
+	}
 	// The remote copy goes first. If it cannot, nothing else changes, so no
 	// object is left behind untracked.
 	if err := s.deleteLiveCopies(ctx, id, map[int64]bool{backupID: true}); err != nil {

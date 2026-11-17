@@ -2,6 +2,7 @@ package databases
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -152,6 +153,8 @@ func TestChangeVersionRefusals(t *testing.T) {
 		{"same version", nil, "16", ErrNotHigher},
 		{"unknown tag", nil, "19", ErrUnknownVersion},
 		{"pending password", func(r *pgChangeRig) { _ = r.store.SetPendingPassword(ctx, r.d.ID, "new-pw") }, "18", ErrPendingPassword},
+		// Decision G: a pending password is named first, whatever the tag.
+		{"pending password before the tag", func(r *pgChangeRig) { _ = r.store.SetPendingPassword(ctx, r.d.ID, "new-pw") }, "16", ErrPendingPassword},
 		{"stopped", func(r *pgChangeRig) { _ = r.svc.Stop(ctx, r.d.ID) }, "18", ErrNotRunning},
 		{"busy", func(r *pgChangeRig) { _ = r.svc.beginJob(r.d.ID, JobKindBackup) }, "18", ErrBusy},
 	} {
@@ -541,5 +544,152 @@ func TestRenameRefusedDuringChange(t *testing.T) {
 	}
 	if got, _ := r.store.Get(ctx, r.d.ID); got.Name != "Shop" {
 		t.Fatalf("renamed to %q", got.Name)
+	}
+}
+
+// interruptedAfterSwitch leaves Database d as a restart in the middle of an
+// in-place change does: the record names to, the container still runs the
+// old version, and the change row is still running.
+func interruptedAfterSwitch(t *testing.T, r *rig, d Database, to string) VersionChange {
+	t.Helper()
+	ctx := context.Background()
+	c, err := r.store.InsertVersionChange(ctx, VersionChange{DatabaseID: d.ID, FromVersion: d.Version, ToVersion: to, Method: VersionMethodInPlace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := d
+	next.Version = to
+	spec, _, err := specFor(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(spec)
+	if err := r.store.CommitVersionChange(ctx, VersionCommit{ChangeID: c.ID, DatabaseID: d.ID, Version: to, Volume: d.Volume,
+		AppliedSpec: string(raw), KeepRunning: true}); err != nil {
+		t.Fatal(err)
+	}
+	r.host.reset()
+	return c
+}
+
+// Review minor: a restart between the switch and the first start of the new
+// image used to leave ReconcileAll to start MariaDB without
+// MARIADB_AUTO_UPGRADE, so mariadb-upgrade never ran and nothing said so.
+func TestInterruptedInPlaceChangeResumes(t *testing.T) {
+	r, d := inPlaceRig(t, "mariadb", "11.4")
+	ctx := context.Background()
+	c := interruptedAfterSwitch(t, r, d, "11.8")
+	before := len(r.host.created)
+	if err := r.svc.Startup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	creates := r.host.created[before:]
+	if len(creates) != 2 || !hasEnv(creates[0], "MARIADB_AUTO_UPGRADE=1") || hasEnv(creates[1], "MARIADB_AUTO_UPGRADE=1") ||
+		creates[1].Image != "mariadb:11.8" {
+		t.Fatalf("creates = %+v", creates)
+	}
+	row, _ := r.store.GetVersionChange(ctx, d.ID, c.ID)
+	if row.Status != JobSucceeded || !strings.Contains(row.Log, "Resumed after a restart") {
+		t.Fatalf("row = %+v", row)
+	}
+	if got, _ := r.store.Get(ctx, d.ID); got.LastError != "" {
+		t.Fatalf("last error = %q", got.LastError)
+	}
+}
+
+func TestInterruptedInPlaceChangeFailsLoudly(t *testing.T) {
+	r, d := inPlaceRig(t, "mariadb", "11.4")
+	ctx := context.Background()
+	c := interruptedAfterSwitch(t, r, d, "11.8")
+	b, err := r.store.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerPreUpdate, LogicalName: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.FinishBackup(ctx, b.ID, Backup{Status: JobSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	r.host.health["mariadb:11.8"] = "unhealthy"
+	if err := r.svc.Startup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	row, _ := r.store.GetVersionChange(ctx, d.ID, c.ID)
+	got, _ := r.store.Get(ctx, d.ID)
+	if row.Status != JobFailed || !strings.Contains(got.LastError, "It is not rolled back") ||
+		!strings.Contains(got.LastError, fmt.Sprintf("#%d", b.ID)) {
+		t.Fatalf("row = %+v, last error %q", row, got.LastError)
+	}
+}
+
+// Review minor: when the new image never ran, nothing has rewritten the data
+// and the message must not say it has.
+func TestInPlaceCreateFailureSaysDataUntouched(t *testing.T) {
+	r, d := inPlaceRig(t, "redis", "7.4")
+	r.host.failOn["create "+ContainerName(d.ID)] = errors.New("no space left")
+	c := r.changeTo(t, d, "8", false)
+	got, _ := r.store.Get(context.Background(), d.ID)
+	if c.Status != JobFailed || strings.Contains(got.LastError, "rewritten") || !strings.Contains(got.LastError, "never ran") {
+		t.Fatalf("row = %+v, last error %q", c, got.LastError)
+	}
+}
+
+// Review minor: a pre-update Backup the change still restores from cannot be
+// deleted under it.
+func TestDeletePreUpdateBackupRefusedDuringChange(t *testing.T) {
+	r := newPGChangeRig(t)
+	ctx := context.Background()
+	b, err := r.store.InsertBackup(ctx, Backup{DatabaseID: r.d.ID, Trigger: TriggerPreUpdate, LogicalName: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.FinishBackup(ctx, b.ID, Backup{Status: JobSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.beginJob(r.d.ID, JobKindChangeVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.DeleteBackup(ctx, r.d.ID, b.ID); !errors.Is(err, ErrBusy) {
+		t.Fatalf("DeleteBackup = %v, want ErrBusy", err)
+	}
+	r.svc.endJob(r.d.ID)
+	if err := r.svc.DeleteBackup(ctx, r.d.ID, b.ID); err != nil {
+		t.Fatalf("DeleteBackup after the change = %v", err)
+	}
+}
+
+// Review minor: until the start-up recovery has run, a new job would race
+// it: Startup fails every running change and Backup, and the sweep removes
+// the volumes of changes it failed.
+func TestJobsHeldUntilRecovered(t *testing.T) {
+	r := newPGChangeRig(t)
+	ctx := context.Background()
+	r.svc.HoldJobs()
+	if _, err := r.svc.ChangeVersion(ctx, r.d.ID, "18", false); !errors.Is(err, ErrStarting) {
+		t.Fatalf("ChangeVersion = %v, want ErrStarting", err)
+	}
+	if _, err := r.svc.StartBackup(ctx, r.d.ID, BackupRequest{Databases: []string{"app"}}); !errors.Is(err, ErrStarting) {
+		t.Fatalf("Backup = %v, want ErrStarting", err)
+	}
+	r.svc.Recover(ctx)
+	if _, err := r.svc.ChangeVersion(ctx, r.d.ID, "18", false); err != nil {
+		t.Fatalf("ChangeVersion after recovery = %v", err)
+	}
+	r.svc.Wait()
+}
+
+func TestReconcileAllSkipsDatabaseWithJob(t *testing.T) {
+	r := newPGChangeRig(t)
+	ctx := context.Background()
+	r.host.mu.Lock()
+	delete(r.host.containers, ContainerName(r.d.ID))
+	r.host.mu.Unlock()
+	if err := r.svc.beginJob(r.d.ID, JobKindChangeVersion); err != nil {
+		t.Fatal(err)
+	}
+	r.host.reset()
+	if err := r.svc.ReconcileAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if m := r.host.mutating(); len(m) != 0 {
+		t.Fatalf("host calls = %v", m)
 	}
 }

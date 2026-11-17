@@ -53,7 +53,16 @@ Downgrades are never offered or accepted.
   2026-11-17). A failed start leaves the new version with a last error that
   names the pre-update Backups. MariaDB's first start carries
   `MARIADB_AUTO_UPGRADE=1`; once healthy, the container is recreated without
-  it, so it never sits in the applied settings.
+  it, so it never sits in the applied settings. A panel restart after the
+  switch finishes the start at the next Startup (MariaDB still gets its
+  upgrade start) instead of leaving ReconcileAll to start the new image
+  plain. The last error says whether the new version ran at all: when its
+  container was never created, the data is untouched and Start retries.
+- **No job starts before the start-up recovery ends.** Startup fails every
+  job still marked running and the sweep removes failed changes' volumes,
+  so the server holds new jobs (409, "still starting") until both have run,
+  and ReconcileAll leaves alone a Database whose job owns its container.
+  While a change runs, its pre-update Backups cannot be deleted.
 - **Refused before anything starts:** a superuser password reset still
   pending, a tag that is not strictly higher (compared by dot-separated
   numbers, 422), an unknown tag, a stopped Database, a running job, or a
