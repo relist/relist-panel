@@ -13,6 +13,7 @@ import { BackupDestinationsPage } from './BackupDestinationsPage';
 
 const api = vi.hoisted(() => ({
   createBackupDestination: vi.fn(),
+  revealDestinationPassphrase: vi.fn(),
   deleteBackupDestination: vi.fn(),
   listBackupDestinations: vi.fn(),
   listSshKeys: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('../data/api', async (importOriginal) => ({
 }));
 
 const minio: BackupDestination = {
+  encrypt: false,
   id: 1,
   lastTestAt: null,
   lastTestError: '',
@@ -46,6 +48,7 @@ const deployKey: SshKey = {
 };
 
 const box: BackupDestination = {
+  encrypt: false,
   id: 2,
   lastTestAt: null,
   lastTestError: '',
@@ -107,7 +110,9 @@ describe('BackupDestinationsPage', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(api.createBackupDestination).toHaveBeenCalledWith({
+        encrypt: false,
         name: 'minio',
+        passphrase: '',
         s3: { accessKeyId: 'AKIA', bucket: 'backups', endpoint: 'https://s3.example.com', pathStyle: true, prefix: 'relist', region: '' },
         secret: 's3cret',
         type: 's3',
@@ -138,6 +143,8 @@ describe('BackupDestinationsPage', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(api.updateBackupDestination).toHaveBeenCalledWith(1, {
+        encrypt: false,
+        passphrase: '',
         name: 'minio',
         s3: { ...minio.s3, prefix: 'other' },
         secret: '',
@@ -213,7 +220,9 @@ describe('BackupDestinationsPage', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(api.createBackupDestination).toHaveBeenCalledWith({
+        encrypt: false,
         name: 'box',
+        passphrase: '',
         secret: '',
         sftp: { auth: 'key', host: 'box.example', path: 'backups', port: 22, sshKeyId: 5, user: 'u' },
         type: 'sftp',
@@ -268,5 +277,87 @@ describe('BackupDestinationsPage', () => {
     show();
     expect(await screen.findByText('sftp://u@box.example:23/b')).toBeTruthy();
     expect(screen.getByText('sftp://u@box/b')).toBeTruthy();
+  });
+});
+
+describe('encryption', () => {
+  const vault: BackupDestination = { ...minio, encrypt: true, id: 7, name: 'vault' };
+
+  it('tags an encrypting destination as Encrypted', async () => {
+    api.listBackupDestinations.mockResolvedValue([vault]);
+    show();
+    expect(await screen.findByText('Encrypted')).toBeTruthy();
+  });
+
+  it('creates an encrypting destination with a generated passphrase, warning about loss', async () => {
+    api.listBackupDestinations.mockResolvedValue([]);
+    api.createBackupDestination.mockResolvedValue(vault);
+    const user = userEvent.setup();
+    show();
+    await user.click((await screen.findAllByRole('button', { name: /Add destination/ }))[0]);
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Name'), 'vault');
+    await user.type(within(dialog).getByLabelText('Endpoint'), 'http://minio:9000');
+    await user.type(within(dialog).getByLabelText('Bucket'), 'backups');
+    await user.type(within(dialog).getByLabelText('Access key ID'), 'AKIA');
+    await user.type(within(dialog).getByLabelText('Secret access key'), 'sec');
+    await user.click(within(dialog).getByLabelText('Encrypt copies with a passphrase'));
+    expect(within(dialog).getByText(/The panel cannot help if this server is lost/)).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Generate' }));
+    const field = within(dialog).getByLabelText('Passphrase') as HTMLInputElement;
+    expect(field.value).toHaveLength(24);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.createBackupDestination).toHaveBeenCalled());
+    const sent = api.createBackupDestination.mock.calls[0][0];
+    expect(sent.encrypt).toBe(true);
+    expect(sent.passphrase).toHaveLength(24);
+  });
+
+  it('shows the server error under the passphrase field', async () => {
+    api.listBackupDestinations.mockResolvedValue([]);
+    api.createBackupDestination.mockRejectedValue(
+      new ApiError(422, 'the passphrase must be at least 20 characters', 'passphrase'),
+    );
+    const user = userEvent.setup();
+    show();
+    await user.click((await screen.findAllByRole('button', { name: /Add destination/ }))[0]);
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Name'), 'vault');
+    await user.type(within(dialog).getByLabelText('Endpoint'), 'http://minio:9000');
+    await user.type(within(dialog).getByLabelText('Bucket'), 'backups');
+    await user.type(within(dialog).getByLabelText('Access key ID'), 'AKIA');
+    await user.type(within(dialog).getByLabelText('Secret access key'), 'sec');
+    await user.click(within(dialog).getByLabelText('Encrypt copies with a passphrase'));
+    await user.type(within(dialog).getByLabelText('Passphrase'), 'short-pass');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByText('the passphrase must be at least 20 characters')).toBeTruthy();
+  });
+
+  it('reveals the passphrase of an encrypting destination', async () => {
+    api.listBackupDestinations.mockResolvedValue([vault]);
+    api.revealDestinationPassphrase.mockResolvedValue({ passphrase: 'p-0123456789-0123456789' });
+    const user = userEvent.setup();
+    show();
+    await user.click(await screen.findByRole('button', { name: 'Edit vault' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Reveal passphrase' }));
+    await waitFor(() => expect(api.revealDestinationPassphrase).toHaveBeenCalledWith(7));
+    expect(await within(dialog).findByText('p-0123456789-0123456789')).toBeTruthy();
+  });
+
+  it('asks before forgetting the passphrase when encryption is turned off', async () => {
+    api.listBackupDestinations.mockResolvedValue([vault]);
+    api.updateBackupDestination.mockResolvedValue({ ...vault, encrypt: false });
+    const user = userEvent.setup();
+    show();
+    await user.click(await screen.findByRole('button', { name: 'Edit vault' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByLabelText('Encrypt copies with a passphrase'));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText(/Existing copies keep the old passphrase and the panel forgets it/)).toBeTruthy();
+    expect(api.updateBackupDestination).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Forget the passphrase' }));
+    await waitFor(() => expect(api.updateBackupDestination).toHaveBeenCalled());
+    expect(api.updateBackupDestination.mock.calls[0][1].encrypt).toBe(false);
   });
 });

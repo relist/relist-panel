@@ -322,9 +322,9 @@ describe('DatabaseBackupsTab', () => {
   it('shows each copy: Copied, Copying and Copy failed with Retry', async () => {
     api.retryDatabaseBackupUpload.mockResolvedValue(undefined);
     api.listDatabaseBackups.mockResolvedValue([
-      backup({ id: 1, trigger: 'scheduled', upload: { destination: 'minio', error: '', status: 'uploaded', uploadedAt: '2026-11-14T10:01:00Z' } }),
-      backup({ id: 2, trigger: 'scheduled', upload: { destination: 'minio', error: '', status: 'running', uploadedAt: null } }),
-      backup({ id: 3, trigger: 'scheduled', upload: { destination: 'minio', error: 'connection refused', status: 'failed', uploadedAt: null } }),
+      backup({ id: 1, trigger: 'scheduled', upload: { destination: 'minio', encrypted: false, error: '', status: 'uploaded', uploadedAt: '2026-11-14T10:01:00Z' } }),
+      backup({ id: 2, trigger: 'scheduled', upload: { destination: 'minio', encrypted: false, error: '', status: 'running', uploadedAt: null } }),
+      backup({ id: 3, trigger: 'scheduled', upload: { destination: 'minio', encrypted: false, error: 'connection refused', status: 'failed', uploadedAt: null } }),
     ]);
     const user = userEvent.setup();
     renderTab();
@@ -337,12 +337,62 @@ describe('DatabaseBackupsTab', () => {
 
   it('says a delete also deletes the copy in the destination', async () => {
     api.listDatabaseBackups.mockResolvedValue([
-      backup({ id: 1, trigger: 'scheduled', upload: { destination: 'minio', error: '', status: 'uploaded', uploadedAt: '2026-11-14T10:01:00Z' } }),
+      backup({ id: 1, trigger: 'scheduled', upload: { destination: 'minio', encrypted: false, error: '', status: 'uploaded', uploadedAt: '2026-11-14T10:01:00Z' } }),
     ]);
     const user = userEvent.setup();
     renderTab();
     await screen.findByText('Copied');
     await user.click(screen.getByRole('button', { name: 'Delete' }));
     expect(await screen.findByText('Also deletes its copy in minio.')).toBeTruthy();
+  });
+});
+
+describe('encrypted copies', () => {
+  it('says an uploaded copy is encrypted', async () => {
+    api.listDatabaseBackups.mockResolvedValue([
+      backup({
+        id: 1,
+        trigger: 'scheduled',
+        upload: { destination: 'minio', encrypted: true, error: '', status: 'uploaded', uploadedAt: '2026-11-14T10:01:00Z' },
+      }),
+    ]);
+    const user = userEvent.setup();
+    renderTab();
+    await user.hover(await screen.findByText('Copied'));
+    expect(await screen.findByText(/Encrypted \(\.age\)/)).toBeTruthy();
+  });
+
+  it('asks for the passphrase of an age file and sends it in the restore', async () => {
+    api.restoreDatabaseUpload.mockResolvedValue({});
+    const user = userEvent.setup();
+    const { container } = renderTab();
+    await screen.findByText('1.5 KB');
+    const file = new File(['age-encryption.org/v1\nrest'], 'dump.sql.age', { type: 'application/octet-stream' });
+    await user.upload(container.querySelector('input[type=file]') as HTMLInputElement, file);
+    const dialog = await screen.findByRole('dialog');
+    const pass = await within(dialog).findByLabelText('Passphrase');
+    await user.type(within(dialog).getByLabelText('Type Shop to confirm'), 'Shop');
+    await user.click(within(dialog).getByLabelText('Restore into a new database'));
+    await user.type(within(dialog).getByLabelText('New database name'), 'imported');
+    const ok = within(dialog).getByRole('button', { name: 'Restore' }) as HTMLButtonElement;
+    // The passphrase is required before Restore enables.
+    expect(ok.disabled).toBe(true);
+    await user.type(pass, 'restore-passphrase-0123456789');
+    await waitFor(() => expect(ok.disabled).toBe(false));
+    await user.click(ok);
+    await waitFor(() =>
+      expect(api.restoreDatabaseUpload).toHaveBeenCalledWith(1, file, 'imported', 'Shop', 'restore-passphrase-0123456789'),
+    );
+  });
+
+  it('shows no passphrase field for a plain file', async () => {
+    const user = userEvent.setup();
+    const { container } = renderTab();
+    await screen.findByText('1.5 KB');
+    const file = new File(['SELECT 1;'], 'dump.sql', { type: 'application/sql' });
+    await user.upload(container.querySelector('input[type=file]') as HTMLInputElement, file);
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('dump.sql');
+    expect(within(dialog).queryByLabelText('Passphrase')).toBeNull();
   });
 });
