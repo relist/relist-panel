@@ -20,10 +20,20 @@ type ScheduleJSON struct {
 	Minute          int        `json:"minute"`
 	All             bool       `json:"all"`
 	Databases       []string   `json:"databases"`
+	LocalMode       string     `json:"localMode"`
 	LocalKeepCount  *int       `json:"localKeepCount"`
 	LocalKeepDays   *int       `json:"localKeepDays"`
+	LocalGfsDays    *int       `json:"localGfsDays"`
+	LocalGfsWeeks   *int       `json:"localGfsWeeks"`
+	LocalGfsMonths  *int       `json:"localGfsMonths"`
+	LocalGfsYears   *int       `json:"localGfsYears"`
+	RemoteMode      string     `json:"remoteMode"`
 	RemoteKeepCount *int       `json:"remoteKeepCount"`
 	RemoteKeepDays  *int       `json:"remoteKeepDays"`
+	RemoteGfsDays   *int       `json:"remoteGfsDays"`
+	RemoteGfsWeeks  *int       `json:"remoteGfsWeeks"`
+	RemoteGfsMonths *int       `json:"remoteGfsMonths"`
+	RemoteGfsYears  *int       `json:"remoteGfsYears"`
 	DestinationID   *int64     `json:"destinationId"`
 	LastRunAt       *time.Time `json:"lastRunAt"`
 	LastError       string     `json:"lastError"`
@@ -40,8 +50,12 @@ type scheduleReply struct {
 func (a *API) scheduleReply(sc Schedule) scheduleReply {
 	now := a.s.d.Now()
 	out := scheduleReply{ScheduleJSON: ScheduleJSON{Enabled: sc.Enabled, Days: sc.Days, Minute: sc.Minute, All: sc.All,
-		Databases: sc.Databases, LocalKeepCount: sc.Local.Count, LocalKeepDays: sc.Local.Days,
-		RemoteKeepCount: sc.Remote.Count, RemoteKeepDays: sc.Remote.Days, DestinationID: sc.DestinationID, LastRunAt: sc.LastRunAt, LastError: sc.LastError},
+		Databases: sc.Databases,
+		LocalMode: modeOf(sc.Local), LocalKeepCount: sc.Local.Count, LocalKeepDays: sc.Local.Days,
+		LocalGfsDays: sc.Local.GFSDays, LocalGfsWeeks: sc.Local.GFSWeeks, LocalGfsMonths: sc.Local.GFSMonths, LocalGfsYears: sc.Local.GFSYears,
+		RemoteMode: modeOf(sc.Remote), RemoteKeepCount: sc.Remote.Count, RemoteKeepDays: sc.Remote.Days,
+		RemoteGfsDays: sc.Remote.GFSDays, RemoteGfsWeeks: sc.Remote.GFSWeeks, RemoteGfsMonths: sc.Remote.GFSMonths, RemoteGfsYears: sc.Remote.GFSYears,
+		DestinationID: sc.DestinationID, LastRunAt: sc.LastRunAt, LastError: sc.LastError},
 		TimeZone: schedule.TimeZone(now)}
 	if sc.Enabled {
 		out.Next = schedule.Next(now, ruleOf(sc))
@@ -73,7 +87,11 @@ func (a *API) putSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	a.target(r, n)
 	sc := Schedule{DatabaseID: n, Enabled: in.Enabled, Days: in.Days, Minute: in.Minute, All: in.All, Databases: in.Databases,
-		Local: Keep{Count: in.LocalKeepCount, Days: in.LocalKeepDays}, Remote: Keep{Count: in.RemoteKeepCount, Days: in.RemoteKeepDays}, DestinationID: in.DestinationID}
+		Local: Keep{Mode: in.LocalMode, Count: in.LocalKeepCount, Days: in.LocalKeepDays,
+			GFSDays: in.LocalGfsDays, GFSWeeks: in.LocalGfsWeeks, GFSMonths: in.LocalGfsMonths, GFSYears: in.LocalGfsYears},
+		Remote: Keep{Mode: in.RemoteMode, Count: in.RemoteKeepCount, Days: in.RemoteKeepDays,
+			GFSDays: in.RemoteGfsDays, GFSWeeks: in.RemoteGfsWeeks, GFSMonths: in.RemoteGfsMonths, GFSYears: in.RemoteGfsYears},
+		DestinationID: in.DestinationID}
 	saved, err := a.s.SaveSchedule(r.Context(), sc)
 	if err != nil {
 		writeError(w, err)
@@ -129,6 +147,35 @@ type ErrInvalidSchedule struct{ Msg string }
 
 func (e ErrInvalidSchedule) Error() string { return e.Msg }
 
+// modeOf is a Keep's mode for the browser: an absent mode reads as Simple.
+func modeOf(k Keep) string {
+	if k.Mode == "" {
+		return RotateSimple
+	}
+	return k.Mode
+}
+
+// normalizeKeep settles one Rotation set: each mode owns its fields, and a
+// GFS set that keeps nothing would delete everything but the newest success,
+// so it is refused.
+func normalizeKeep(k Keep) (Keep, error) {
+	if k.Mode == "" {
+		k.Mode = RotateSimple
+	}
+	switch k.Mode {
+	case RotateSimple:
+		k.GFSDays, k.GFSWeeks, k.GFSMonths, k.GFSYears = nil, nil, nil, nil
+	case RotateGFS:
+		k.Days = nil
+		if k.Count == nil && k.GFSDays == nil && k.GFSWeeks == nil && k.GFSMonths == nil && k.GFSYears == nil {
+			return Keep{}, ErrInvalidSchedule{"keep at least one tier"}
+		}
+	default:
+		return Keep{}, ErrInvalidSchedule{"rotation mode must be simple or gfs"}
+	}
+	return k, nil
+}
+
 // scheduleDatabase checks that Database id is live and has Backups.
 func (s *Service) scheduleDatabase(ctx context.Context, id int64) error {
 	if err := s.hasBackups(ctx, id); err != nil {
@@ -166,7 +213,14 @@ func (s *Service) SaveSchedule(ctx context.Context, sc Schedule) (Schedule, erro
 	if sc.Minute < 0 || sc.Minute > 1439 {
 		return Schedule{}, ErrInvalidSchedule{"the time must be between 00:00 and 23:59"}
 	}
-	for _, v := range []*int{sc.Local.Count, sc.Local.Days, sc.Remote.Count, sc.Remote.Days} {
+	if sc.Local, err = normalizeKeep(sc.Local); err != nil {
+		return Schedule{}, err
+	}
+	if sc.Remote, err = normalizeKeep(sc.Remote); err != nil {
+		return Schedule{}, err
+	}
+	for _, v := range []*int{sc.Local.Count, sc.Local.Days, sc.Local.GFSDays, sc.Local.GFSWeeks, sc.Local.GFSMonths, sc.Local.GFSYears,
+		sc.Remote.Count, sc.Remote.Days, sc.Remote.GFSDays, sc.Remote.GFSWeeks, sc.Remote.GFSMonths, sc.Remote.GFSYears} {
 		if v != nil && *v < 1 {
 			return Schedule{}, ErrInvalidSchedule{"keep at least 1"}
 		}
