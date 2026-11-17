@@ -1317,10 +1317,21 @@ export interface DatabaseSchedule {
   minute: number;
   all: boolean;
   databases: string[];
+  /** Simple keeps by count/days; GFS keeps calendar tiers (ADR-0046). */
+  localMode: 'simple' | 'gfs';
   localKeepCount: number | null;
   localKeepDays: number | null;
+  localGfsDays: number | null;
+  localGfsWeeks: number | null;
+  localGfsMonths: number | null;
+  localGfsYears: number | null;
+  remoteMode: 'simple' | 'gfs';
   remoteKeepCount: number | null;
   remoteKeepDays: number | null;
+  remoteGfsDays: number | null;
+  remoteGfsWeeks: number | null;
+  remoteGfsMonths: number | null;
+  remoteGfsYears: number | null;
   /** The Backup destination its scheduled Backups are copied to; null = none. */
   destinationId: number | null;
   lastRunAt: string | null;
