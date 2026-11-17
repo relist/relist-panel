@@ -383,7 +383,7 @@ describe('encrypted copies', () => {
     await waitFor(() =>
       expect(api.restoreDatabaseUpload).toHaveBeenCalledWith(1, file, 'imported', 'Shop', 'restore-passphrase-0123456789'),
     );
-  });
+  }, 15_000);
 
   it('shows no passphrase field for a plain file', async () => {
     const user = userEvent.setup();

@@ -45,11 +45,14 @@ type KeepName =
   | 'remoteGfsMonths'
   | 'remoteGfsYears';
 
-/** An InputNumber that is blank keeps nothing for its rule. */
-function KeepField({ extra, label, name }: { extra?: string; label: string; name: KeepName }) {
+/**
+ * An InputNumber whose blank means "no limit" in Simple mode — but "keep
+ * nothing for this rule" in GFS, where the placeholder must say so.
+ */
+function KeepField({ extra, label, name, placeholder = 'No limit' }: { extra?: string; label: string; name: KeepName; placeholder?: string }) {
   return (
     <Form.Item extra={extra} label={label} name={name}>
-      <InputNumber aria-label={label} min={1} placeholder="No limit" precision={0} />
+      <InputNumber aria-label={label} min={1} placeholder={placeholder} precision={0} />
     </Form.Item>
   );
 }
@@ -71,13 +74,13 @@ function RotationSet({ mode, prefix }: { mode: 'simple' | 'gfs'; prefix: '' | 'D
         />
       </Form.Item>
       <Flex gap={16} wrap>
-        <KeepField label={field('Last N backups')} name={`${names}KeepCount`} />
+        <KeepField label={field('Last N backups')} name={`${names}KeepCount`} placeholder={mode === 'gfs' ? 'Keep none' : 'No limit'} />
         {mode === 'gfs' ? (
           <>
-            <KeepField label={field('Daily for D days')} name={`${names}GfsDays`} />
-            <KeepField extra="ISO weeks, Monday first." label={field('Weekly for W weeks')} name={`${names}GfsWeeks`} />
-            <KeepField label={field('Monthly for M months')} name={`${names}GfsMonths`} />
-            <KeepField label={field('Yearly for Y years')} name={`${names}GfsYears`} />
+            <KeepField label={field('Daily for D days')} name={`${names}GfsDays`} placeholder="Keep none" />
+            <KeepField extra="ISO weeks, Monday first." label={field('Weekly for W weeks')} name={`${names}GfsWeeks`} placeholder="Keep none" />
+            <KeepField label={field('Monthly for M months')} name={`${names}GfsMonths`} placeholder="Keep none" />
+            <KeepField label={field('Yearly for Y years')} name={`${names}GfsYears`} placeholder="Keep none" />
           </>
         ) : (
           <KeepField label={field('At most X days')} name={`${names}KeepDays`} />
@@ -253,7 +256,7 @@ export function DatabaseScheduleCard({ db }: { db: Database }) {
           ) : null}
           <Text style={{ display: 'block', marginBottom: 12 }} type="secondary">
             Rotation deletes only scheduled backups that are not pinned. The newest successful one of each database is
-            always kept. Leave a field blank for no limit.
+            always kept. A blank Simple field is no limit; a blank GFS field keeps nothing for that rule.
           </Text>
           <Flex align="center" gap={12} wrap>
             <Button htmlType="submit" loading={saving}>

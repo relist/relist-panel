@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -289,6 +290,29 @@ func TestRestoreUploadPassphraseHeader(t *testing.T) {
 	req = httptest.NewRequest("POST", base, bytes.NewReader(enc))
 	req.Header.Set("X-Passphrase", agePass)
 	w = httptest.NewRecorder()
+	a.h.ServeHTTP(w, req)
+	a.svc.Wait()
+	if w.Code != http.StatusAccepted || len(*got) != 1 || (*got)[0] != "SELECT 1;\n" {
+		t.Fatalf("restore = %d %s, stdin %q", w.Code, w.Body, *got)
+	}
+}
+
+// Review: fetch header values are byte strings, so the browser percent-encodes
+// the passphrase; the server decodes it, and a non-ASCII passphrase works.
+func TestRestoreUploadPassphraseHeaderEncoded(t *testing.T) {
+	a := newAPIRig(t)
+	a.seed(t, "Shop", "postgres", "18")
+	a.dumps("pg_dump -U postgres", "PRE;\n")
+	a.adminSQL(pgAdmin, "postgres\n", nil)
+	got := a.captureRestore(pgRestore, "")
+	thai := "รหัสลับ-0123456789-ยาว"
+	var buf bytes.Buffer
+	if err := agefile.Encrypt(&buf, thai, strings.NewReader("SELECT 1;\n")); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/api/databases/1/restores/upload?name=a.sql.age&confirm=Shop&target=app", bytes.NewReader(buf.Bytes()))
+	req.Header.Set("X-Passphrase", url.PathEscape(thai))
+	w := httptest.NewRecorder()
 	a.h.ServeHTTP(w, req)
 	a.svc.Wait()
 	if w.Code != http.StatusAccepted || len(*got) != 1 || (*got)[0] != "SELECT 1;\n" {
