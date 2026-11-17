@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"relist-panel/internal/agefile"
 	"relist-panel/internal/backupdest"
 )
 
@@ -41,20 +42,60 @@ func (s *Service) upload(ctx context.Context, d Database, b Backup, destID int64
 		return Upload{BackupID: b.ID, DestinationID: destID, Status: UploadFailed, Error: err.Error()}
 	}
 	key := backupdest.ObjectKey(dest.KeyPrefix(), d.Slug, d.ID, b.LogicalName, b.FileName)
-	u, err := s.d.Store.InsertUpload(ctx, Upload{BackupID: b.ID, DestinationID: destID, ObjectKey: key, Status: UploadRunning})
+	if dest.Encrypt {
+		key += ".age"
+	}
+	u, err := s.d.Store.InsertUpload(ctx, Upload{BackupID: b.ID, DestinationID: destID, ObjectKey: key, Status: UploadRunning, Encrypted: dest.Encrypt})
 	if err != nil {
 		return Upload{BackupID: b.ID, DestinationID: destID, DestinationName: dest.Name, Status: UploadFailed, Error: err.Error()}
 	}
-	err = s.put(ctx, remote, key, s.filePath(d.ID, b))
+	path := s.filePath(d.ID, b)
+	if dest.Encrypt {
+		// Encrypt beside the Backup first, so the destination gets the
+		// encrypted file with its exact size.
+		if tmp, eerr := encryptToTemp(path, dest.Passphrase); eerr != nil {
+			err = eerr
+		} else {
+			err = s.put(ctx, remote, key, tmp)
+			os.Remove(tmp)
+		}
+	} else {
+		err = s.put(ctx, remote, key, path)
+	}
 	status, msg := UploadUploaded, ""
 	if err != nil {
-		status, msg = UploadFailed, err.Error()
+		status, msg = UploadFailed, scrub(err.Error(), dest.Passphrase)
 	}
 	u.Status, u.Error = status, msg
 	if ferr := s.d.Store.FinishUpload(ctx, u.ID, status, msg, s.d.Now()); ferr != nil {
 		log.Printf("databases: record upload %d: %v", u.ID, ferr)
 	}
 	return u
+}
+
+// encryptToTemp writes path's age encryption under passphrase to a temp file
+// in the same directory and returns its path; on any error nothing is left.
+func encryptToTemp(path, passphrase string) (string, error) {
+	src, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+	dir, base := filepath.Split(path)
+	tmp, err := os.CreateTemp(dir, base+"-*.age.tmp")
+	if err != nil {
+		return "", err
+	}
+	if err := agefile.Encrypt(tmp, passphrase, src); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	return tmp.Name(), nil
 }
 
 // errStalled ends an upload that sent nothing for uploadStall.
