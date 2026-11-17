@@ -213,3 +213,15 @@ func TestLockedIs409(t *testing.T) {
 		t.Fatalf("code = %d", w.Code)
 	}
 }
+
+func TestDatabaseJSONUpgrades(t *testing.T) {
+	a := newAPIRig(t)
+	a.seed(t, "Shop", "postgres", "16")
+	w := a.do("GET", "/api/databases/1", "")
+	var got struct {
+		Upgrades []string `json:"upgrades"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || !slices.Equal(got.Upgrades, []string{"17", "18"}) {
+		t.Fatalf("upgrades = %v, %v (%s)", got.Upgrades, err, w.Body)
+	}
+}
