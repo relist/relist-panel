@@ -233,7 +233,8 @@ describe('Preview', () => {
     await user.click(await screen.findByRole('switch', { name: 'Allow writes' }));
     await user.type(screen.getByLabelText('SQL'), 'DELETE FROM orders');
     await user.click(screen.getByRole('button', { name: 'Preview' }));
-    expect(await screen.findByText('Would delete 3,412 rows from orders')).toBeTruthy();
+    expect(await screen.findByText(/Would delete 3,412 rows from/)).toBeTruthy();
+    expect(screen.getByText('orders').tagName).toBe('CODE');
     expect(screen.getByText(/It cannot undo sequence values/)).toBeTruthy();
     expect(api.runDatabaseQuery).toHaveBeenCalledWith(
       shop.id,

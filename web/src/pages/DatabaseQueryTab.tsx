@@ -31,11 +31,16 @@ function outcomeOf(response: QueryResponse): string {
 }
 
 /** "Would delete 3,412 rows from orders" — one Preview statement's effect. */
-function previewLine(result: QueryResult): string {
+function previewLine(result: QueryResult) {
   const verb = result.verb || 'change';
   const count = (result.affected ?? 0).toLocaleString('en-US');
   const rows = result.affected === 1 ? 'row' : 'rows';
-  return result.target ? `Would ${verb} ${count} ${rows} from ${result.target}` : `Would ${verb} ${count} ${rows}`;
+  if (!result.target) return `Would ${verb} ${count} ${rows}`;
+  return (
+    <>
+      Would {verb} {count} {rows} from <Text code>{result.target}</Text>
+    </>
+  );
 }
 
 function CellView({ cell }: { cell: QueryCell }) {
