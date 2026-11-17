@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 type rig struct {
@@ -365,5 +367,42 @@ func TestVolumesListsInitializedOnly(t *testing.T) {
 	got, err := r.svc.Volumes(context.Background())
 	if err != nil || !slices.Equal(got, []string{"relist-db-1"}) {
 		t.Fatalf("Volumes = %v, %v", got, err)
+	}
+}
+
+// A container left off relist-network (a version change cut its clients off,
+// then the panel stopped) is reconnected even when it has no alias.
+func TestReconcileReconnectsWithoutAlias(t *testing.T) {
+	r := newRig(t)
+	d := r.create(t, "ไทย", "postgres", "18")
+	r.host.containers[ContainerName(d.ID)].OnNetwork = false
+	r.host.reset()
+	if err := r.svc.ReconcileAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !r.host.saw(fmt.Sprintf("realias %s ", ContainerName(d.ID))) {
+		t.Fatalf("calls = %v", r.host.all())
+	}
+}
+
+func TestWaitHealthy(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	name := ContainerName(d.ID)
+	r.svc.healthPoll, r.svc.healthTimeout = time.Millisecond, 20*time.Millisecond
+	if err := r.svc.waitHealthy(ctx, name); err != nil {
+		t.Fatalf("healthy: %v", err)
+	}
+	r.host.containers[name].Health = "starting"
+	if err := r.svc.waitHealthy(ctx, name); err == nil || !strings.Contains(err.Error(), "did not become healthy within 20ms") {
+		t.Fatalf("starting: %v", err)
+	}
+	r.host.containers[name].Running = false
+	r.host.logs = "FATAL: bad PASSWORD 'SCRAM-SHA-256$x'\n"
+	start := time.Now()
+	err := r.svc.waitHealthy(ctx, name)
+	if err == nil || !strings.Contains(err.Error(), "the container stopped") || strings.Contains(err.Error(), "SCRAM") || time.Since(start) > 15*time.Millisecond {
+		t.Fatalf("stopped: %v after %v", err, time.Since(start))
 	}
 }

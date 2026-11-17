@@ -21,6 +21,9 @@ type fakeDBDaemon struct {
 	bodies  map[string]json.RawMessage // "METHOD path" -> body
 	inspect string                     // canned container inspect JSON ("" = 404)
 	volume  bool                       // GET /volumes/<name> exists
+	// disconnect answers POST /networks/…/disconnect when set: status and message.
+	disconnectStatus int
+	disconnectMsg    string
 }
 
 func (f *fakeDBDaemon) handler(w http.ResponseWriter, r *http.Request) {
@@ -37,6 +40,8 @@ func (f *fakeDBDaemon) handler(w http.ResponseWriter, r *http.Request) {
 		f.bodies[r.Method+" "+r.URL.RequestURI()] = raw
 	}
 	switch {
+	case strings.HasSuffix(key, "/disconnect") && f.disconnectStatus != 0:
+		http.Error(w, `{"message":"`+f.disconnectMsg+`"}`, f.disconnectStatus)
 	case key == "POST /containers/create":
 		_, _ = w.Write([]byte(`{"Id":"new"}`))
 	case key == "POST /volumes/create":
@@ -221,5 +226,62 @@ func TestDatabaseHostCreateStopsBeforeRemove(t *testing.T) {
 	remove := slices.Index(f.calls, "DELETE /containers/relist-db-1")
 	if stop < 0 || remove < 0 || stop > remove {
 		t.Fatalf("want stop before remove, calls = %v", f.calls)
+	}
+}
+
+func TestDatabaseHostDisconnect(t *testing.T) {
+	h, f := newDBHost(t)
+	if err := h.Disconnect(context.Background(), "relist-db-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.calls, []string{"POST /networks/relist-network/disconnect"}) {
+		t.Fatalf("calls = %v", f.calls)
+	}
+	var body struct {
+		Container string
+		Force     bool
+	}
+	if err := json.Unmarshal(f.bodies["POST /networks/relist-network/disconnect"], &body); err != nil || body.Container != "relist-db-1" || !body.Force {
+		t.Fatalf("body = %+v, %v", body, err)
+	}
+	for _, c := range []struct {
+		status int
+		msg    string
+		ok     bool
+	}{
+		{http.StatusForbidden, "container relist-db-1 is not connected to network relist-network", true},
+		{http.StatusNotFound, "No such container: relist-db-1", true},
+		{http.StatusInternalServerError, "daemon broke", false},
+	} {
+		h, f := newDBHost(t)
+		f.disconnectStatus, f.disconnectMsg = c.status, c.msg
+		err := h.Disconnect(context.Background(), "relist-db-1")
+		if (err == nil) != c.ok {
+			t.Fatalf("%d %q: err = %v", c.status, c.msg, err)
+		}
+	}
+}
+
+// A container a version change disconnected is reconnected by Realias.
+func TestDatabaseHostRealiasNotConnected(t *testing.T) {
+	h, f := newDBHost(t)
+	f.disconnectStatus, f.disconnectMsg = http.StatusForbidden, "container relist-db-1 is not connected to network relist-network"
+	if err := h.Realias(context.Background(), "relist-db-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(f.calls, "POST /networks/relist-network/connect") {
+		t.Fatalf("calls = %v", f.calls)
+	}
+}
+
+func TestDatabaseHostInspectOnNetwork(t *testing.T) {
+	h, f := newDBHost(t)
+	f.inspect = `{"State":{"Running":true},"NetworkSettings":{"Networks":{"relist-network":{"Aliases":null}}}}`
+	if st, err := h.Inspect(context.Background(), "relist-db-1"); err != nil || !st.OnNetwork {
+		t.Fatalf("on the network: %+v, %v", st, err)
+	}
+	f.inspect = `{"State":{"Running":true},"NetworkSettings":{"Networks":{"bridge":{}}}}`
+	if st, err := h.Inspect(context.Background(), "relist-db-1"); err != nil || st.OnNetwork {
+		t.Fatalf("off the network: %+v, %v", st, err)
 	}
 }

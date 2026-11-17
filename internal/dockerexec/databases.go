@@ -2,6 +2,7 @@ package dockerexec
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -136,6 +137,7 @@ func (h *DatabaseHost) Inspect(ctx context.Context, name string) (databases.Cont
 		Hash: out.Config.Labels[databases.HashLabel], ImageID: out.Image,
 		Aliases: out.NetworkSettings.Networks[databases.Network].Aliases,
 	}
+	_, st.OnNetwork = out.NetworkSettings.Networks[databases.Network]
 	if out.State.Health != nil {
 		st.Health = out.State.Health.Status
 	}
@@ -209,7 +211,7 @@ func (h *DatabaseHost) Restart(ctx context.Context, name string) error {
 
 func (h *DatabaseHost) Realias(ctx context.Context, name, alias string) error {
 	path := "/networks/" + databases.Network
-	if err := h.engine.doBody(ctx, http.MethodPost, path+"/disconnect", map[string]any{"Container": name, "Force": true}, nil); err != nil {
+	if err := h.disconnect(ctx, name); err != nil && !notConnected(err) {
 		return err
 	}
 	ep := dbEndpoint{}
@@ -217,6 +219,23 @@ func (h *DatabaseHost) Realias(ctx context.Context, name, alias string) error {
 		ep.Aliases = []string{alias}
 	}
 	return h.engine.doBody(ctx, http.MethodPost, path+"/connect", map[string]any{"Container": name, "EndpointConfig": ep}, nil)
+}
+
+func (h *DatabaseHost) Disconnect(ctx context.Context, name string) error {
+	if err := h.disconnect(ctx, name); err != nil && !notConnected(err) && !isEngineNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+func (h *DatabaseHost) disconnect(ctx context.Context, name string) error {
+	return h.engine.doBody(ctx, http.MethodPost, "/networks/"+databases.Network+"/disconnect", map[string]any{"Container": name, "Force": true}, nil)
+}
+
+// notConnected is the engine's answer for a container not on the network.
+func notConnected(err error) bool {
+	var apiErr *engineError
+	return errors.As(err, &apiErr) && strings.Contains(apiErr.msg, "is not connected")
 }
 
 func (h *DatabaseHost) Remove(ctx context.Context, name string) error {
