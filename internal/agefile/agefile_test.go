@@ -116,3 +116,64 @@ func TestOneDerivationAtATime(t *testing.T) {
 		t.Fatal("Encrypt never finished after unlock")
 	}
 }
+
+// The lock covers the derivation only: a long copy into an age file must not
+// keep every other encrypt and decrypt in the panel waiting.
+func TestEncryptCopiesOutsideTheLock(t *testing.T) {
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- Encrypt(io.Discard, pass, pr) }()
+	// The write returns once Encrypt is reading src, after the derivation.
+	if _, err := pw.Write([]byte("first chunk")); err != nil {
+		t.Fatal(err)
+	}
+	if !mu.TryLock() {
+		pw.Close()
+		<-done
+		t.Fatal("the lock is held while copying the plaintext")
+	}
+	mu.Unlock()
+	pw.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A work factor age itself rejects as malformed is a damaged file, not one
+// that is too expensive: "decrypt it with age -d first" would not help.
+func TestMalformedWorkFactorIsDamaged(t *testing.T) {
+	for _, wf := range []string{" 018", " 015"} {
+		tampered := bytes.Replace(encrypt(t, pass, "hello"), []byte(" 15"), []byte(wf), 1)
+		_, err := Decrypt(pass, bytes.NewReader(tampered))
+		if !errors.Is(err, ErrDamaged) || errors.Is(err, ErrTooExpensive) {
+			t.Fatalf("work factor %q: err = %v, want ErrDamaged", wf, err)
+		}
+	}
+}
+
+func TestDamagedHeader(t *testing.T) {
+	enc := encrypt(t, pass, "hello")
+	for name, data := range map[string][]byte{
+		"truncated": enc[:30],
+		"garbage":   append([]byte("age-encryption.org/v1\n"), "not a stanza\n"...),
+	} {
+		_, err := Decrypt(pass, bytes.NewReader(data))
+		if !errors.Is(err, ErrDamaged) {
+			t.Fatalf("%s: err = %v, want ErrDamaged", name, err)
+		}
+	}
+}
+
+// A flipped payload byte leaves the header intact: Decrypt succeeds and the
+// damage shows on read.
+func TestDamagedPayload(t *testing.T) {
+	enc := encrypt(t, pass, "hello")
+	enc[len(enc)-1] ^= 0xff
+	r, err := Decrypt(pass, bytes.NewReader(enc))
+	if err != nil {
+		t.Fatalf("Decrypt = %v, want the damage to show on read", err)
+	}
+	if _, err := io.ReadAll(r); !errors.Is(err, ErrDamaged) {
+		t.Fatalf("read err = %v, want ErrDamaged", err)
+	}
+}

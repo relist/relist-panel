@@ -319,3 +319,18 @@ func TestRestoreUploadPassphraseHeaderEncoded(t *testing.T) {
 		t.Fatalf("restore = %d %s, stdin %q", w.Code, w.Body, *got)
 	}
 }
+
+func TestRestoreUploadDamagedIs422(t *testing.T) {
+	a := newAPIRig(t)
+	a.seed(t, "Shop", "postgres", "18")
+	a.adminSQL(pgAdmin, "postgres\n", nil)
+	enc := []byte("age-encryption.org/v1\nnot a stanza\n")
+	req := httptest.NewRequest("POST", "/api/databases/1/restores/upload?name=a.sql.age&confirm=Shop&target=app", bytes.NewReader(enc))
+	req.Header.Set("X-Passphrase", "restore-passphrase-0123456789")
+	w := httptest.NewRecorder()
+	a.h.ServeHTTP(w, req)
+	a.svc.Wait()
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "damaged") {
+		t.Fatalf("restore = %d %s, want 422 damaged", w.Code, w.Body)
+	}
+}

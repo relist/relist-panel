@@ -559,3 +559,18 @@ func TestRestoreTooExpensiveUploadRefused(t *testing.T) {
 	}
 	uploadsDirEmpty(t, r, d.ID)
 }
+
+func TestRestoreDamagedEncryptedUpload(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	r.adminSQL(pgAdmin, "", nil)
+	r.host.reset()
+	enc := ageBytes(t, agePass, "SELECT 1;\n")
+	enc[len(enc)-1] ^= 0xff
+	_, err := r.svc.RestoreFromUpload(ctx, d.ID, "shop", "Shop", "p.sql.age", agePass, bytes.NewReader(enc))
+	if !errors.Is(err, agefile.ErrDamaged) {
+		t.Fatalf("err = %v, want ErrDamaged", err)
+	}
+	uploadsDirEmpty(t, r, d.ID)
+}
