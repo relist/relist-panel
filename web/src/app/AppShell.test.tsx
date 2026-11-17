@@ -248,7 +248,7 @@ describe('Member databases', () => {
     cpus: 0, createdAt: '2026-11-14T00:00:00Z', defaultDatabase: 'postgres', deleted: false,
     desired: 'running', engine: 'postgres', host: 'relist-db-1', hostReadable: '', id: 1,
     image: 'postgres:18', job: '', lastError: '', memoryMb: 0, name: 'Shop', port: 5432,
-    settingsOutdated: false, slug: 'shop', status: 'running', user: 'shop_ro', version: '18', warnings: [],
+    settingsOutdated: false, upgrades: [], slug: 'shop', status: 'running', user: 'shop_ro', version: '18', warnings: [],
   } as never;
 
   function renderMember(path: string) {
