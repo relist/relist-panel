@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ErrNoPreviousData is a change that kept no data, or whose data is deleted.
@@ -29,14 +30,14 @@ func (s *Service) ChangeVersion(ctx context.Context, id int64, version string, b
 	}
 	var dp Dumper
 	d, err := s.begin(ctx, id, JobKindChangeVersion, func(d Database) error {
+		if d.PendingPassword != "" {
+			return ErrPendingPassword
+		}
 		if _, err := Lookup(d.Engine, version); err != nil {
 			return err
 		}
 		if compareTags(version, d.Version) <= 0 {
 			return ErrNotHigher
-		}
-		if d.PendingPassword != "" {
-			return ErrPendingPassword
 		}
 		if d.Engine == "redis" {
 			return nil
@@ -348,8 +349,6 @@ func (r *versionRun) restoreOld(ctx context.Context, old ContainerSpec, created 
 // read (Redis 7.4 refuses an RDB that Redis 8 saved).
 func (r *versionRun) inPlace(ctx context.Context, backupFirst bool) {
 	s, d := r.s, r.d
-	name := ContainerName(d.ID)
-	eng := Engines[d.Engine]
 	next := d
 	next.Version = r.c.ToVersion
 	newSpec, _, err := specFor(next)
@@ -401,14 +400,35 @@ func (r *versionRun) inPlace(ctx context.Context, backupFirst bool) {
 		r.fail(ctx, err, nil)
 		return
 	}
+	r.finishInPlace(ctx, backups)
+}
+
+// finishInPlace starts the new image after the switch: MariaDB once with
+// MARIADB_AUTO_UPGRADE, then without it. A failure is not rolled back; the
+// Database's last error says whether the new version ran at all and names
+// the pre-update Backups. A restart in the middle runs it again from
+// Startup.
+func (r *versionRun) finishInPlace(ctx context.Context, backups []string) {
+	s := r.s
+	name := ContainerName(r.d.ID)
+	next := r.d
+	next.Version = r.c.ToVersion
+	newSpec, _, err := specFor(next)
+	if err != nil {
+		r.fail(ctx, err, nil)
+		return
+	}
+	// ran is whether the new image got as far as running on the data.
+	ran := false
 	start := func(spec ContainerSpec) error {
-		if err := s.withLock(d.ID, func() error { return s.d.Host.Create(ctx, spec) }); err != nil {
+		if err := s.withLock(r.d.ID, func() error { return s.d.Host.Create(ctx, spec) }); err != nil {
 			return err
 		}
+		ran = true
 		return s.waitHealthy(ctx, name)
 	}
 	err = r.step(ctx, "Start "+newSpec.Image, func() (string, error) {
-		if d.Engine != "mariadb" {
+		if r.d.Engine != "mariadb" {
 			return "", start(newSpec)
 		}
 		// MARIADB_AUTO_UPGRADE only for this first start: kept, it would be
@@ -419,21 +439,71 @@ func (r *versionRun) inPlace(ctx context.Context, backupFirst bool) {
 		upgrade.Labels = map[string]string{IDLabel: newSpec.Labels[IDLabel], HashLabel: hashSpec(upgrade)}
 		return "", start(upgrade)
 	})
-	if err == nil && d.Engine == "mariadb" {
+	if err == nil && r.d.Engine == "mariadb" {
 		err = r.step(ctx, "Recreate without MARIADB_AUTO_UPGRADE", func() (string, error) { return "", start(newSpec) })
 	}
 	if err != nil {
-		msg := fmt.Sprintf("%s %s did not start: %s. It is not rolled back: %s has rewritten the data, which %s cannot read.",
-			eng.Label(), r.c.ToVersion, redactPasswords(err.Error()), r.c.ToVersion, r.c.FromVersion)
+		label, to, from := Engines[r.d.Engine].Label(), r.c.ToVersion, r.c.FromVersion
+		var msg string
+		if ran {
+			msg = fmt.Sprintf("%s %s did not start: %s. It is not rolled back: %s may have rewritten the data, which %s cannot read.",
+				label, to, redactPasswords(err.Error()), to, from)
+		} else {
+			msg = fmt.Sprintf("%s %s did not start: %s. It is not rolled back, but %s never ran, so the data is as %s left it; Start the Database to try %s again.",
+				label, to, redactPasswords(err.Error()), to, from, to)
+		}
 		if len(backups) > 0 {
 			msg += fmt.Sprintf(" The pre-update Backups %s hold the data from before the change.", strings.Join(backups, ", "))
 		}
-		_ = s.d.Store.SetLastError(ctx, d.ID, msg)
+		_ = s.d.Store.SetLastError(ctx, r.d.ID, msg)
 		r.fail(ctx, err, nil)
 		return
 	}
 	r.log.WriteString("Done\n")
 	_ = s.d.Store.SucceedVersionChange(ctx, r.c.ID, r.logText())
+}
+
+// resumeInterrupted finishes the in-place changes a restart cut off after
+// their switch: the record already names the new version, so ReconcileAll
+// alone would start it, but MariaDB without mariadb-upgrade. Every other
+// running change is failed by the caller, and ReconcileAll puts its old
+// container back.
+func (s *Service) resumeInterrupted(ctx context.Context) error {
+	running, err := s.d.Store.RunningVersionChanges(ctx)
+	if err != nil {
+		return err
+	}
+	for _, c := range running {
+		d, err := s.d.Store.Get(ctx, c.DatabaseID)
+		if err != nil || d.DeletedAt != nil || c.Method != VersionMethodInPlace || d.Version != c.ToVersion {
+			continue
+		}
+		if err := s.beginJob(d.ID, JobKindChangeVersion); err != nil {
+			continue
+		}
+		r := &versionRun{s: s, d: d, c: c}
+		r.log.WriteString(c.Log)
+		r.note(ctx, "Resumed after a restart")
+		r.finishInPlace(ctx, s.preUpdateSince(ctx, d.ID, c.StartedAt))
+		s.endJob(d.ID)
+	}
+	return nil
+}
+
+// preUpdateSince names Database id's succeeded pre-update Backups taken
+// since a change started, as "#<id>".
+func (s *Service) preUpdateSince(ctx context.Context, id int64, since time.Time) []string {
+	all, err := s.d.Store.ListBackups(ctx, id)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, b := range all {
+		if b.Trigger == TriggerPreUpdate && b.Status == JobSucceeded && !b.StartedAt.Before(since) {
+			out = append(out, fmt.Sprintf("#%d", b.ID))
+		}
+	}
+	return out
 }
 
 // ListVersionChanges lists Database id's version changes, newest first.

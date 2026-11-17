@@ -149,7 +149,17 @@ func (s *Store) SucceedVersionChange(ctx context.Context, id int64, log string) 
 
 // ListVersionChanges lists a Database's changes, newest first.
 func (s *Store) ListVersionChanges(ctx context.Context, databaseID int64) ([]VersionChange, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+versionColumns+` FROM database_version_changes WHERE database_id = ? ORDER BY id DESC`, databaseID)
+	return s.versionChanges(ctx, `SELECT `+versionColumns+` FROM database_version_changes WHERE database_id = ? ORDER BY id DESC`, databaseID)
+}
+
+// RunningVersionChanges lists the changes still marked running, oldest
+// first: at start-up, the ones a restart interrupted.
+func (s *Store) RunningVersionChanges(ctx context.Context) ([]VersionChange, error) {
+	return s.versionChanges(ctx, `SELECT `+versionColumns+` FROM database_version_changes WHERE status = ? ORDER BY id`, JobRunning)
+}
+
+func (s *Store) versionChanges(ctx context.Context, query string, args ...any) ([]VersionChange, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

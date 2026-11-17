@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,9 +91,37 @@ func (s *Service) WaitIdle(ctx context.Context) error {
 	}
 }
 
+// ErrStarting refuses a new job until the start-up recovery has run.
+var ErrStarting = errors.New("the panel is still starting; try again in a moment")
+
+// HoldJobs refuses every new job with ErrStarting until Recover ends. The
+// server calls it before its routes go live: Startup fails every job still
+// marked running and the sweep removes the volumes of changes it failed, so
+// a job started before them would be failed under its own feet.
+func (s *Service) HoldJobs() { s.holding.Store(true) }
+
+// Recover is the start-up recovery: Startup, ReconcileAll, then the sweep
+// of failed version changes' volumes. It logs what fails and lets jobs
+// start again at the end, whatever happened.
+func (s *Service) Recover(ctx context.Context) {
+	defer s.holding.Store(false)
+	if err := s.Startup(ctx); err != nil {
+		log.Printf("databases: finish interrupted jobs: %v", err)
+	}
+	if err := s.ReconcileAll(ctx); err != nil {
+		log.Printf("databases: reconcile at start: %v", err)
+	}
+	if err := s.SweepFailedVersionVolumes(ctx); err != nil {
+		log.Printf("databases: sweep failed version changes: %v", err)
+	}
+}
+
 // gate refuses a new job while a server Migration or a Panel update holds
 // its lock.
 func (s *Service) gate(ctx context.Context) error {
+	if s.holding.Load() {
+		return ErrStarting
+	}
 	if s.locked(ctx) || (s.d.UpdateLocked != nil && s.d.UpdateLocked()) {
 		return ErrLocked
 	}
@@ -104,7 +133,8 @@ func (s *Service) dbDir(id int64) string {
 }
 
 // Startup fails every Backup and restore a restart interrupted, and removes
-// their half-written files. Call it before ReconcileAll.
+// their half-written files. It finishes an in-place version change cut off
+// after its switch and fails every other. Call it before ReconcileAll.
 func (s *Service) Startup(ctx context.Context) error {
 	if _, err := s.d.Store.FailRunning(ctx, interrupted); err != nil {
 		return err
@@ -112,9 +142,13 @@ func (s *Service) Startup(ctx context.Context) error {
 	if err := s.d.Store.FailRunningUploads(ctx, interrupted); err != nil {
 		return err
 	}
-	// The record still names the old version and volume, so ReconcileAll
-	// recreates the old container; SweepFailedVersionVolumes then removes
+	// An in-place change past its switch is finished; any other still
+	// names the old version and volume in the record, so ReconcileAll
+	// recreates the old container and SweepFailedVersionVolumes then removes
 	// the half-made volume.
+	if err := s.resumeInterrupted(ctx); err != nil {
+		return err
+	}
 	if err := s.d.Store.FailRunningVersionChanges(ctx, interrupted); err != nil {
 		return err
 	}
