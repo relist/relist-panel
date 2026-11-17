@@ -103,7 +103,7 @@ Add `TestRotateGFS` beside the Simple cases, with `now := time.Date(2026, 11, 17
 - *count*: `Keep{Mode: RotateGFS, Count: new(2)}` over 4 OK dailies keeps the 2 newest, deletes the rest.
 - *daily tier*: `GFSDays: new(3)` over two backups on each of the last 5 days keeps the newest of each of the last 3 days (per group).
 - *midnight boundary (Review Focus 1)*: items at Nov 16 23:59 and Nov 17 00:01 with `now` Nov 17 00:05 and `GFSDays: new(1)` — only the 00:01 item is in today's bucket; with `GFSDays: new(2)` both days' newest are kept.
-- *weekly*: `GFSWeeks: new(2)` with items on Mon Nov 10 (ISO week 46) and Mon Nov 17 (week 47) keeps both newest; an item in week 45 goes.
+- *weekly*: `GFSWeeks: new(2)` with items on Mon Nov 16 2026 (ISO week 47), Mon Nov 9 (week 46) and Mon Nov 2 (week 45) keeps the weeks 47 and 46 items; the week 45 item goes.
 - *monthly / yearly*: `GFSMonths: new(2)` keeps newest of Nov and Oct, deletes September's; `GFSYears: new(1)` keeps only this year's newest per bucket.
 - *failed never fills a slot*: a day whose only items are failed keeps nothing for that day (but the group's newest OK overall is still kept); a failed item newer than an OK one in the same day does not displace it.
 - *any rule keeps*: an item kept by the weekly tier but past Count stays.
