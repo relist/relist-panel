@@ -700,7 +700,7 @@ func TestEncryptionAPI(t *testing.T) {
 }
 
 // Review: turning encryption on over the API without any passphrase, stored
-// or sent, must refuse — the row would otherwise encrypt with '' and every
+// or sent, must refuse — the row would otherwise encrypt with an empty passphrase and every
 // copy would fail.
 func TestEncryptOnNeedsAPassphrase(t *testing.T) {
 	r := newRig(t)

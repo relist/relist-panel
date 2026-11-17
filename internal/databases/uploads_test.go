@@ -492,3 +492,20 @@ func TestStartupSweepsAgeTemps(t *testing.T) {
 		t.Fatalf("the Backup file is gone: %v", err)
 	}
 }
+
+// A failure inside the encryption itself, not only in the put, leaves no
+// temp file behind.
+func TestEncryptToTempFailureLeavesNoTemp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "b.sql.gz")
+	if err := os.WriteFile(path, []byte("SELECT 1;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := encryptToTemp(path, ""); err == nil {
+		t.Fatal("encrypting with an empty passphrase succeeded")
+	}
+	tmps, _ := filepath.Glob(filepath.Join(dir, "*.age.tmp"))
+	if len(tmps) != 0 {
+		t.Fatalf("temp files left: %v", tmps)
+	}
+}
