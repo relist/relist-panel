@@ -206,6 +206,22 @@ func TestQueryAuditsEveryOutcome(t *testing.T) {
 	}
 }
 
+// A Preview is a preview whatever came of it: a run that failed before the
+// engine could mark the response still answers and audits as one.
+func TestFailedPreviewIsStillAPreview(t *testing.T) {
+	qr := newQueryRig(t)
+	qr.create(t, "Shop", "postgres", "18")
+	qr.q.resp["boom"] = dbquery.QueryResponse{Results: []dbquery.QueryResult{}, Error: &dbquery.QueryError{Message: "connection refused"}}
+	w := qr.do(context.Background(), "POST", "/api/databases/1/query", `{"database":"shop","sql":"boom","preview":true}`)
+	ev := qr.take()
+	if w.Code != 200 || len(ev) != 1 || ev[0].Detail["outcome"] != "preview" {
+		t.Fatalf("failed preview: status %d, events %+v", w.Code, ev)
+	}
+	if !strings.Contains(w.Body.String(), `"preview":true`) {
+		t.Fatalf("response lost the preview flag: %s", w.Body)
+	}
+}
+
 func TestQueryRedactsStatement(t *testing.T) {
 	qr := newQueryRig(t)
 	qr.create(t, "Shop", "mysql", "8.4")

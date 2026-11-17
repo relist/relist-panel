@@ -129,6 +129,11 @@ func (s *Service) Query(ctx context.Context, id int64, dbUser string, r dbquery.
 	}
 	r.Engine = d.Engine
 	resp := s.d.Querier.Run(ctx, t, r)
+	if r.Preview {
+		// A Preview whatever came of it: a run that failed before the engine
+		// marked the response still answers and audits as one.
+		resp.Preview = true
+	}
 	if resp.Error != nil {
 		resp.Error.Message = scrubAll(resp.Error.Message, passwords...)
 	}
