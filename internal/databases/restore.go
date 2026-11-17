@@ -13,10 +13,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"relist-panel/internal/agefile"
 )
 
 // ErrBadUpload is an uploaded file that is not readable gzip or SQL.
 var ErrBadUpload = errors.New("the uploaded file is not valid gzip")
+
+// ErrNeedPassphrase is an age upload restored without its passphrase.
+var ErrNeedPassphrase = errors.New("this file is encrypted: enter its passphrase")
 
 var ErrChangedFile = errors.New("the backup file changed since it was written; it was not restored")
 
@@ -76,10 +81,12 @@ func (s *Service) RestoreFromBackup(ctx context.Context, id, backupID int64, tar
 	return r, nil
 }
 
-// RestoreFromUpload restores an uploaded .sql or .sql.gz of one database into
-// target. The body is streamed to disk, gzip is detected by content, and the
-// text is checked (CheckUpload) before anything runs.
-func (s *Service) RestoreFromUpload(ctx context.Context, id int64, target, confirm, name string, body io.Reader) (Restore, error) {
+// RestoreFromUpload restores an uploaded .sql, .sql.gz or .age of one
+// database into target. The body is streamed to disk; an age file (told by
+// its binary header) is decrypted with passphrase first, then gzip is
+// detected by content and the text is checked (CheckUpload) before anything
+// runs.
+func (s *Service) RestoreFromUpload(ctx context.Context, id int64, target, confirm, name, passphrase string, body io.Reader) (Restore, error) {
 	d, dp, err := s.acquire(ctx, id, JobKindRestore)
 	if err != nil {
 		return Restore{}, err
@@ -113,6 +120,9 @@ func (s *Service) RestoreFromUpload(ctx context.Context, id int64, target, confi
 	if err := f.Close(); err != nil {
 		return fail(err)
 	}
+	if path, err = decryptUpload(dir, path, passphrase); err != nil {
+		return fail(err)
+	}
 	if err := checkUploadFile(d.Engine, path); err != nil {
 		return fail(err)
 	}
@@ -126,6 +136,48 @@ func (s *Service) RestoreFromUpload(ctx context.Context, id int64, target, confi
 	}
 	s.startRestore(ctx, d, dp, r, path, replace, true)
 	return r, nil
+}
+
+// decryptUpload turns an age upload at path into its plain file in dir and
+// returns the new path, removing the encrypted one. A file without the age
+// header passes through untouched. On an error the returned path is the one
+// still on disk, for the caller to remove; nothing else is left behind.
+func decryptUpload(dir, path, passphrase string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return path, err
+	}
+	defer f.Close()
+	head := make([]byte, 22)
+	n, _ := io.ReadFull(f, head)
+	if !agefile.IsAge(head[:n]) {
+		return path, nil
+	}
+	if passphrase == "" {
+		return path, ErrNeedPassphrase
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return path, err
+	}
+	r, err := agefile.Decrypt(passphrase, f)
+	if err != nil {
+		return path, err
+	}
+	out, err := os.CreateTemp(dir, "*.upload") // mode 0600
+	if err != nil {
+		return path, err
+	}
+	if _, err := io.Copy(out, r); err != nil {
+		_ = out.Close()
+		_ = os.Remove(out.Name())
+		return path, err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(out.Name())
+		return path, err
+	}
+	_ = os.Remove(path)
+	return out.Name(), nil
 }
 
 // checkRestore is the confirmation and the target: whether target replaces an
