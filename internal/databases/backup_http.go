@@ -33,6 +33,7 @@ type UploadJSON struct {
 	Destination string     `json:"destination"`
 	Status      string     `json:"status"`
 	Error       string     `json:"error"`
+	Encrypted   bool       `json:"encrypted"`
 	UploadedAt  *time.Time `json:"uploadedAt"`
 }
 
@@ -40,7 +41,7 @@ func backupJSON(b Backup) BackupJSON {
 	var up *UploadJSON
 	// A copy Rotation already deleted from its destination is not shown.
 	if b.Upload != nil && b.Upload.DeletedAt == nil {
-		up = &UploadJSON{Destination: b.Upload.DestinationName, Status: b.Upload.Status, Error: b.Upload.Error, UploadedAt: b.Upload.UploadedAt}
+		up = &UploadJSON{Destination: b.Upload.DestinationName, Status: b.Upload.Status, Error: b.Upload.Error, Encrypted: b.Upload.Encrypted, UploadedAt: b.Upload.UploadedAt}
 	}
 	return BackupJSON{Upload: up, ID: b.ID, Trigger: b.Trigger, Database: b.LogicalName, Status: b.Status, Error: b.Error, Log: b.Log,
 		Size: b.Size, SHA256: b.SHA256, StartedAt: b.StartedAt, FinishedAt: b.FinishedAt, Pinned: b.Pinned, LocalRemoved: b.LocalRemovedAt != nil}

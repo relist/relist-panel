@@ -3,15 +3,18 @@ package databases
 import (
 	"time"
 
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	"relist-panel/internal/agefile"
 	"relist-panel/internal/backupdest"
 )
 
@@ -372,5 +375,92 @@ func TestRemoteDeleteTimesOut(t *testing.T) {
 	}
 	if _, err := os.Stat(r.svc.filePath(d.ID, b)); err != nil {
 		t.Fatalf("the file is gone: %v", err)
+	}
+}
+
+// Review Focus 3: the uploaded object is the encrypted file, sent with its
+// exact size, and no temp file stays behind.
+func TestUploadEncrypts(t *testing.T) {
+	const pass = "upload-passphrase-0123456789"
+	r := newRig(t)
+	d := r.create(t, "Shop", "postgres", "18")
+	remote := r.withDestination(t)
+	r.svc.d.Destinations = fakeOpener{remote: remote, dest: &backupdest.Destination{
+		ID: 1, Name: "minio", Type: "s3", S3: backupdest.S3Config{Prefix: "pfx"}, Encrypt: true, Passphrase: pass}}
+	r.dumps("pg_dump -U postgres", "SELECT 1;\n")
+	r.useClock(day(15, 3, 0))
+	r.schedule(t, d.ID, r.toDestination, day(14, 3, 0))
+	r.svc.tick(context.Background())
+	b := r.lastBackup(t, d.ID)
+	if b.Upload == nil || b.Upload.Status != UploadUploaded || !b.Upload.Encrypted {
+		t.Fatalf("upload = %+v", b.Upload)
+	}
+	key := backupdest.ObjectKey("pfx", "shop", d.ID, b.LogicalName, b.FileName) + ".age"
+	if b.Upload.ObjectKey != key || !remote.has(key) {
+		t.Fatalf("key = %q, bucket has %v", b.Upload.ObjectKey, remote.objects)
+	}
+	enc := remote.objects[key]
+	if int64(len(enc)) != remote.sizes[key] {
+		t.Fatalf("Put was told size %d, the encrypted object is %d", remote.sizes[key], len(enc))
+	}
+	if !agefile.IsAge(enc[:22]) {
+		t.Fatalf("object does not start with the age header: %q", enc[:22])
+	}
+	rd, err := agefile.Decrypt(pass, bytes.NewReader(enc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := io.ReadAll(rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := os.ReadFile(r.svc.filePath(d.ID, b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(plain, local) {
+		t.Fatalf("decrypted %d bytes != local file %d bytes", len(plain), len(local))
+	}
+	tmps, _ := filepath.Glob(filepath.Join(r.svc.dbDir(d.ID), "backups", "*.age.tmp"))
+	if len(tmps) != 0 {
+		t.Fatalf("temp files left: %v", tmps)
+	}
+}
+
+func TestUploadEncryptsPutFailureLeavesNoTemp(t *testing.T) {
+	r := newRig(t)
+	d := r.create(t, "Shop", "postgres", "18")
+	remote := r.withDestination(t)
+	remote.putErr = errors.New("connection refused")
+	r.svc.d.Destinations = fakeOpener{remote: remote, dest: &backupdest.Destination{
+		ID: 1, Name: "minio", Type: "s3", S3: backupdest.S3Config{Prefix: "pfx"}, Encrypt: true, Passphrase: "upload-passphrase-0123456789"}}
+	r.dumps("pg_dump -U postgres", "SELECT 1;\n")
+	r.useClock(day(15, 3, 0))
+	r.schedule(t, d.ID, r.toDestination, day(14, 3, 0))
+	r.svc.tick(context.Background())
+	b := r.lastBackup(t, d.ID)
+	if b.Upload == nil || b.Upload.Status != UploadFailed {
+		t.Fatalf("upload = %+v", b.Upload)
+	}
+	tmps, _ := filepath.Glob(filepath.Join(r.svc.dbDir(d.ID), "backups", "*.age.tmp"))
+	if len(tmps) != 0 {
+		t.Fatalf("temp files left: %v", tmps)
+	}
+}
+
+func TestUploadPlainStaysPlain(t *testing.T) {
+	r := newRig(t)
+	d := r.create(t, "Shop", "postgres", "18")
+	remote := r.withDestination(t)
+	r.dumps("pg_dump -U postgres", "SELECT 1;\n")
+	r.useClock(day(15, 3, 0))
+	r.schedule(t, d.ID, r.toDestination, day(14, 3, 0))
+	r.svc.tick(context.Background())
+	b := r.lastBackup(t, d.ID)
+	if b.Upload == nil || b.Upload.Status != UploadUploaded || b.Upload.Encrypted {
+		t.Fatalf("upload = %+v", b.Upload)
+	}
+	if strings.HasSuffix(b.Upload.ObjectKey, ".age") || !remote.has(b.Upload.ObjectKey) {
+		t.Fatalf("key = %q", b.Upload.ObjectKey)
 	}
 }
