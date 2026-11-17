@@ -19,6 +19,7 @@ type fakeHost struct {
 	calls      []string
 	containers map[string]*ContainerState
 	specs      map[string]ContainerSpec
+	created    []ContainerSpec // every Create, in order
 	volumes    map[string]bool
 	images     map[string]string // ref -> image ID after a pull
 	failOn     map[string]error  // call prefix -> error
@@ -161,6 +162,7 @@ func (f *fakeHost) Create(_ context.Context, spec ContainerSpec) error {
 	}
 	f.volumes[spec.Volume] = true
 	f.specs[spec.Name] = spec
+	f.created = append(f.created, spec)
 	st := &ContainerState{Exists: true, Running: !f.stopOnStart[spec.Image], Health: "healthy", Hash: spec.Labels[HashLabel], ImageID: "sha256:img-" + spec.Image, OnNetwork: true}
 	if h, ok := f.health[spec.Image]; ok {
 		st.Health = h

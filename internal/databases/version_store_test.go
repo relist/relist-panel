@@ -207,3 +207,27 @@ func TestTargetVolume(t *testing.T) {
 		t.Fatalf("targetVolume = %q", got)
 	}
 }
+
+// An in-place change switches the record before the new image's first start:
+// the row stays running until the start is through.
+func TestVersionCommitKeepRunning(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	d := seedDB(t, s, "Shop")
+	c := insertChange(t, s, d, VersionMethodInPlace)
+	if err := s.CommitVersionChange(ctx, VersionCommit{ChangeID: c.ID, DatabaseID: d.ID, Version: "19", Volume: d.Volume, KeepRunning: true}); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ := s.GetVersionChange(ctx, d.ID, c.ID); row.Status != JobRunning || row.FinishedAt != nil {
+		t.Fatalf("row after switch = %+v", row)
+	}
+	if got, _ := s.Get(ctx, d.ID); got.Version != "19" {
+		t.Fatalf("version = %q", got.Version)
+	}
+	if err := s.SucceedVersionChange(ctx, c.ID, "done\n"); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ := s.GetVersionChange(ctx, d.ID, c.ID); row.Status != JobSucceeded || row.FinishedAt == nil || row.Log != "done\n" {
+		t.Fatalf("row = %+v", row)
+	}
+}

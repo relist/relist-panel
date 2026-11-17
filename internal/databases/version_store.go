@@ -31,9 +31,13 @@ type VersionChange struct {
 }
 
 // VersionCommit is what a succeeded change writes in one transaction.
+// KeepRunning leaves the row running: an in-place change switches the
+// record before the new image's first start, and SucceedVersionChange ends
+// it after.
 type VersionCommit struct {
 	ChangeID, DatabaseID                          int64
 	Version, Volume, AppliedSpec, FromVolume, Log string
+	KeepRunning                                   bool
 }
 
 const versionColumns = `id, database_id, from_version, to_version, method, status, error, log, from_volume, to_volume, from_volume_removed_at, started_at, finished_at`
@@ -122,8 +126,12 @@ func (s *Store) CommitVersionChange(ctx context.Context, c VersionCommit) error 
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
+	status, finished := JobSucceeded, sql.NullInt64{Int64: now, Valid: true}
+	if c.KeepRunning {
+		status, finished = JobRunning, sql.NullInt64{}
+	}
 	res, err = tx.ExecContext(ctx, `UPDATE database_version_changes SET status = ?, from_volume = ?, log = ?, finished_at = ? WHERE id = ? AND database_id = ?`,
-		JobSucceeded, c.FromVolume, c.Log, now, c.ChangeID, c.DatabaseID)
+		status, c.FromVolume, c.Log, finished, c.ChangeID, c.DatabaseID)
 	if err != nil {
 		return err
 	}
@@ -131,6 +139,12 @@ func (s *Store) CommitVersionChange(ctx context.Context, c VersionCommit) error 
 		return ErrNotFound
 	}
 	return tx.Commit()
+}
+
+// SucceedVersionChange ends a change committed with KeepRunning.
+func (s *Store) SucceedVersionChange(ctx context.Context, id int64, log string) error {
+	return s.execOne(ctx, `UPDATE database_version_changes SET status = ?, log = ?, finished_at = ? WHERE id = ?`,
+		JobSucceeded, log, s.now().UnixMilli(), id)
 }
 
 // ListVersionChanges lists a Database's changes, newest first.
