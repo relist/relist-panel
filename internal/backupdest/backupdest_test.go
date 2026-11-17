@@ -629,3 +629,72 @@ func TestEncryptPassphraseRoundTrip(t *testing.T) {
 		t.Fatalf("after off-update = encrypt %v passphrase %q", got.Encrypt, got.Passphrase)
 	}
 }
+
+const passphrase23 = "p-0123456789-012345678x"
+
+func encForm(encrypt bool, pass string) string {
+	return `{"name":"vault","type":"s3","s3":{"endpoint":"http://minio:9000","region":"","bucket":"backups","prefix":"p","accessKeyId":"AKIA","pathStyle":true},"secret":"` + secret + `","encrypt":` + map[bool]string{true: "true", false: "false"}[encrypt] + `,"passphrase":"` + pass + `"}`
+}
+
+func TestEncryptionAPI(t *testing.T) {
+	r := newRig(t)
+	// A short passphrase is refused by field.
+	if w := r.do("POST", "/api/backup-destinations", encForm(true, "short-pass")); w.Code != 422 || !strings.Contains(w.Body.String(), `"field":"passphrase"`) {
+		t.Fatalf("short passphrase = %d %s", w.Code, w.Body)
+	}
+	// Encryption without a passphrase is refused too.
+	if w := r.do("POST", "/api/backup-destinations", encForm(true, "")); w.Code != 422 || !strings.Contains(w.Body.String(), `"field":"passphrase"`) {
+		t.Fatalf("missing passphrase = %d %s", w.Code, w.Body)
+	}
+	w := r.do("POST", "/api/backup-destinations", encForm(true, passphrase23))
+	if w.Code != 201 || !strings.Contains(w.Body.String(), `"encrypt":true`) {
+		t.Fatalf("create = %d %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), passphrase23) {
+		t.Fatalf("create response carries the passphrase: %s", w.Body)
+	}
+	// Reveal answers the passphrase and audits it as a secret read.
+	w = r.do("GET", "/api/backup-destinations/1/passphrase", "")
+	var rev struct {
+		Passphrase string `json:"passphrase"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &rev)
+	if w.Code != 200 || rev.Passphrase != passphrase23 {
+		t.Fatalf("reveal = %d", w.Code)
+	}
+	r.mu.Lock()
+	seen := false
+	for _, e := range r.events {
+		if e.Action == "secret.read" {
+			seen = true
+		}
+	}
+	r.mu.Unlock()
+	if !seen {
+		t.Fatal("no secret.read audit event for the reveal")
+	}
+	// An update with a blank passphrase keeps the stored one.
+	if w := r.do("PUT", "/api/backup-destinations/1", encForm(true, "")); w.Code != 200 {
+		t.Fatalf("keep update = %d %s", w.Code, w.Body)
+	}
+	if d, _ := r.svc.store.Get(context.Background(), 1); d.Passphrase != passphrase23 {
+		t.Fatal("stored passphrase lost on a keep update")
+	}
+	// A short new passphrase on update is refused.
+	if w := r.do("PUT", "/api/backup-destinations/1", encForm(true, "short-pass")); w.Code != 422 || !strings.Contains(w.Body.String(), `"field":"passphrase"`) {
+		t.Fatalf("short update = %d %s", w.Code, w.Body)
+	}
+	// A test failure naming the passphrase never reaches the browser.
+	r.remote.testFn = func() error { return errors.New("denied for " + passphrase23) }
+	if w := r.do("POST", "/api/backup-destinations/1/test", ""); strings.Contains(w.Body.String(), passphrase23) {
+		t.Fatalf("test response carries the passphrase: %s", w.Body)
+	}
+	// Turning encryption off forgets the passphrase; the reveal then refuses.
+	if w := r.do("PUT", "/api/backup-destinations/1", encForm(false, "")); w.Code != 200 {
+		t.Fatalf("off update = %d %s", w.Code, w.Body)
+	}
+	w = r.do("GET", "/api/backup-destinations/1/passphrase", "")
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "does not encrypt") {
+		t.Fatalf("reveal on plain = %d %s", w.Code, w.Body)
+	}
+}
