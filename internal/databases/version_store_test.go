@@ -143,3 +143,67 @@ func TestGetVersionChangeOtherDatabase(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
+
+// moveVolume commits a finished dump-and-restore change of d to volume v.
+func moveVolume(t *testing.T, s *Store, d Database, v string) {
+	t.Helper()
+	c := insertChange(t, s, d, VersionMethodDumpRestore)
+	err := s.CommitVersionChange(context.Background(), VersionCommit{ChangeID: c.ID, DatabaseID: d.ID, Version: d.Version,
+		Volume: v, AppliedSpec: d.AppliedSpec, FromVolume: d.Volume})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSpecUsesStoredVolume(t *testing.T) {
+	d := Database{ID: 3, Slug: "shop", Engine: "postgres", Version: "18", Password: "pw", Volume: "relist-db-3-v9"}
+	spec, _, err := specFor(d)
+	if err != nil || spec.Volume != "relist-db-3-v9" {
+		t.Fatalf("specFor volume = %q, %v", spec.Volume, err)
+	}
+	d.AppliedSpec = `{"Volume":"relist-db-3","Image":"postgres:18"}`
+	applied, err := appliedSpec(d)
+	if err != nil || applied.Volume != "relist-db-3-v9" {
+		t.Fatalf("appliedSpec volume = %q, %v", applied.Volume, err)
+	}
+}
+
+func TestVolumesListsCurrentAndPrevious(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "16")
+	d, _ = r.store.Get(ctx, d.ID)
+	to := fmt.Sprintf("relist-db-%d-v9", d.ID)
+	moveVolume(t, r.store, d, to)
+	vols, err := r.svc.Volumes(ctx)
+	if err != nil || !slices.Equal(vols, []string{to, d.Volume}) {
+		t.Fatalf("Volumes = %v, %v; want [%s %s]", vols, err, to, d.Volume)
+	}
+	v := r.view(t, d.ID)
+	if v.Volume != to || !slices.Equal(v.PreviousVolumes, []string{d.Volume}) {
+		t.Fatalf("view volume %q previous %v", v.Volume, v.PreviousVolumes)
+	}
+}
+
+func TestDeleteRemovesPreviousVolumes(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "16")
+	d, _ = r.store.Get(ctx, d.ID)
+	to := fmt.Sprintf("relist-db-%d-v9", d.ID)
+	moveVolume(t, r.store, d, to)
+	if err := r.svc.Delete(ctx, d.ID, "Shop", true); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []string{to, d.Volume} {
+		if !r.host.saw("remove-volume " + v) {
+			t.Fatalf("no remove-volume %s in %v", v, r.host.all())
+		}
+	}
+}
+
+func TestTargetVolume(t *testing.T) {
+	if got := targetVolume(3, 9); got != "relist-db-3-v9" {
+		t.Fatalf("targetVolume = %q", got)
+	}
+}

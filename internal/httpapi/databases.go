@@ -44,7 +44,10 @@ func ownDatabases(ctx context.Context, svc *databases.Service, images, volumes m
 		if v.Deleted { // a tombstone has no volume, and its image is the Admin's to clean
 			continue
 		}
-		volumes[databases.VolumeName(v.ID)] = databases.OwnerName
+		volumes[v.Volume] = databases.OwnerName
+		for _, prev := range v.PreviousVolumes {
+			volumes[prev] = databases.OwnerName
+		}
 		if e, ok := databases.Engines[v.Engine]; ok {
 			for _, ref := range imageref.Pinned(e.Image(v.Version)) {
 				images[ref] = databases.OwnerName
