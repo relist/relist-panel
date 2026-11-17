@@ -141,10 +141,10 @@ test.describe('change version', () => {
     await page.reload();
     await page.getByRole('tab', { name: 'Settings' }).click();
     await expect(page.getByText('16 → 18')).toBeVisible();
-    await expect(page.getByText(`Previous version data: relist-db-${id}`)).toBeVisible();
+    await expect(page.getByRole('cell', { name: `relist-db-${id} Delete` })).toBeVisible();
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Delete previous data' }).click();
-    await expect(page.getByText(`Previous version data: relist-db-${id}`)).toBeHidden();
+    await expect(page.getByRole('cell', { name: `relist-db-${id} Delete` })).toBeHidden();
     const vols = volumes();
     expect(vols).not.toContain(`relist-db-${id}`);
     expect(vols).toContain(`relist-db-${id}-v${change.id}`);

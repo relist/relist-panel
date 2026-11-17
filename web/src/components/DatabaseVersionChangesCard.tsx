@@ -55,22 +55,19 @@ export function DatabaseVersionChangesCard({ db }: { db: Database }) {
             title: 'Status',
           },
           { key: 'started', render: (_, row) => <RelativeTime value={row.startedAt} />, title: 'Started' },
+          { key: 'error', render: (_, row) => row.error && <Text type="danger">{row.error}</Text>, title: 'Error' },
           {
-            key: 'error',
-            render: (_, row) => (
-              <Flex gap={4} vertical>
-                {row.error && <Text type="danger">{row.error}</Text>}
-                {row.previousData && (
-                  <Flex align="center" gap={8} wrap>
-                    <Text type="secondary">Previous version data: {row.previousData}</Text>
-                    <Button danger onClick={() => remove(row)} size="small">
-                      Delete
-                    </Button>
-                  </Flex>
-                )}
-              </Flex>
-            ),
-            title: 'Error',
+            key: 'previous',
+            render: (_, row) =>
+              row.previousData && (
+                <Flex align="center" gap={8} wrap>
+                  <Text code>{row.previousData}</Text>
+                  <Button danger onClick={() => remove(row)} size="small">
+                    Delete
+                  </Button>
+                </Flex>
+              ),
+            title: 'Previous version data',
           },
         ]}
         dataSource={data}
@@ -80,6 +77,7 @@ export function DatabaseVersionChangesCard({ db }: { db: Database }) {
         }}
         pagination={false}
         rowKey="id"
+        scroll={{ x: 'max-content' }}
         size="small"
       />
     </Card>
