@@ -112,6 +112,8 @@ type Service struct {
 	// superuser password, pendingTries how many tries there are.
 	pendingRetry time.Duration
 	pendingTries int
+	// healthPoll and healthTimeout pace waitHealthy.
+	healthPoll, healthTimeout time.Duration
 }
 
 func New(d Deps) *Service {
@@ -126,7 +128,8 @@ func New(d Deps) *Service {
 	}
 	return &Service{d: d, locks: map[int64]*sync.Mutex{}, inflight: map[int64]bool{}, jobs: map[int64]string{}, jobsChanged: make(chan struct{}),
 		uploadStall: 5 * time.Minute, remoteTimeout: time.Minute,
-		pendingRetry: 5 * time.Second, pendingTries: 24}
+		pendingRetry: 5 * time.Second, pendingTries: 24,
+		healthPoll: 2 * time.Second, healthTimeout: 3 * time.Minute}
 }
 
 func (s *Service) locked(ctx context.Context) bool {
@@ -395,7 +398,7 @@ func (s *Service) reconcile(ctx context.Context, d Database) (changed bool, err 
 		}
 		changed = true
 	}
-	if spec.Alias != "" && !containsString(st.Aliases, spec.Alias) {
+	if !st.OnNetwork || (spec.Alias != "" && !containsString(st.Aliases, spec.Alias)) {
 		return changed, s.d.Host.Realias(ctx, spec.Name, spec.Alias)
 	}
 	return changed, nil
