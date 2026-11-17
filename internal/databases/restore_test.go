@@ -107,11 +107,13 @@ func TestRestoreFromBackupReplacesTarget(t *testing.T) {
 	}
 	r.svc.Wait()
 	lines := execLines(r)
-	if len(lines) != 4 || !strings.Contains(lines[0], "pg_dump") || !strings.HasSuffix(lines[1], pgAdmin) ||
-		!strings.HasSuffix(lines[2], pgAdmin) || !strings.HasSuffix(lines[3], pgRestore) {
+	if len(lines) != 5 || !strings.Contains(lines[0], "pg_dump") || !strings.HasSuffix(lines[1], pgAdmin) ||
+		!strings.HasSuffix(lines[2], pgAdmin) || !strings.HasSuffix(lines[3], pgAdmin) || !strings.HasSuffix(lines[4], pgRestore) {
 		t.Fatalf("exec order = %v", lines)
 	}
-	if len(*admin) != 2 || !strings.HasPrefix((*admin)[0], "SELECT pg_get_userbyid") || !strings.HasPrefix((*admin)[1], `DROP DATABASE IF EXISTS "app" WITH (FORCE);`) {
+	// inspect, the per-database settings, then the replace.
+	if len(*admin) != 3 || !strings.HasPrefix((*admin)[0], "SELECT pg_get_userbyid") || !strings.Contains((*admin)[1], "pg_db_role_setting") ||
+		!strings.HasPrefix((*admin)[2], `DROP DATABASE IF EXISTS "app" WITH (FORCE);`) {
 		t.Fatalf("admin sql = %q", *admin)
 	}
 	if len(*stdin) != 1 || (*stdin)[0] != "ORIGINAL;\n" {
@@ -238,7 +240,7 @@ func TestReplaceKeepsOwner(t *testing.T) {
 	}
 	r.svc.Wait()
 	want := "DROP DATABASE IF EXISTS \"app\" WITH (FORCE);\nCREATE DATABASE \"app\" TEMPLATE template0 OWNER \"appuser\";\n"
-	if len(*admin) != 2 || (*admin)[1] != want {
+	if len(*admin) != 3 || (*admin)[2] != want {
 		t.Fatalf("replace sql = %q", *admin)
 	}
 	if !preFirst {

@@ -425,7 +425,8 @@ func TestRestoreReplaceKeepsACL(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.svc.Wait()
-	if len(*admin) != 2 || !strings.Contains((*admin)[1], `GRANT CONNECT ON DATABASE "app" TO "ro";`) || !strings.Contains((*admin)[1], `REVOKE ALL ON DATABASE "app" FROM PUBLIC;`) {
+	// inspect, the per-database settings, then the replace.
+	if len(*admin) != 3 || !strings.Contains((*admin)[2], `GRANT CONNECT ON DATABASE "app" TO "ro";`) || !strings.Contains((*admin)[2], `REVOKE ALL ON DATABASE "app" FROM PUBLIC;`) {
 		t.Fatalf("admin sql = %q", *admin)
 	}
 }

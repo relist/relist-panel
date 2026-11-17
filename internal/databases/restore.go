@@ -274,18 +274,19 @@ func (s *Service) executeRestore(ctx context.Context, d Database, dp Dumper, r R
 		}
 	}
 
-	prev, log, err := s.admin(ctx, d, dp, dp.InspectSQL(target))
+	// A replace keeps the target's owner, ACL and per-database settings,
+	// which DROP DATABASE deletes and a one-database dump does not carry.
+	st, log, err := s.captureState(ctx, d, dp, target)
 	if err != nil {
 		s.finishRestore(ctx, r, pre, JobFailed, err.Error(), log)
 		return
 	}
-	prev = strings.TrimSpace(prev)
-	if !replace && prev != "" {
+	if !replace && st.Prev != "" {
 		// It was created after the target was checked; nothing was backed up.
 		s.finishRestore(ctx, r, pre, JobFailed, "the database "+target+" now exists; it was not replaced", "")
 		return
 	}
-	log, err = s.restoreInto(ctx, d, dp, dbState{Name: target, Prev: prev}, path)
+	log, err = s.restoreInto(ctx, d, dp, st, path)
 	if err != nil {
 		s.finishRestore(ctx, r, pre, JobFailed, err.Error(), log)
 		return
