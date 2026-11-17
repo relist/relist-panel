@@ -159,3 +159,40 @@ func TestDeleteDatabaseCascades(t *testing.T) {
 		t.Fatalf("restores survived: %+v", rs)
 	}
 }
+
+func TestUploadEncryptedRoundTrip(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	d := seedDB(t, s, "Shop")
+	if _, err := s.db.Exec(`INSERT INTO backup_destinations (id, name, type, config, secret, created_at, updated_at) VALUES (1, 'minio', 's3', '{}', 'x', 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerScheduled, LogicalName: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.InsertUpload(ctx, Upload{BackupID: b.ID, DestinationID: 1, ObjectKey: "k/f.sql.gz.age", Status: UploadRunning, Encrypted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !u.Encrypted {
+		t.Fatalf("inserted row lost Encrypted: %+v", u)
+	}
+	if err := s.FinishUpload(ctx, u.ID, UploadUploaded, "", time.UnixMilli(1000)); err != nil {
+		t.Fatal(err)
+	}
+	live, err := s.LiveUploads(ctx, d.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != 1 || !live[0].Encrypted {
+		t.Fatalf("live = %+v", live)
+	}
+	list, err := s.ListBackups(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Upload == nil || !list[0].Upload.Encrypted {
+		t.Fatalf("list upload = %+v", list[0].Upload)
+	}
+}

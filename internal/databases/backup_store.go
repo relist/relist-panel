@@ -58,6 +58,7 @@ type Upload struct {
 	ID, BackupID, DestinationID int64
 	DestinationName             string
 	ObjectKey, Status, Error    string
+	Encrypted                   bool
 	UploadedAt, DeletedAt       *time.Time
 }
 
@@ -292,12 +293,12 @@ func (s *Store) FailRunning(ctx context.Context, msg string) ([]Backup, error) {
 	return out, nil
 }
 
-const uploadColumns = `u.id, u.backup_id, u.destination_id, d.name, u.object_key, u.status, u.error, u.uploaded_at, u.deleted_at`
+const uploadColumns = `u.id, u.backup_id, u.destination_id, d.name, u.object_key, u.status, u.error, u.encrypted, u.uploaded_at, u.deleted_at`
 
 func scanUpload(row interface{ Scan(...any) error }) (Upload, error) {
 	var u Upload
 	var up, del sql.NullInt64
-	if err := row.Scan(&u.ID, &u.BackupID, &u.DestinationID, &u.DestinationName, &u.ObjectKey, &u.Status, &u.Error, &up, &del); err != nil {
+	if err := row.Scan(&u.ID, &u.BackupID, &u.DestinationID, &u.DestinationName, &u.ObjectKey, &u.Status, &u.Error, &u.Encrypted, &up, &del); err != nil {
 		return Upload{}, err
 	}
 	if up.Valid {
@@ -336,8 +337,8 @@ func (s *Store) latestUploads(ctx context.Context, databaseID int64) (map[int64]
 // InsertUpload stores u (ID is set here) and returns the stored row.
 func (s *Store) InsertUpload(ctx context.Context, u Upload) (Upload, error) {
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO database_backup_uploads (backup_id, destination_id, object_key, status) VALUES (?, ?, ?, ?)`,
-		u.BackupID, u.DestinationID, u.ObjectKey, u.Status)
+		INSERT INTO database_backup_uploads (backup_id, destination_id, object_key, status, encrypted) VALUES (?, ?, ?, ?, ?)`,
+		u.BackupID, u.DestinationID, u.ObjectKey, u.Status, u.Encrypted)
 	if err != nil {
 		return Upload{}, err
 	}

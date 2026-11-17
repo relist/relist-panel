@@ -5,8 +5,20 @@ import (
 	"time"
 )
 
-// Keep is one Rotation rule set: a nil field is no limit.
-type Keep struct{ Count, Days *int }
+// The Rotation modes. An empty Mode reads as Simple everywhere.
+const (
+	RotateSimple = "simple"
+	RotateGFS    = "gfs"
+)
+
+// Keep is one Rotation rule set: a nil field is no limit. Count and Days
+// drive Simple mode; Count and the GFS tiers drive GFS mode (Days is
+// Simple-only and normalized to nil on a GFS save).
+type Keep struct {
+	Mode                                   string
+	Count, Days                            *int
+	GFSDays, GFSWeeks, GFSMonths, GFSYears *int
+}
 
 // RotItem is a Backup, or a copy of one, that Rotation may delete. Group is
 // the logical database name: Rotation counts per group.

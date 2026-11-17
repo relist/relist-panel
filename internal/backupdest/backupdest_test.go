@@ -589,3 +589,43 @@ func TestSFTPResponsesNeverCarrySecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestEncryptPassphraseRoundTrip(t *testing.T) {
+	db, err := database.OpenAndMigrate(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	s := NewStore(db)
+	ctx := context.Background()
+	now := time.Unix(1000, 0)
+	d, err := s.Create(ctx, Destination{Name: "minio", Type: TypeS3,
+		S3:     S3Config{Endpoint: "http://minio:9000", Bucket: "b", AccessKeyID: "AKIA"},
+		Secret: "sec", Encrypt: true, Passphrase: "p-0123456789-0123456789"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Encrypt || got.Passphrase != "p-0123456789-0123456789" {
+		t.Fatalf("got = encrypt %v passphrase %q", got.Encrypt, got.Passphrase)
+	}
+	// An empty Passphrase on Update keeps the stored one, like Secret.
+	got.Passphrase = ""
+	if err := s.Update(ctx, got, now); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx, d.ID); !got.Encrypt || got.Passphrase != "p-0123456789-0123456789" {
+		t.Fatalf("after keep-update = encrypt %v passphrase %q", got.Encrypt, got.Passphrase)
+	}
+	// Turning encryption off clears the stored passphrase.
+	got.Encrypt = false
+	if err := s.Update(ctx, got, now); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx, d.ID); got.Encrypt || got.Passphrase != "" {
+		t.Fatalf("after off-update = encrypt %v passphrase %q", got.Encrypt, got.Passphrase)
+	}
+}
