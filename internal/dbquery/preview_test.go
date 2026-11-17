@@ -32,6 +32,8 @@ func TestPreviewStatements(t *testing.T) {
 		{"postgres", "SELECT 1", 0, "Statement 1 starts with SELECT."},
 		{"mysql", "/*!50000 DROP TABLE t */", 0, "starts with an executable comment."},
 		{"mariadb", "/*M!100000 DROP TABLE t */", 0, "starts with an executable comment."},
+		{"mysql", "INSERT INTO t VALUES (1) /*!50000 , (2) */", 0, "holds an executable comment."},
+		{"mariadb", "update t set a=1 /*M!100000 , b=2 */ where id=1", 0, "holds an executable comment."},
 	}
 	for _, c := range refused {
 		stmts, qe := PreviewStatements(c.engine, c.sql)

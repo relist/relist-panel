@@ -104,6 +104,14 @@ func PreviewStatements(engine, sql string) ([]Statement, *QueryError) {
 				StatementIndex: i, StatementStart: st.Start,
 			}
 		}
+		if my && (strings.Contains(st.Text, "/*!") || strings.Contains(st.Text, "/*M!")) {
+			// Anywhere in the statement, a string literal included: refusing a
+			// legitimate /*! inside data is safe, running one is not.
+			return nil, &QueryError{
+				Message:        fmt.Sprintf("%s Statement %d holds an executable comment.", previewBase(engine), i+1),
+				StatementIndex: i, StatementStart: st.Start,
+			}
+		}
 		word := leadingWord(lead)
 		if word == "INSERT" || word == "UPDATE" || word == "DELETE" || (my && word == "REPLACE") {
 			continue
