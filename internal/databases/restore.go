@@ -285,26 +285,10 @@ func (s *Service) executeRestore(ctx context.Context, d Database, dp Dumper, r R
 		s.finishRestore(ctx, r, pre, JobFailed, "the database "+target+" now exists; it was not replaced", "")
 		return
 	}
-	if _, log, err := s.admin(ctx, d, dp, dp.ReplaceSQL(target, prev)); err != nil {
+	log, err = s.restoreInto(ctx, d, dp, dbState{Name: target, Prev: prev}, path)
+	if err != nil {
 		s.finishRestore(ctx, r, pre, JobFailed, err.Error(), log)
 		return
 	}
-
-	in, c, err := openSQL(path)
-	if err != nil {
-		s.finishRestore(ctx, r, pre, JobFailed, err.Error(), "")
-		return
-	}
-	defer c.Close()
-	cmd, extra := dp.RestoreCmd(target)
-	errOut := &tailBuffer{max: logLimit}
-	code, err := s.d.Host.Exec(ctx, ContainerName(d.ID), ExecRequest{Cmd: cmd, Env: execEnv(dp, d.Password, extra), Stdin: in, Stderr: errOut})
-	switch {
-	case err != nil:
-		s.finishRestore(ctx, r, pre, JobFailed, err.Error(), errOut.String())
-	case code != 0:
-		s.finishRestore(ctx, r, pre, JobFailed, fmt.Sprintf("the restore command exited with code %d", code), errOut.String())
-	default:
-		s.finishRestore(ctx, r, pre, JobSucceeded, "", errOut.String())
-	}
+	s.finishRestore(ctx, r, pre, JobSucceeded, "", log)
 }
