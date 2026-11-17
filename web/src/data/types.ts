@@ -1195,7 +1195,7 @@ export type DatabaseStatus =
   | 'deleted';
 
 /** The job running on a Database; while one runs, lifecycle actions answer 409. */
-export type DatabaseJob = '' | 'backup' | 'restore' | 'update_image' | 'rotate' | 'drop_database' | 'reset_password';
+export type DatabaseJob = '' | 'backup' | 'restore' | 'update_image' | 'rotate' | 'drop_database' | 'reset_password' | 'change_version';
 
 export interface Database {
   id: number;
@@ -1224,8 +1224,27 @@ export interface Database {
   job: DatabaseJob;
   /** A tombstone: only its Backups remain. */
   deleted: boolean;
+  /** The higher versions Change version can move it to, lowest first. */
+  upgrades: string[];
   /** Set for a grantee: how they reach this Database (ADR-0045). */
   access?: DatabaseGrantAccess;
+}
+
+/**
+ * One Change version of a Database (ADR-0047). previousData is the volume a
+ * succeeded Postgres change left behind, until it is deleted; "" otherwise.
+ */
+export interface VersionChange {
+  id: number;
+  fromVersion: string;
+  toVersion: string;
+  method: 'dump_restore' | 'in_place';
+  status: 'running' | 'succeeded' | 'failed';
+  error: string;
+  log: string;
+  previousData: string;
+  startedAt: string;
+  finishedAt: string | null;
 }
 
 /** A grantee's own grant: the managed user they work as, or a Redis level. */

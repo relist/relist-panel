@@ -5,7 +5,9 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import useSWR, { useSWRConfig } from 'swr';
 
 import { paths } from '../app/paths';
+import { ChangeVersionModal } from '../components/ChangeVersionModal';
 import { DangerModal } from '../components/DangerModal';
+import { DatabaseVersionChangesCard } from '../components/DatabaseVersionChangesCard';
 import { PageHeader } from '../components/primitives';
 import { api } from '../data/api';
 import type { Database, DatabaseAction, DatabaseCredentials } from '../data/types';
@@ -40,6 +42,7 @@ export function DatabasePage() {
   const [actionError, setActionError] = useState<string>();
   const [updating, setUpdating] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [changing, setChanging] = useState(false);
 
   const act = async (action: DatabaseAction, done: string) => {
     setBusy(action);
@@ -127,6 +130,13 @@ export function DatabasePage() {
                   Update image
                 </Button>
               </Tooltip>
+              {data.upgrades.length > 0 && (
+                <Tooltip title={data.status === 'running' ? undefined : 'Start the Database first'}>
+                  <Button disabled={jobRunning || data.status !== 'running'} onClick={() => setChanging(true)}>
+                    Change version
+                  </Button>
+                </Tooltip>
+              )}
               {canRepair(data) && (
                 <Button disabled={jobRunning} loading={busy === 'repair'} onClick={() => void act('repair', `Repaired ${name}`)} type="primary">
                   Repair
@@ -249,6 +259,16 @@ export function DatabasePage() {
         />
       )}
       {isLoading && !data && !error && <Text type="secondary">Loading…</Text>}
+      {changing && data && (
+        <ChangeVersionModal
+          db={data}
+          onClose={() => setChanging(false)}
+          onStarted={() => {
+            setChanging(false);
+            void mutate();
+          }}
+        />
+      )}
       <Modal
         confirmLoading={updateBusy}
         destroyOnHidden
@@ -553,6 +573,7 @@ function SettingsTab({ db, onDeleted, onRenamed }: { db: Database; onDeleted: ()
   return (
     <Flex gap={16} vertical>
       {error && <Alert showIcon title={error} type="error" />}
+      <DatabaseVersionChangesCard db={db} />
       <Card title="Name" variant="outlined">
         <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
           Renaming changes the readable host only. The Database is not restarted, and the stable host stays {db.host}.

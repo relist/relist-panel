@@ -131,6 +131,11 @@ describe('phase 7 helpers', () => {
     expect(jobNotice('drop_database')).toContain('backs up first');
   });
 
+  it('names a version change', () => {
+    expect(jobLabel('change_version')).toBe('Changing the version');
+    expect(jobNotice('change_version')).toBe('The version is being changed. The Database is unavailable until it ends; other changes wait.');
+  });
+
   it('finds the role a restore needs', () => {
     expect(missingRole('ERROR:  role "app" does not exist')).toBe('app');
     expect(missingRole('something else')).toBeUndefined();

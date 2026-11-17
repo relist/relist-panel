@@ -109,6 +109,8 @@ export function jobNotice(job: Database['job']): string {
       return 'The superuser password is being reset and the Database restarted. Other changes wait until it ends.';
     case 'rotate':
       return 'Old scheduled backups are being deleted. Other changes wait until it ends.';
+    case 'change_version':
+      return 'The version is being changed. The Database is unavailable until it ends; other changes wait.';
     default:
       return '';
   }
@@ -121,7 +123,15 @@ const JOBS: Record<string, string> = {
   rotate: 'Rotating backups',
   drop_database: 'Dropping a database',
   reset_password: 'Resetting the password',
+  change_version: 'Changing the version',
 };
+
+const ENGINES: Record<string, string> = { mariadb: 'MariaDB', mysql: 'MySQL', postgres: 'PostgreSQL', redis: 'Redis' };
+
+/** The display name of an engine. */
+export function engineLabel(engine: string): string {
+  return ENGINES[engine] ?? engine;
+}
 
 /** The short name of a running job. */
 export function jobLabel(job: Database['job']): string {
