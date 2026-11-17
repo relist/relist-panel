@@ -449,3 +449,45 @@ func TestChangeVersionInPlaceBackupFailureChangesNothing(t *testing.T) {
 		t.Fatalf("database = %+v", got)
 	}
 }
+
+// Review Focus 3: the panel stopped half-way through a change, after the new
+// container was created but before the switch.
+func TestInterruptedChangeRecovers(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "16")
+	d, _ = r.store.Get(ctx, d.ID)
+	c, err := r.store.InsertVersionChange(ctx, VersionChange{DatabaseID: d.ID, FromVersion: "16", ToVersion: "18", Method: VersionMethodDumpRestore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	to := targetVolume(d.ID, c.ID)
+	if err := r.store.SetVersionChangeTarget(ctx, c.ID, to); err != nil {
+		t.Fatal(err)
+	}
+	next := d
+	next.Version, next.Volume = "18", to
+	spec, _, _ := specFor(next)
+	if err := r.host.Create(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.Startup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.ReconcileAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.SweepFailedVersionVolumes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	row, _ := r.store.GetVersionChange(ctx, d.ID, c.ID)
+	if row.Status != JobFailed || row.Error != interrupted {
+		t.Fatalf("row = %+v", row)
+	}
+	if got := r.host.specs[ContainerName(d.ID)]; got.Image != "postgres:16" || got.Volume != "relist-db-1" {
+		t.Fatalf("container = %+v", got)
+	}
+	if !r.host.saw("remove-volume "+to) || r.host.volumes[to] {
+		t.Fatalf("target volume kept: %v", r.host.all())
+	}
+}

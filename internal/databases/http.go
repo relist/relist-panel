@@ -40,6 +40,9 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/databases/{id}/repair", a.action(a.s.Repair))
 	mux.HandleFunc("POST /api/databases/{id}/update-image", a.updateImage)
 	mux.HandleFunc("POST /api/databases/{id}/apply-settings", a.action(a.s.ApplySettings))
+	mux.HandleFunc("POST /api/databases/{id}/change-version", a.changeVersion)
+	mux.HandleFunc("GET /api/databases/{id}/version-changes", a.listVersionChanges)
+	mux.HandleFunc("DELETE /api/databases/{id}/version-changes/{changeID}/previous-data", a.deletePreviousData)
 	mux.HandleFunc("GET /api/databases/{id}/logical-databases", a.logicalDatabases)
 	mux.HandleFunc("GET /api/databases/{id}/logical-databases/details", a.logicalDetails)
 	mux.HandleFunc("POST /api/databases/{id}/logical-databases", a.createLogical)
@@ -465,7 +468,7 @@ func writeError(w http.ResponseWriter, err error) {
 	case errors.As(err, &invalid), errors.As(err, &fullOnSuper), errors.As(err, &reserved), errors.As(err, &ownerAccess),
 		errors.As(err, &protected), errors.Is(err, ErrBadUserName),
 		errors.Is(err, ErrNeedPassphrase), errors.Is(err, agefile.ErrWrongPassphrase), errors.Is(err, agefile.ErrTooExpensive),
-		errors.Is(err, agefile.ErrDamaged):
+		errors.Is(err, agefile.ErrDamaged), errors.Is(err, ErrNotHigher):
 		writeJSONError(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.As(err, &userOwns), errors.As(err, &userOwnsIn), errors.As(err, &userExists), errors.As(err, &dbExists), errors.Is(err, ErrPendingPassword), errors.Is(err, ErrUserNotManaged):
 		writeJSONError(w, http.StatusConflict, err.Error())
@@ -480,6 +483,8 @@ func writeError(w http.ResponseWriter, err error) {
 		errors.Is(err, ErrUnsafeName), errors.Is(err, ErrBadTarget), errors.Is(err, ErrNothingToBackUp), errors.Is(err, ErrNotRestorable),
 		errors.Is(err, ErrBadUpload), errors.Is(err, ErrNoQuery), errors.Is(err, ErrNoConsole), errors.As(err, &forbidden):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrNoPreviousData):
+		writeJSONError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, "Database not found")
 	case errors.Is(err, ErrDuplicateName), errors.Is(err, ErrLocked), errors.Is(err, ErrBusy), errors.Is(err, ErrNotRunning), errors.Is(err, ErrChangedFile), errors.Is(err, ErrRemoteOnly), errors.Is(err, ErrNotScheduled), errors.Is(err, ErrNoFailedUpload):
