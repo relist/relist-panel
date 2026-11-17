@@ -1305,6 +1305,8 @@ export interface DatabaseBackupUpload {
   destination: string;
   status: 'running' | 'uploaded' | 'failed';
   error: string;
+  /** The copy is an age file (`<file>.age`), opened with the destination's passphrase. */
+  encrypted: boolean;
   uploadedAt: string | null;
 }
 
@@ -1384,6 +1386,8 @@ export interface BackupDestinationSftp {
 export type BackupDestination = {
   id: number;
   name: string;
+  /** Copies to this destination are age-encrypted with the stored passphrase. */
+  encrypt: boolean;
   lastTestAt: string | null;
   lastTestOk: boolean;
   lastTestError: string;
@@ -1396,7 +1400,7 @@ export type BackupDestinationSftpInput = Omit<BackupDestinationSftp, 'hostKey' |
  * one. The secret is the S3 secret access key or the SFTP password ('' with
  * key auth). The type cannot change on edit.
  */
-export type BackupDestinationInput = { name: string; secret: string } & (
+export type BackupDestinationInput = { name: string; secret: string; encrypt: boolean; passphrase: string } & (
   | { type: 's3'; s3: BackupDestinationS3 }
   | { type: 'sftp'; sftp: BackupDestinationSftpInput }
 );

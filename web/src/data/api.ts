@@ -668,14 +668,25 @@ export const api = {
   testBackupDestination: (id: number) => request<BackupDestination>(`/api/backup-destinations/${id}/test`, { method: 'POST' }),
   resetBackupDestinationHostKey: (id: number) =>
     request<BackupDestination>(`/api/backup-destinations/${id}/reset-host-key`, { method: 'POST' }),
+  /** Reveals the encryption passphrase; every call is audited. */
+  revealDestinationPassphrase: (id: number) =>
+    request<{ passphrase: string }>(`/api/backup-destinations/${id}/passphrase`),
   listDatabaseRestores: (id: number) => request<DatabaseRestore[]>(`/api/databases/${id}/restores`),
   restoreDatabase: (id: number, backupId: number, target: string, confirm: string) =>
     request<DatabaseRestore>(`/api/databases/${id}/restores`, jsonInit('POST', { backupId, confirm, target })),
-  /** The raw file is the request body; target, confirm and name travel in the query. */
-  restoreDatabaseUpload: (id: number, file: File, target: string, confirm: string) =>
+  /**
+   * The raw file is the request body; target, confirm and name travel in the
+   * query. An age file's passphrase rides in a header, never the query, which
+   * can end up in access logs.
+   */
+  restoreDatabaseUpload: (id: number, file: File, target: string, confirm: string, passphrase?: string) =>
     request<DatabaseRestore>(
       `/api/databases/${id}/restores/upload?${new URLSearchParams({ confirm, name: file.name, target })}`,
-      { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file },
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', ...(passphrase ? { 'X-Passphrase': passphrase } : {}) },
+        body: file,
+      },
     ),
   /** Reveals the password; every call is audited. */
   databaseBackupUrl: (id: number, backupId: number) => `/api/databases/${id}/backups/${backupId}/download`,

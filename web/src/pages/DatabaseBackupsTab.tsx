@@ -79,7 +79,7 @@ function CopyCell({ onRetry, row }: { onRetry: () => void; row: DatabaseBackup }
   if (!upload) return <Text type="secondary">—</Text>;
   if (upload.status === 'uploaded') {
     return (
-      <Tooltip title={`Copied to ${upload.destination}`}>
+      <Tooltip title={`Copied to ${upload.destination}${upload.encrypted ? ' · Encrypted (.age)' : ''}`}>
         <Tag color="success">Copied</Tag>
       </Tooltip>
     );
@@ -99,7 +99,9 @@ function CopyCell({ onRetry, row }: { onRetry: () => void; row: DatabaseBackup }
   );
 }
 
-type RestoreSource = { backup: DatabaseBackup; kind: 'backup' } | { file: File; kind: 'upload' };
+type RestoreSource = { backup: DatabaseBackup; kind: 'backup' } | { encrypted: boolean; file: File; kind: 'upload' };
+
+const AGE_HEADER = 'age-encryption.org/v1\n';
 
 /**
  * A Database's Backups: back up now, download, restore (from a Backup or an
@@ -123,6 +125,7 @@ export function DatabaseBackupsTab({ db, onOpenUsers }: { db: Database; onOpenUs
   const [targetMode, setTargetMode] = useState<'replace' | 'new'>();
   const [replaceName, setReplaceName] = useState('');
   const [newName, setNewName] = useState('');
+  const [agePassphrase, setAgePassphrase] = useState('');
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const logical = useSWR(source || (backingUp && scopeMode === 'selected') ? `${key}/logical` : null, () => api.databaseLogicalDatabases(db.id));
@@ -133,6 +136,7 @@ export function DatabaseBackupsTab({ db, onOpenUsers }: { db: Database; onOpenUs
     setTargetMode(undefined);
     setReplaceName('');
     setNewName('');
+    setAgePassphrase('');
   }, [source]);
 
   // A Backup restores into its own database when it still exists, and into a
@@ -182,6 +186,8 @@ export function DatabaseBackupsTab({ db, onOpenUsers }: { db: Database; onOpenUs
     try {
       if (source.kind === 'backup') {
         await api.restoreDatabase(db.id, source.backup.id, resolvedTarget, db.name);
+      } else if (source.encrypted) {
+        await api.restoreDatabaseUpload(db.id, source.file, resolvedTarget, db.name, agePassphrase);
       } else {
         await api.restoreDatabaseUpload(db.id, source.file, resolvedTarget, db.name);
       }
@@ -366,9 +372,15 @@ export function DatabaseBackupsTab({ db, onOpenUsers }: { db: Database; onOpenUs
               </Tooltip>
               <Tooltip title={reading ? undefined : reason}>
                 <Upload
-                  accept=".sql,.gz"
+                  accept=".sql,.gz,.age"
                   beforeUpload={(file) => {
-                    setSource({ file, kind: 'upload' });
+                    // An age file is told by its binary header; it then needs
+                    // its passphrase before the restore can start.
+                    void file
+                      .slice(0, AGE_HEADER.length)
+                      .text()
+                      .then((head) => setSource({ encrypted: head === AGE_HEADER, file, kind: 'upload' }))
+                      .catch(() => setSource({ encrypted: false, file, kind: 'upload' }));
                     return false;
                   }}
                   disabled={!reading}
@@ -458,6 +470,15 @@ export function DatabaseBackupsTab({ db, onOpenUsers }: { db: Database; onOpenUs
         consequences={
           <Flex gap={12} vertical>
             {source?.kind === 'upload' && <Text code>{source.file.name}</Text>}
+            {source?.kind === 'upload' && source.encrypted && (
+              <Input.Password
+                aria-label="Passphrase"
+                autoComplete="off"
+                onChange={(event) => setAgePassphrase(event.target.value)}
+                placeholder="This file is encrypted: enter its passphrase"
+                value={agePassphrase}
+              />
+            )}
             <Radio.Group onChange={(event) => setTargetMode(event.target.value as 'replace' | 'new')} value={targetMode}>
               <Flex gap={4} vertical>
                 <Radio value="replace">Replace an existing database</Radio>
@@ -487,7 +508,7 @@ export function DatabaseBackupsTab({ db, onOpenUsers }: { db: Database; onOpenUs
           </Flex>
         }
         description={warning}
-        disabled={!resolvedTarget}
+        disabled={!resolvedTarget || (source?.kind === 'upload' && source.encrypted && agePassphrase === '')}
         loading={busy}
         okText="Restore"
         onCancel={() => setSource(undefined)}
