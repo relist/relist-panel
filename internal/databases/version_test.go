@@ -138,3 +138,18 @@ func TestDBSettingsQueryQuotes(t *testing.T) {
 		t.Fatalf("query does not quote the name: %s", q)
 	}
 }
+
+// Review: psql cuts a long LINE echo with "...", so the closing quote can be
+// missing; the hash must still go.
+func TestRedactPasswordsTruncated(t *testing.T) {
+	in := "ERROR:  boom\nLINE 1: ...LOGIN NOREPLICATION NOBYPASSRLS PASSWORD 'SCRAM-SHA-256$4096:abcdefsalt...\n                                                             ^\nnext line"
+	got := redactPasswords(in)
+	for _, leak := range []string{"SCRAM", "abcdef"} {
+		if strings.Contains(got, leak) {
+			t.Fatalf("%q still in %q", leak, got)
+		}
+	}
+	if !strings.Contains(got, "next line") || !strings.Contains(got, "PASSWORD '***'") {
+		t.Fatalf("redacted too much or too little: %q", got)
+	}
+}
