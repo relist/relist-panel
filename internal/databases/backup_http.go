@@ -248,7 +248,9 @@ func (a *API) uploadRestore(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	a.target(r, n)
 	audit.Detail(r.Context(), "file", q.Get("name"))
-	rs, err := a.s.RestoreFromUpload(r.Context(), n, q.Get("target"), q.Get("confirm"), q.Get("name"), r.Body)
+	// The passphrase of an encrypted file rides in a header: a query string
+	// can end up in access logs.
+	rs, err := a.s.RestoreFromUpload(r.Context(), n, q.Get("target"), q.Get("confirm"), q.Get("name"), r.Header.Get("X-Passphrase"), r.Body)
 	if err != nil {
 		writeError(w, err)
 		return

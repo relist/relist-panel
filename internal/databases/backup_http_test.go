@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"relist-panel/internal/agefile"
 )
 
 func (a *apiRig) seed(t *testing.T, name, engine, version string) {
@@ -249,5 +252,46 @@ func TestDownloadAudited(t *testing.T) {
 	defer a.mu.Unlock()
 	if e := a.last.Event(); e.Target != "Shop" || e.Detail["backup"] != int64(1) {
 		t.Fatalf("audit event = %+v", e)
+	}
+}
+
+// The passphrase travels in the X-Passphrase header, never the query string.
+func TestRestoreUploadPassphraseHeader(t *testing.T) {
+	a := newAPIRig(t)
+	a.seed(t, "Shop", "postgres", "18")
+	a.dumps("pg_dump -U postgres", "PRE;\n")
+	a.adminSQL(pgAdmin, "postgres\n", nil)
+	got := a.captureRestore(pgRestore, "")
+	var buf bytes.Buffer
+	if err := agefile.Encrypt(&buf, agePass, strings.NewReader("SELECT 1;\n")); err != nil {
+		t.Fatal(err)
+	}
+	enc := buf.Bytes()
+	base := "/api/databases/1/restores/upload?name=a.sql.age&confirm=Shop&target=app"
+	// Without the passphrase: a 422 that names it.
+	req := httptest.NewRequest("POST", base, bytes.NewReader(enc))
+	w := httptest.NewRecorder()
+	a.h.ServeHTTP(w, req)
+	a.svc.Wait()
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "enter its passphrase") {
+		t.Fatalf("missing passphrase = %d %s", w.Code, w.Body)
+	}
+	// A wrong one: 422 with the message.
+	req = httptest.NewRequest("POST", base, bytes.NewReader(enc))
+	req.Header.Set("X-Passphrase", "not-the-passphrase-00000000")
+	w = httptest.NewRecorder()
+	a.h.ServeHTTP(w, req)
+	a.svc.Wait()
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "wrong passphrase") {
+		t.Fatalf("wrong passphrase = %d %s", w.Code, w.Body)
+	}
+	// The right one reaches the service and restores.
+	req = httptest.NewRequest("POST", base, bytes.NewReader(enc))
+	req.Header.Set("X-Passphrase", agePass)
+	w = httptest.NewRecorder()
+	a.h.ServeHTTP(w, req)
+	a.svc.Wait()
+	if w.Code != http.StatusAccepted || len(*got) != 1 || (*got)[0] != "SELECT 1;\n" {
+		t.Fatalf("restore = %d %s, stdin %q", w.Code, w.Body, *got)
 	}
 }
