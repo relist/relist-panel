@@ -127,11 +127,15 @@ func toJSON(v View) DatabaseJSON {
 
 func (a *API) list(w http.ResponseWriter, r *http.Request) {
 	if _, ok := authz.Member(r.Context()); ok {
-		// A non-Admin sees only the Databases their grants name.
-		if user, ok := auth.UserFrom(r.Context()); ok {
-			a.granteeList(w, r, user)
+		// A non-Admin sees only the Databases their grants name; without an
+		// identity in the context they see none, never the full list.
+		user, okUser := auth.UserFrom(r.Context())
+		if !okUser {
+			writeJSON(w, http.StatusOK, []DatabaseJSON{})
 			return
 		}
+		a.granteeList(w, r, user)
+		return
 	}
 	views, err := a.s.List(r.Context())
 	if err != nil {
@@ -364,7 +368,10 @@ func (a *API) credentials(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if want != "" && want != eng.User() {
+	// A grantee always reads its managed user's stored password, even one
+	// that happens to carry the superuser's name; only an Admin asking for
+	// the superuser by name gets d.Password.
+	if want != "" && (!c.Admin || want != eng.User()) {
 		if db := r.URL.Query().Get("database"); db != "" {
 			if !targetPattern.MatchString(db) {
 				writeJSONError(w, http.StatusUnprocessableEntity, ErrBadTarget.Error())

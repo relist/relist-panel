@@ -100,6 +100,44 @@ func TestGranteeCredentialsRefusedForServerWideUser(t *testing.T) {
 	}
 }
 
+// A grant whose managed user happens to carry the superuser's name must
+// still answer that managed user's stored password, never the superuser's.
+func TestGranteeNamedLikeSuperuserGetsOwnPassword(t *testing.T) {
+	r := newAdminRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	if err := r.store.UpsertUser(ctx, d.ID, "postgres", "managed-pw"); err != nil {
+		t.Fatal(err)
+	}
+	mux := plainMux(r)
+	alice := auth.User{ID: 2, Email: "alice@example.com"}
+	grant := authz.DatabaseGrant{DatabaseID: d.ID, DBUser: "postgres"}
+	got := doCtx(mux, granteeCtx(alice, grant), http.MethodGet, "/api/databases/1/credentials", "")
+	if got.Code != http.StatusOK {
+		t.Fatalf("credentials = %d: %s", got.Code, got.Body)
+	}
+	var body map[string]string
+	_ = json.Unmarshal(got.Body.Bytes(), &body)
+	super, _ := r.store.Get(ctx, d.ID)
+	if body["password"] != "managed-pw" || body["password"] == super.Password {
+		t.Fatalf("password = %q, want the managed user's, never the superuser's", body["password"])
+	}
+}
+
+// A non-Admin the middleware let onto the list route without an identity in
+// the context sees nothing: the list fails closed, never open.
+func TestMemberListWithoutIdentityIsEmpty(t *testing.T) {
+	qr := newQueryRig(t)
+	qr.create(t, "Shop", "postgres", "18")
+	mux := http.NewServeMux()
+	NewAPI(qr.svc).RegisterRoutes(mux)
+	ctx := authz.WithAccess(context.Background(), grants.Access{})
+	got := doCtx(mux, ctx, http.MethodGet, "/api/databases", "")
+	if got.Code != http.StatusOK || strings.TrimSpace(got.Body.String()) != "[]" {
+		t.Fatalf("member list without identity = %d: %s", got.Code, got.Body)
+	}
+}
+
 func TestNonAdminWithoutGrantIs404(t *testing.T) {
 	qr := newQueryRig(t)
 	qr.create(t, "Shop", "postgres", "18")
