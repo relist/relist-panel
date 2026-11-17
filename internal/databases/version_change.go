@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// ErrNoPreviousData is a change that kept no data, or whose data is deleted.
+var ErrNoPreviousData = errors.New("this version change has no previous version data")
 
 // ErrNotHigher refuses a Change version to the same or a lower version:
 // downgrades are never offered (ADR-0047).
@@ -412,4 +416,52 @@ func (r *versionRun) inPlace(ctx context.Context, backupFirst bool) {
 	}
 	r.log.WriteString("Done\n")
 	_ = s.d.Store.SucceedVersionChange(ctx, r.c.ID, r.logText())
+}
+
+// ListVersionChanges lists Database id's version changes, newest first.
+func (s *Service) ListVersionChanges(ctx context.Context, id int64) ([]VersionChange, error) {
+	d, err := s.d.Store.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if d.DeletedAt != nil {
+		return nil, ErrNotFound
+	}
+	return s.d.Store.ListVersionChanges(ctx, id)
+}
+
+// DeletePreviousData removes the volume a succeeded change left behind.
+func (s *Service) DeletePreviousData(ctx context.Context, id, changeID int64) error {
+	return s.opIdle(ctx, id, func(d Database) error {
+		c, err := s.d.Store.GetVersionChange(ctx, id, changeID)
+		if errors.Is(err, ErrNotFound) {
+			return ErrNoPreviousData
+		}
+		if err != nil {
+			return err
+		}
+		if c.Status != JobSucceeded || c.FromVolume == "" || c.FromVolumeRemovedAt != nil || c.FromVolume == volumeOf(d) {
+			return ErrNoPreviousData
+		}
+		if err := s.d.Host.RemoveVolume(ctx, c.FromVolume); err != nil {
+			return err
+		}
+		return s.d.Store.MarkFromVolumeRemoved(ctx, changeID)
+	})
+}
+
+// SweepFailedVersionVolumes removes the volumes failed or interrupted changes
+// were creating. Each name is unique to its change, so none is live data. A
+// volume still in use is logged and left for the next start.
+func (s *Service) SweepFailedVersionVolumes(ctx context.Context) error {
+	vols, err := s.d.Store.FailedTargetVolumes(ctx)
+	if err != nil {
+		return err
+	}
+	for _, v := range vols {
+		if err := s.d.Host.RemoveVolume(ctx, v); err != nil {
+			log.Printf("databases: remove the volume %s of a failed version change: %v", v, err)
+		}
+	}
+	return nil
 }

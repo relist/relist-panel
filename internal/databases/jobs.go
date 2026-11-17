@@ -112,6 +112,12 @@ func (s *Service) Startup(ctx context.Context) error {
 	if err := s.d.Store.FailRunningUploads(ctx, interrupted); err != nil {
 		return err
 	}
+	// The record still names the old version and volume, so ReconcileAll
+	// recreates the old container; SweepFailedVersionVolumes then removes
+	// the half-made volume.
+	if err := s.d.Store.FailRunningVersionChanges(ctx, interrupted); err != nil {
+		return err
+	}
 	if s.d.DataDir == "" {
 		return nil
 	}

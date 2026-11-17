@@ -411,6 +411,9 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			if err := databaseService.ReconcileAll(ctx); err != nil {
 				log.Printf("databases: reconcile at start: %v", err)
 			}
+			if err := databaseService.SweepFailedVersionVolumes(ctx); err != nil {
+				log.Printf("databases: sweep failed version changes: %v", err)
+			}
 			if err := databaseService.ResolvePendingPasswords(ctx); err != nil {
 				log.Printf("databases: settle a pending superuser password: %v", err)
 			}
