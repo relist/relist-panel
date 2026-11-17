@@ -319,7 +319,97 @@ func (r *versionRun) restoreOld(ctx context.Context, old ContainerSpec, created 
 	return errors.Join(errs...)
 }
 
-// inPlace is the MariaDB and Redis flow (Task 7).
+// inPlace is the MariaDB and Redis flow: back up (MariaDB, when asked),
+// pull, switch the record, then start the new image on the same volume.
+// Nothing is changed before the switch. After it there is no rollback: the
+// new version may already have rewritten the data, which the old one cannot
+// read (Redis 7.4 refuses an RDB that Redis 8 saved).
 func (r *versionRun) inPlace(ctx context.Context, backupFirst bool) {
-	r.fail(ctx, errors.New("changing the version in place is not available yet"), nil)
+	s, d := r.s, r.d
+	name := ContainerName(d.ID)
+	eng := Engines[d.Engine]
+	next := d
+	next.Version = r.c.ToVersion
+	newSpec, _, err := specFor(next)
+	if err != nil {
+		r.fail(ctx, err, nil)
+		return
+	}
+	var backups []string
+	if backupFirst && r.dp != nil {
+		var names []string
+		if err := r.step(ctx, "List the databases", func() (string, error) {
+			names, err = s.listLogical(ctx, d, r.dp)
+			return "", err
+		}); err != nil {
+			r.fail(ctx, err, nil)
+			return
+		}
+		for _, n := range names {
+			if err := r.step(ctx, "Back up "+n, func() (string, error) {
+				b := s.backupNow(ctx, d, r.dp, n, TriggerPreUpdate, nil)
+				if b.Status != JobSucceeded {
+					return b.Log, errors.New(b.Error)
+				}
+				backups = append(backups, fmt.Sprintf("#%d", b.ID))
+				return "", nil
+			}); err != nil {
+				r.fail(ctx, err, nil)
+				return
+			}
+		}
+	}
+	if err := r.step(ctx, "Pull "+newSpec.Image, func() (string, error) {
+		_, err := s.d.Host.PullImage(ctx, newSpec.Image)
+		return "", err
+	}); err != nil {
+		r.fail(ctx, err, nil)
+		return
+	}
+	if err := r.step(ctx, "Switch to "+newSpec.Image, func() (string, error) {
+		raw, err := json.Marshal(newSpec)
+		if err != nil {
+			return "", err
+		}
+		return "", s.withLock(d.ID, func() error {
+			return s.d.Store.CommitVersionChange(ctx, VersionCommit{ChangeID: r.c.ID, DatabaseID: d.ID, Version: r.c.ToVersion,
+				Volume: volumeOf(d), AppliedSpec: string(raw), Log: r.logText(), KeepRunning: true})
+		})
+	}); err != nil {
+		r.fail(ctx, err, nil)
+		return
+	}
+	start := func(spec ContainerSpec) error {
+		if err := s.withLock(d.ID, func() error { return s.d.Host.Create(ctx, spec) }); err != nil {
+			return err
+		}
+		return s.waitHealthy(ctx, name)
+	}
+	err = r.step(ctx, "Start "+newSpec.Image, func() (string, error) {
+		if d.Engine != "mariadb" {
+			return "", start(newSpec)
+		}
+		// MARIADB_AUTO_UPGRADE only for this first start: kept, it would be
+		// in the applied settings for good. The label hash is this
+		// container's own, so a restart in between recreates the plain one.
+		upgrade := newSpec
+		upgrade.Env = append(append([]string(nil), newSpec.Env...), "MARIADB_AUTO_UPGRADE=1")
+		upgrade.Labels = map[string]string{IDLabel: newSpec.Labels[IDLabel], HashLabel: hashSpec(upgrade)}
+		return "", start(upgrade)
+	})
+	if err == nil && d.Engine == "mariadb" {
+		err = r.step(ctx, "Recreate without MARIADB_AUTO_UPGRADE", func() (string, error) { return "", start(newSpec) })
+	}
+	if err != nil {
+		msg := fmt.Sprintf("%s %s did not start: %s. It is not rolled back: %s has rewritten the data, which %s cannot read.",
+			eng.Label(), r.c.ToVersion, redactPasswords(err.Error()), r.c.ToVersion, r.c.FromVersion)
+		if len(backups) > 0 {
+			msg += fmt.Sprintf(" The pre-update Backups %s hold the data from before the change.", strings.Join(backups, ", "))
+		}
+		_ = s.d.Store.SetLastError(ctx, d.ID, msg)
+		r.fail(ctx, err, nil)
+		return
+	}
+	r.log.WriteString("Done\n")
+	_ = s.d.Store.SucceedVersionChange(ctx, r.c.ID, r.logText())
 }

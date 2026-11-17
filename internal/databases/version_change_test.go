@@ -320,3 +320,132 @@ func TestChangeVersionRollbackFailure(t *testing.T) {
 		t.Fatalf("LastError = %q", got.LastError)
 	}
 }
+
+const mariaList = "mariadb -uroot -N -e SHOW DATABASES"
+
+// inPlaceRig is a running Database of engine at version, scripted to list
+// one logical database "app" and dump it.
+func inPlaceRig(t *testing.T, engine, version string) (*rig, Database) {
+	t.Helper()
+	r := newRig(t)
+	r.svc.healthPoll, r.svc.healthTimeout = time.Millisecond, 50*time.Millisecond
+	d := r.create(t, "Shop", engine, version)
+	d, _ = r.store.Get(context.Background(), d.ID)
+	r.host.script(mariaList, func(req ExecRequest) (int, error) {
+		_, err := io.WriteString(req.Stdout, "app\n")
+		return 0, err
+	})
+	r.dumps("mariadb-dump", "x;\n")
+	r.host.reset()
+	return r, d
+}
+
+func (r *rig) changeTo(t *testing.T, d Database, to string, backupFirst bool) VersionChange {
+	t.Helper()
+	c, err := r.svc.ChangeVersion(context.Background(), d.ID, to, backupFirst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Method != VersionMethodInPlace {
+		t.Fatalf("method = %q", c.Method)
+	}
+	r.svc.Wait()
+	got, err := r.store.GetVersionChange(context.Background(), d.ID, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func hasEnv(spec ContainerSpec, kv string) bool {
+	for _, e := range spec.Env {
+		if e == kv {
+			return true
+		}
+	}
+	return false
+}
+
+func TestChangeVersionMariaDBInPlace(t *testing.T) {
+	r, d := inPlaceRig(t, "mariadb", "11.4")
+	ctx := context.Background()
+	before := len(r.host.created)
+	c := r.changeTo(t, d, "11.8", true)
+	if c.Status != JobSucceeded || c.FromVolume != "" {
+		t.Fatalf("row = %+v", c)
+	}
+	bl, _ := r.store.ListBackups(ctx, d.ID)
+	if len(bl) != 1 || bl[0].Trigger != TriggerPreUpdate || bl[0].Status != JobSucceeded {
+		t.Fatalf("backups = %+v", bl)
+	}
+	creates := r.host.created[before:]
+	if len(creates) != 2 || !hasEnv(creates[0], "MARIADB_AUTO_UPGRADE=1") || hasEnv(creates[1], "MARIADB_AUTO_UPGRADE=1") ||
+		creates[0].Image != "mariadb:11.8" || creates[1].Image != "mariadb:11.8" || creates[1].Volume != d.Volume {
+		t.Fatalf("creates = %+v", creates)
+	}
+	if creates[0].Labels[HashLabel] == creates[1].Labels[HashLabel] {
+		t.Fatal("the upgrade container carries the plain container's hash")
+	}
+	got, _ := r.store.Get(ctx, d.ID)
+	spec, _ := appliedSpec(got)
+	if got.Version != "11.8" || got.Volume != d.Volume || hasEnv(spec, "MARIADB_AUTO_UPGRADE=1") || spec.Image != "mariadb:11.8" {
+		t.Fatalf("database = %+v, spec %+v", got, spec)
+	}
+	if v := r.view(t, d.ID); v.SettingsOutdated {
+		t.Fatal("settings outdated after the change")
+	}
+}
+
+func TestChangeVersionRedisInPlace(t *testing.T) {
+	r, d := inPlaceRig(t, "redis", "7.4")
+	c := r.changeTo(t, d, "8", true)
+	if c.Status != JobSucceeded {
+		t.Fatalf("row = %+v", c)
+	}
+	if bl, _ := r.store.ListBackups(context.Background(), d.ID); len(bl) != 0 {
+		t.Fatalf("backups = %+v", bl)
+	}
+	got, _ := r.store.Get(context.Background(), d.ID)
+	if got.Version != "8" || r.host.specs[ContainerName(d.ID)].Image != "redis:8" {
+		t.Fatalf("database = %+v", got)
+	}
+}
+
+// The new version may have rewritten the data already, which the old one
+// cannot read (redis 7.4 refuses an RDB redis 8 saved): no rollback.
+func TestChangeVersionInPlaceNoRollback(t *testing.T) {
+	r, d := inPlaceRig(t, "mariadb", "11.4")
+	r.host.health["mariadb:11.8"] = "unhealthy"
+	before := len(r.host.created)
+	c := r.changeTo(t, d, "11.8", true)
+	if c.Status != JobFailed || !strings.HasPrefix(c.Error, "Start mariadb:11.8: ") {
+		t.Fatalf("row = %+v", c)
+	}
+	for _, spec := range r.host.created[before:] {
+		if spec.Image != "mariadb:11.8" {
+			t.Fatalf("recreated %s after the switch", spec.Image)
+		}
+	}
+	got, _ := r.store.Get(context.Background(), d.ID)
+	bl, _ := r.store.ListBackups(context.Background(), d.ID)
+	if got.Version != "11.8" || !strings.Contains(got.LastError, "It is not rolled back") ||
+		len(bl) != 1 || !strings.Contains(got.LastError, fmt.Sprintf("#%d", bl[0].ID)) {
+		t.Fatalf("database = %+v", got)
+	}
+}
+
+func TestChangeVersionInPlaceBackupFailureChangesNothing(t *testing.T) {
+	r, d := inPlaceRig(t, "mariadb", "11.4")
+	r.host.failOn["exec "+ContainerName(d.ID)+" mariadb-dump"] = errors.New("dump failed")
+	c := r.changeTo(t, d, "11.8", true)
+	if c.Status != JobFailed || !strings.HasPrefix(c.Error, "Back up app: ") {
+		t.Fatalf("row = %+v", c)
+	}
+	if index(r.host.all(), "pull ") >= 0 || index(r.host.all(), "create ") >= 0 {
+		t.Fatalf("calls = %v", r.host.all())
+	}
+	got, _ := r.store.Get(context.Background(), d.ID)
+	if got.Version != "11.4" {
+		t.Fatalf("database = %+v", got)
+	}
+}
