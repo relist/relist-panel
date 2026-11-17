@@ -92,3 +92,10 @@ type Host interface {
 // OwnerName is who the Docker page shows as the owner of a Database's volume
 // and image, so cleanup never offers them.
 const OwnerName = "Databases"
+
+// targetVolume is the volume a version change moves a Database's data to.
+// The change's ID makes the name unique to that one attempt, so a volume a
+// failed or interrupted attempt left behind is never live data (ADR-0047).
+func targetVolume(id, changeID int64) string {
+	return fmt.Sprintf("relist-db-%d-v%d", id, changeID)
+}

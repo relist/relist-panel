@@ -85,6 +85,9 @@ type View struct {
 	// "update_image". Deleted is a tombstone.
 	Job     string
 	Deleted bool
+	// PreviousVolumes is the previous version data a version change left
+	// behind and nobody has deleted yet.
+	PreviousVolumes []string
 }
 
 // Service runs the panel's Databases. The database is the source of truth;
@@ -250,7 +253,7 @@ func specFor(d Database) (ContainerSpec, Engine, error) {
 		return ContainerSpec{}, nil, err
 	}
 	spec := ContainerSpec{
-		Name: ContainerName(d.ID), Volume: VolumeName(d.ID),
+		Name: ContainerName(d.ID), Volume: volumeOf(d),
 		Image: eng.Image(d.Version), DataPath: eng.DataPath(d.Version),
 		Env: eng.Env(d.Password), Cmd: eng.Cmd(), Healthcheck: eng.Healthcheck(),
 		Alias:       Alias(d.Slug),
@@ -274,6 +277,14 @@ func hashSpec(spec ContainerSpec) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// volumeOf is d's stored volume; a record from before the column has none.
+func volumeOf(d Database) string {
+	if d.Volume == "" {
+		return VolumeName(d.ID)
+	}
+	return d.Volume
+}
+
 // appliedSpec is the spec d's container was last created with, with the
 // names and alias of d as it is now. Before the first reconcile stored one,
 // it is today's specFor.
@@ -286,7 +297,7 @@ func appliedSpec(d Database) (ContainerSpec, error) {
 	if err := json.Unmarshal([]byte(d.AppliedSpec), &spec); err != nil {
 		return ContainerSpec{}, fmt.Errorf("read the applied settings: %w", err)
 	}
-	spec.Name, spec.Volume, spec.Alias = ContainerName(d.ID), VolumeName(d.ID), Alias(d.Slug)
+	spec.Name, spec.Volume, spec.Alias = ContainerName(d.ID), volumeOf(d), Alias(d.Slug)
 	spec.Labels = map[string]string{IDLabel: fmt.Sprint(d.ID), HashLabel: hashSpec(spec)}
 	return spec, nil
 }
@@ -631,8 +642,14 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBa
 		if err := s.d.Host.Remove(ctx, ContainerName(id)); err != nil {
 			return err
 		}
-		if err := s.d.Host.RemoveVolume(ctx, VolumeName(id)); err != nil {
+		prev, err := s.d.Store.PreviousVolumes(ctx)
+		if err != nil {
 			return err
+		}
+		for _, v := range append([]string{volumeOf(d)}, prev[id]...) {
+			if err := s.d.Host.RemoveVolume(ctx, v); err != nil {
+				return err
+			}
 		}
 		if !deleteBackups {
 			kept, err := s.d.Store.ListBackups(ctx, id)
@@ -686,7 +703,15 @@ func (s *Service) Get(ctx context.Context, id int64) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	return s.view(ctx, d), nil
+	v := s.view(ctx, d)
+	if !v.Deleted {
+		prev, err := s.d.Store.PreviousVolumes(ctx)
+		if err != nil {
+			return View{}, err
+		}
+		v.PreviousVolumes = prev[id]
+	}
+	return v, nil
 }
 
 func (s *Service) List(ctx context.Context) ([]View, error) {
@@ -694,9 +719,17 @@ func (s *Service) List(ctx context.Context) ([]View, error) {
 	if err != nil {
 		return nil, err
 	}
+	prev, err := s.d.Store.PreviousVolumes(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]View, 0, len(all))
 	for _, d := range all {
-		out = append(out, s.view(ctx, d))
+		v := s.view(ctx, d)
+		if !v.Deleted {
+			v.PreviousVolumes = prev[d.ID]
+		}
+		out = append(out, v)
 	}
 	return out, nil
 }
@@ -839,17 +872,22 @@ func (s *Service) StartWanted(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// Volumes names the volumes of Databases that have started once: the ones a
-// Migration must copy.
+// Volumes names the volumes of Databases that have started once, each
+// followed by its previous version data: the ones a Migration must copy.
 func (s *Service) Volumes(ctx context.Context) ([]string, error) {
 	all, err := s.d.Store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	prev, err := s.d.Store.PreviousVolumes(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out := []string{}
 	for _, d := range all {
 		if d.Initialized && d.DeletedAt == nil {
-			out = append(out, VolumeName(d.ID))
+			out = append(out, volumeOf(d))
+			out = append(out, prev[d.ID]...)
 		}
 	}
 	return out, nil
