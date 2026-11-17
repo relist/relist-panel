@@ -76,7 +76,16 @@ describe('DatabaseVersionChangesCard', () => {
     expect(screen.getByText('Succeeded')).toBeTruthy();
     expect(screen.getByText('Failed')).toBeTruthy();
     expect(screen.getByText('Restore legacy: the restore command exited with code 3')).toBeTruthy();
-    expect(screen.getByText('Previous version data: relist-db-1')).toBeTruthy();
+  });
+
+  it('shows previous version data in its own column, not under Error', async () => {
+    renderCard();
+    await screen.findByText('Version changes');
+    const headers = screen.getAllByRole('columnheader').map((th) => th.textContent);
+    expect(headers).toContain('Previous version data');
+    const cell = screen.getByText('relist-db-1').closest('td') as HTMLTableCellElement;
+    expect(headers[cell.cellIndex]).toBe('Previous version data');
+    expect(within(cell).getByRole('button', { name: 'Delete' })).toBeTruthy();
   });
 
   it('shows the log of an expanded row', async () => {

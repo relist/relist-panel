@@ -382,6 +382,33 @@ describe('Change version', () => {
     return { dialog: await screen.findByRole('dialog'), user };
   }
 
+  it('shows the running change on the Settings tab as soon as it starts', async () => {
+    api.getDatabase.mockResolvedValue(pg16);
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
+    await waitFor(() => expect(api.listVersionChanges).toHaveBeenCalled());
+    expect(screen.queryByText('Version changes')).toBeNull();
+    api.listVersionChanges.mockResolvedValue([
+      {
+        error: '',
+        finishedAt: null,
+        fromVersion: '16',
+        id: 1,
+        log: '',
+        method: 'dump_restore',
+        previousData: '',
+        startedAt: '2026-11-17T10:00:00Z',
+        status: 'running',
+        toVersion: '18',
+      },
+    ]);
+    await user.click(screen.getByRole('button', { name: 'Change version' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Change to 18' }));
+    const card = (await screen.findByText('Version changes')).closest('.ant-card') as HTMLElement;
+    expect(within(card).getByText('Running')).toBeTruthy();
+  });
+
   it('is not offered without a higher version', async () => {
     api.getDatabase.mockResolvedValue(shop);
     renderPage();

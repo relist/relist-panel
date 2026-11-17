@@ -34,6 +34,7 @@ export function DatabasePage() {
   const navigate = useNavigate();
   const databaseId = Number(useParams().databaseId);
   const key = `/api/databases/${databaseId}`;
+  const { mutate: refreshKey } = useSWRConfig();
   const { data, error, isLoading, mutate } = useSWR(key, () => api.getDatabase(databaseId), {
     refreshInterval: (row) => pollInterval(row ? [row] : undefined),
   });
@@ -266,6 +267,8 @@ export function DatabasePage() {
           onStarted={() => {
             setChanging(false);
             void mutate();
+            // The Settings tab's card polls only while it shows a running row.
+            void refreshKey(`/api/databases/${data.id}/version-changes`);
           }}
         />
       )}
