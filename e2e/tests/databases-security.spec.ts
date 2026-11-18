@@ -181,9 +181,9 @@ test.describe('owner-planted code never runs as the superuser', () => {
     expect(pwned(id, 'pwned-view')).toBe(false);
 
     // Run, by default, connects as the database's owner.
-    const run = await panel.json<{ user: string; results: { rows: unknown[][] }[]; error?: { message: string } }>(
+    const run = await panel.json<{ user: string; results: { rows: unknown[][] }[]; error: { message: string } | null }>(
       'POST', `/api/databases/${id}/query`, { database: 'app3', sql: 'SELECT n FROM orders' });
-    expect(run.error).toBeUndefined();
+    expect(run.error).toBeNull();
     expect(run.user).toBe('app3');
     expect(run.results[0].rows).toEqual([['7']]);
     expect(pwned(id, 'pwned-view')).toBe(false);
