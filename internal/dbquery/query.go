@@ -30,6 +30,9 @@ type Request struct {
 	// AsSuperuser is an Admin's choice to run as the superuser inside a
 	// database another role owns; the engines never read it.
 	AsSuperuser bool
+	// CatalogSearchPath starts a Postgres session on search_path
+	// pg_catalog, pg_temp, whatever the database's or role's settings say.
+	CatalogSearchPath bool
 }
 
 // Column is a result column.

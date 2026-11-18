@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -129,5 +130,25 @@ func TestReplaceRestoreKeepsRoleSettings(t *testing.T) {
 	}
 	if last := sqls[len(sqls)-1]; strings.TrimSpace(last) != setting {
 		t.Fatalf("last admin SQL = %q, want the setting", last)
+	}
+}
+
+// Review: the psql admin sessions (on template1) start on the catalog
+// search_path too, whatever a role or database setting says.
+func TestPostgresAdminCommandPinsSearchPath(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Pg", "postgres", "16")
+	d, _ = r.store.Get(ctx, d.ID)
+	var env []string
+	r.host.script(pgAdmin, func(req ExecRequest) (int, error) {
+		env = req.Env
+		return 0, nil
+	})
+	if _, _, err := r.svc.admin(ctx, d, pgDumper{}, "SELECT 1"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(env, "PGOPTIONS=-c search_path=pg_catalog,pg_temp") {
+		t.Fatalf("env = %q", env)
 	}
 }

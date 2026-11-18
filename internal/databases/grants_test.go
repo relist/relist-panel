@@ -242,6 +242,31 @@ func TestAdminQueryRunsAsTheOwner(t *testing.T) {
 		}
 	}
 
+	// Review: an opt-in superuser run inside a database another role owns
+	// starts on the catalog search_path, so the owner's ALTER DATABASE … SET
+	// search_path cannot shadow an operator it uses.
+	for _, c := range []struct {
+		database    string
+		asSuperuser bool
+		want        bool
+	}{{"shop", true, true}, {"appdb", true, true}, {"shop", false, false}, {"legacy", false, false}, {"legacy", true, false}} {
+		if _, err := qr.svc.Query(ctx, d.ID, "", dbquery.Request{Database: c.database, SQL: "SELECT 1", AsSuperuser: c.asSuperuser}); err != nil {
+			t.Fatal(err)
+		}
+		if got := qr.q.last().CatalogSearchPath; got != c.want {
+			t.Errorf("%+v: CatalogSearchPath = %v", c, got)
+		}
+	}
+
+	// Review: an owner can change its own password; the failed login says
+	// how to get back, not only "turn on the superuser".
+	qr.q.resp["SELECT 2"] = dbquery.QueryResponse{Results: []dbquery.QueryResult{},
+		Error: &dbquery.QueryError{Message: `failed to connect: FATAL: password authentication failed for user "shop" (SQLSTATE 28P01)`}}
+	resp, err := qr.svc.Query(ctx, d.ID, "", dbquery.Request{Database: "shop", SQL: "SELECT 2"})
+	if err != nil || resp.Error == nil || !strings.Contains(resp.Error.Message, "Reset password") {
+		t.Fatalf("owner login failure = %+v, %v", resp.Error, err)
+	}
+
 	// An owner the panel has no password for is never silently the superuser.
 	var unmanaged ErrOwnerUnmanaged
 	if _, err := qr.svc.Query(ctx, d.ID, "", dbquery.Request{Database: "appdb", SQL: "SELECT 1"}); !errors.As(err, &unmanaged) || unmanaged.Owner != "app_role" {
@@ -275,7 +300,51 @@ func TestAdminQueryAsSuperuserOverHTTP(t *testing.T) {
 		t.Fatalf("superuser run audit = %+v", ev)
 	}
 	rec = qr.do(ctx, "POST", path, `{"database":"appdb","sql":"SELECT 1"}`)
-	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "app_role") {
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "app_role") || !strings.Contains(rec.Body.String(), "Reset password") {
 		t.Fatalf("unmanaged owner = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// Review: the audit tells an opt-in superuser run from a run in a database
+// the superuser owns.
+func TestAdminQueryAuditsTheSuperuserChoice(t *testing.T) {
+	qr := newQueryRig(t)
+	ctx := context.Background()
+	d := qr.create(t, "Shop", "postgres", "18")
+	qr.admin.answer(pgOwnerQuery("legacy"), [][]string{{"postgres", "t"}})
+	path := fmt.Sprintf("/api/databases/%d/query", d.ID)
+	for _, c := range []struct {
+		body string
+		want bool
+	}{{`{"database":"legacy","sql":"SELECT 1"}`, false}, {`{"database":"legacy","sql":"SELECT 1","asSuperuser":true}`, true}} {
+		if rec := qr.do(ctx, "POST", path, c.body); rec.Code != 200 {
+			t.Fatalf("%s = %d %s", c.body, rec.Code, rec.Body)
+		}
+		if ev := qr.take(); len(ev) != 1 || ev[0].Detail["asSuperuser"] != c.want {
+			t.Fatalf("%s audit = %+v", c.body, ev)
+		}
+	}
+}
+
+// Review: MariaDB has no owner, and a user with Full access can create a
+// SQL SECURITY INVOKER view over a function, which then runs as root for an
+// Admin who reads it. Root is an explicit choice in such a database.
+func TestAdminMySQLQueryNeedsOptInWhereUsersHaveFull(t *testing.T) {
+	qr := newQueryRig(t)
+	ctx := context.Background()
+	d := qr.create(t, "Maria", "mariadb", "11.8")
+	my, _ := accountsFor("mariadb")
+	qr.admin.answer(my.AccessQuery(), [][]string{{"shop", "shop", "full"}, {"reader", "zoo", "read"}})
+
+	var optIn ErrRootOptIn
+	if _, err := qr.svc.Query(ctx, d.ID, "", dbquery.Request{Database: "shop", SQL: "SELECT 1"}); !errors.As(err, &optIn) ||
+		!slices.Equal(optIn.Users, []string{"shop"}) {
+		t.Fatalf("shop = %v, want ErrRootOptIn naming shop", err)
+	}
+	for _, r := range []dbquery.Request{{Database: "zoo", SQL: "SELECT 1"}, {Database: "shop", SQL: "SELECT 1", AsSuperuser: true}} {
+		resp, err := qr.svc.Query(ctx, d.ID, "", r)
+		if err != nil || resp.User != "root" {
+			t.Fatalf("%+v = %+v, %v", r, resp.User, err)
+		}
 	}
 }

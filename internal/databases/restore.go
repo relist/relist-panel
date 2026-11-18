@@ -252,8 +252,14 @@ func (s *Service) finishRestore(ctx context.Context, r Restore, pre *int64, stat
 func (s *Service) admin(ctx context.Context, d Database, dp Dumper, sql string) (out, log string, err error) {
 	var stdout bytes.Buffer
 	errOut := &tailBuffer{max: logLimit}
+	env := dp.Env(d.Password)
+	if d.Engine == "postgres" {
+		// The same catalog search_path as the panel's other superuser
+		// sessions: a startup option outranks any role or database setting.
+		env = append(env, "PGOPTIONS=-c search_path=pg_catalog,pg_temp")
+	}
 	code, err := s.d.Host.Exec(ctx, ContainerName(d.ID), ExecRequest{
-		Cmd: dp.AdminCmd(), Env: dp.Env(d.Password), Stdin: strings.NewReader(sql), Stdout: &stdout, Stderr: errOut})
+		Cmd: dp.AdminCmd(), Env: env, Stdin: strings.NewReader(sql), Stdout: &stdout, Stderr: errOut})
 	if err == nil && code != 0 {
 		err = fmt.Errorf("the database command exited with code %d", code)
 	}

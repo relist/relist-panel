@@ -103,6 +103,7 @@ func (a *API) query(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	audit.Detail(ctx, "database", in.Database)
 	audit.Detail(ctx, "dbUser", resp.User)
+	audit.Detail(ctx, "asSuperuser", in.AsSuperuser && c.Admin)
 	audit.Detail(ctx, "statement", cutText(dbquery.RedactSQL(in.SQL), auditText))
 	audit.Detail(ctx, "writes", in.Writes)
 	audit.Detail(ctx, "durationMs", resp.DurationMs)
