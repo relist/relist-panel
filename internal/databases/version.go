@@ -165,6 +165,10 @@ func splitGUCList(s string) (names []string, ok bool) {
 		return []string{}, true
 	}
 	for {
+		// A separator with no name after it: pg_dump refuses an empty name.
+		if i == len(s) {
+			return nil, false
+		}
 		var name strings.Builder
 		if s[i] == '"' {
 			i++
