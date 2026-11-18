@@ -227,7 +227,7 @@ export function DatabasePage() {
           onChange={openTab}
           items={grantee ? [
             ...(sql ? [{ children: <ConnectionTab db={data} grantee />, key: 'connection', label: 'Connection' }] : []),
-            ...(sql ? [{ children: <DatabaseQueryTab db={data} />, key: 'query', label: 'Query' }] : []),
+            ...(sql ? [{ children: <DatabaseQueryTab db={data} grantee />, key: 'query', label: 'Query' }] : []),
             ...(data.engine === 'redis' ? [{ children: <DatabaseRedisTab db={data} />, key: 'console', label: 'Console' }] : []),
           ] : [
             { children: <ConnectionTab db={data} />, key: 'connection', label: 'Connection' },

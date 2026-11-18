@@ -84,11 +84,11 @@ function answer(over: Partial<QueryResponse> = {}): QueryResponse {
   };
 }
 
-function view(db: Database = shop) {
+function view(db: Database = shop, grantee = false) {
   return render(
     <SWRConfig value={{ dedupingInterval: 0, provider: () => new Map() }}>
       <App>
-        <DatabaseQueryTab db={db} />
+        <DatabaseQueryTab db={db} grantee={grantee} />
       </App>
     </SWRConfig>,
   );
@@ -160,11 +160,22 @@ describe('DatabaseQueryTab', () => {
     expect(screen.getByRole('button', { name: /^run/i })).toBeTruthy();
   });
 
-  it('runs SELECT * LIMIT 100 for a table clicked in the tree', async () => {
+  // Security review: a click on a view ran it at once, as whoever the
+  // console connects as; a view's function runs with the reader's rights.
+  it('fills the editor with SELECT * LIMIT 100 for a clicked table, and runs nothing', async () => {
     view();
     await userEvent.click(await screen.findByText('items'));
-    await waitFor(() => expect(api.runDatabaseQuery).toHaveBeenCalled());
-    expect(api.runDatabaseQuery.mock.calls[0][1].sql).toBe('SELECT * FROM "public"."items" LIMIT 100');
+    await waitFor(() => expect((screen.getByLabelText('SQL') as HTMLTextAreaElement).value).toBe('SELECT * FROM "public"."items" LIMIT 100'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(api.runDatabaseQuery).not.toHaveBeenCalled();
+  });
+
+  it('marks views in the tree', async () => {
+    api.databaseQuerySchema.mockResolvedValue([{ name: 'public', tables: ['items', 'orders'], views: ['orders'] }]);
+    view();
+    const orders = await screen.findByText('orders');
+    expect(within(orders.closest('.ant-tree-treenode') as HTMLElement).getByText('view')).toBeTruthy();
+    expect(within(screen.getByText('items').closest('.ant-tree-treenode') as HTMLElement).queryByText('view')).toBeNull();
   });
 
   it('quotes a MySQL table with backticks and uses the first listed database', async () => {
@@ -172,9 +183,36 @@ describe('DatabaseQueryTab', () => {
     api.databaseQuerySchema.mockResolvedValue([{ name: 'app', tables: ['users'] }]);
     view({ ...shop, defaultDatabase: '', engine: 'mysql', image: 'mysql:8.4' });
     await userEvent.click(await screen.findByText('users'));
+    await userEvent.click(screen.getByRole('button', { name: /^run/i }));
     await waitFor(() => expect(api.runDatabaseQuery).toHaveBeenCalled());
     expect(api.runDatabaseQuery.mock.calls[0][1]).toEqual({ database: 'app', preview: false, sql: 'SELECT * FROM `users` LIMIT 100', writes: false });
     expect(screen.getByLabelText('SQL').getAttribute('data-language')).toBe('mysql');
+    expect(screen.queryByRole('switch', { name: /run as superuser/i })).toBeNull();
+  });
+
+  it('says which database user a run connected as', async () => {
+    api.runDatabaseQuery.mockResolvedValueOnce(answer({ user: 'shop' }));
+    view();
+    await typeSql('SELECT 1');
+    await userEvent.click(screen.getByRole('button', { name: /^run/i }));
+    expect(await screen.findByText('Ran as shop')).toBeTruthy();
+  });
+
+  it('runs as the superuser only after the switch is on, with a warning', async () => {
+    view();
+    expect(screen.queryByText(/views, triggers and functions/i)).toBeNull();
+    await userEvent.click(screen.getByRole('switch', { name: /run as superuser/i }));
+    expect(screen.getByText(/views, triggers and functions/i)).toBeTruthy();
+    await typeSql('SELECT 1');
+    await userEvent.click(screen.getByRole('button', { name: /^run/i }));
+    await waitFor(() => expect(api.runDatabaseQuery).toHaveBeenCalled());
+    expect(api.runDatabaseQuery.mock.calls[0][1]).toEqual({ asSuperuser: true, database: 'postgres', preview: false, sql: 'SELECT 1', writes: false });
+  });
+
+  it('offers no superuser switch to a grantee', async () => {
+    view(shop, true);
+    await screen.findByText('items');
+    expect(screen.queryByRole('switch', { name: /run as superuser/i })).toBeNull();
   });
 
   it('keeps the last runs and lists them in History', async () => {

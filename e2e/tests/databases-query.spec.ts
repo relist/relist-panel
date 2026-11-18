@@ -272,11 +272,12 @@ for (const e of ENGINES) {
     });
 
     if (e.engine === 'postgres') {
-      test('the Query tab runs a table click and exports CSV', async ({ page }) => {
+      test('the Query tab runs a clicked table and exports CSV', async ({ page }) => {
         await signIn(page);
         await page.goto(`/databases/${id}`);
         await page.getByRole('tab', { name: 'Query' }).click();
         await page.getByText('items', { exact: true }).click();
+        await page.getByRole('button', { name: 'Run', exact: true }).click();
         await expect(page.getByRole('tab', { name: '1 · SELECT 2' })).toBeVisible();
         await expect(page.getByText('a', { exact: true }).first()).toBeVisible();
         const download = page.waitForEvent('download');

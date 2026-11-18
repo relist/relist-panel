@@ -279,7 +279,7 @@ func SchemaPostgres(ctx context.Context, t Target, database string) ([]SchemaNod
 		defer c()
 		_ = conn.Close(cctx)
 	}()
-	rows, err := conn.Query(ctx, `SELECT n.nspname, c.relname
+	rows, err := conn.Query(ctx, `SELECT n.nspname, c.relname, c.relkind IN ('v','m')
 		FROM pg_namespace n LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relkind IN ('r','v','m','p','f')
 		WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg\_toast%' AND n.nspname NOT LIKE 'pg\_temp\_%'
 		ORDER BY n.nspname, c.relname`)
@@ -291,14 +291,19 @@ func SchemaPostgres(ctx context.Context, t Target, database string) ([]SchemaNod
 	for rows.Next() {
 		var schema string
 		var table *string
-		if err := rows.Scan(&schema, &table); err != nil {
+		var view *bool
+		if err := rows.Scan(&schema, &table, &view); err != nil {
 			return nil, err
 		}
 		if len(out) == 0 || out[len(out)-1].Name != schema {
-			out = append(out, SchemaNode{Name: schema, Tables: []string{}})
+			out = append(out, SchemaNode{Name: schema, Tables: []string{}, Views: []string{}})
 		}
 		if table != nil {
-			out[len(out)-1].Tables = append(out[len(out)-1].Tables, *table)
+			node := &out[len(out)-1]
+			node.Tables = append(node.Tables, *table)
+			if view != nil && *view {
+				node.Views = append(node.Views, *table)
+			}
 		}
 	}
 	return out, rows.Err()

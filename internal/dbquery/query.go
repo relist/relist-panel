@@ -27,6 +27,9 @@ type Request struct {
 	// Preview runs the batch inside a transaction that is rolled back; only
 	// plain DML is allowed (PreviewStatements). It implies Writes.
 	Preview bool
+	// AsSuperuser is an Admin's choice to run as the superuser inside a
+	// database another role owns; the engines never read it.
+	AsSuperuser bool
 }
 
 // Column is a result column.
@@ -67,12 +70,17 @@ type QueryResponse struct {
 	Cancelled  bool          `json:"cancelled"`
 	// Preview: the run was a Preview, and nothing was kept.
 	Preview bool `json:"preview,omitempty"`
+	// User is the database user the run connected as.
+	User string `json:"user"`
 }
 
-// SchemaNode is a schema and its tables and views.
+// SchemaNode is a schema and its tables and views. Views names the entries
+// of Tables that are views (or materialized views): reading one runs the
+// functions it calls with the reader's rights.
 type SchemaNode struct {
 	Name   string   `json:"name"`
 	Tables []string `json:"tables"`
+	Views  []string `json:"views"`
 }
 
 const (

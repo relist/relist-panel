@@ -458,7 +458,10 @@ func writeError(w http.ResponseWriter, err error) {
 	var badGrant ErrBadGrant
 	var serverWide ErrServerWideUser
 	var userInUse ErrUserInUse
+	var ownerUnmanaged ErrOwnerUnmanaged
 	switch {
+	case errors.As(err, &ownerUnmanaged):
+		writeJSONError(w, http.StatusConflict, err.Error())
 	case errors.As(err, &grantToAdmin), errors.As(err, &badGrant), errors.As(err, &serverWide):
 		writeJSONError(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.As(err, &userInUse):
