@@ -241,14 +241,15 @@ CREATE SQL SECURITY INVOKER VIEW orders AS SELECT f() AS n;
 `));
       const loot = () => docker(maria(id, root.user, root.password, 'shop', 'SELECT COUNT(*) FROM loot;'));
 
-      const refused = await panel.raw('POST', `/api/databases/${id}/query`, { database: 'shop', sql: 'SELECT * FROM orders' });
+      const refused = await panel.raw('POST', `/api/databases/${id}/query`, { database: 'shop', sql: 'SELECT * FROM orders', writes: true });
       expect(refused.status).toBe(409);
       expect(refused.body).toContain('Run as superuser');
       expect(loot()).toBe('0');
 
-      // The switch really is root: the function's copy now succeeds.
+      // The switch really is root: with writes allowed (a read-only
+      // session refuses the function's INSERT), the copy now succeeds.
       const chosen = await panel.json<{ user: string }>('POST', `/api/databases/${id}/query`,
-        { database: 'shop', sql: 'SELECT * FROM orders', asSuperuser: true });
+        { database: 'shop', sql: 'SELECT * FROM orders', writes: true, asSuperuser: true });
       expect(chosen.user).toBe('root');
       expect(loot()).toBe('1');
     } finally {
