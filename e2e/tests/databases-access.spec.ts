@@ -182,16 +182,17 @@ test.describe('database access for non-admins', () => {
     expect((await query(alice, id, 'app', 'SELECT 1')).error).toBeNull();
 
     // A MyISAM table refuses every Preview, by name.
-    expect((await query(admin, id, 'app', 'CREATE TABLE legacy (a int) ENGINE=MyISAM', { writes: true })).error).toBeNull();
-    const refused = await query(admin, id, 'app', 'DELETE FROM legacy', { preview: true, writes: true });
+    // app has a Full user (app), so the Admin's runs there choose root.
+    expect((await query(admin, id, 'app', 'CREATE TABLE legacy (a int) ENGINE=MyISAM', { writes: true, asSuperuser: true })).error).toBeNull();
+    const refused = await query(admin, id, 'app', 'DELETE FROM legacy', { preview: true, writes: true, asSuperuser: true });
     expect(refused.error?.message).toContain('app.legacy (MyISAM)');
-    expect((await query(admin, id, 'app', 'DROP TABLE legacy', { writes: true })).error).toBeNull();
-    const ok = await query(admin, id, 'app', 'CREATE TABLE t (a int) ENGINE=InnoDB; INSERT INTO t VALUES (1)', { writes: true });
+    expect((await query(admin, id, 'app', 'DROP TABLE legacy', { writes: true, asSuperuser: true })).error).toBeNull();
+    const ok = await query(admin, id, 'app', 'CREATE TABLE t (a int) ENGINE=InnoDB; INSERT INTO t VALUES (1)', { writes: true, asSuperuser: true });
     expect(ok.error).toBeNull();
-    const preview = await query(admin, id, 'app', 'DELETE FROM t', { preview: true, writes: true });
+    const preview = await query(admin, id, 'app', 'DELETE FROM t', { preview: true, writes: true, asSuperuser: true });
     expect(preview.error).toBeNull();
     expect(preview.results.at(-1)?.affected).toBe(1);
-    const still = await query(admin, id, 'app', 'SELECT count(*) FROM t');
+    const still = await query(admin, id, 'app', 'SELECT count(*) FROM t', { asSuperuser: true });
     expect(still.results[0].rows[0][0]).toBe('1');
 
     await removeDatabase(admin, id, name);
