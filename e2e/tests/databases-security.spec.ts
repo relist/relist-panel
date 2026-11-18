@@ -24,15 +24,26 @@ function dockerEnv() {
   };
 }
 
-type Run = { args: string[]; secret?: Record<string, string> };
+type Run = { args: string[]; secret?: Record<string, string>; input?: string };
 
 function docker(first: string | Run, ...rest: string[]): string {
   const run: Run = typeof first === 'string' ? { args: [first, ...rest] } : first;
   return execFileSync('docker', run.args, {
     encoding: 'utf8',
     env: { ...dockerEnv(), ...run.secret },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    input: run.input,
+    stdio: [run.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
   }).trim();
+}
+
+/** The mariadb client on stdin, so a script can change its DELIMITER. */
+function maria(id: number, user: string, password: string, database: string, script: string): Run {
+  return {
+    args: ['run', '--rm', '-i', '--network', 'relist-network', '-e', 'MYSQL_PWD', 'mariadb:11.8',
+      'mariadb', '-h', `relist-db-${id}`, '-u', user, '-N', '-D', database],
+    secret: { MYSQL_PWD: password },
+    input: script,
+  };
 }
 
 function psql(id: number, user: string, password: string, database: string, sql: string): Run {
@@ -147,6 +158,11 @@ test.describe('owner-planted code never runs as the superuser', () => {
     await panel.json('POST', `/api/databases/${id}/users`, { name: 'reader2' });
     await panel.json('PUT', `/api/databases/${id}/users/reader2/access`, { access: { app2: 'read' } });
     await panel.json('GET', `/api/databases/${id}/query/schema?database=app2`);
+    // A run the Admin chose to make as the superuser starts on pg_catalog too.
+    const asSuper = await panel.json<{ user: string; error: { message: string } | null }>('POST', `/api/databases/${id}/query`, {
+      database: 'app2', sql: "SELECT count(*) FROM pg_catalog.pg_namespace WHERE nspname NOT LIKE 'pg%'", asSuperuser: true });
+    expect(asSuper.error).toBeNull();
+    expect(asSuper.user).toBe('postgres');
 
     expect(pwned(id, 'pwned-operator')).toBe(false);
     expect(isSuper('app2')).toBe('f');
@@ -193,5 +209,50 @@ test.describe('owner-planted code never runs as the superuser', () => {
       'POST', `/api/databases/${id}/query`, { database: 'app3', sql: 'SELECT current_user', asSuperuser: true });
     expect(asSuper.user).toBe('postgres');
     expect(asSuper.results[0].rows).toEqual([['postgres']]);
+  });
+});
+
+test.describe('mariadb', () => {
+  test.describe.configure({ timeout: 10 * 60_000 });
+
+  test("a Full user's view does not run as root unless the Admin chooses it", async () => {
+    const name = `e2e-sec-maria-${runId()}`;
+    const panel = await Panel.signIn();
+    const { id } = await panel.json<{ id: number }>('POST', '/api/databases', { name, engine: 'mariadb', version: '11.8' });
+    try {
+      await expect
+        .poll(async () => (await panel.json<{ status: string }>('GET', `/api/databases/${id}`)).status, { timeout: 300_000 })
+        .toBe('running');
+      docker('pull', '-q', 'mariadb:11.8');
+      await panel.json('POST', `/api/databases/${id}/logical-databases`, { name: 'shop', createOwner: true });
+      const owner = await creds(panel, id, 'shop', 'shop');
+      const root = await creds(panel, id);
+      // As the reader, the function copies what only root can read.
+      docker(maria(id, 'shop', owner.password, 'shop', `CREATE TABLE loot (n BIGINT);
+DELIMITER //
+CREATE FUNCTION f() RETURNS INT SQL SECURITY INVOKER MODIFIES SQL DATA
+BEGIN
+  DECLARE CONTINUE HANDLER FOR SQLEXCEPTION BEGIN END;
+  INSERT INTO shop.loot SELECT COUNT(*) FROM mysql.user;
+  RETURN 1;
+END//
+DELIMITER ;
+CREATE SQL SECURITY INVOKER VIEW orders AS SELECT f() AS n;
+`));
+      const loot = () => docker(maria(id, root.user, root.password, 'shop', 'SELECT COUNT(*) FROM loot;'));
+
+      const refused = await panel.raw('POST', `/api/databases/${id}/query`, { database: 'shop', sql: 'SELECT * FROM orders' });
+      expect(refused.status).toBe(409);
+      expect(refused.body).toContain('Run as superuser');
+      expect(loot()).toBe('0');
+
+      // The switch really is root: the function's copy now succeeds.
+      const chosen = await panel.json<{ user: string }>('POST', `/api/databases/${id}/query`,
+        { database: 'shop', sql: 'SELECT * FROM orders', asSuperuser: true });
+      expect(chosen.user).toBe('root');
+      expect(loot()).toBe('1');
+    } finally {
+      await panel.json('DELETE', `/api/databases/${id}`, { confirm: name, deleteBackups: true });
+    }
   });
 });
