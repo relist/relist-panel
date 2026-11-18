@@ -44,8 +44,8 @@ func TestCaptureStateQuotedNames(t *testing.T) {
 		ctx := context.Background()
 		d := r.create(t, "Pg", "postgres", "16")
 		d, _ = r.store.Get(ctx, d.ID)
-		setting := `ALTER ROLE "report""x" IN DATABASE "` + name + `" SET role TO 'app';`
-		admin := r.stateAdmin("app\t{=Tc/app,\"\\\"report\\\"\\\"x\\\"=c/app\"}\n", setting+"\n")
+		setting := `ALTER ROLE "report""x" IN DATABASE "` + name + `" SET "role" TO 'app';`
+		admin := r.stateAdmin("app\t{=Tc/app,\"\\\"report\\\"\\\"x\\\"=c/app\"}\n", settingsRow(`report"x`, "role=app"))
 		restored := r.captureRestore(pgRestore, "")
 		st, _, err := r.svc.captureState(ctx, d, pgDumper{}, name)
 		if err != nil {
@@ -107,8 +107,8 @@ func TestReplaceRestoreKeepsRoleSettings(t *testing.T) {
 	d := r.create(t, "Shop", "postgres", "18")
 	r.dumps("pg_dump -U postgres", "ORIGINAL;\n")
 	b := r.manualBackup(t, d.ID)
-	setting := `ALTER ROLE "full_u" IN DATABASE "app" SET role TO 'app_owner';`
-	admin := r.stateAdmin("app_owner\n", setting+"\n")
+	setting := `ALTER ROLE "full_u" IN DATABASE "app" SET "role" TO 'app_owner';`
+	admin := r.stateAdmin("app_owner\n", settingsRow("full_u", "role=app_owner"))
 	r.captureRestore(pgRestore, "")
 	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop"); err != nil {
 		t.Fatal(err)
