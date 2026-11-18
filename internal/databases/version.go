@@ -1,6 +1,9 @@
 package databases
 
 import (
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -71,28 +74,133 @@ func redactPasswords(s string) string {
 	return passwordLiteral.ReplaceAllString(s, "${1}'***'")
 }
 
-// dbSettingsSQL prints, one per line, the statements that recreate a
-// database's ALTER ROLE … IN DATABASE … SET and ALTER DATABASE … SET rows. A
-// one-database pg_dump does not carry them and DROP DATABASE deletes them.
-// List settings such as search_path are stored already quoted and go in
-// as they are, like pg_dump does; every other value is a literal.
-const dbSettingsSQL = `SELECT CASE WHEN s.setrole = 0
-    THEN format('ALTER DATABASE %I SET %s TO %s;', d.datname, quote_ident(split_part(c.cfg, '=', 1)), c.val)
-    ELSE format('ALTER ROLE %I IN DATABASE %I SET %s TO %s;', r.rolname, d.datname, quote_ident(split_part(c.cfg, '=', 1)), c.val)
-  END
-FROM pg_db_role_setting s
-JOIN pg_database d ON d.oid = s.setdatabase
-LEFT JOIN pg_roles r ON r.oid = s.setrole
-CROSS JOIN LATERAL (
-  SELECT cfg, CASE WHEN split_part(cfg, '=', 1) IN ('search_path', 'temp_tablespaces', 'session_preload_libraries', 'local_preload_libraries')
-    THEN substr(cfg, strpos(cfg, '=') + 1)
-    ELSE quote_literal(substr(cfg, strpos(cfg, '=') + 1)) END AS val
-  FROM unnest(s.setconfig) AS cfg
-) c
-WHERE d.datname = :name
-ORDER BY 1;`
+// dbSettingsSQL lists a database's ALTER ROLE … IN DATABASE … SET and ALTER
+// DATABASE … SET rows, one setconfig element per line: the role (empty for a
+// database-wide setting) and the element, each hex-encoded so no value can
+// break psql's lines or fields. A one-database pg_dump does not carry these
+// rows and DROP DATABASE deletes them; settingsSQL turns them back into
+// statements. The server never builds SQL text from them: a value a role
+// stored with SET … FROM CURRENT is its raw session text, unquoted.
+const dbSettingsSQL = `SELECT CASE WHEN s.setrole = 0 THEN '' ELSE encode(convert_to(r.rolname::text, 'UTF8'), 'hex') END,
+  encode(convert_to(c.cfg, 'UTF8'), 'hex')
+FROM pg_catalog.pg_db_role_setting s
+JOIN pg_catalog.pg_database d ON d.oid = s.setdatabase
+LEFT JOIN pg_catalog.pg_roles r ON r.oid = s.setrole
+CROSS JOIN LATERAL unnest(s.setconfig) WITH ORDINALITY AS c(cfg, n)
+WHERE d.datname = :name AND (s.setrole = 0 OR r.rolname IS NOT NULL)
+ORDER BY s.setrole <> 0, r.rolname, c.n;`
 
 // dbSettingsQuery is dbSettingsSQL for one database.
 func dbSettingsQuery(name string) string {
 	return strings.Replace(dbSettingsSQL, ":name", pgLit(name), 1)
+}
+
+// listSettings are the settings whose value is a list of names, which the
+// server keeps as a comma-separated list of identifiers: pg_dump's
+// variable_is_guc_list_quote.
+var listSettings = map[string]bool{
+	"local_preload_libraries": true, "search_path": true, "session_preload_libraries": true,
+	"shared_preload_libraries": true, "temp_tablespaces": true, "unix_socket_directories": true,
+}
+
+// settingsSQL turns dbSettingsQuery's output for database db into the
+// statements that recreate the settings. Every name is an identifier and
+// every value a literal: a list setting is split the way pg_dump splits it
+// and each element is its own literal, so "$user", public stays two names.
+// A list that does not split goes back as one literal.
+func settingsSQL(db, out string) (string, error) {
+	var b strings.Builder
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		roleHex, cfgHex, ok := strings.Cut(line, "|")
+		if !ok {
+			return "", fmt.Errorf("unexpected settings line %q", line)
+		}
+		role, err1 := hex.DecodeString(roleHex)
+		cfg, err2 := hex.DecodeString(cfgHex)
+		if err := errors.Join(err1, err2); err != nil {
+			return "", fmt.Errorf("unexpected settings line %q: %w", line, err)
+		}
+		name, value, ok := strings.Cut(string(cfg), "=")
+		if !ok || name == "" {
+			return "", fmt.Errorf("unexpected setting %q", cfg)
+		}
+		lit := pgLit(value)
+		if listSettings[name] {
+			if names, ok := splitGUCList(value); ok {
+				quoted := make([]string, len(names))
+				for i, n := range names {
+					quoted[i] = pgLit(n)
+				}
+				if lit = strings.Join(quoted, ", "); lit == "" {
+					lit = "''"
+				}
+			}
+		}
+		if len(role) == 0 {
+			fmt.Fprintf(&b, "ALTER DATABASE %s SET %s TO %s;\n", pgIdent(db), pgIdent(name), lit)
+		} else {
+			fmt.Fprintf(&b, "ALTER ROLE %s IN DATABASE %s SET %s TO %s;\n", pgIdent(string(role)), pgIdent(db), pgIdent(name), lit)
+		}
+	}
+	return b.String(), nil
+}
+
+// splitGUCList is pg_dump's SplitGUCList: names separated by commas, each
+// either double-quoted (with "" for a quote) or running to a comma or
+// whitespace. Names are not downcased. ok is false on bad syntax.
+func splitGUCList(s string) (names []string, ok bool) {
+	isSpace := func(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f' }
+	i := 0
+	skip := func() {
+		for i < len(s) && isSpace(s[i]) {
+			i++
+		}
+	}
+	skip()
+	if i == len(s) {
+		return []string{}, true
+	}
+	for {
+		var name strings.Builder
+		if s[i] == '"' {
+			i++
+			for {
+				j := strings.IndexByte(s[i:], '"')
+				if j < 0 {
+					return nil, false
+				}
+				name.WriteString(s[i : i+j])
+				i += j + 1
+				if i < len(s) && s[i] == '"' {
+					name.WriteByte('"')
+					i++
+					continue
+				}
+				break
+			}
+		} else {
+			start := i
+			for i < len(s) && s[i] != ',' && !isSpace(s[i]) {
+				i++
+			}
+			if i == start {
+				return nil, false
+			}
+			name.WriteString(s[start:i])
+		}
+		names = append(names, name.String())
+		skip()
+		if i == len(s) {
+			return names, true
+		}
+		if s[i] != ',' {
+			return nil, false
+		}
+		i++
+		skip()
+	}
 }

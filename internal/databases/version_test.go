@@ -1,6 +1,7 @@
 package databases
 
 import (
+	"encoding/hex"
 	"slices"
 	"strings"
 	"testing"
@@ -151,5 +152,48 @@ func TestRedactPasswordsTruncated(t *testing.T) {
 	}
 	if !strings.Contains(got, "next line") || !strings.Contains(got, "PASSWORD '***'") {
 		t.Fatalf("redacted too much or too little: %q", got)
+	}
+}
+
+// settingsRow is one line of dbSettingsQuery's output: the role (empty for a
+// database-wide setting) and one setconfig element, each hex-encoded.
+func settingsRow(role, cfg string) string {
+	return hex.EncodeToString([]byte(role)) + "|" + hex.EncodeToString([]byte(cfg)) + "\n"
+}
+
+// Security review: a list setting stored with SET … FROM CURRENT is the
+// session's raw text, never quoted by the server; replayed as SQL text it ran
+// as the superuser. Every value now goes back as literals.
+func TestSettingsSQLQuotesEveryValue(t *testing.T) {
+	for _, c := range []struct{ role, cfg, want string }{
+		{"app1", "search_path=x;ALTER/**/ROLE/**/app1/**/SUPERUSER;--",
+			`ALTER ROLE "app1" IN DATABASE "app" SET "search_path" TO 'x;ALTER/**/ROLE/**/app1/**/SUPERUSER;--';`},
+		{"app1", `search_path="$user", public`, `ALTER ROLE "app1" IN DATABASE "app" SET "search_path" TO '$user', 'public';`},
+		{"", `search_path="a""b",  c`, `ALTER DATABASE "app" SET "search_path" TO 'a"b', 'c';`},
+		{"", `search_path=""`, `ALTER DATABASE "app" SET "search_path" TO '';`},
+		{"", `search_path="unclosed`, `ALTER DATABASE "app" SET "search_path" TO '"unclosed';`},
+		{"", `local_preload_libraries=a';DROP ROLE x;--,b`, `ALTER DATABASE "app" SET "local_preload_libraries" TO 'a'';DROP ROLE x;--,b';`},
+		{"full_u", "role=app_owner", `ALTER ROLE "full_u" IN DATABASE "app" SET "role" TO 'app_owner';`},
+		{"", "work_mem=8MB", `ALTER DATABASE "app" SET "work_mem" TO '8MB';`},
+		{`a"b`, "application_name=it's=1", `ALTER ROLE "a""b" IN DATABASE "app" SET "application_name" TO 'it''s=1';`},
+	} {
+		got, err := settingsSQL("app", settingsRow(c.role, c.cfg))
+		if err != nil {
+			t.Fatalf("%s: %v", c.cfg, err)
+		}
+		if strings.TrimSpace(got) != c.want {
+			t.Errorf("%s:\n got %s\nwant %s", c.cfg, strings.TrimSpace(got), c.want)
+		}
+	}
+}
+
+func TestSettingsSQLRefusesGarbage(t *testing.T) {
+	for _, out := range []string{"zz|00\n", "6170700a\n", "|" + hex.EncodeToString([]byte("no_equals")) + "\n"} {
+		if _, err := settingsSQL("app", out); err == nil {
+			t.Errorf("%q: no error", out)
+		}
+	}
+	if got, err := settingsSQL("app", "\n"); err != nil || got != "" {
+		t.Fatalf("empty = %q, %v", got, err)
 	}
 }
