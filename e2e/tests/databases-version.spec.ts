@@ -124,6 +124,9 @@ test.describe('change version', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByText(/moves the data to PostgreSQL 18 on a new volume/)).toBeVisible();
     await dialog.getByRole('button', { name: 'Change to 18' }).click();
+    // The dialog closes once the job has started; polling earlier can see
+    // the Database idle on 16 before the request lands.
+    await expect(dialog).toBeHidden();
     const after = await settled(panel, id);
     expect(after.version).toBe('18');
     expect(after.lastError).toBe('');
