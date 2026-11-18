@@ -172,6 +172,12 @@ func TestSettingsSQLQuotesEveryValue(t *testing.T) {
 		{"", `search_path="a""b",  c`, `ALTER DATABASE "app" SET "search_path" TO 'a"b', 'c';`},
 		{"", `search_path=""`, `ALTER DATABASE "app" SET "search_path" TO '';`},
 		{"", `search_path="unclosed`, `ALTER DATABASE "app" SET "search_path" TO '"unclosed';`},
+		// Review: a trailing separator ran past the end of the value and
+		// panicked the whole panel; local_preload_libraries takes it.
+		{"", "local_preload_libraries=a,", `ALTER DATABASE "app" SET "local_preload_libraries" TO 'a,';`},
+		{"", "local_preload_libraries=a, ", `ALTER DATABASE "app" SET "local_preload_libraries" TO 'a, ';`},
+		{"", `local_preload_libraries="a",`, `ALTER DATABASE "app" SET "local_preload_libraries" TO '"a",';`},
+		{"", "local_preload_libraries=a,\v", "ALTER DATABASE \"app\" SET \"local_preload_libraries\" TO 'a,\v';"},
 		{"", `local_preload_libraries=a';DROP ROLE x;--,b`, `ALTER DATABASE "app" SET "local_preload_libraries" TO 'a'';DROP ROLE x;--,b';`},
 		{"full_u", "role=app_owner", `ALTER ROLE "full_u" IN DATABASE "app" SET "role" TO 'app_owner';`},
 		{"", "work_mem=8MB", `ALTER DATABASE "app" SET "work_mem" TO '8MB';`},
@@ -196,4 +202,29 @@ func TestSettingsSQLRefusesGarbage(t *testing.T) {
 	if got, err := settingsSQL("app", "\n"); err != nil || got != "" {
 		t.Fatalf("empty = %q, %v", got, err)
 	}
+}
+
+// Every string of up to six characters from the separators, quotes,
+// whitespace and a name character splits or fails, never panics, and what
+// it splits into joins back without a stray separator.
+func TestSplitGUCListNeverPanics(t *testing.T) {
+	alphabet := []string{"a", ",", " ", `"`, "\v"}
+	var walk func(prefix string, depth int)
+	walk = func(prefix string, depth int) {
+		names, ok := splitGUCList(prefix)
+		if ok {
+			for _, n := range names {
+				if n == "" && !strings.Contains(prefix, `""`) {
+					t.Fatalf("%q split into an empty unquoted name: %q", prefix, names)
+				}
+			}
+		}
+		if depth == 0 {
+			return
+		}
+		for _, c := range alphabet {
+			walk(prefix+c, depth-1)
+		}
+	}
+	walk("", 6)
 }
