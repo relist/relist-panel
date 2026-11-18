@@ -15,11 +15,18 @@ import (
 // adminTimeout bounds one admin call; connecting is bounded by 5 s inside it.
 const adminTimeout = 60 * time.Second
 
+// catalogSearchPath is the search_path of every superuser session the panel
+// opens for its own catalog queries. A startup parameter outranks ALTER
+// DATABASE … SET and ALTER ROLE … SET, so a database's owner cannot put a
+// schema of its own ahead of pg_catalog and have the superuser call its
+// operators or functions; public is left out for the same reason.
+const catalogSearchPath = "pg_catalog, pg_temp"
+
 // adminPgConfig is pgConfig for the admin path. It sets no read-only mode and
 // no query label, and it turns statement logging off for the session:
 // without log_min_error_statement=panic a failed CREATE ROLE ... PASSWORD
-// '...' is written to the container log, where the Logs tab shows it.
-// database "" connects to postgres.
+// '...' is written to the container log, where the Logs tab shows it. Its
+// search_path is catalogSearchPath. database "" connects to postgres.
 func adminPgConfig(t Target, database string) (*pgx.ConnConfig, error) {
 	cfg, err := pgx.ParseConfig("sslmode=disable")
 	if err != nil {
@@ -35,6 +42,7 @@ func adminPgConfig(t Target, database string) (*pgx.ConnConfig, error) {
 		"application_name":        "relist-panel-admin",
 		"log_min_error_statement": "panic",
 		"log_statement":           "none",
+		"search_path":             catalogSearchPath,
 	}
 	cfg.BuildContextWatcherHandler = func(c *pgconn.PgConn) ctxwatch.Handler {
 		return &pgconn.CancelRequestContextWatcherHandler{Conn: c, DeadlineDelay: time.Second}

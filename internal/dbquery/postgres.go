@@ -250,11 +250,23 @@ func finishPg(resp *QueryResponse, runCtx, parent context.Context, err error, be
 	}
 }
 
+// schemaPgConfig is the table tree's session: read-only, on
+// catalogSearchPath, since it may be the superuser's inside a database
+// another role owns.
+func schemaPgConfig(t Target, database string) (*pgx.ConnConfig, error) {
+	cfg, err := pgConfig(t, Request{Database: database})
+	if err != nil {
+		return nil, err
+	}
+	cfg.RuntimeParams["search_path"] = catalogSearchPath
+	return cfg, nil
+}
+
 // SchemaPostgres lists the schemas of database with their tables and views.
 func SchemaPostgres(ctx context.Context, t Target, database string) ([]SchemaNode, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	cfg, err := pgConfig(t, Request{Database: database})
+	cfg, err := schemaPgConfig(t, database)
 	if err != nil {
 		return nil, err
 	}
