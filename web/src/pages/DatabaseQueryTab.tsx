@@ -119,8 +119,9 @@ function ResultView({ result, database }: { database: string; result: QueryResul
 
 /**
  * The SQL console of a Postgres, MySQL or MariaDB Database (GUIDELINES §4.6a).
- * An Admin's Postgres runs connect as the chosen database's owner unless Run
- * as superuser is on; a grantee always runs as its own database user.
+ * An Admin's Postgres runs connect as the chosen database's owner, and root
+ * needs Run as superuser in a MySQL or MariaDB database other users have
+ * Full access to; a grantee always runs as its own database user.
  */
 export function DatabaseQueryTab({ db, grantee = false }: { db: Database; grantee?: boolean }) {
   const mysql = db.engine !== 'postgres';
@@ -290,7 +291,7 @@ export function DatabaseQueryTab({ db, grantee = false }: { db: Database; grante
           <Text>Allow writes</Text>
           {writes && <Tag color="red">Writes allowed</Tag>}
         </Flex>
-        {!grantee && !mysql && (
+        {!grantee && (
           <Flex align="center" gap={8}>
             <Switch aria-label="Run as superuser" checked={asSuperuser} onChange={setAsSuperuser} />
             <Text>Run as superuser</Text>
@@ -356,10 +357,14 @@ export function DatabaseQueryTab({ db, grantee = false }: { db: Database; grante
             )}
           </div>
           <Text type="secondary">Runs the selection, or the whole editor. Ctrl or Cmd + Enter runs.</Text>
-          {asSuperuser && !grantee && !mysql && (
+          {asSuperuser && !grantee && (
             <Alert
               showIcon
-              title="Runs as the superuser. In a database another role owns, its views, triggers and functions then run with superuser rights."
+              title={
+                mysql
+                  ? 'Runs as root. Views and functions that users with Full access created then run with root’s rights.'
+                  : 'Runs as the superuser. In a database another role owns, its views, triggers and functions then run with superuser rights, and only pg_catalog is on the search path: write schema.table.'
+              }
               type="warning"
             />
           )}

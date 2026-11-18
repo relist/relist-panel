@@ -44,6 +44,9 @@ func pgConfig(t Target, r Request) (*pgx.ConnConfig, error) {
 	if !r.Writes {
 		cfg.RuntimeParams["default_transaction_read_only"] = "on"
 	}
+	if r.CatalogSearchPath {
+		cfg.RuntimeParams["search_path"] = catalogSearchPath
+	}
 	cfg.BuildContextWatcherHandler = func(c *pgconn.PgConn) ctxwatch.Handler {
 		// The socket deadline must outlive the cancel request, or the
 		// request's own context ends with it before it is sent.

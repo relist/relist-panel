@@ -187,7 +187,13 @@ describe('DatabaseQueryTab', () => {
     await waitFor(() => expect(api.runDatabaseQuery).toHaveBeenCalled());
     expect(api.runDatabaseQuery.mock.calls[0][1]).toEqual({ database: 'app', preview: false, sql: 'SELECT * FROM `users` LIMIT 100', writes: false });
     expect(screen.getByLabelText('SQL').getAttribute('data-language')).toBe('mysql');
-    expect(screen.queryByRole('switch', { name: /run as superuser/i })).toBeNull();
+  });
+
+  it('warns that root runs Full users\' views and functions with its rights', async () => {
+    view({ ...shop, defaultDatabase: '', engine: 'mariadb', image: 'mariadb:11.8' });
+    await userEvent.click(screen.getByRole('switch', { name: /run as superuser/i }));
+    expect(screen.getByText(/runs as root/i)).toBeTruthy();
+    expect(screen.getByText(/views and functions/i)).toBeTruthy();
   });
 
   it('says which database user a run connected as', async () => {
@@ -203,6 +209,7 @@ describe('DatabaseQueryTab', () => {
     expect(screen.queryByText(/views, triggers and functions/i)).toBeNull();
     await userEvent.click(screen.getByRole('switch', { name: /run as superuser/i }));
     expect(screen.getByText(/views, triggers and functions/i)).toBeTruthy();
+    expect(screen.getByText(/schema\.table/i)).toBeTruthy();
     await typeSql('SELECT 1');
     await userEvent.click(screen.getByRole('button', { name: /^run/i }));
     await waitFor(() => expect(api.runDatabaseQuery).toHaveBeenCalled());
