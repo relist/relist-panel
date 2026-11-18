@@ -69,6 +69,9 @@ func (a *API) query(w http.ResponseWriter, r *http.Request) {
 		SQL      string `json:"sql"`
 		Writes   bool   `json:"writes"`
 		Preview  bool   `json:"preview"`
+		// AsSuperuser: an Admin runs as the superuser even inside a
+		// database another role owns. A grantee's is ignored.
+		AsSuperuser bool `json:"asSuperuser"`
 	}
 	if !decodeBig(w, r, maxQueryBody, &in) {
 		return
@@ -88,7 +91,7 @@ func (a *API) query(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.target(r, n)
-	resp, err := a.s.Query(r.Context(), n, dbUser, dbquery.Request{Database: in.Database, SQL: in.SQL, Writes: in.Writes, Preview: in.Preview})
+	resp, err := a.s.Query(r.Context(), n, dbUser, dbquery.Request{Database: in.Database, SQL: in.SQL, Writes: in.Writes, Preview: in.Preview, AsSuperuser: in.AsSuperuser && c.Admin})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -98,16 +101,8 @@ func (a *API) query(w http.ResponseWriter, r *http.Request) {
 		rows += len(res.Rows)
 	}
 	ctx := r.Context()
-	auditUser := dbUser
-	if auditUser == "" {
-		if d, derr := a.s.d.Store.Get(r.Context(), n); derr == nil {
-			if e, ok := Engines[d.Engine]; ok {
-				auditUser = e.User()
-			}
-		}
-	}
 	audit.Detail(ctx, "database", in.Database)
-	audit.Detail(ctx, "dbUser", auditUser)
+	audit.Detail(ctx, "dbUser", resp.User)
 	audit.Detail(ctx, "statement", cutText(dbquery.RedactSQL(in.SQL), auditText))
 	audit.Detail(ctx, "writes", in.Writes)
 	audit.Detail(ctx, "durationMs", resp.DurationMs)

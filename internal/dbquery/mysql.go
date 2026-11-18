@@ -394,18 +394,22 @@ func SchemaMySQL(ctx context.Context, t Target, database string) ([]SchemaNode, 
 	}
 	defer db.Close()
 	defer conn.Close()
-	rows, err := conn.QueryContext(ctx, "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME", database)
+	rows, err := conn.QueryContext(ctx, "SELECT TABLE_NAME, TABLE_TYPE = 'VIEW' FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME", database)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	node := SchemaNode{Name: database, Tables: []string{}}
+	node := SchemaNode{Name: database, Tables: []string{}, Views: []string{}}
 	for rows.Next() {
 		var name string
-		if err := rows.Scan(&name); err != nil {
+		var view bool
+		if err := rows.Scan(&name, &view); err != nil {
 			return nil, err
 		}
 		node.Tables = append(node.Tables, name)
+		if view {
+			node.Views = append(node.Views, name)
+		}
 	}
 	return []SchemaNode{node}, rows.Err()
 }

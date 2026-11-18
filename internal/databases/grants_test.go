@@ -3,6 +3,7 @@ package databases
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -196,5 +197,85 @@ func TestGranteeDatabases(t *testing.T) {
 	got, err := r.svc.GranteeDatabases(ctx, r.d.ID, "alice")
 	if err != nil || !slices.Equal(got, []string{"owned", "readable"}) {
 		t.Fatalf("GranteeDatabases = %v, %v", got, err)
+	}
+}
+
+// Security review: an Admin's run inside a database another role owns ran as
+// the superuser, so the owner's views, triggers and functions ran with
+// superuser rights. It now connects as the owner, and the superuser is an
+// explicit choice.
+func TestAdminQueryRunsAsTheOwner(t *testing.T) {
+	qr := newQueryRig(t)
+	ctx := context.Background()
+	d := qr.create(t, "Shop", "postgres", "18")
+	super, _ := qr.store.Get(ctx, d.ID)
+	if err := qr.store.UpsertUser(ctx, d.ID, "shop", "owner-pw"); err != nil {
+		t.Fatal(err)
+	}
+	if err := qr.store.UpsertUser(ctx, d.ID, "shop_ro", "ro-pw"); err != nil {
+		t.Fatal(err)
+	}
+	qr.admin.answer(pgOwnerQuery("shop"), [][]string{{"shop", "f"}})
+	qr.admin.answer(pgOwnerQuery("legacy"), [][]string{{"postgres", "t"}})
+	qr.admin.answer(pgOwnerQuery("appdb"), [][]string{{"app_role", "f"}})
+
+	for _, c := range []struct {
+		dbUser, database   string
+		asSuperuser        bool
+		wantUser, wantPass string
+	}{
+		{"", "shop", false, "shop", "owner-pw"},
+		{"", "shop", true, "postgres", super.Password},
+		{"", "legacy", false, "postgres", super.Password},
+		{"", "appdb", true, "postgres", super.Password},
+		{"shop_ro", "shop", true, "shop_ro", "ro-pw"},
+	} {
+		resp, err := qr.svc.Query(ctx, d.ID, c.dbUser, dbquery.Request{Database: c.database, SQL: "SELECT 1", AsSuperuser: c.asSuperuser})
+		if err != nil {
+			t.Fatalf("%+v: %v", c, err)
+		}
+		qr.q.mu.Lock()
+		target, run := qr.q.targets[len(qr.q.targets)-1], qr.q.runs[len(qr.q.runs)-1]
+		qr.q.mu.Unlock()
+		if resp.User != c.wantUser || target.User != c.wantUser || target.Password != c.wantPass || run.Restricted != (c.dbUser != "") {
+			t.Errorf("%+v: user %q, target %+v, restricted %v", c, resp.User, target, run.Restricted)
+		}
+	}
+
+	// An owner the panel has no password for is never silently the superuser.
+	var unmanaged ErrOwnerUnmanaged
+	if _, err := qr.svc.Query(ctx, d.ID, "", dbquery.Request{Database: "appdb", SQL: "SELECT 1"}); !errors.As(err, &unmanaged) || unmanaged.Owner != "app_role" {
+		t.Fatalf("appdb = %v, want ErrOwnerUnmanaged", err)
+	}
+}
+
+func TestAdminQueryAsSuperuserOverHTTP(t *testing.T) {
+	qr := newQueryRig(t)
+	ctx := context.Background()
+	d := qr.create(t, "Shop", "postgres", "18")
+	if err := qr.store.UpsertUser(ctx, d.ID, "shop", "owner-pw"); err != nil {
+		t.Fatal(err)
+	}
+	qr.admin.answer(pgOwnerQuery("shop"), [][]string{{"shop", "f"}})
+	qr.admin.answer(pgOwnerQuery("appdb"), [][]string{{"app_role", "f"}})
+	path := fmt.Sprintf("/api/databases/%d/query", d.ID)
+
+	rec := qr.do(ctx, "POST", path, `{"database":"shop","sql":"SELECT 1"}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"user":"shop"`) {
+		t.Fatalf("owner run = %d %s", rec.Code, rec.Body)
+	}
+	if ev := qr.take(); len(ev) != 1 || ev[0].Detail["dbUser"] != "shop" {
+		t.Fatalf("owner run audit = %+v", ev)
+	}
+	rec = qr.do(ctx, "POST", path, `{"database":"shop","sql":"SELECT 1","asSuperuser":true}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"user":"postgres"`) {
+		t.Fatalf("superuser run = %d %s", rec.Code, rec.Body)
+	}
+	if ev := qr.take(); len(ev) != 1 || ev[0].Detail["dbUser"] != "postgres" {
+		t.Fatalf("superuser run audit = %+v", ev)
+	}
+	rec = qr.do(ctx, "POST", path, `{"database":"appdb","sql":"SELECT 1"}`)
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "app_role") {
+		t.Fatalf("unmanaged owner = %d %s", rec.Code, rec.Body)
 	}
 }

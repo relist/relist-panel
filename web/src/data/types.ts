@@ -1461,11 +1461,15 @@ export interface QueryResponse {
   stopped: string;
   /** The run was a Preview: everything was rolled back. */
   preview?: boolean;
+  /** The database user the run connected as. */
+  user?: string;
 }
 
 export interface QuerySchemaNode {
   name: string;
   tables: string[];
+  /** The entries of tables that are views. */
+  views?: string[];
 }
 
 export interface QueryRequest {
@@ -1474,6 +1478,8 @@ export interface QueryRequest {
   writes: boolean;
   /** Run in a transaction and roll back; DML only. */
   preview?: boolean;
+  /** An Admin's choice to run as the superuser inside a database another role owns. */
+  asSuperuser?: boolean;
 }
 
 /** A RESP2 reply; a bulk string cut at 64 KB carries its full size in `bytes`, a collection cut at 1,000 elements `more`. */
