@@ -149,7 +149,7 @@ export function DatabaseQueryTab({ db, grantee = false }: { db: Database; grante
           key: `t:${node.name}\u0000${table}`,
           title: node.views?.includes(table) ? (
             <span>
-              {table} <Tag bordered={false}>view</Tag>
+              <span>{table}</span> <Tag bordered={false}>view</Tag>
             </span>
           ) : (
             table
