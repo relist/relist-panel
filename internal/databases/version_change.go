@@ -55,6 +55,10 @@ func (s *Service) ChangeVersion(ctx context.Context, id int64, version string, b
 	method := VersionMethodInPlace
 	if d.Engine == "postgres" {
 		method = VersionMethodDumpRestore
+		if err := s.checkRoleSettings(ctx, d, dp); err != nil {
+			s.endJob(id)
+			return VersionChange{}, err
+		}
 	}
 	c, err := s.d.Store.InsertVersionChange(ctx, VersionChange{DatabaseID: id, FromVersion: d.Version, ToVersion: version, Method: method})
 	if err != nil {

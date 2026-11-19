@@ -19,6 +19,8 @@ func (r *rig) stateAdmin(prev, settings string) *[]string {
 		sql := string(b)
 		got = append(got, sql)
 		switch {
+		case strings.Contains(sql, "setdatabase = 0"):
+			// Role-wide settings (checkRoleSettings): none.
 		case strings.Contains(sql, "pg_get_userbyid"):
 			_, _ = io.WriteString(req.Stdout, prev)
 		case strings.Contains(sql, "pg_db_role_setting"):

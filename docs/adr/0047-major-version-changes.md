@@ -68,6 +68,12 @@ Downgrades are never offered or accepted.
   numbers, 422), an unknown tag, a stopped Database, a running job, or a
   Migration or Panel update lock. MySQL offers one tag, so it is never
   offered.
+- **A role-wide list setting `pg_dumpall` cannot copy** refuses a Postgres
+  change (422) before anything changes. A role can keep raw text in such a
+  setting with `SET … FROM CURRENT`; when pg_dump's `SplitGUCList` cannot
+  split it, `pg_dumpall` writes `ALTER ROLE … SET … TO ;`, and the roles
+  restore would fail every time. The refusal names the role, the setting
+  and the `ALTER ROLE … RESET` that fixes it.
 
 **Considered and rejected:**
 
