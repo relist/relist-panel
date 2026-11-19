@@ -28,6 +28,10 @@ func TestUnsplittableRoleSetting(t *testing.T) {
 			role: "Odd Role", setting: "local_preload_libraries"},
 		{name: "an empty element", out: roleSettingRow("app", "temp_tablespaces=a,,b"), role: "app", setting: "temp_tablespaces"},
 		{name: "an unclosed quote", out: roleSettingRow("app", `search_path="x`), role: "app", setting: "search_path"},
+		// No names at all: pg_dumpall writes "SET search_path TO ;" (checked on 16).
+		{name: "an empty list", out: roleSettingRow("app", "search_path="), role: "app", setting: "search_path"},
+		{name: "a blank list", out: roleSettingRow("app", "temp_tablespaces=  "), role: "app", setting: "temp_tablespaces"},
+		{name: "an empty quoted name", out: roleSettingRow("app", `search_path=""`)},
 		{name: "not hex", out: "zz|00\n", wantParseError: true},
 		{name: "no separator", out: "6162\n", wantParseError: true},
 	}

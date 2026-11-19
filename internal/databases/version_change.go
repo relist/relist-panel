@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"relist-panel/internal/safely"
 )
 
 // ErrNoPreviousData is a change that kept no data, or whose data is deleted.
@@ -55,7 +57,7 @@ func (s *Service) ChangeVersion(ctx context.Context, id int64, version string, b
 	method := VersionMethodInPlace
 	if d.Engine == "postgres" {
 		method = VersionMethodDumpRestore
-		if err := s.checkRoleSettings(ctx, d, dp); err != nil {
+		if err := safely.Call("check the role settings", func() error { return s.checkRoleSettings(ctx, d, dp) }); err != nil {
 			s.endJob(id)
 			return VersionChange{}, err
 		}
@@ -70,21 +72,22 @@ func (s *Service) ChangeVersion(ctx context.Context, id int64, version string, b
 		defer s.wg.Done()
 		ctx := context.WithoutCancel(ctx)
 		run := &versionRun{s: s, d: d, dp: dp, c: c}
-		panicked := s.contain(ctx, id, "Change version", func() {
+		perr := s.contain(ctx, id, "Change version", func() {
 			if method == VersionMethodDumpRestore {
 				run.dumpRestore(ctx)
 			} else {
 				run.inPlace(ctx, backupFirst)
 			}
 		})
-		if panicked {
-			// The Database may be half changed. It keeps its job slot and the
-			// change its running record, so nothing else touches it until a
-			// panel restart, whose start-up recovery finishes the change or
-			// rolls it back (ADR-0047).
-			d, _ := s.d.Store.Get(ctx, id)
-			_ = s.d.Store.SetLastError(ctx, id, d.LastError+". Restart the panel to finish or roll back the version change")
-			return
+		if perr != nil {
+			// The Database may be half changed: heal it now, as a panel
+			// restart would. Should that fail too, the slot stays held so
+			// nothing else touches the Database, and a restart heals it.
+			if err := safely.Call("recover a version change", func() error { return s.recoverChange(ctx, id, c.ID, perr) }); err != nil {
+				log.Printf("databases: recover version change %d: %v", c.ID, err)
+				_ = s.d.Store.SetLastError(ctx, id, perr.Error()+". Restart the panel to finish or roll back the version change")
+				return
+			}
 		}
 		s.endJob(id)
 	}()
@@ -497,10 +500,58 @@ func (s *Service) resumeInterrupted(ctx context.Context) error {
 			continue
 		}
 		r := &versionRun{s: s, d: d, c: c}
-		r.log.WriteString(c.Log)
-		r.note(ctx, "Resumed after a restart")
-		r.finishInPlace(ctx, s.preUpdateSince(ctx, d.ID, c.StartedAt))
+		err = safely.Call("resume a version change", func() error {
+			r.log.WriteString(c.Log)
+			r.note(ctx, "Resumed after a restart")
+			r.finishInPlace(ctx, s.preUpdateSince(ctx, d.ID, c.StartedAt))
+			return nil
+		})
+		if err != nil {
+			ierr := internalError(err)
+			_ = s.d.Store.FailVersionChange(ctx, c.ID, ierr.Error(), r.logText()+"✗ "+ierr.Error()+"\n")
+			_ = s.d.Store.SetLastError(ctx, d.ID, ierr.Error())
+		}
 		s.endJob(d.ID)
+	}
+	return nil
+}
+
+// recoverChange heals Database id after its version change panicked, the
+// way a panel restart's recovery would (Startup, ReconcileAll, the volume
+// sweep) but for this change only. An in-place change past its switch is
+// finished. A change still running is failed with perr in its log; then the
+// container is reconciled to what the Database's record names, and the
+// change's half-made volume removed. The caller holds the job slot.
+func (s *Service) recoverChange(ctx context.Context, id, changeID int64, perr error) error {
+	c, err := s.d.Store.GetVersionChange(ctx, id, changeID)
+	if err != nil {
+		return err
+	}
+	d, err := s.d.Store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	running := c.Status == JobRunning
+	if running && c.Method == VersionMethodInPlace && d.Version == c.ToVersion {
+		r := &versionRun{s: s, d: d, c: c}
+		r.log.WriteString(c.Log)
+		r.note(ctx, "Resumed after an internal error")
+		r.finishInPlace(ctx, s.preUpdateSince(ctx, d.ID, c.StartedAt))
+		return nil
+	}
+	if running {
+		if err := s.d.Store.FailVersionChange(ctx, c.ID, perr.Error(), c.Log+"✗ "+perr.Error()+"\n"); err != nil {
+			return err
+		}
+	}
+	if err := s.withLock(id, func() error {
+		_, err := s.reconcile(ctx, d)
+		return err
+	}); err != nil {
+		return err
+	}
+	if running && c.ToVolume != "" {
+		return s.d.Host.RemoveVolume(ctx, c.ToVolume)
 	}
 	return nil
 }

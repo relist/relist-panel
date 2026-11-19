@@ -18,6 +18,7 @@ import (
 
 	"relist-panel/internal/backupdest"
 	"relist-panel/internal/directaccess"
+	"relist-panel/internal/safely"
 	"relist-panel/internal/slug"
 )
 
@@ -821,7 +822,7 @@ func (s *Service) ReconcileAll(ctx context.Context) error {
 		if d.DeletedAt != nil {
 			continue
 		}
-		err := func() error {
+		err := safely.Call("reconcile "+d.Name, func() error {
 			unlock := s.lock(d.ID)
 			defer unlock()
 			// A running job owns its container: a version change has it
@@ -835,7 +836,7 @@ func (s *Service) ReconcileAll(ctx context.Context) error {
 			}
 			_, err = s.reconcile(ctx, fresh)
 			return err
-		}()
+		})
 		if err != nil && first == nil {
 			first = fmt.Errorf("%s: %w", d.Name, err)
 		}

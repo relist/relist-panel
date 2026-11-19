@@ -23,9 +23,9 @@ type fakeHost struct {
 	volumes    map[string]bool
 	images     map[string]string // ref -> image ID after a pull
 	failOn     map[string]error  // call prefix -> error
-	// panicOn panics on a call starting with its prefix. Not for exec,
-	// which records under a lock it releases by hand: script a panicking
-	// exec instead.
+	// panicOn panics once on a call starting with its prefix, then lets
+	// that call through. Not for exec, which records under a lock it
+	// releases by hand: script a panicking exec instead.
 	panicOn map[string]string
 	logs    string
 	// health is the Health a container of that image has after Create
@@ -64,6 +64,7 @@ func (f *fakeHost) record(call string) error {
 	f.calls = append(f.calls, call)
 	for prefix, value := range f.panicOn {
 		if strings.HasPrefix(call, prefix) {
+			delete(f.panicOn, prefix)
 			panic(value)
 		}
 	}

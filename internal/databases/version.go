@@ -161,9 +161,9 @@ WHERE s.setdatabase = 0
 ORDER BY r.rolname, c.n;`
 
 // ErrUnsplittableSetting refuses a Postgres Change version: a role-wide list
-// setting does not split the way pg_dump splits it (a role can store any
-// raw text with SET … FROM CURRENT), so pg_dumpall writes "SET … TO ;" and
-// restoring the roles on the new version would fail.
+// setting does not split the way pg_dump splits it, or splits into no names
+// (a role can store any raw text with SET … FROM CURRENT), so pg_dumpall
+// writes "SET … TO ;" and restoring the roles on the new version would fail.
 type ErrUnsplittableSetting struct{ Role, Setting string }
 
 func (e ErrUnsplittableSetting) Error() string {
@@ -192,7 +192,9 @@ func unsplittableRoleSetting(out string) (*ErrUnsplittableSetting, error) {
 		if !listSettings[strings.ToLower(name)] {
 			continue
 		}
-		if _, ok := splitGUCList(value); !ok {
+		// No names at all is as bad: pg_dumpall writes "SET … TO ;" for
+		// both (makeAlterConfigCommand appends one literal per name).
+		if names, ok := splitGUCList(value); !ok || len(names) == 0 {
 			return &ErrUnsplittableSetting{Role: string(role), Setting: name}, nil
 		}
 	}

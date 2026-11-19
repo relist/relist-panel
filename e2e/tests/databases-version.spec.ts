@@ -197,6 +197,21 @@ test.describe('change version', () => {
     expect(db.job).toBe('');
     expect(db.version).toBe('16');
 
+    // An empty list is as bad: pg_dumpall writes "SET search_path TO ;".
+    const su = await creds(panel, id);
+    docker(psql(id, 'postgres', su.password, 'postgres', 'ALTER ROLE shop RESET local_preload_libraries'));
+    docker(psql(id, 'shop', owner.password, 'shop',
+      "SELECT set_config('search_path', '', false); ALTER ROLE CURRENT_USER SET search_path FROM CURRENT"));
+    const empty = await panel.raw('POST', `/api/databases/${id}/change-version`, { version: '18' });
+    expect(empty.status).toBe(422);
+    expect((JSON.parse(empty.body) as { error: string }).error).toContain('ALTER ROLE "shop" RESET search_path');
+
+    // Fixed as the message says, the change goes through.
+    docker(psql(id, 'postgres', su.password, 'postgres', 'ALTER ROLE shop RESET search_path'));
+    expect((await panel.raw('POST', `/api/databases/${id}/change-version`, { version: '18' })).status).toBe(202);
+    expect((await settled(panel, id)).version).toBe('18');
+    expect((await lastChange(panel, id)).status).toBe('succeeded');
+
     await removeDatabase(panel, id, name);
   });
 

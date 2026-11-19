@@ -3,6 +3,8 @@ package databases
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -62,10 +64,10 @@ func TestPanicInARestoreIsContained(t *testing.T) {
 	r.wantContained(t, d.ID)
 }
 
-// A version change that panics may have left the Database half changed: it
-// keeps its job slot and its running record, so nothing else touches it
-// until a panel restart, whose start-up recovery finishes or rolls it back.
-func TestPanicInAVersionChangeKeepsTheDatabaseForRecovery(t *testing.T) {
+// A version change that panics is healed at once, the way a panel restart
+// would heal it: the change fails with the panic in its log, the container
+// goes back to what the Database's record names, and the slot is freed.
+func TestPanicBeforeAVersionChangeTouchesTheHostIsRecovered(t *testing.T) {
 	r := newPGChangeRig(t)
 	ctx := context.Background()
 	r.host.mu.Lock()
@@ -76,16 +78,110 @@ func TestPanicInAVersionChangeKeepsTheDatabaseForRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.svc.Wait()
-	if job := r.svc.Jobs(r.d.ID); job != JobKindChangeVersion {
-		t.Fatalf("job slot = %q, want it held for recovery", job)
+	if job := r.svc.Jobs(r.d.ID); job != "" {
+		t.Fatalf("job slot still held: %q", job)
 	}
 	got, err := r.store.GetVersionChange(ctx, r.d.ID, c.ID)
-	if err != nil || got.Status != JobRunning {
+	if err != nil || got.Status != JobFailed || !strings.Contains(got.Error, "internal error") || !strings.Contains(got.Log, "internal error") {
 		t.Fatalf("version change = %+v, %v", got, err)
 	}
+	if d, _ := r.store.Get(ctx, r.d.ID); d.Version != "16" {
+		t.Fatalf("version = %q", d.Version)
+	}
+}
+
+func TestPanicMidVersionChangeRollsBackInProcess(t *testing.T) {
+	r := newPGChangeRig(t)
+	ctx := context.Background()
+	// The new server is up on its own volume and the old one stopped when
+	// the first database's restore panics.
+	r.host.override(pgRestore, func(ExecRequest) (int, error) { panic("boom") })
+	c, err := r.svc.ChangeVersion(ctx, r.d.ID, "18", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	if job := r.svc.Jobs(r.d.ID); job != "" {
+		t.Fatalf("job slot still held: %q", job)
+	}
+	got, _ := r.store.GetVersionChange(ctx, r.d.ID, c.ID)
+	if got.Status != JobFailed || !strings.Contains(got.Error, "internal error") {
+		t.Fatalf("version change = %+v", got)
+	}
 	d, _ := r.store.Get(ctx, r.d.ID)
-	if !strings.Contains(d.LastError, "internal error") || !strings.Contains(d.LastError, "Restart the panel") {
-		t.Fatalf("last error = %q", d.LastError)
+	r.host.mu.Lock()
+	defer r.host.mu.Unlock()
+	spec, st := r.host.specs[ContainerName(d.ID)], r.host.containers[ContainerName(d.ID)]
+	if d.Version != "16" || spec.Image != "postgres:16" || spec.Volume != d.Volume || st == nil || !st.Running {
+		t.Fatalf("after recovery: version %q, spec %+v, state %+v", d.Version, spec, st)
+	}
+	if got.ToVolume == "" || r.host.volumes[got.ToVolume] {
+		t.Fatalf("the half-made volume %q is still there", got.ToVolume)
+	}
+}
+
+// Reading the role settings runs while the request holds the job slot.
+func TestPanicReadingRoleSettingsReleasesTheSlot(t *testing.T) {
+	r := newPGChangeRig(t)
+	ctx := context.Background()
+	r.host.override(pgAdmin, func(req ExecRequest) (int, error) {
+		b, _ := io.ReadAll(req.Stdin)
+		if strings.Contains(string(b), "setdatabase = 0") {
+			panic("boom")
+		}
+		return 0, nil
+	})
+	if _, err := r.svc.ChangeVersion(ctx, r.d.ID, "18", false); err == nil || !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("err = %v", err)
+	}
+	if job := r.svc.Jobs(r.d.ID); job != "" {
+		t.Fatalf("job slot still held: %q", job)
+	}
+}
+
+// A panic resuming one interrupted change fails that change and frees its
+// slot; the rest of the start-up recovery still runs.
+func TestPanicResumingAnInPlaceChangeIsContained(t *testing.T) {
+	r, d := inPlaceRig(t, "mariadb", "11.4")
+	ctx := context.Background()
+	c := interruptedAfterSwitch(t, r, d, "11.8")
+	partial := filepath.Join(r.dataDir, ".databases", "99", "backups", "x.sql.gz.partial")
+	if err := os.MkdirAll(filepath.Dir(partial), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(partial, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.host.mu.Lock()
+	r.host.panicOn["create "] = "boom"
+	r.host.mu.Unlock()
+	if err := r.svc.Startup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if job := r.svc.Jobs(d.ID); job != "" {
+		t.Fatalf("job slot still held: %q", job)
+	}
+	if row, _ := r.store.GetVersionChange(ctx, d.ID, c.ID); row.Status != JobFailed || !strings.Contains(row.Error, "internal error") {
+		t.Fatalf("row = %+v", row)
+	}
+	if _, err := os.Stat(partial); !os.IsNotExist(err) {
+		t.Fatalf("the rest of Startup did not run: %v", err)
+	}
+}
+
+func TestPanicReconcilingOneDatabaseStillReconcilesTheRest(t *testing.T) {
+	r := newRig(t)
+	a := r.create(t, "Shop", "postgres", "18")
+	b := r.create(t, "Blog", "postgres", "18")
+	r.host.mu.Lock()
+	r.host.panicOn["inspect "+ContainerName(a.ID)] = "boom"
+	r.host.calls = nil
+	r.host.mu.Unlock()
+	if err := r.svc.ReconcileAll(context.Background()); err == nil || !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("ReconcileAll = %v", err)
+	}
+	if !r.host.saw("inspect " + ContainerName(b.ID)) {
+		t.Fatalf("Blog was not reconciled: %v", r.host.all())
 	}
 }
 

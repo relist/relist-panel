@@ -71,8 +71,8 @@ Downgrades are never offered or accepted.
 - **A role-wide list setting `pg_dumpall` cannot copy** refuses a Postgres
   change (422) before anything changes. A role can keep raw text in such a
   setting with `SET … FROM CURRENT`; when pg_dump's `SplitGUCList` cannot
-  split it, `pg_dumpall` writes `ALTER ROLE … SET … TO ;`, and the roles
-  restore would fail every time. The refusal names the role, the setting
+  split it, or it holds no names (`''` or blanks), `pg_dumpall` writes
+  `ALTER ROLE … SET … TO ;`, and the roles restore would fail every time. The refusal names the role, the setting
   and the `ALTER ROLE … RESET` that fixes it.
 
 **Considered and rejected:**
