@@ -51,26 +51,6 @@
   animation-delay: var(--rp-boot-loop-offset);
 }
 
-/* Plum petals drifting off the branch on her left. */
-.rp-boot__petal {
-  position: absolute;
-  top: 52px;
-  left: 28px;
-  width: 9px;
-  height: 7px;
-  border-radius: 80% 0 80% 0;
-  background: #f1dcb4;
-  box-shadow: inset -1px -1px 0 rgba(201, 150, 72, 0.45);
-  opacity: 0;
-  animation: rp-boot-petal 9.6s linear infinite;
-}
-
-.rp-boot__petal:nth-child(2) { left: 22px; animation-delay: calc(var(--rp-boot-loop-offset) - 0s); }
-.rp-boot__petal:nth-child(3) { left: 44px; animation-delay: calc(var(--rp-boot-loop-offset) - 1.92s); }
-.rp-boot__petal:nth-child(4) { left: 16px; animation-delay: calc(var(--rp-boot-loop-offset) - 3.84s); }
-.rp-boot__petal:nth-child(5) { left: 38px; animation-delay: calc(var(--rp-boot-loop-offset) - 5.76s); }
-.rp-boot__petal:nth-child(6) { left: 28px; animation-delay: calc(var(--rp-boot-loop-offset) - 7.68s); }
-
 .rp-boot__label {
   font-size: 14px;
   letter-spacing: 0.01em;
@@ -95,16 +75,6 @@
   50% { opacity: 1; transform: scale(1.04); }
 }
 
-@keyframes rp-boot-petal {
-  0% { opacity: 0; transform: translate(0, 0) rotate(0deg); }
-  6% { opacity: 0.95; }
-  25% { transform: translate(14px, 40px) rotate(70deg); }
-  50% { opacity: 0.85; transform: translate(-4px, 92px) rotate(150deg); }
-  75% { transform: translate(18px, 140px) rotate(230deg); }
-  90% { opacity: 0; }
-  100% { opacity: 0; transform: translate(6px, 176px) rotate(300deg); }
-}
-
 @keyframes rp-boot-dot {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.45; }
   30% { transform: translateY(-3px); opacity: 1; }
@@ -115,9 +85,5 @@
   .rp-boot__glow,
   .rp-boot__dots span {
     animation: none;
-  }
-
-  .rp-boot__petal {
-    display: none;
   }
 }

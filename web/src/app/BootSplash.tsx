@@ -6,10 +6,8 @@ import black from '../assets/relist-chan-black.webp';
 import silver from '../assets/relist-chan-silver.webp';
 import './BootSplash.css';
 
-/** One loop of the float, the glow and the petals, in ms (BootSplash.css). */
+/** One loop of the float and the glow, in ms (BootSplash.css). */
 const LOOP_MS = 9600;
-
-const PETALS = 5;
 
 /** Relist-chan's looks, each with the light that suits her: gold for the silver hair, lavender for the black. */
 const MASCOTS = [
@@ -43,9 +41,6 @@ export function BootSplash({ label, leaving = false, fadeMs = 0 }: { label: stri
     <div aria-label="Loading" className={leaving ? 'rp-boot rp-boot--leaving' : 'rp-boot'} role="status" style={style}>
       <div className="rp-boot__stage">
         <div aria-hidden className="rp-boot__glow" />
-        {Array.from({ length: PETALS }, (_, index) => (
-          <span aria-hidden className="rp-boot__petal" key={index} />
-        ))}
         <img alt="" className="rp-boot__mascot" draggable={false} height={224} src={mascot.src} width={224} />
       </div>
       <Typography.Text className="rp-boot__label" type="secondary">
