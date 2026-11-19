@@ -218,8 +218,8 @@ SQL engines only. Redis has neither tab.
   - MySQL / MariaDB Full: `GRANT ALL ON \`db\`.*`. Read-only: `GRANT SELECT, SHOW
     VIEW ON \`db\`.*`.
 - **Delete user:** refused while it owns a database or objects (Postgres), with
-  the error naming them. Deleting a user that phase 8 access uses asks for
-  confirmation listing those panel users.
+  the error naming them. (Deleting a user that phase 8 access used asked for
+  confirmation listing those panel users; dropped with phase 8, ADR-0049.)
 - **The Connection tab** gains a user picker: the superuser, and every managed
   user, each with its own URL and Compose snippet.
 

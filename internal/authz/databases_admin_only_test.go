@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"relist-panel/internal/auth"
@@ -48,6 +49,15 @@ func TestDatabaseRoutesAreAdminOnly(t *testing.T) {
 		}
 		if _, ok := Routes[p]; ok {
 			t.Errorf("Routes[%q] is set: Database routes must stay out of Routes, which makes them Admin-only", p)
+		}
+	}
+	// Any route of the Databases family, not only the ones above.
+	for p := range Routes {
+		_, path, _ := strings.Cut(p, " ")
+		for _, prefix := range []string{"/api/databases", "/api/direct-accesses", "/api/backup-destinations"} {
+			if path == prefix || strings.HasPrefix(path, prefix+"/") {
+				t.Errorf("Routes[%q] is set: Databases are Admin-only (ADR-0049)", p)
+			}
 		}
 	}
 }

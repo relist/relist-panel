@@ -61,7 +61,9 @@ All three reproduced on real servers (`e2e/tests/databases-security.spec.ts`).
   `RESET ROLE` and get the superuser back, because the session user stays
   the superuser.
 - **Pinning `search_path` on the Admin's normal runs.** Unqualified table
-  names would stop resolving. Running as the owner removes the need.
+  names would stop resolving. Running as the owner removed the need; since
+  ADR-0049 an Admin's run is the superuser on the database's own
+  `search_path`, which is the accepted risk.
 
 **Consequences** (of the removed owner-run console, until ADR-0049):
 - In a database another role owns, an Admin's run sees what the owner sees,
