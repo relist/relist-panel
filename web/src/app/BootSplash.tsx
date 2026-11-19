@@ -2,13 +2,23 @@ import { Typography, theme } from 'antd';
 import type { CSSProperties } from 'react';
 import { useState } from 'react';
 
-import mascot from '../assets/relist-chan.webp';
+import black from '../assets/relist-chan-black.webp';
+import silver from '../assets/relist-chan-silver.webp';
 import './BootSplash.css';
 
 /** One loop of the float, the glow and the petals, in ms (BootSplash.css). */
 const LOOP_MS = 9600;
 
 const PETALS = 5;
+
+/** Relist-chan's looks, each with the light that suits her: gold for the silver hair, lavender for the black. */
+const MASCOTS = [
+  { src: silver, glow: 'rgba(214, 170, 92, 0.4)' },
+  { src: black, glow: 'rgba(150, 128, 196, 0.36)' },
+];
+
+/** Picked once per page load, so the hand-over from RequireAuth to BootGate keeps the same one. */
+const mascot = MASCOTS[Math.floor(Math.random() * MASCOTS.length)];
 
 /**
  * Relist-chan, waiting with the visitor while the panel loads: the full-screen
@@ -25,6 +35,7 @@ export function BootSplash({ label, leaving = false, fadeMs = 0 }: { label: stri
   const style = {
     '--rp-boot-loop-offset': `${phase}ms`,
     '--rp-boot-fade': `${fadeMs}ms`,
+    '--rp-boot-glow': mascot.glow,
     background: token.colorBgLayout,
     zIndex: token.zIndexPopupBase + 1000,
   } as CSSProperties;
@@ -35,7 +46,7 @@ export function BootSplash({ label, leaving = false, fadeMs = 0 }: { label: stri
         {Array.from({ length: PETALS }, (_, index) => (
           <span aria-hidden className="rp-boot__petal" key={index} />
         ))}
-        <img alt="" className="rp-boot__mascot" draggable={false} height={224} src={mascot} width={224} />
+        <img alt="" className="rp-boot__mascot" draggable={false} height={224} src={mascot.src} width={224} />
       </div>
       <Typography.Text className="rp-boot__label" type="secondary">
         {label}

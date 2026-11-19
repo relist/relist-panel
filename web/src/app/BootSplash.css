@@ -41,12 +41,12 @@
   animation-delay: var(--rp-boot-loop-offset);
 }
 
-/* Warm light behind the ink, the colour of her hairpin. */
+/* Soft light behind the ink, tinted per look (BootSplash.tsx). */
 .rp-boot__glow {
   position: absolute;
   inset: 8px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(214, 170, 92, 0.4) 0%, rgba(214, 170, 92, 0) 66%);
+  background: radial-gradient(circle, var(--rp-boot-glow) 0%, transparent 66%);
   animation: rp-boot-glow 4.8s ease-in-out infinite;
   animation-delay: var(--rp-boot-loop-offset);
 }
