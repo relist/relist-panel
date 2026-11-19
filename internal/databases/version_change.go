@@ -64,14 +64,25 @@ func (s *Service) ChangeVersion(ctx context.Context, id int64, version string, b
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		defer s.endJob(id)
 		ctx := context.WithoutCancel(ctx)
 		run := &versionRun{s: s, d: d, dp: dp, c: c}
-		if method == VersionMethodDumpRestore {
-			run.dumpRestore(ctx)
-		} else {
-			run.inPlace(ctx, backupFirst)
+		panicked := s.contain(ctx, id, "Change version", func() {
+			if method == VersionMethodDumpRestore {
+				run.dumpRestore(ctx)
+			} else {
+				run.inPlace(ctx, backupFirst)
+			}
+		})
+		if panicked {
+			// The Database may be half changed. It keeps its job slot and the
+			// change its running record, so nothing else touches it until a
+			// panel restart, whose start-up recovery finishes the change or
+			// rolls it back (ADR-0047).
+			d, _ := s.d.Store.Get(ctx, id)
+			_ = s.d.Store.SetLastError(ctx, id, d.LastError+". Restart the panel to finish or roll back the version change")
+			return
 		}
+		s.endJob(id)
 	}()
 	return c, nil
 }

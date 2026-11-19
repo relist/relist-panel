@@ -243,9 +243,12 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Database, error) 
 	go func() {
 		defer s.wg.Done()
 		defer s.setInflight(d.ID, false)
-		unlock := s.lock(d.ID)
-		defer unlock()
-		_, _ = s.reconcile(context.WithoutCancel(ctx), d)
+		ctx := context.WithoutCancel(ctx)
+		s.contain(ctx, d.ID, "start the Database", func() {
+			unlock := s.lock(d.ID)
+			defer unlock()
+			_, _ = s.reconcile(ctx, d)
+		})
 	}()
 	return d, nil
 }
@@ -552,17 +555,19 @@ func (s *Service) UpdateImage(ctx context.Context, id int64, backupFirst bool) e
 		defer s.wg.Done()
 		defer s.endJob(id)
 		ctx := context.WithoutCancel(ctx)
-		if ok, firstErr := s.backupAll(ctx, d, dp, TriggerPreUpdate); !ok {
-			_ = s.d.Store.SetLastError(ctx, id, "the pre-update backup failed, so the image was not updated: "+firstErr)
-			return
-		}
-		unlock := s.lock(id)
-		defer unlock()
-		fresh, err := s.d.Store.Get(ctx, id)
-		if err != nil {
-			return
-		}
-		_ = s.updateImage(ctx)(fresh)
+		s.contain(ctx, id, "update image", func() {
+			if ok, firstErr := s.backupAll(ctx, d, dp, TriggerPreUpdate); !ok {
+				_ = s.d.Store.SetLastError(ctx, id, "the pre-update backup failed, so the image was not updated: "+firstErr)
+				return
+			}
+			unlock := s.lock(id)
+			defer unlock()
+			fresh, err := s.d.Store.Get(ctx, id)
+			if err != nil {
+				return
+			}
+			_ = s.updateImage(ctx)(fresh)
+		})
 	}()
 	return nil
 }

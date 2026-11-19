@@ -167,9 +167,11 @@ func (s *Service) StartBackup(ctx context.Context, id int64, req BackupRequest) 
 		defer s.wg.Done()
 		defer s.endJob(id)
 		ctx := context.WithoutCancel(ctx)
-		for _, b := range rows {
-			s.executeBackup(ctx, d, dp, b)
-		}
+		s.contain(ctx, id, "backup", func() {
+			for _, b := range rows {
+				s.executeBackup(ctx, d, dp, b)
+			}
+		})
 	}()
 	return rows, nil
 }

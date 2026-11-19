@@ -412,6 +412,23 @@ func (s *Store) DeleteUpload(ctx context.Context, id int64) error {
 }
 
 // FailRunningUploads marks every running upload failed with msg.
+// FailRunningOf fails the Backups, restores and Backup copies of Database
+// id still marked running: a job of its that panicked left them behind.
+func (s *Store) FailRunningOf(ctx context.Context, id int64, msg string) error {
+	now := s.now().UnixMilli()
+	if _, err := s.db.ExecContext(ctx, `UPDATE database_backups SET status = ?, error = ?, finished_at = ? WHERE status = ? AND database_id = ?`,
+		JobFailed, msg, now, JobRunning, id); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE database_restores SET status = ?, error = ?, finished_at = ? WHERE status = ? AND database_id = ?`,
+		JobFailed, msg, now, JobRunning, id); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE database_backup_uploads SET status = 'failed', error = ?
+		WHERE status = 'running' AND backup_id IN (SELECT id FROM database_backups WHERE database_id = ?)`, msg, id)
+	return err
+}
+
 func (s *Store) FailRunningUploads(ctx context.Context, msg string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE database_backup_uploads SET status = 'failed', error = ? WHERE status = 'running'`, msg)
 	return err

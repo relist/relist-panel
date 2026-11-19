@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"relist-panel/internal/safely"
 	"relist-panel/internal/schedule"
 )
 
@@ -22,7 +23,7 @@ const skippedNotRunning = "skipped: the Database was not running"
 // ends (the Registry cleaner's loop).
 func (s *Service) RunScheduler(ctx context.Context) {
 	for {
-		s.tick(ctx)
+		safely.Do("databases: backup schedules", func() { s.tick(ctx) })
 		select {
 		case <-ctx.Done():
 			return
@@ -76,6 +77,11 @@ func (s *Service) tickOne(ctx context.Context, sc Schedule, now time.Time) {
 	defer s.wg.Done()
 	defer s.endJob(sc.DatabaseID)
 	ctx = context.WithoutCancel(ctx)
+	s.contain(ctx, sc.DatabaseID, "scheduled backup", func() { s.runTick(ctx, sc, now) })
+}
+
+// runTick is tickOne's work, with the job slot held.
+func (s *Service) runTick(ctx context.Context, sc Schedule, now time.Time) {
 	d, err := s.d.Store.Get(ctx, sc.DatabaseID)
 	if err != nil || d.DeletedAt != nil {
 		return
