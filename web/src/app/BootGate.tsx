@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
-import { BOOT_CAP_MS, bootWaitingOn, CHECKING_SIGN_IN } from './boot-readiness';
+import { BOOT_CAP_MS, BOOT_MIN_MS, bootWaitingOn, CHECKING_SIGN_IN } from './boot-readiness';
 import { BootSplash } from './BootSplash';
 
 /** How long the splash takes to fade once the panel is ready. */
@@ -33,7 +33,8 @@ type Phase = 'waiting' | 'leaving' | 'done';
 /**
  * The first paint after sign-in: the app mounts underneath at once, so its own
  * loads start, while the splash covers it until the Migration lock has been
- * read and every `useBootHold` has let go (`boot-readiness.ts`). It then fades
+ * read, every `useBootHold` has let go and `BOOT_MIN_MS` has passed
+ * (`boot-readiness.ts`). It then fades
  * and unmounts for the rest of this gate's life — later reloads belong to their
  * controls (GUIDELINES §8).
  *
@@ -58,21 +59,26 @@ export function BootGate({ lockSettled, children }: { lockSettled: boolean; chil
   const [phase, setPhase] = useState<Phase>('waiting');
   const [label, setLabel] = useState(CHECKING_SIGN_IN);
   const [capped, setCapped] = useState(false);
+  const [minShown, setMinShown] = useState(false);
 
   useEffect(() => {
-    const timer = setTimeout(() => setCapped(true), BOOT_CAP_MS);
-    return () => clearTimeout(timer);
+    const min = setTimeout(() => setMinShown(true), BOOT_MIN_MS);
+    const cap = setTimeout(() => setCapped(true), BOOT_CAP_MS);
+    return () => {
+      clearTimeout(min);
+      clearTimeout(cap);
+    };
   }, []);
 
   useEffect(() => {
     if (phase !== 'waiting') return;
-    const waitingOn = bootWaitingOn({ lockSettled, holds: registered.current.values(), capped });
+    const waitingOn = bootWaitingOn({ lockSettled, holds: registered.current.values(), capped, minShown });
     if (waitingOn === null) {
       setPhase('leaving');
     } else {
       setLabel(waitingOn);
     }
-  }, [capped, lockSettled, phase, version]);
+  }, [capped, lockSettled, minShown, phase, version]);
 
   useEffect(() => {
     if (phase !== 'leaving') return;

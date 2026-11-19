@@ -119,6 +119,8 @@ describe('RequireAuth boot splash', () => {
     expect(screen.getByText('Checking sign-in')).toBeTruthy();
     expect(screen.getByText('the app')).toBeTruthy();
     await act(async () => { answer(idle); });
+    // The splash keeps its minimum, then fades.
+    await act(() => vi.advanceTimersByTimeAsync(3000));
     await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(screen.queryByRole('status', { name: 'Loading' })).toBeNull();
     expect(screen.getByText('the app')).toBeTruthy();

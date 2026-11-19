@@ -4,7 +4,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BOOT_CAP_MS } from './boot-readiness';
+import { BOOT_CAP_MS, BOOT_MIN_MS } from './boot-readiness';
 import { BOOT_FADE_MS, BootGate, useBootHold } from './BootGate';
 
 beforeEach(() => { vi.useFakeTimers(); });
@@ -20,6 +20,9 @@ function Hold({ waitingOn }: { waitingOn: string | null }) {
 
 const splash = () => screen.queryByRole('status', { name: 'Loading' });
 
+/** Let the minimum pass. */
+const minPasses = () => act(() => vi.advanceTimersByTimeAsync(BOOT_MIN_MS));
+
 /** Fade the splash out and let it unmount. */
 const fadeOut = () => act(() => vi.advanceTimersByTimeAsync(BOOT_FADE_MS));
 
@@ -33,12 +36,24 @@ describe('BootGate', () => {
 
     rerender(<BootGate lockSettled><Hold waitingOn={null} /><p>the app</p></BootGate>);
     expect(splash()).toBeTruthy();
+    await minPasses();
+    await fadeOut();
+    expect(splash()).toBeNull();
+  });
+
+  it('stays up for its minimum even when everything answers at once', async () => {
+    render(<BootGate lockSettled><Hold waitingOn={null} /></BootGate>);
+    await act(() => vi.advanceTimersByTimeAsync(BOOT_MIN_MS - 1));
+    expect(splash()).toBeTruthy();
+    expect(screen.getByText('Almost ready')).toBeTruthy();
+    await act(() => vi.advanceTimersByTimeAsync(1));
     await fadeOut();
     expect(splash()).toBeNull();
   });
 
   it('waits for the Migration lock read', async () => {
     const { rerender } = render(<BootGate lockSettled={false}><p>the app</p></BootGate>);
+    await minPasses();
     await fadeOut();
     expect(screen.getByText('Checking sign-in')).toBeTruthy();
     rerender(<BootGate lockSettled><p>the app</p></BootGate>);
@@ -60,6 +75,7 @@ describe('BootGate', () => {
       );
     }
     render(<BootGate lockSettled><Shell /></BootGate>);
+    await minPasses();
     act(() => { screen.getByRole('button', { name: 'load' }).click(); });
     await fadeOut();
     expect(splash()).toBeTruthy();
@@ -68,6 +84,7 @@ describe('BootGate', () => {
 
   it('never comes back once the panel has shown', async () => {
     const { rerender } = render(<BootGate lockSettled><Hold waitingOn={null} /></BootGate>);
+    await minPasses();
     await fadeOut();
     expect(splash()).toBeNull();
     // A screen reloading the tree around a mutation holds again.

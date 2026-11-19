@@ -710,8 +710,8 @@ Reusable pieces live in `web-design/src/components/`; port them into `web/src/` 
   paint, table `loading` for refetches. No full-page overlays after first paint.
 - First paint itself is Relist-chan's boot splash (`app/BootGate.tsx`): it covers the mounted app
   until the sign-in, the Migration lock, the Project tree, the sider badges and — on Overview —
-  every Compose's Services have answered (15 s cap), then never returns. A screen whose first paint
-  would otherwise look empty holds it with `useBootHold(label | null)`.
+  every Compose's Services have answered, staying at least 3 s (15 s cap), then never returns. A
+  screen whose first paint would otherwise look empty holds it with `useBootHold(label | null)`.
 - Outcomes use `App.useApp()` messages, one line, naming the thing: "Deployed web". Modals are for
   decisions, messages for outcomes.
 - Multi-step work (deploy, bulk variable replace) uses a **keyed notification** so progress is
