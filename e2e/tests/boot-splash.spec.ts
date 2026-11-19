@@ -46,7 +46,7 @@ test('the splash covers the panel until the Project tree is in, then goes', asyn
   await expect(page).toHaveURL((u) => u.pathname === '/projects');
 });
 
-test('a reload of the tree after first paint does not bring the splash back', async ({ page }) => {
+test('navigating within the shell never shows the splash', async ({ page }) => {
   await signIn(page);
   await expect(splash(page)).toHaveCount(0);
   await page.getByRole('menuitem', { name: /\bProjects\b/ }).click();
