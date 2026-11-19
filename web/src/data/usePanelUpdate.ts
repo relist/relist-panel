@@ -7,13 +7,14 @@ const SHELL_POLL_MS = 10 * 60 * 1000;
 
 /**
  * The update status the header reads. It shares the page's SWR key, so a check
- * made on the page moves the header's tag at once. A failed read leaves no tag.
+ * made on the page moves the header's tag at once. A failed read leaves no tag;
+ * `error` only tells the boot splash the read has answered.
  */
 export function usePanelUpdateStatus(enabled: boolean) {
-  const { data } = useSWR<PanelUpdateStatus>(enabled ? '/api/panel-update/status' : null, api.panelUpdateStatus, {
+  const { data, error } = useSWR<PanelUpdateStatus>(enabled ? '/api/panel-update/status' : null, api.panelUpdateStatus, {
     refreshInterval: SHELL_POLL_MS,
     revalidateOnFocus: false,
     shouldRetryOnError: false,
   });
-  return data;
+  return { data, error: error as unknown };
 }

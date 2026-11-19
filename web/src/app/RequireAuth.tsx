@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Spin, Typography } from 'antd';
+import { Alert, Button, Card, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router';
 
@@ -6,6 +6,9 @@ import { ApiError, api } from '../data/api';
 import type { MigrationStatus } from '../data/migration';
 import { usePanel } from '../data/store';
 import { MigrationLockPage } from '../pages/MigrationLockPage';
+import { CHECKING_SIGN_IN } from './boot-readiness';
+import { BootGate } from './BootGate';
+import { BootSplash } from './BootSplash';
 import { CenteredScreen } from './CenteredScreen';
 import { entryScreen } from './entry';
 import { paths } from './paths';
@@ -15,6 +18,10 @@ import { paths } from './paths';
  * the auth status settles, and a signed-out visitor is redirected to the entry
  * screen the API implies (setup on first run, sign-in after) — at whatever deep
  * link they arrived on, which sign-in sends them back to.
+ *
+ * Relist-chan's boot splash covers the wait: first for the status, then, via
+ * `BootGate`, over the mounted app until its first data is in. It steps aside
+ * at once for the sign-in redirect, the Retry card and the lock page.
  */
 export function RequireAuth() {
   const { auth, loadAuthStatus, isPending } = usePanel();
@@ -61,11 +68,7 @@ export function RequireAuth() {
         </CenteredScreen>
       );
     }
-    return (
-      <CenteredScreen>
-        <Spin aria-label="Loading" size="large" />
-      </CenteredScreen>
-    );
+    return <BootSplash label={CHECKING_SIGN_IN} />;
   }
 
   const screen = entryScreen(auth);
@@ -81,7 +84,11 @@ export function RequireAuth() {
       />
     );
   }
-  return <Outlet />;
+  return (
+    <BootGate lockSettled={lock.settled}>
+      <Outlet />
+    </BootGate>
+  );
 }
 
 /**
@@ -95,6 +102,9 @@ export function RequireAuth() {
  */
 function useMigrationLock(enabled: boolean, signedOut: () => void) {
   const [status, setStatus] = useState<MigrationStatus>();
+  // The first read has answered, either way: the boot splash waits on it, so
+  // the app never flashes before a lock page.
+  const [settled, setSettled] = useState(false);
   useEffect(() => {
     if (!enabled) return;
     let stopped = false;
@@ -114,6 +124,7 @@ function useMigrationLock(enabled: boolean, signedOut: () => void) {
           signedOut();
         })
         .finally(() => {
+          if (!stopped) setSettled(true);
           if (!stopped && locked) timer = setTimeout(read, 5000);
         });
     };
@@ -123,5 +134,5 @@ function useMigrationLock(enabled: boolean, signedOut: () => void) {
       clearTimeout(timer);
     };
   }, [enabled]);
-  return { status };
+  return { status, settled };
 }
