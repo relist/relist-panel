@@ -9,31 +9,10 @@ import (
 )
 
 type (
-	accessKey        struct{}
-	scopeKey         struct{}
-	stillKey         struct{}
-	databaseGrantKey struct{}
+	accessKey struct{}
+	scopeKey  struct{}
+	stillKey  struct{}
 )
-
-// DatabaseGrant is a non-Admin's access to the path's Database: the managed
-// user it runs as (SQL engines) or its level (Redis). Admins carry none.
-type DatabaseGrant struct {
-	DatabaseID int64
-	DBUser     string
-	Level      string
-}
-
-// WithDatabaseGrant returns ctx carrying g, as Middleware does on a
-// LevelDatabase route a grant admitted. Tests use it.
-func WithDatabaseGrant(ctx context.Context, g DatabaseGrant) context.Context {
-	return context.WithValue(ctx, databaseGrantKey{}, g)
-}
-
-// DatabaseGrantFrom is the grant that admitted this request, if one did.
-func DatabaseGrantFrom(ctx context.Context) (DatabaseGrant, bool) {
-	g, ok := ctx.Value(databaseGrantKey{}).(DatabaseGrant)
-	return g, ok
-}
 
 // WithAccess returns ctx carrying access, as Middleware does for every
 // signed-in request. Tests that call handlers without the middleware use it.

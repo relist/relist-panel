@@ -84,11 +84,11 @@ function answer(over: Partial<QueryResponse> = {}): QueryResponse {
   };
 }
 
-function view(db: Database = shop, grantee = false) {
+function view(db: Database = shop) {
   return render(
     <SWRConfig value={{ dedupingInterval: 0, provider: () => new Map() }}>
       <App>
-        <DatabaseQueryTab db={db} grantee={grantee} />
+        <DatabaseQueryTab db={db} />
       </App>
     </SWRConfig>,
   );
@@ -187,39 +187,6 @@ describe('DatabaseQueryTab', () => {
     await waitFor(() => expect(api.runDatabaseQuery).toHaveBeenCalled());
     expect(api.runDatabaseQuery.mock.calls[0][1]).toEqual({ database: 'app', preview: false, sql: 'SELECT * FROM `users` LIMIT 100', writes: false });
     expect(screen.getByLabelText('SQL').getAttribute('data-language')).toBe('mysql');
-  });
-
-  it('warns that root runs Full users\' views and functions with its rights', async () => {
-    view({ ...shop, defaultDatabase: '', engine: 'mariadb', image: 'mariadb:11.8' });
-    await userEvent.click(screen.getByRole('switch', { name: /run as superuser/i }));
-    expect(screen.getByText(/runs as root/i)).toBeTruthy();
-    expect(screen.getByText(/views and functions/i)).toBeTruthy();
-  });
-
-  it('says which database user a run connected as', async () => {
-    api.runDatabaseQuery.mockResolvedValueOnce(answer({ user: 'shop' }));
-    view();
-    await typeSql('SELECT 1');
-    await userEvent.click(screen.getByRole('button', { name: /^run/i }));
-    expect(await screen.findByText('Ran as shop')).toBeTruthy();
-  });
-
-  it('runs as the superuser only after the switch is on, with a warning', async () => {
-    view();
-    expect(screen.queryByText(/views, triggers and functions/i)).toBeNull();
-    await userEvent.click(screen.getByRole('switch', { name: /run as superuser/i }));
-    expect(screen.getByText(/views, triggers and functions/i)).toBeTruthy();
-    expect(screen.getByText(/schema\.table/i)).toBeTruthy();
-    await typeSql('SELECT 1');
-    await userEvent.click(screen.getByRole('button', { name: /^run/i }));
-    await waitFor(() => expect(api.runDatabaseQuery).toHaveBeenCalled());
-    expect(api.runDatabaseQuery.mock.calls[0][1]).toEqual({ asSuperuser: true, database: 'postgres', preview: false, sql: 'SELECT 1', writes: false });
-  });
-
-  it('offers no superuser switch to a grantee', async () => {
-    view(shop, true);
-    await screen.findByText('items');
-    expect(screen.queryByRole('switch', { name: /run as superuser/i })).toBeNull();
   });
 
   it('keeps the last runs and lists them in History', async () => {

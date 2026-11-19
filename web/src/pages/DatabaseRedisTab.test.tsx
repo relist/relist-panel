@@ -162,18 +162,3 @@ describe('DatabaseRedisTab', () => {
     expect((screen.getByLabelText('Command') as HTMLInputElement).disabled).toBe(true);
   });
 });
-
-describe('Redis grantee at Read', () => {
-  it('has no writes switch', async () => {
-    api.redisKeys.mockResolvedValue({ cursor: '0', keys: [] });
-    render(
-      <SWRConfig value={{ provider: () => new Map() }}>
-        <App>
-          <DatabaseRedisTab db={{ ...cache, access: { level: 'read' } }} />
-        </App>
-      </SWRConfig>,
-    );
-    expect(await screen.findByRole('textbox', { name: 'Command' })).toBeTruthy();
-    expect(screen.queryByRole('switch', { name: 'Allow writes' })).toBeNull();
-  });
-});

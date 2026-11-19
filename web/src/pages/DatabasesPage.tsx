@@ -8,7 +8,6 @@ import useSWR from 'swr';
 import { paths } from '../app/paths';
 import { EmptyState, PageHeader, RelativeTime } from '../components/primitives';
 import { api } from '../data/api';
-import { useIsAdmin } from '../data/useCan';
 import type { Database, DatabaseEngine, DatabaseInput } from '../data/types';
 import { pollInterval, statusMeta } from './databases-view';
 
@@ -39,7 +38,6 @@ export function DatabasesPage() {
   });
   const { data: engines } = useSWR('/api/databases/engines', () => api.listDatabaseEngines());
   const [creating, setCreating] = useState(false);
-  const isAdmin = useIsAdmin();
 
   const engineLabel = (name: string) => engines?.find((engine) => engine.name === name)?.label ?? name;
 
@@ -83,11 +81,9 @@ export function DatabasesPage() {
             <Button icon={<ReloadOutlined />} loading={isLoading} onClick={() => void mutate()}>
               Refresh
             </Button>
-            {isAdmin && (
-              <Button disabled={!engines} icon={<PlusOutlined />} onClick={() => setCreating(true)} type="primary">
-                Create database
-              </Button>
-            )}
+            <Button disabled={!engines} icon={<PlusOutlined />} onClick={() => setCreating(true)} type="primary">
+              Create database
+            </Button>
           </Flex>
         }
         title="Databases"

@@ -44,9 +44,6 @@ func pgConfig(t Target, r Request) (*pgx.ConnConfig, error) {
 	if !r.Writes {
 		cfg.RuntimeParams["default_transaction_read_only"] = "on"
 	}
-	if r.CatalogSearchPath {
-		cfg.RuntimeParams["search_path"] = catalogSearchPath
-	}
 	cfg.BuildContextWatcherHandler = func(c *pgconn.PgConn) ctxwatch.Handler {
 		// The socket deadline must outlive the cancel request, or the
 		// request's own context ends with it before it is sent.
@@ -79,25 +76,6 @@ func RunPostgres(ctx context.Context, t Target, r Request) QueryResponse {
 		defer cancel()
 		_ = conn.Close(cctx)
 	}()
-
-	if r.Restricted {
-		rows, err := conn.Query(runCtx, PgServerWideQuery("session_user"))
-		if err != nil {
-			finishPg(&resp, runCtx, ctx, err, began)
-			return resp
-		}
-		wide := rows.Next()
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			finishPg(&resp, runCtx, ctx, err, began)
-			return resp
-		}
-		if wide {
-			resp.Error = &QueryError{Message: ServerWideMessage(t.User)}
-			resp.DurationMs = sinceMs(began)
-			return resp
-		}
-	}
 
 	if r.Preview {
 		return pgPreview(runCtx, ctx, conn, r, began)

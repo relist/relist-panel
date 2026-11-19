@@ -245,11 +245,3 @@ func TestReadKeyCutsASetAtAThousand(t *testing.T) {
 		t.Fatalf("items %d more %v total %d", len(kv.Items), kv.More, kv.Total)
 	}
 }
-
-func TestRunRedisGranteeNeverConfirms(t *testing.T) {
-	f := newFakeRedis(t, func([]string) string { return "+OK\r\n" })
-	got := RunRedisGrantee(context.Background(), f.Target, 0, "FLUSHALL", true)
-	if got.Refused == "" || got.NeedsConfirm || got.Reply != nil || len(f.commands()) != 0 {
-		t.Fatalf("resp = %+v, sent %v: a grantee's FLUSHALL is refused outright", got, f.commands())
-	}
-}

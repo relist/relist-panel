@@ -1226,8 +1226,6 @@ export interface Database {
   deleted: boolean;
   /** The higher versions Change version can move it to, lowest first. */
   upgrades: string[];
-  /** Set for a grantee: how they reach this Database (ADR-0045). */
-  access?: DatabaseGrantAccess;
 }
 
 /**
@@ -1245,21 +1243,6 @@ export interface VersionChange {
   previousData: string;
   startedAt: string;
   finishedAt: string | null;
-}
-
-/** A grantee's own grant: the managed user they work as, or a Redis level. */
-export interface DatabaseGrantAccess {
-  dbUser?: string;
-  level?: 'read' | 'read_write';
-}
-
-/** One Database grant on the Panel access tab (ADR-0045). */
-export interface DatabaseGrantRow {
-  userId: number;
-  email: string;
-  dbUser?: string;
-  level?: 'read' | 'read_write';
-  createdAt: string;
 }
 
 export interface DatabaseEngine {
@@ -1461,8 +1444,6 @@ export interface QueryResponse {
   stopped: string;
   /** The run was a Preview: everything was rolled back. */
   preview?: boolean;
-  /** The database user the run connected as. */
-  user?: string;
 }
 
 export interface QuerySchemaNode {
@@ -1478,8 +1459,6 @@ export interface QueryRequest {
   writes: boolean;
   /** Run in a transaction and roll back; DML only. */
   preview?: boolean;
-  /** An Admin's choice to run as the superuser inside a database another role owns. */
-  asSuperuser?: boolean;
 }
 
 /** A RESP2 reply; a bulk string cut at 64 KB carries its full size in `bytes`, a collection cut at 1,000 elements `more`. */

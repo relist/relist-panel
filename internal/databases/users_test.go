@@ -299,7 +299,7 @@ func TestDeleteUserOwnsRefused(t *testing.T) {
 	ctx := context.Background()
 	r.users("app")
 	r.admin.answer(r.pg.OwnedQuery("app"), [][]string{{"database", "app"}, {"objects", "web"}})
-	err := r.svc.DeleteUser(ctx, r.d.ID, "app", false)
+	err := r.svc.DeleteUser(ctx, r.d.ID, "app")
 	var ow ErrUserOwns
 	if !errors.As(err, &ow) || err.Error() != "app owns databases: app; owns objects in: web. Give them another owner or drop them first" {
 		t.Fatalf("err = %v", err)
@@ -315,7 +315,7 @@ func TestDeleteUserDropsOwnedFirst(t *testing.T) {
 	r.users("app")
 	_ = r.store.UpsertUser(ctx, r.d.ID, "app", "p")
 	r.admin.answer(r.pg.PrivilegedDatabasesQuery("app"), [][]string{{"app"}, {"postgres"}})
-	if err := r.svc.DeleteUser(ctx, r.d.ID, "app", false); err != nil {
+	if err := r.svc.DeleteUser(ctx, r.d.ID, "app"); err != nil {
 		t.Fatal(err)
 	}
 	got := r.admin.calls()
@@ -326,7 +326,7 @@ func TestDeleteUserDropsOwnedFirst(t *testing.T) {
 	if _, err := r.store.GetUser(ctx, r.d.ID, "app"); !errors.Is(err, ErrUserNotManaged) {
 		t.Fatalf("managed row left: %v", err)
 	}
-	if err := r.svc.DeleteUser(ctx, r.d.ID, "nobody", false); !errors.As(err, new(ErrUnknownUser)) {
+	if err := r.svc.DeleteUser(ctx, r.d.ID, "nobody"); !errors.As(err, new(ErrUnknownUser)) {
 		t.Fatalf("unknown = %v", err)
 	}
 }
@@ -337,7 +337,7 @@ func TestDeleteUserMySQL(t *testing.T) {
 	d := r.create(t, "Blog", "mariadb", "11.8")
 	r.admin.answer(mustAccounts(t, "mariadb").UsersQuery(), [][]string{{"app"}})
 	_ = r.store.UpsertUser(ctx, d.ID, "app", "p")
-	if err := r.svc.DeleteUser(ctx, d.ID, "app", false); err != nil {
+	if err := r.svc.DeleteUser(ctx, d.ID, "app"); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.admin.stmts(); !slices.Equal(got, []string{"DROP USER 'app'@'%'"}) {

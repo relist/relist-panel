@@ -1,5 +1,9 @@
 # Per-Database access for non-Admins, and Preview
 
+**Superseded by ADR-0049**, except Preview and the Redis scripts rule: Databases
+are Admin-only again, and the grants, the server-wide check and the grantee
+Redis classifier are gone (migration `00054` drops `database_grants`).
+
 Through phase 7 only Admins saw a Database at all. Phase 8
 (`.scratch/databases/plan-phase-8.md`) lets an Admin give a panel user who is
 not an Admin access to one Database, worked in its Query panel or Redis

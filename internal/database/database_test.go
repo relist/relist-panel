@@ -27,8 +27,8 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 53 {
-		t.Fatalf("migration version = %d, want 53", version)
+	if version != 54 {
+		t.Fatalf("migration version = %d, want 54", version)
 	}
 
 	var one int
@@ -717,5 +717,22 @@ func TestAuditMigration(t *testing.T) {
 	}
 	if _, err := db.Exec("INSERT INTO audit_settings (id, retention_days) VALUES (2, 1)"); err == nil {
 		t.Fatal("a second settings row was accepted")
+	}
+}
+
+// Databases are Admin-only (ADR-0049): the per-Database grants of phase 8
+// are gone, table included.
+func TestDatabaseGrantsTableIsDropped(t *testing.T) {
+	db, err := OpenAndMigrate(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('database_grants', 'database_grants_user')").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("database_grants still has %d schema objects", n)
 	}
 }

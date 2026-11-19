@@ -188,8 +188,7 @@ func (a *API) deleteUser(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	a.target(r, n)
 	audit.Detail(r.Context(), "user", name)
-	confirm := r.URL.Query().Get("confirmGrants") != ""
-	if err := a.s.DeleteUser(r.Context(), n, name, confirm); err != nil {
+	if err := a.s.DeleteUser(r.Context(), n, name); err != nil {
 		writeError(w, err)
 		return
 	}

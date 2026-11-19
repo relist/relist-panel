@@ -264,26 +264,3 @@ func TestAccountsQueriesMentionTheRules(t *testing.T) {
 		t.Errorf("my access query = %s", q)
 	}
 }
-
-func TestServerWideQueryPerEngine(t *testing.T) {
-	pg := pgAccounts{}
-	if q := pg.ServerWideQuery("app"); !strings.Contains(q, "pg_has_role('app', r.oid, 'MEMBER')") {
-		t.Errorf("postgres query does not quote the name: %s", q)
-	}
-	if pg.ServerWide(nil) || pg.ServerWide([][]string{}) {
-		t.Error("postgres with no rows must be clean")
-	}
-	if !pg.ServerWide([][]string{{"postgres"}}) {
-		t.Error("postgres with a row must be server-wide")
-	}
-	my := myAccounts{engine: "mysql"}
-	if q := my.ServerWideQuery("a"); q != "SHOW GRANTS FOR 'a'@'%'" {
-		t.Errorf("mysql query = %s", q)
-	}
-	if my.ServerWide([][]string{{"GRANT USAGE ON *.* TO `a`@`%`"}}) {
-		t.Error("mysql USAGE must be clean")
-	}
-	if !my.ServerWide([][]string{{"GRANT FILE ON *.* TO `a`@`%`"}}) {
-		t.Error("mysql FILE must be server-wide")
-	}
-}

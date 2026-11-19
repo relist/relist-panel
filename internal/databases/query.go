@@ -3,8 +3,6 @@ package databases
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sort"
 	"strings"
 
 	"relist-panel/internal/dbquery"
@@ -22,8 +20,6 @@ type Querier interface {
 	// RunRedis never sends a refused command, nor a dangerous one before
 	// confirmDangerous.
 	RunRedis(ctx context.Context, t dbquery.Target, db int, line string, writes, confirmDangerous bool) dbquery.RedisResponse
-	// RunRedisGrantee is a non-Admin's run: stricter, and never confirmable.
-	RunRedisGrantee(ctx context.Context, t dbquery.Target, db int, line string, readWrite bool) dbquery.RedisResponse
 	ScanKeys(ctx context.Context, t dbquery.Target, db int, pattern, cursor string) ([]dbquery.KeyInfo, string, error)
 	ReadKey(ctx context.Context, t dbquery.Target, db int, key string) (dbquery.KeyValue, error)
 }
@@ -40,10 +36,6 @@ func (engineQuerier) Run(ctx context.Context, t dbquery.Target, r dbquery.Reques
 
 func (engineQuerier) RunRedis(ctx context.Context, t dbquery.Target, db int, line string, writes, confirm bool) dbquery.RedisResponse {
 	return dbquery.RunRedis(ctx, t, db, line, writes, confirm)
-}
-
-func (engineQuerier) RunRedisGrantee(ctx context.Context, t dbquery.Target, db int, line string, readWrite bool) dbquery.RedisResponse {
-	return dbquery.RunRedisGrantee(ctx, t, db, line, readWrite)
 }
 
 func (engineQuerier) ScanKeys(ctx context.Context, t dbquery.Target, db int, pattern, cursor string) ([]dbquery.KeyInfo, string, error) {
@@ -95,42 +87,14 @@ func (s *Service) queryTarget(ctx context.Context, id int64, wantRedis bool) (Da
 	return d, dbquery.Target{Host: ContainerName(id), Port: eng.Port(), User: eng.User(), Password: d.Password}, nil
 }
 
-// granteeTarget swaps the superuser for managed user dbUser on t, and says
-// which passwords a response must be scrubbed of. An empty dbUser is the
-// superuser; it is never a fallback for a non-Admin, which the HTTP layer
-// guarantees before calling.
-func (s *Service) granteeTarget(ctx context.Context, d Database, t dbquery.Target, dbUser string) (dbquery.Target, []string, error) {
-	passwords := []string{d.Password}
-	if dbUser == "" {
-		return t, passwords, nil
-	}
-	u, err := s.d.Store.GetUser(ctx, d.ID, dbUser)
-	if err != nil {
-		return dbquery.Target{}, nil, err
-	}
-	t.User, t.Password = dbUser, u.Password
-	return t, append(passwords, u.Password), nil
-}
-
-// Query runs r against Database id, as an Admin (dbUser "": see
-// consoleTarget) or as a managed user, restricted. Whatever the server answers, an error included,
-// is in the response; the returned error is only for a run that could not
-// start.
-func (s *Service) Query(ctx context.Context, id int64, dbUser string, r dbquery.Request) (dbquery.QueryResponse, error) {
+// Query runs r against Database id. Whatever the server answers, an error
+// included, is in the response; the returned error is only for a run that
+// could not start.
+func (s *Service) Query(ctx context.Context, id int64, r dbquery.Request) (dbquery.QueryResponse, error) {
 	d, t, err := s.queryTarget(ctx, id, false)
 	if err != nil {
 		return dbquery.QueryResponse{}, err
 	}
-	var passwords []string
-	if dbUser == "" {
-		t, passwords, err = s.consoleTarget(ctx, d, t, &r)
-	} else {
-		t, passwords, err = s.granteeTarget(ctx, d, t, dbUser)
-	}
-	if err != nil {
-		return dbquery.QueryResponse{}, err
-	}
-	r.Restricted = dbUser != ""
 	if r.Preview {
 		r.Writes = true
 	}
@@ -142,33 +106,21 @@ func (s *Service) Query(ctx context.Context, id int64, dbUser string, r dbquery.
 		resp.Preview = true
 	}
 	if resp.Error != nil {
-		resp.Error.Message = scrubAll(resp.Error.Message, passwords...)
-		// An owner can change its own password, which the panel then no
-		// longer knows.
-		if dbUser == "" && len(passwords) > 1 && strings.Contains(resp.Error.Message, "password authentication failed") {
-			resp.Error.Message += fmt.Sprintf(". The panel's password for %s no longer works: use Reset password on the Users tab, "+
-				"or turn on Run as superuser", t.User)
-		}
+		resp.Error.Message = scrub(resp.Error.Message, d.Password)
 	}
-	resp.Stopped = scrubAll(resp.Stopped, passwords...)
-	resp.User = t.User
+	resp.Stopped = scrub(resp.Stopped, d.Password)
 	return resp, nil
 }
 
-// Schema lists the schemas and tables of one logical database, connected as
-// dbUser when it is set.
-func (s *Service) Schema(ctx context.Context, id int64, dbUser, database string) ([]dbquery.SchemaNode, error) {
+// Schema lists the schemas and tables of one logical database.
+func (s *Service) Schema(ctx context.Context, id int64, database string) ([]dbquery.SchemaNode, error) {
 	d, t, err := s.queryTarget(ctx, id, false)
-	if err != nil {
-		return nil, err
-	}
-	t, passwords, err := s.granteeTarget(ctx, d, t, dbUser)
 	if err != nil {
 		return nil, err
 	}
 	nodes, err := s.d.Querier.Schema(ctx, t, d.Engine, database)
 	if err != nil {
-		return nil, errors.New(scrubAll(err.Error(), passwords...))
+		return nil, errors.New(scrub(err.Error(), d.Password))
 	}
 	return nodes, nil
 }
@@ -182,25 +134,13 @@ func scrub(s, password string) string {
 	return strings.ReplaceAll(s, password, "***")
 }
 
-// RedisCommand runs one console line on logical database db. level "" is an
-// Admin; a grantee's level picks the stricter classifier, and its confirm is
-// ignored: nothing it runs is confirmable.
-func (s *Service) RedisCommand(ctx context.Context, id int64, level RedisLevel, db int, line string, writes, confirmDangerous bool) (dbquery.RedisResponse, error) {
+// RedisCommand runs one console line on logical database db.
+func (s *Service) RedisCommand(ctx context.Context, id int64, db int, line string, writes, confirmDangerous bool) (dbquery.RedisResponse, error) {
 	d, t, err := s.queryTarget(ctx, id, true)
 	if err != nil {
 		return dbquery.RedisResponse{}, err
 	}
-	var resp dbquery.RedisResponse
-	switch level {
-	case "":
-		resp = s.d.Querier.RunRedis(ctx, t, db, line, writes, confirmDangerous)
-	case LevelRead:
-		resp = s.d.Querier.RunRedisGrantee(ctx, t, db, line, false)
-	case LevelReadWrite:
-		resp = s.d.Querier.RunRedisGrantee(ctx, t, db, line, writes)
-	default:
-		return dbquery.RedisResponse{}, ErrBadGrant{Reason: "unknown level"}
-	}
+	resp := s.d.Querier.RunRedis(ctx, t, db, line, writes, confirmDangerous)
 	resp.Error = scrub(resp.Error, d.Password)
 	return resp, nil
 }
@@ -229,102 +169,4 @@ func (s *Service) RedisKey(ctx context.Context, id int64, db int, key string) (d
 		return dbquery.KeyValue{}, errors.New(scrub(err.Error(), d.Password))
 	}
 	return kv, nil
-}
-
-// ErrOwnerUnmanaged refuses an Admin's run inside a Postgres database owned
-// by a role the panel has no password for, unless the Admin chose the
-// superuser: run as the superuser, the owner's views, triggers and functions
-// run with superuser rights.
-type ErrOwnerUnmanaged struct{ Owner string }
-
-func (e ErrOwnerUnmanaged) Error() string {
-	return fmt.Sprintf("this database belongs to %s, which the panel has no password for. Use Reset password on the Users tab "+
-		"to query it as %s, or turn on Run as superuser; its views, triggers and functions then run with superuser rights", e.Owner, e.Owner)
-}
-
-// ErrRootOptIn refuses an Admin's MySQL or MariaDB run as root inside a
-// database where other users have Full access, unless the Admin chose it:
-// they can create views and functions that run with the reader's rights.
-type ErrRootOptIn struct {
-	Database string
-	Users    []string
-}
-
-func (e ErrRootOptIn) Error() string {
-	return fmt.Sprintf("users with Full access to %s (%s) can create views and functions that run with the rights of whoever reads them. "+
-		"Turn on Run as superuser to query it as root", e.Database, strings.Join(e.Users, ", "))
-}
-
-// pgOwnerQuery reads a database's owner and whether it is a superuser.
-func pgOwnerQuery(database string) string {
-	return `SELECT r.rolname, r.rolsuper FROM pg_catalog.pg_database d JOIN pg_catalog.pg_roles r ON r.oid = d.datdba WHERE d.datname = ` + pgLit(database)
-}
-
-// consoleTarget is who an Admin's run connects as, and how.
-//   - Postgres, inside a database owned by a role that is not a superuser:
-//     that owner, through its managed login, so whatever the owner put in
-//     its database (a view's function, a trigger, an operator on the
-//     search_path) runs with the owner's rights, never the superuser's. An
-//     owner the panel has no password for is ErrOwnerUnmanaged. With
-//     AsSuperuser it is the superuser, on the catalog search_path.
-//   - MySQL and MariaDB: root, which has no owner to step down to. Inside a
-//     database other users have Full access to, only with AsSuperuser
-//     (ErrRootOptIn).
-//   - Anything else, a database a superuser owns or one that does not exist:
-//     the superuser.
-func (s *Service) consoleTarget(ctx context.Context, d Database, t dbquery.Target, r *dbquery.Request) (dbquery.Target, []string, error) {
-	passwords := []string{d.Password}
-	switch d.Engine {
-	case "postgres":
-	case "mysql", "mariadb":
-		if r.AsSuperuser || r.Database == "" {
-			return t, passwords, nil
-		}
-		a, err := accountsFor(d.Engine)
-		if err != nil {
-			return dbquery.Target{}, nil, err
-		}
-		access, err := s.accessRows(ctx, d, t, a)
-		if err != nil {
-			return dbquery.Target{}, nil, err
-		}
-		var full []string
-		for user, dbs := range access {
-			if dbs[r.Database] == AccessFull && user != t.User {
-				full = append(full, user)
-			}
-		}
-		if len(full) > 0 {
-			sort.Strings(full)
-			return dbquery.Target{}, nil, ErrRootOptIn{Database: r.Database, Users: full}
-		}
-		return t, passwords, nil
-	default:
-		return t, passwords, nil
-	}
-	database := r.Database
-	if database == "" {
-		database = t.User // the server's default for a session with no database
-	}
-	rows, err := s.d.Admin.Rows(ctx, t, d.Engine, "", pgOwnerQuery(database))
-	if err != nil {
-		return dbquery.Target{}, nil, errors.New(scrub(err.Error(), d.Password))
-	}
-	if len(rows) == 0 || len(rows[0]) < 2 || rows[0][1] == "t" {
-		return t, passwords, nil
-	}
-	if r.AsSuperuser {
-		r.CatalogSearchPath = true
-		return t, passwords, nil
-	}
-	owner := rows[0][0]
-	u, err := s.d.Store.GetUser(ctx, d.ID, owner)
-	if errors.Is(err, ErrUserNotManaged) {
-		return dbquery.Target{}, nil, ErrOwnerUnmanaged{Owner: owner}
-	}
-	if err != nil {
-		return dbquery.Target{}, nil, err
-	}
-	t.User, t.Password = owner, u.Password
-	return t, append(passwords, u.Password), nil
 }

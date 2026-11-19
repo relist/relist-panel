@@ -64,9 +64,6 @@ A login user of a Database whose password the panel stores, because it created o
 **Access**:
 What a user may do in one logical database: None, Read-only or Full, set per user per logical database on the Users tab (ADR-0044). _Avoid_: Permission, Role (a Postgres role is the engine's word for a user or group).
 
-**Database grant**:
-A non-Admin panel user's access to one Database, set on its Panel access tab (ADR-0045): the managed user they work as (SQL engines), or a level, Read or Read-write (Redis). _Avoid_: Grant (that is a Role on a Project or Environment), Access (that is a database user's level in one logical database).
-
 **Backup**:
 One gzipped plain-SQL dump of one logical database of a Database; never users or roles. It is a file kept on the panel under `.databases/<id>/backups/` with its sha256, made by `docker exec` in the Database's own container. Its trigger is manual, scheduled, `pre_restore`, `pre_update` or `pre_drop`. Redis has none. _Avoid_: Snapshot, Export (a Backup is a file the panel keeps, not a volume copy).
 

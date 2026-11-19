@@ -251,6 +251,11 @@ links to the Users tab.
 
 ## Phase 8: Per-Database access for non-Admins
 
+> **Dropped 2026-11-19 (ADR-0049), except Preview.** Databases are
+> Admin-only: the grants, the grantee views and their protections were
+> removed on `claude/databases-admin-only`. Preview and the Redis scripts
+> rule stay. The text below is the original design, kept for the record.
+
 An Admin gives a panel user (not an Admin) access to one Database. Security
 comes from the database's own permissions, not from filtering statements:
 filtering cannot stop a superuser session (`DO … EXECUTE` built from strings,

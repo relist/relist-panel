@@ -13,8 +13,6 @@ import (
 
 	"relist-panel/internal/agefile"
 	"relist-panel/internal/audit"
-	"relist-panel/internal/auth"
-	"relist-panel/internal/authz"
 )
 
 // API serves /api/databases. Every route is admin-only: authz leaves them out
@@ -54,9 +52,6 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/databases/{id}/users/{name}/reset-password", a.resetUserPassword)
 	mux.HandleFunc("DELETE /api/databases/{id}/users/{name}", a.deleteUser)
 	mux.HandleFunc("POST /api/databases/{id}/reset-password", a.resetSuperuser)
-	mux.HandleFunc("GET /api/databases/{id}/grants", a.listGrants)
-	mux.HandleFunc("PUT /api/databases/{id}/grants/{userID}", a.setGrant)
-	mux.HandleFunc("DELETE /api/databases/{id}/grants/{userID}", a.deleteGrant)
 	mux.HandleFunc("GET /api/databases/{id}/backups", a.listBackups)
 	mux.HandleFunc("POST /api/databases/{id}/backups", a.startBackup)
 	mux.HandleFunc("GET /api/databases/{id}/backups/{backupID}/download", a.downloadBackup)
@@ -105,14 +100,6 @@ type DatabaseJSON struct {
 	Deleted bool   `json:"deleted"`
 	// Upgrades are the higher tags Change version can move it to.
 	Upgrades []string `json:"upgrades"`
-	// Access is set for a grantee: how they reach this Database.
-	Access *AccessJSON `json:"access,omitempty"`
-}
-
-// AccessJSON is a grantee's own grant.
-type AccessJSON struct {
-	DBUser string `json:"dbUser,omitempty"`
-	Level  string `json:"level,omitempty"`
 }
 
 func toJSON(v View) DatabaseJSON {
@@ -136,17 +123,6 @@ func toJSON(v View) DatabaseJSON {
 }
 
 func (a *API) list(w http.ResponseWriter, r *http.Request) {
-	if _, ok := authz.Member(r.Context()); ok {
-		// A non-Admin sees only the Databases their grants name; without an
-		// identity in the context they see none, never the full list.
-		user, okUser := auth.UserFrom(r.Context())
-		if !okUser {
-			writeJSON(w, http.StatusOK, []DatabaseJSON{})
-			return
-		}
-		a.granteeList(w, r, user)
-		return
-	}
 	views, err := a.s.List(r.Context())
 	if err != nil {
 		writeError(w, err)
@@ -229,18 +205,9 @@ func (a *API) get(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	c, ok := callerOf(r)
-	if !ok {
-		writeError(w, ErrNotFound)
-		return
-	}
 	v, err := a.s.Get(r.Context(), n)
 	if err != nil {
 		writeError(w, err)
-		return
-	}
-	if !c.Admin {
-		writeJSON(w, http.StatusOK, granteeJSON(v, c.Grant))
 		return
 	}
 	writeJSON(w, http.StatusOK, toJSON(v))
@@ -350,38 +317,8 @@ func (a *API) credentials(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	c, okc := callerOf(r)
-	if !okc {
-		writeError(w, ErrNotFound)
-		return
-	}
 	user, password, database := eng.User(), d.Password, eng.DefaultDatabase()
-	want := r.URL.Query().Get("user")
-	if !c.Admin {
-		// A grantee only ever gets its own user; ?user is ignored. A Redis
-		// grant has only the superuser's password, which a non-Admin never
-		// sees.
-		if c.Grant.DBUser == "" {
-			writeJSONError(w, http.StatusForbidden, "a Redis grant has no credentials to show")
-			return
-		}
-		want = c.Grant.DBUser
-		// The password works outside the panel's restricted sessions, so a
-		// user that has grown server-wide powers is not revealed either.
-		if err := a.s.refuseServerWide(r.Context(), n, want); err != nil {
-			writeError(w, err)
-			return
-		}
-		if r.URL.Query().Get("database") == "" {
-			if own, err := a.s.GranteeDatabases(r.Context(), n, want); err == nil && len(own) > 0 {
-				database = own[0]
-			}
-		}
-	}
-	// A grantee always reads its managed user's stored password, even one
-	// that happens to carry the superuser's name; only an Admin asking for
-	// the superuser by name gets d.Password.
-	if want != "" && (!c.Admin || want != eng.User()) {
+	if want := r.URL.Query().Get("user"); want != "" && want != eng.User() {
 		if db := r.URL.Query().Get("database"); db != "" {
 			if !targetPattern.MatchString(db) {
 				writeJSONError(w, http.StatusUnprocessableEntity, ErrBadTarget.Error())
@@ -454,21 +391,7 @@ func writeError(w http.ResponseWriter, err error) {
 	var dbExists ErrDatabaseExists
 	var unknownUser ErrUnknownUser
 	var admin adminError
-	var grantToAdmin ErrGrantToAdmin
-	var badGrant ErrBadGrant
-	var serverWide ErrServerWideUser
-	var userInUse ErrUserInUse
-	var ownerUnmanaged ErrOwnerUnmanaged
-	var rootOptIn ErrRootOptIn
 	switch {
-	case errors.As(err, &ownerUnmanaged), errors.As(err, &rootOptIn):
-		writeJSONError(w, http.StatusConflict, err.Error())
-	case errors.As(err, &grantToAdmin), errors.As(err, &badGrant), errors.As(err, &serverWide):
-		writeJSONError(w, http.StatusUnprocessableEntity, err.Error())
-	case errors.As(err, &userInUse):
-		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "users": userInUse.Emails})
-	case errors.Is(err, ErrUnknownPanelUser):
-		writeJSONError(w, http.StatusNotFound, err.Error())
 	case errors.As(err, &invalid), errors.As(err, &fullOnSuper), errors.As(err, &reserved), errors.As(err, &ownerAccess),
 		errors.As(err, &protected), errors.Is(err, ErrBadUserName),
 		errors.Is(err, ErrNeedPassphrase), errors.Is(err, agefile.ErrWrongPassphrase), errors.Is(err, agefile.ErrTooExpensive),

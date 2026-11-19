@@ -29,22 +29,6 @@ type fakeQuerier struct {
 	calls []redisCall
 	sent  []string
 	redis func(line string) dbquery.RedisResponse
-	// granteeCalls records every RunRedisGrantee.
-	granteeCalls []granteeCall
-}
-
-type granteeCall struct {
-	db        int
-	line      string
-	readWrite bool
-}
-
-func (f *fakeQuerier) RunRedisGrantee(_ context.Context, t dbquery.Target, db int, line string, readWrite bool) dbquery.RedisResponse {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.targets = append(f.targets, t)
-	f.granteeCalls = append(f.granteeCalls, granteeCall{db, line, readWrite})
-	return dbquery.RedisResponse{Reply: &dbquery.Reply{Type: "string", Value: "OK"}}
 }
 
 type redisCall struct {
@@ -86,12 +70,8 @@ func (f *fakeQuerier) last() dbquery.Request {
 // the audit rows are the ones production writes.
 type queryRig struct {
 	*rig
-	q     *fakeQuerier
-	admin *fakeAdmin
-	h     http.Handler
-	// user, when set, makes every request this signed-in user's; nil is the
-	// admin.
-	user   *auth.User
+	q      *fakeQuerier
+	h      http.Handler
 	mu     sync.Mutex
 	events []audit.Event
 }
@@ -100,11 +80,10 @@ func newQueryRig(t *testing.T) *queryRig {
 	t.Helper()
 	r := newRig(t)
 	q := &fakeQuerier{resp: map[string]dbquery.QueryResponse{}}
-	admin := newFakeAdmin()
-	r.svc = New(Deps{Store: r.store, Host: r.host, DataDir: r.dataDir, Querier: q, Admin: admin,
+	r.svc = New(Deps{Store: r.store, Host: r.host, DataDir: r.dataDir, Querier: q,
 		Locked:       func(context.Context) bool { return r.locked },
 		UpdateLocked: func() bool { return r.updateLocked }})
-	qr := &queryRig{rig: r, q: q, admin: admin}
+	qr := &queryRig{rig: r, q: q}
 	mux := http.NewServeMux()
 	NewAPI(r.svc).RegisterRoutes(mux)
 	lookup := func(*http.Request) (auth.User, bool, error) { return auth.User{}, false, nil }
@@ -115,11 +94,7 @@ func newQueryRig(t *testing.T) *queryRig {
 		return nil
 	}).Middleware(mux, mux)
 	qr.h = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		u := auth.User{ID: 1, Email: "owner@example.com", IsAdmin: true}
-		if qr.user != nil {
-			u = *qr.user
-		}
-		mw.ServeHTTP(w, req.WithContext(auth.WithUser(req.Context(), u)))
+		mw.ServeHTTP(w, req.WithContext(auth.WithUser(req.Context(), auth.User{ID: 1, Email: "owner@example.com", IsAdmin: true})))
 	})
 	return qr
 }

@@ -3,7 +3,7 @@ import { Alert, App, Button, Flex, Form, Input, Modal, Popconfirm, Segmented, Ta
 import { useState } from 'react';
 import useSWR from 'swr';
 
-import { api, ApiError } from '../data/api';
+import { api } from '../data/api';
 import type { Database, DatabaseAccess, DatabaseUser, LogicalDatabase } from '../data/types';
 import { validTargetName } from './databases-view';
 
@@ -25,8 +25,6 @@ export function DatabaseUsersTab({ db }: { db: Database }) {
   const [createBusy, setCreateBusy] = useState(false);
   const [createError, setCreateError] = useState<string>();
   const [error, setError] = useState<string>();
-  // A delete refused because panel users use this database user.
-  const [grantsConfirm, setGrantsConfirm] = useState<{ emails: string[]; user: DatabaseUser }>();
   const [editing, setEditing] = useState<DatabaseUser>();
   const [levels, setLevels] = useState<Record<string, DatabaseAccess>>({});
   const [saveBusy, setSaveBusy] = useState(false);
@@ -58,19 +56,13 @@ export function DatabaseUsersTab({ db }: { db: Database }) {
     }
   };
 
-  const remove = async (user: DatabaseUser, confirmGrants = false) => {
+  const remove = async (user: DatabaseUser) => {
     setError(undefined);
     try {
-      await api.deleteDatabaseUser(db.id, user.name, confirmGrants);
+      await api.deleteDatabaseUser(db.id, user.name);
       void message.success(`Deleted ${user.name}`);
-      setGrantsConfirm(undefined);
       await users.mutate();
     } catch (reason: unknown) {
-      // A 409 naming panel users: deleting takes their access with it.
-      if (reason instanceof ApiError && reason.status === 409 && reason.body && typeof reason.body === 'object' && 'users' in reason.body) {
-        setGrantsConfirm({ emails: (reason.body as { users: string[] }).users, user });
-        return;
-      }
       setError(failure(reason, 'Could not delete the user'));
     }
   };
@@ -257,20 +249,6 @@ export function DatabaseUsersTab({ db }: { db: Database }) {
           )}
           {saveError && <Alert showIcon title={saveError} type="error" />}
         </Flex>
-      </Modal>
-      <Modal
-        destroyOnHidden
-        okButtonProps={{ danger: true }}
-        okText="Delete"
-        onCancel={() => setGrantsConfirm(undefined)}
-        onOk={() => void (grantsConfirm && remove(grantsConfirm.user, true))}
-        open={Boolean(grantsConfirm)}
-        title={grantsConfirm ? `Delete ${grantsConfirm.user.name}?` : ''}
-      >
-        <Text>
-          {grantsConfirm?.user.name} backs the panel access of {grantsConfirm?.emails.join(', ')}. Deleting it deletes
-          their access to this Database too.
-        </Text>
       </Modal>
     </Flex>
   );

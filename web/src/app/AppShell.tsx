@@ -21,7 +21,6 @@ import type { MenuProps } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router';
-import useSWR from 'swr';
 
 import { DiskPressureFooter } from '../components/DiskPressureFooter';
 import { PanelVersionFooter } from '../components/PanelVersionFooter';
@@ -33,7 +32,6 @@ import { useVulnSummary } from '../data/useVulnSummary';
 import { useIsAdmin } from '../data/useCan';
 import { summaryBadge } from '../pages/vulnerabilities-view';
 import { usePanel } from '../data/store';
-import { api } from '../data/api';
 import { composeState, projectComposes, summarize } from '../data/types';
 import { COMPOSE_STATE_META, LAYOUT } from './theme';
 import { paths, resolvePath } from './paths';
@@ -45,9 +43,7 @@ const { Text } = Typography;
  * Account. The API decides inside each; every other page is an admin's.
  */
 function memberMay(pattern: string | undefined): boolean {
-  return pattern === 'projects' || pattern === 'deployments' || pattern === 'account' || !!pattern?.startsWith('projects/')
-    // A member with Database grants; the API filters and refuses (ADR-0045).
-    || pattern === 'databases' || pattern === 'databases/:databaseId';
+  return pattern === 'projects' || pattern === 'deployments' || pattern === 'account' || !!pattern?.startsWith('projects/');
 }
 
 /** antd's zero-width sider trigger is a 40px square. */
@@ -74,11 +70,6 @@ export function AppShell() {
   const isAdmin = useIsAdmin();
   const adminView = auth.authenticated && isAdmin;
   const { data: deploymentQueue } = useGlobalDeploymentQueue(auth.authenticated);
-  // A member's granted Databases decide whether their sider shows Data.
-  const { data: memberDatabases } = useSWR(
-    auth.authenticated && !isAdmin ? '/api/databases' : null,
-    () => api.listDatabases(),
-  );
   const diskPressure = useDiskPressure(adminView);
   const queuedCount = deploymentQueue?.filter((d) => d.status === 'queued').length ?? 0;
   const { data: vulnSummary } = useVulnSummary({}, adminView);
@@ -191,13 +182,7 @@ export function AppShell() {
       };
     }),
   };
-  const memberData = (memberDatabases?.length ?? 0) > 0
-    ? [{
-        type: 'group' as const, label: 'Data',
-        children: [{ key: 'databases', icon: <ConsoleSqlOutlined />, label: 'Databases' }],
-      }]
-    : [];
-  const menuItems: MenuProps['items'] = !auth.authenticated ? [] : !adminView ? [projectsItem, deploymentsItem, ...memberData, recentProjects] : [
+  const menuItems: MenuProps['items'] = !auth.authenticated ? [] : !adminView ? [projectsItem, deploymentsItem, recentProjects] : [
     { key: 'overview', icon: <AppstoreOutlined />, label: 'Overview' },
     projectsItem,
     deploymentsItem,
