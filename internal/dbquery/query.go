@@ -47,7 +47,10 @@ type QueryResult struct {
 
 // QueryError is the server's error, placed in the text that was sent.
 type QueryError struct {
-	Message        string `json:"message"`
+	Message string `json:"message"`
+	// Code is the server's: a Postgres SQLSTATE or a MySQL error number. The
+	// audit log keeps it instead of the message, which can quote the text.
+	Code           string `json:"code,omitempty"`
 	StatementIndex int    `json:"statementIndex"`
 	StatementStart int    `json:"statementStart"`
 	Position       *int   `json:"position"`

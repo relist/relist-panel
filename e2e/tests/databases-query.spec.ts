@@ -246,7 +246,9 @@ for (const e of ENGINES) {
       await expect.poll(async () => (await fresh()).length, { timeout: 5000 }).toBe(1);
       const row = (await fresh())[0];
       expect(row.target).toBe(name);
-      expect(row.detail.statement).toBe(e.sleep);
+      expect(row.detail.statements).toBe('SELECT');
+      expect(JSON.stringify(row.detail)).not.toContain('SLEEP(');
+      expect(JSON.stringify(row.detail)).not.toContain('pg_sleep');
     });
 
     test('values keep their digits and bytes', async () => {
@@ -291,19 +293,30 @@ for (const e of ENGINES) {
       }
     });
 
-    test('the audit trail names each run and redacts passwords', async () => {
+    test('the audit trail names each run by kind and keeps no text', async () => {
+      const last = Math.max(0, ...(await queryAudits()).map((a) => a.id));
       await run("SELECT 'audit-marker'");
-      const secret =
-        e.engine === 'postgres' ? "CREATE ROLE audited PASSWORD 'hunter2'" : "CREATE USER audited IDENTIFIED BY 'hunter2'";
-      const refused = await run(secret);
-      expect(refused.error).not.toBeNull();
-      const audits = await queryAudits();
-      const marker = audits.find((a) => a.detail.statement === "SELECT 'audit-marker'");
-      expect(marker?.detail).toMatchObject({ outcome: 'ok', writes: false, database: e.db, rows: 1 });
-      const redacted = audits.find((a) => String(a.detail.statement).includes('audited'));
-      expect(redacted?.detail.statement).toContain("'***'");
-      expect(JSON.stringify(redacted)).not.toContain('hunter2');
-      expect(redacted?.detail.outcome).toBe('error');
+      // Each of these writes the password a way a pattern could miss.
+      const secrets =
+        e.engine === 'postgres'
+          ? ["CREATE ROLE audited PASSWORD $pw$hunter2$pw$", "CREATE ROLE audited PASSWORD /* c */ 'hunter2'"]
+          : ["CREATE USER audited IDENTIFIED BY _utf8mb4'hunter2'", "CREATE USER audited IDENTIFIED BY X'68756e74657232'"];
+      for (const secret of secrets) {
+        const refused = await run(secret);
+        expect(refused.error).not.toBeNull();
+      }
+      const fresh = (await queryAudits()).filter((a) => a.id > last).sort((a, b) => a.id - b.id);
+      expect(fresh).toHaveLength(3);
+      expect(fresh[0].detail).toMatchObject({ statements: 'SELECT', outcome: 'ok', writes: false, database: e.db, rows: 1, errorCode: '' });
+      const kind = e.engine === 'postgres' ? 'CREATE ROLE' : 'CREATE USER';
+      for (const row of fresh.slice(1)) {
+        expect(row.detail).toMatchObject({ statements: kind, outcome: 'error', errorStatement: 1 });
+        expect(row.detail.errorCode).toMatch(/^\w+$/);
+      }
+      const text = JSON.stringify(fresh);
+      for (const leak of ['audit-marker', 'hunter2', '68756e', 'audited']) {
+        expect(text).not.toContain(leak);
+      }
     });
 
     if (e.engine === 'postgres') {

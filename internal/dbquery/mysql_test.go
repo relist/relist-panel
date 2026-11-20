@@ -111,3 +111,14 @@ func TestMySQLRowCapStopsTheBatch(t *testing.T) {
 	}
 	_ = errors.New
 }
+
+// The server's error number travels as the error's code: the audit log keeps
+// it instead of the message, which may quote the statement.
+func TestMySQLErrorCode(t *testing.T) {
+	stmts, _ := SplitMySQL("SELEC 2")
+	q := &fakeQueryer{errs: map[string]error{"SELEC 2": &mysql.MySQLError{Number: 1064, Message: "near 'SELEC 2'"}}}
+	resp, _ := runBatch(context.Background(), q, stmts, func() {})
+	if resp.Error == nil || resp.Error.Code != "1064" {
+		t.Fatalf("error = %+v, want code 1064", resp.Error)
+	}
+}

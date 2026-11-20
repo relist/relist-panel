@@ -194,10 +194,15 @@ func id(w http.ResponseWriter, r *http.Request) (int64, bool) {
 }
 
 // target names the Database in the audit event.
-func (a *API) target(r *http.Request, n int64) {
-	if d, err := a.s.d.Store.Get(r.Context(), n); err == nil {
-		audit.Target(r.Context(), d.Name)
+// target names Database n as the audit row's target and returns it (the
+// zero Database when it cannot be read).
+func (a *API) target(r *http.Request, n int64) Database {
+	d, err := a.s.d.Store.Get(r.Context(), n)
+	if err != nil {
+		return Database{}
 	}
+	audit.Target(r.Context(), d.Name)
+	return d
 }
 
 func (a *API) get(w http.ResponseWriter, r *http.Request) {

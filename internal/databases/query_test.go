@@ -2,6 +2,7 @@ package databases
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -142,17 +143,21 @@ func TestQueryRoute(t *testing.T) {
 func TestQueryAuditsEveryOutcome(t *testing.T) {
 	qr := newQueryRig(t)
 	qr.create(t, "Shop", "postgres", "18")
-	qr.q.resp["err"] = dbquery.QueryResponse{Results: []dbquery.QueryResult{}, Error: &dbquery.QueryError{Message: "boom"}}
-	qr.q.resp["stop"] = dbquery.QueryResponse{Stopped: "Stopped after 1,000 rows.", Results: []dbquery.QueryResult{{Rows: make([][]dbquery.Cell, 1000), Truncated: true}}}
-	qr.q.resp["ok2"] = dbquery.QueryResponse{Results: []dbquery.QueryResult{{Rows: make([][]dbquery.Cell, 2)}, {Rows: make([][]dbquery.Cell, 3)}}}
+	two := int64(2)
+	qr.q.resp["UPDATE t SET a = 1; SELECT 1; SELEC 2"] = dbquery.QueryResponse{
+		Results: []dbquery.QueryResult{{Affected: &two}, {Rows: make([][]dbquery.Cell, 1)}},
+		Error:   &dbquery.QueryError{Message: "syntax error at or near \"SELEC\"", Code: "42601", StatementIndex: 2},
+	}
+	qr.q.resp["SELECT * FROM t"] = dbquery.QueryResponse{Stopped: "Stopped after 1,000 rows.", Results: []dbquery.QueryResult{{Rows: make([][]dbquery.Cell, 1000), Truncated: true}}}
+	qr.q.resp["SELECT 1; SELECT 2"] = dbquery.QueryResponse{Results: []dbquery.QueryResult{{Rows: make([][]dbquery.Cell, 2)}, {Rows: make([][]dbquery.Cell, 3)}}}
 
 	cases := []struct {
-		sql, outcome, errText string
-		rows                  int
+		sql, outcome, kinds, code string
+		rows, affected, failed    int
 	}{
-		{"ok2", "ok", "", 5},
-		{"err", "error", "boom", 0},
-		{"stop", "stopped", "", 1000},
+		{"SELECT 1; SELECT 2", "ok", "SELECT ×2", "", 5, 0, 0},
+		{"UPDATE t SET a = 1; SELECT 1; SELEC 2", "error", "UPDATE, SELECT, OTHER", "42601", 1, 2, 3},
+		{"SELECT * FROM t", "stopped", "SELECT", "", 1000, 0, 0},
 	}
 	for _, c := range cases {
 		w := qr.do(context.Background(), "POST", "/api/databases/1/query", `{"database":"shop","sql":"`+c.sql+`","writes":true}`)
@@ -161,8 +166,8 @@ func TestQueryAuditsEveryOutcome(t *testing.T) {
 			t.Fatalf("%s: status %d, %d audit rows", c.sql, w.Code, len(ev))
 		}
 		d := ev[0].Detail
-		if ev[0].Action != "database.query" || ev[0].Target != "Shop" || d["outcome"] != c.outcome || d["statement"] != c.sql || d["writes"] != true ||
-			d["database"] != "shop" || d["rows"] != c.rows || d["error"] != c.errText {
+		if ev[0].Action != "database.query" || ev[0].Target != "Shop" || d["outcome"] != c.outcome || d["statements"] != c.kinds || d["writes"] != true ||
+			d["database"] != "shop" || d["rows"] != c.rows || d["affected"] != int64(c.affected) || d["errorCode"] != c.code || d["errorStatement"] != c.failed {
 			t.Errorf("%s: event %+v", c.sql, ev[0])
 		}
 		if _, ok := d["durationMs"]; !ok {
@@ -197,23 +202,33 @@ func TestFailedPreviewIsStillAPreview(t *testing.T) {
 	}
 }
 
-func TestQueryRedactsStatement(t *testing.T) {
+// The audit log keeps the kinds of statement and the error's code, never
+// the text or the server's message: a regex cannot find every way to write
+// a password literal, and an error can quote the statement.
+func TestQueryAuditKeepsNoText(t *testing.T) {
 	qr := newQueryRig(t)
 	qr.create(t, "Shop", "mysql", "8.4")
-	qr.do(context.Background(), "POST", "/api/databases/1/query", `{"sql":"ALTER USER u IDENTIFIED BY 'hunter2'"}`)
-	ev := qr.take()
-	if len(ev) != 1 || ev[0].Detail["statement"] != "ALTER USER u IDENTIFIED BY '***'" {
-		t.Fatalf("events = %+v", ev)
+	for _, sql := range []string{
+		"ALTER USER u IDENTIFIED BY 'hunter2'",
+		"SET PASSWORD = _utf8mb4'hunter2'",
+		"ALTER USER u IDENTIFIED BY X'68756e74657232'",
+		"/* hunter2 */ SELECT 1",
+	} {
+		qr.q.resp[sql] = dbquery.QueryResponse{Results: []dbquery.QueryResult{}, Error: &dbquery.QueryError{Message: "You have an error in your SQL syntax near 'hunter2'", Code: "1064"}}
+		body, _ := json.Marshal(map[string]any{"sql": sql})
+		qr.do(context.Background(), "POST", "/api/databases/1/query", string(body))
+		ev := qr.take()
+		raw, _ := json.Marshal(ev)
+		if len(ev) != 1 || strings.Contains(string(raw), "hunter2") || strings.Contains(string(raw), "68756e") {
+			t.Fatalf("%q: the audit row keeps the text: %s", sql, raw)
+		}
+		if ev[0].Detail["errorCode"] != "1064" {
+			t.Fatalf("%q: errorCode = %v", sql, ev[0].Detail["errorCode"])
+		}
 	}
-	// What the browser sent to the engine is not redacted; only the record is.
+	// What the browser sent reaches the engine whole; only the record is cut.
 	if !strings.Contains(qr.q.last().SQL, "hunter2") {
 		t.Fatal("the run must get the real text")
-	}
-	long := strings.Repeat("é", 3000)
-	qr.do(context.Background(), "POST", "/api/databases/1/query", `{"sql":"SELECT '`+long+`'"}`)
-	st := qr.take()[0].Detail["statement"].(string)
-	if len(st) > 4096 || !strings.HasPrefix(st, "SELECT 'é") {
-		t.Fatalf("statement is %d bytes", len(st))
 	}
 }
 
@@ -224,7 +239,8 @@ func TestQueryHidesThePasswordInErrors(t *testing.T) {
 	qr.q.resp["x"] = dbquery.QueryResponse{Results: []dbquery.QueryResult{}, Error: &dbquery.QueryError{Message: "failed for " + got.Password}}
 	w := qr.do(context.Background(), "POST", "/api/databases/1/query", `{"sql":"x"}`)
 	ev := qr.take()
-	if strings.Contains(w.Body.String(), got.Password) || strings.Contains(ev[0].Detail["error"].(string), got.Password) {
+	raw, _ := json.Marshal(ev)
+	if strings.Contains(w.Body.String(), got.Password) || strings.Contains(string(raw), got.Password) {
 		t.Fatalf("password leaked: %s / %v", w.Body, ev[0].Detail)
 	}
 }
@@ -298,17 +314,19 @@ func (f *fakeQuerier) RunRedis(_ context.Context, _ dbquery.Target, db int, line
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, redisCall{db, line, writes, confirm})
+	// Like RunRedis, name the command a real server would know.
+	name := strings.ToUpper(strings.Fields(line + " ")[0])
 	if strings.HasPrefix(line, "FLUSHALL") && !confirm {
-		return dbquery.RedisResponse{NeedsConfirm: true}
+		return dbquery.RedisResponse{Command: name, NeedsConfirm: true}
 	}
 	if strings.HasPrefix(line, "SET ") && !writes {
-		return dbquery.RedisResponse{Refused: "writes are off"}
+		return dbquery.RedisResponse{Command: name, Refused: "writes are off"}
 	}
 	f.sent = append(f.sent, line)
 	if f.redis != nil {
 		return f.redis(line)
 	}
-	return dbquery.RedisResponse{Reply: &dbquery.Reply{Type: "string", Value: "OK"}}
+	return dbquery.RedisResponse{Command: name, Reply: &dbquery.Reply{Type: "string", Value: "OK"}}
 }
 
 func (f *fakeQuerier) ScanKeys(_ context.Context, _ dbquery.Target, db int, pattern, cursor string) ([]dbquery.KeyInfo, string, error) {
@@ -363,19 +381,19 @@ func TestRedisAuditsRefused(t *testing.T) {
 		t.Fatalf("SET = %d %s, %d audit rows", w.Code, w.Body, len(ev))
 	}
 	d := ev[0].Detail
-	if ev[0].Action != "database.redis_command" || ev[0].Target != "Cache" || d["outcome"] != "refused" || d["statement"] != "SET k v" ||
+	if ev[0].Action != "database.redis_command" || ev[0].Target != "Cache" || d["outcome"] != "refused" || d["command"] != "SET" ||
 		d["writes"] != false || d["database"] != 1 {
 		t.Fatalf("event %+v", ev[0])
 	}
 	qr.redisCmd(`{"db":0,"command":"GET k"}`)
-	if ev := qr.take(); len(ev) != 1 || ev[0].Detail["outcome"] != "ok" || ev[0].Detail["error"] != "" {
+	if ev := qr.take(); len(ev) != 1 || ev[0].Detail["outcome"] != "ok" || ev[0].Detail["command"] != "GET" || ev[0].Detail["errorCode"] != "" {
 		t.Fatalf("GET event %+v", ev)
 	}
 	qr.q.redis = func(string) dbquery.RedisResponse {
-		return dbquery.RedisResponse{Reply: &dbquery.Reply{Type: "error", Value: "WRONGTYPE nope"}}
+		return dbquery.RedisResponse{Command: "LPUSH", Reply: &dbquery.Reply{Type: "error", Value: "WRONGTYPE nope"}}
 	}
 	qr.redisCmd(`{"db":0,"command":"LPUSH k x","writes":true}`)
-	if ev := qr.take(); len(ev) != 1 || ev[0].Detail["outcome"] != "error" || ev[0].Detail["error"] != "WRONGTYPE nope" {
+	if ev := qr.take(); len(ev) != 1 || ev[0].Detail["outcome"] != "error" || ev[0].Detail["errorCode"] != "WRONGTYPE" {
 		t.Fatalf("error event %+v", ev)
 	}
 }
@@ -392,16 +410,27 @@ func TestRedisAuditsACancelledRun(t *testing.T) {
 	}
 }
 
-func TestRedisRedactsAuth(t *testing.T) {
+// A console line reaches the audit log as its command's name only: no
+// argument, and of an error reply only its leading code (Redis quotes the
+// arguments of an unknown command in the message).
+func TestRedisAuditKeepsNoArguments(t *testing.T) {
 	qr := newRedisRig(t)
+	qr.q.redis = func(line string) dbquery.RedisResponse {
+		if strings.HasPrefix(line, "CONFIG") {
+			return dbquery.RedisResponse{Command: "CONFIG SET", Reply: &dbquery.Reply{Type: "string", Value: "OK"}}
+		}
+		return dbquery.RedisResponse{Reply: &dbquery.Reply{Type: "error", Value: "ERR unknown command 'hunter2', with args beginning with: 'x'"}}
+	}
 	qr.redisCmd(`{"db":0,"command":"CONFIG SET requirepass hunter2","writes":true,"confirmDangerous":true}`)
+	qr.redisCmd(`{"db":0,"command":"hunter2 x","writes":true}`)
 	qr.redisCmd(`{"db":0,"command":"AUTH \"un closed hunter2","writes":true}`)
 	ev := qr.take()
-	if len(ev) != 2 || ev[0].Detail["statement"] != "CONFIG SET requirepass ***" {
-		t.Fatalf("events %+v", ev)
+	raw, _ := json.Marshal(ev)
+	if len(ev) != 3 || strings.Contains(string(raw), "hunter2") {
+		t.Fatalf("the audit rows keep an argument: %s", raw)
 	}
-	if s, _ := ev[1].Detail["statement"].(string); strings.Contains(s, "hunter2") {
-		t.Fatalf("a line that cannot be split must not be recorded raw: %q", s)
+	if ev[0].Detail["command"] != "CONFIG SET" || ev[1].Detail["command"] != "OTHER" || ev[1].Detail["errorCode"] != "ERR" {
+		t.Fatalf("events %s", raw)
 	}
 }
 

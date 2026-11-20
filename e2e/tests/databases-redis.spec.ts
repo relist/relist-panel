@@ -184,13 +184,15 @@ for (const version of ['8', '7.4']) {
       expect(set.reply?.value).toBe('OK');
       await run('FLUSHALL', { writes: true });
       const fresh = (await audits()).filter((a) => a.id > last).reverse();
-      expect(fresh.map((a) => [a.detail.statement, a.detail.outcome])).toEqual([
-        ['SET audited 1', 'refused'],
-        ['GET audited', 'ok'],
-        ['CONFIG SET requirepass ***', 'ok'],
+      expect(fresh.map((a) => [a.detail.command, a.detail.outcome])).toEqual([
+        ['SET', 'refused'],
+        ['GET', 'ok'],
+        ['CONFIG SET', 'ok'],
         ['FLUSHALL', 'refused'],
       ]);
-      expect(JSON.stringify(fresh)).not.toContain(password);
+      const text = JSON.stringify(fresh);
+      expect(text).not.toContain(password);
+      expect(text).not.toContain('audited');
       expect(fresh.every((a) => a.target === name && a.detail.database === 0)).toBe(true);
       expect(fresh[2].detail.writes).toBe(true);
     });

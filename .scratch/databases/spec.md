@@ -496,12 +496,21 @@ data under `/var/lib/postgresql`, while 17 and below use
 
 - who;
 - which Database and logical database;
-- the statement text (cut at 4 KB), with passwords replaced by `***` (phase 4
-  decision): the quoted value after `PASSWORD` or `IDENTIFIED … BY`, and in
-  Redis the arguments of `AUTH`, `CONFIG SET requirepass|masterauth`,
-  `MIGRATE … AUTH|AUTH2` and `ACL SETUSER` rules starting with `>` or `#`;
+- what kinds of statement ran, never their text (review decision
+  2026-11-20, replacing phase 4's redacted text): for SQL the leading
+  keyword of each statement, and for `CREATE`, `ALTER` and `DROP` its
+  object, from a fixed list, with anything else recorded as `OTHER`
+  (`SELECT ×2, ALTER ROLE`); for Redis the command and subcommand the
+  server's command table knows. No pattern finds every way to write a
+  password literal (`$tag$…$tag$`, `U&'…'`, `_utf8mb4'…'`, `X'…'`, a
+  comment in between), and the History drawer already keeps the text in the
+  Admin's own browser;
 - whether writes were allowed;
-- duration, row count and error.
+- duration, rows returned and rows affected;
+- on an error, the server's code (a Postgres SQLSTATE, a MySQL error number,
+  the leading word of a Redis error such as `WRONGTYPE`) and the failing
+  statement's number. Never the message: servers quote the statement in it
+  (MySQL's `near '…'`, Redis's `unknown command '…'`).
 
 Every run is recorded, including refused, failed, stopped and cancelled ones
 (phase 4 decision): a run answers 200 with its outcome in the body, so the

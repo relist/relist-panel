@@ -6,16 +6,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"relist-panel/internal/audit"
 	"relist-panel/internal/dbquery"
 )
 
-const (
-	maxQueryBody = 1 << 20
-	auditText    = 4096
-)
+const maxQueryBody = 1 << 20
 
 // decodeBig reads a body of at most max bytes; one over it is 413.
 func decodeBig(w http.ResponseWriter, r *http.Request, max int64, out any) bool {
@@ -29,17 +25,6 @@ func decodeBig(w http.ResponseWriter, r *http.Request, max int64, out any) bool 
 		return false
 	}
 	return true
-}
-
-// cutText shortens s to at most n bytes at a character boundary.
-func cutText(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n]
 }
 
 func outcomeOf(resp dbquery.QueryResponse) string {
@@ -77,27 +62,34 @@ func (a *API) query(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "there is nothing to run")
 		return
 	}
-	a.target(r, n)
+	d := a.target(r, n)
 	resp, err := a.s.Query(r.Context(), n, dbquery.Request{Database: in.Database, SQL: in.SQL, Writes: in.Writes, Preview: in.Preview})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	rows := 0
+	// What ran, never the text: no pattern finds every way to write a
+	// password literal, and the server's message can quote the statement.
+	rows, affected := 0, int64(0)
 	for _, res := range resp.Results {
 		rows += len(res.Rows)
+		if res.Affected != nil {
+			affected += *res.Affected
+		}
+	}
+	code, failed := "", 0
+	if resp.Error != nil {
+		code, failed = resp.Error.Code, resp.Error.StatementIndex+1
 	}
 	ctx := r.Context()
 	audit.Detail(ctx, "database", in.Database)
-	audit.Detail(ctx, "statement", cutText(dbquery.RedactSQL(in.SQL), auditText))
+	audit.Detail(ctx, "statements", dbquery.StatementKinds(d.Engine, in.SQL))
 	audit.Detail(ctx, "writes", in.Writes)
 	audit.Detail(ctx, "durationMs", resp.DurationMs)
 	audit.Detail(ctx, "rows", rows)
-	if resp.Error != nil {
-		audit.Detail(ctx, "error", cutText(resp.Error.Message, auditText))
-	} else {
-		audit.Detail(ctx, "error", "")
-	}
+	audit.Detail(ctx, "affected", affected)
+	audit.Detail(ctx, "errorCode", code)
+	audit.Detail(ctx, "errorStatement", failed)
 	audit.Detail(ctx, "outcome", outcomeOf(resp))
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -126,17 +118,6 @@ func redisDB(w http.ResponseWriter, raw string) (int, bool) {
 		return 0, false
 	}
 	return n, true
-}
-
-// auditStatement is a console line as the audit log records it: split like
-// the console splits it, passwords replaced, cut. A line that cannot be split
-// is not recorded: it might carry a password the redaction cannot find.
-func auditStatement(line string) string {
-	args, err := dbquery.SplitRedisArgs(line)
-	if err != nil {
-		return "(a line with unbalanced quotes)"
-	}
-	return cutText(strings.Join(dbquery.RedactRedis(args), " "), auditText)
 }
 
 // redisCommand runs one console line. Like a SQL run, every outcome answers
@@ -168,26 +149,31 @@ func (a *API) redisCommand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	outcome, failure := "ok", resp.Error
+	// The command's name and the error's code, never an argument: Redis
+	// quotes the arguments of an unknown command in its error.
+	outcome, code := "ok", ""
 	switch {
 	case resp.Cancelled:
 		outcome = "cancelled"
 	case resp.Error != "":
 		outcome = "error"
-	case resp.Refused != "":
-		outcome, failure = "refused", resp.Refused
-	case resp.NeedsConfirm:
-		outcome, failure = "refused", "needs confirmation"
+	case resp.Refused != "", resp.NeedsConfirm:
+		outcome = "refused"
 	case resp.Reply != nil && resp.Reply.Type == "error":
 		outcome = "error"
-		failure, _ = resp.Reply.Value.(string)
+		msg, _ := resp.Reply.Value.(string)
+		code = redisErrorCode(msg)
+	}
+	command := resp.Command
+	if command == "" {
+		command = "OTHER"
 	}
 	ctx := r.Context()
 	audit.Detail(ctx, "database", in.DB)
-	audit.Detail(ctx, "statement", auditStatement(in.Command))
+	audit.Detail(ctx, "command", command)
 	audit.Detail(ctx, "writes", in.Writes)
 	audit.Detail(ctx, "durationMs", resp.DurationMs)
-	audit.Detail(ctx, "error", cutText(failure, auditText))
+	audit.Detail(ctx, "errorCode", code)
 	audit.Detail(ctx, "outcome", outcome)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -230,4 +216,19 @@ func (a *API) redisKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, kv)
+}
+
+// redisErrorCode is an error reply's leading code (ERR, WRONGTYPE), or ""
+// when it does not start with one.
+func redisErrorCode(msg string) string {
+	word, _, _ := strings.Cut(msg, " ")
+	if word == "" || len(word) > 32 {
+		return ""
+	}
+	for _, c := range word {
+		if c < 'A' || c > 'Z' {
+			return ""
+		}
+	}
+	return word
 }
