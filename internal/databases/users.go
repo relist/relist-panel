@@ -28,18 +28,37 @@ func (e ErrOwnerAccess) Error() string {
 // ErrFullOnSuperuserDB is Full on a Postgres database a superuser owns: Full
 // is membership in the owner role, so the user would become that superuser's
 // equal in every database it owns.
-type ErrFullOnSuperuserDB struct{ Database string }
+type ErrFullOnSuperuserDB struct{ Database, User string }
 
 func (e ErrFullOnSuperuserDB) Error() string {
-	return e.Database + " is owned by a superuser, so Full access would make the user one; give it Read-only, or create the database with an owning user"
+	fix := ""
+	if e.User != "" && e.Database != "postgres" {
+		// A database restored from a Backup without its state is owned by
+		// postgres though its tables are the user's.
+		fix = ", make the user its owner (" + ownerFix(e.Database, e.User) + " in the Query tab)"
+	}
+	return e.Database + " is owned by a superuser, so Full access would make the user one; give it Read-only" + fix + ", or create the database with an owning user"
+}
+
+// ownerFix is the statement that makes user the owner of database.
+func ownerFix(database, user string) string {
+	return "ALTER DATABASE " + pgIdent(database) + " OWNER TO " + pgIdent(user)
 }
 
 // ErrUserOwnsIn is changing the access of a non-owner on a Postgres database
 // where it still owns tables or other objects: Read-only and None would revoke
 // them, and Full's SET role would hide them.
-type ErrUserOwnsIn struct{ User, Database, Owner string }
+type ErrUserOwnsIn struct {
+	User, Database, Owner string
+	// SuperOwner: Owner is a superuser, and the user's objects must not go
+	// to it; the user becomes the owner instead.
+	SuperOwner bool
+}
 
 func (e ErrUserOwnsIn) Error() string {
+	if e.SuperOwner {
+		return e.User + " owns tables or other objects in " + e.Database + ", which the superuser " + e.Owner + " owns; make " + e.User + " its owner first: " + ownerFix(e.Database, e.User) + " in the Query tab"
+	}
 	return e.User + " owns tables or other objects in " + e.Database + "; give them to " + e.Owner + " first, then change its access"
 }
 
@@ -285,7 +304,7 @@ func (s *Service) SetUserAccess(ctx context.Context, id int64, name string, acce
 			return ErrOwnerAccess{User: name, Database: n}
 		}
 		if d.Engine == "postgres" && access[n] == AccessFull && owner != name && slices.Contains(supers, owner) {
-			return ErrFullOnSuperuserDB{Database: n}
+			return ErrFullOnSuperuserDB{Database: n, User: name}
 		}
 	}
 	fromOf := func(n string) Access {
@@ -315,7 +334,8 @@ func (s *Service) SetUserAccess(ctx context.Context, id int64, name string, acce
 				continue
 			}
 			if access[n] != fromOf(n) {
-				return ErrUserOwnsIn{User: name, Database: n, Owner: byName[n].Owner}
+				owner := byName[n].Owner
+				return ErrUserOwnsIn{User: name, Database: n, Owner: owner, SuperOwner: slices.Contains(supers, owner)}
 			}
 			keep[n] = true
 		}

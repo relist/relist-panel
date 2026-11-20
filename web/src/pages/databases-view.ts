@@ -94,6 +94,13 @@ export function restoreWarning(target: string, replace: boolean): string {
     : `Creates the database ${target}.`;
 }
 
+/** The restore dialog's choice to create a new database as its Backup recorded it. */
+export function asBackedUpLabel(engine: string, backedUpAs: string): string {
+  return engine === 'postgres'
+    ? `Owned by ${backedUpAs}, as when it was backed up`
+    : `Character set ${backedUpAs}, as when it was backed up`;
+}
+
 /** The line under the header while a job runs. */
 export function jobNotice(job: Database['job']): string {
   switch (job) {

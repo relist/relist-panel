@@ -13,6 +13,9 @@ import (
 // dbSettingsQuery (ALTER ROLE … IN DATABASE … SET, ALTER DATABASE … SET).
 type dbState struct {
 	Name, Prev, Settings string
+	// From creates a new target the way a Backup's state says (NewSQL);
+	// "" creates it the plain way.
+	From string
 }
 
 // captureState reads a logical database's state on the running server.
@@ -41,7 +44,11 @@ func (s *Service) captureState(ctx context.Context, d Database, dp Dumper, name 
 // Once the drop has run, the settings go back even when the restore fails:
 // the drop deleted them, and the pre_restore Backup carries none.
 func (s *Service) restoreInto(ctx context.Context, d Database, dp Dumper, st dbState, path string) (string, error) {
-	if _, log, err := s.admin(ctx, d, dp, dp.ReplaceSQL(st.Name, st.Prev)); err != nil {
+	create := dp.ReplaceSQL(st.Name, st.Prev)
+	if st.Prev == "" && st.From != "" {
+		create = dp.NewSQL(st.Name, st.From)
+	}
+	if _, log, err := s.admin(ctx, d, dp, create); err != nil {
 		return log, err
 	}
 	log, err := s.restoreFile(ctx, d, dp, st.Name, path)

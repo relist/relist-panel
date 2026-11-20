@@ -274,7 +274,17 @@ data under `/var/lib/postgresql`, while 17 and below use
   it. The Database keeps running.
   - **Postgres:** `DROP DATABASE … WITH (FORCE)`, which ends the sessions on
     it in the same step, then `CREATE DATABASE … TEMPLATE template0 OWNER
-    <its owner before>`. A new database is owned by `postgres`.
+    <its owner before>`. A new database is owned by `postgres`, unless it
+    is restored "as it was backed up" (review decision 2026-11-20,
+    ADR-0050): every Backup keeps its database's owner and ACL (Postgres)
+    or character set and collation (MySQL, MariaDB), read before the dump,
+    and the restore dialog offers a box, ticked by default, that creates the
+    new database with that owner, or that character set. The owner is used
+    only while it exists and is no superuser; otherwise `postgres` owns it
+    and the restore's log says why. Backups from before keep no state and
+    restore the old way. Without the owner, the app's user owns the tables
+    but not the database, and the Users tab names the fix:
+    `ALTER DATABASE … OWNER TO …`.
   - **MySQL / MariaDB:** `DROP DATABASE`, then `CREATE DATABASE` with its
     default character set and collation from before.
   - The file then runs connected to the target: `psql -v ON_ERROR_STOP=1`, or

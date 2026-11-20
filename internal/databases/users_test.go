@@ -383,6 +383,28 @@ func TestSetAccessFullKeepsMemberTables(t *testing.T) {
 	}
 }
 
+// A database restored from an old Backup is owned by postgres while the
+// app's user owns its tables: the refusal names the one statement that
+// fixes it, instead of giving the tables to a superuser.
+func TestOwnsInASuperuserOwnedDatabaseNamesTheFix(t *testing.T) {
+	r := newPgUsersRig(t)
+	ctx := context.Background()
+	r.users("app")
+	r.databases([]string{"shop", "1", "postgres", "f"})
+	r.admin.answer(r.pg.SuperuserRolesQuery(), [][]string{{"postgres"}})
+	r.admin.answer(r.pg.OwnsInQuery("app"), [][]string{{"shop"}})
+	err := r.svc.SetUserAccess(ctx, r.d.ID, "app", map[string]Access{"shop": AccessRead})
+	want := `app owns tables or other objects in shop, which the superuser postgres owns; make app its owner first: ALTER DATABASE "shop" OWNER TO "app" in the Query tab`
+	if err == nil || err.Error() != want {
+		t.Fatalf("Read-only: err = %v", err)
+	}
+	err = r.svc.SetUserAccess(ctx, r.d.ID, "app", map[string]Access{"shop": AccessFull})
+	want = `shop is owned by a superuser, so Full access would make the user one; give it Read-only, make the user its owner (ALTER DATABASE "shop" OWNER TO "app" in the Query tab), or create the database with an owning user`
+	if err == nil || err.Error() != want {
+		t.Fatalf("Full: err = %v", err)
+	}
+}
+
 // Read-only and None would lock a user out of tables it owns.
 func TestSetAccessRefusesLoweringWhenUserOwnsObjects(t *testing.T) {
 	for _, to := range []Access{AccessRead, AccessNone} {

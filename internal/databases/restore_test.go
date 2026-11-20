@@ -98,7 +98,7 @@ func TestRestoreFromBackupReplacesTarget(t *testing.T) {
 	stdin := r.captureRestore(pgRestore, "")
 	r.host.reset()
 
-	rs, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop")
+	rs, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,14 +106,15 @@ func TestRestoreFromBackupReplacesTarget(t *testing.T) {
 		t.Fatalf("returned = %+v", rs)
 	}
 	r.svc.Wait()
+	// The pre_restore Backup reads its state and dumps; then the restore's
+	// inspect, the per-database settings, the replace and the restore.
 	lines := execLines(r)
-	if len(lines) != 5 || !strings.Contains(lines[0], "pg_dump") || !strings.HasSuffix(lines[1], pgAdmin) ||
-		!strings.HasSuffix(lines[2], pgAdmin) || !strings.HasSuffix(lines[3], pgAdmin) || !strings.HasSuffix(lines[4], pgRestore) {
+	if len(lines) != 6 || !strings.HasSuffix(lines[0], pgAdmin) || !strings.Contains(lines[1], "pg_dump") || !strings.HasSuffix(lines[2], pgAdmin) ||
+		!strings.HasSuffix(lines[3], pgAdmin) || !strings.HasSuffix(lines[4], pgAdmin) || !strings.HasSuffix(lines[5], pgRestore) {
 		t.Fatalf("exec order = %v", lines)
 	}
-	// inspect, the per-database settings, then the replace.
-	if len(*admin) != 3 || !strings.HasPrefix((*admin)[0], "SELECT pg_get_userbyid") || !strings.Contains((*admin)[1], "pg_db_role_setting") ||
-		!strings.HasPrefix((*admin)[2], `DROP DATABASE IF EXISTS "app" WITH (FORCE);`) {
+	if len(*admin) != 4 || !strings.HasPrefix((*admin)[0], "SELECT pg_get_userbyid") || !strings.HasPrefix((*admin)[1], "SELECT pg_get_userbyid") ||
+		!strings.Contains((*admin)[2], "pg_db_role_setting") || !strings.HasPrefix((*admin)[3], `DROP DATABASE IF EXISTS "app" WITH (FORCE);`) {
 		t.Fatalf("admin sql = %q", *admin)
 	}
 	if len(*stdin) != 1 || (*stdin)[0] != "ORIGINAL;\n" {
@@ -141,7 +142,7 @@ func TestRestoreFromBackupIntoNewTarget(t *testing.T) {
 	b := r.manualBackup(t, d.ID)
 	r.adminSQL(pgAdmin, "", nil)
 	r.captureRestore(pgRestore, "")
-	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app_copy", "Shop"); err != nil {
+	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app_copy", "Shop", false); err != nil {
 		t.Fatal(err)
 	}
 	r.svc.Wait()
@@ -240,7 +241,8 @@ func TestReplaceKeepsOwner(t *testing.T) {
 	}
 	r.svc.Wait()
 	want := "DROP DATABASE IF EXISTS \"app\" WITH (FORCE);\nCREATE DATABASE \"app\" TEMPLATE template0 OWNER \"appuser\";\n"
-	if len(*admin) != 3 || (*admin)[2] != want {
+	// The pre_restore Backup's state, the inspect, the settings, the replace.
+	if len(*admin) != 4 || (*admin)[3] != want {
 		t.Fatalf("replace sql = %q", *admin)
 	}
 	if !preFirst {
@@ -257,7 +259,8 @@ func TestRestoreMySQLKeepsCharset(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.svc.Wait()
-	if len(*admin) != 2 || (*admin)[1] != "DROP DATABASE IF EXISTS `app`;\nCREATE DATABASE `app` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;\n" {
+	// The pre_restore Backup's state, the inspect, the replace.
+	if len(*admin) != 3 || (*admin)[2] != "DROP DATABASE IF EXISTS `app`;\nCREATE DATABASE `app` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;\n" {
 		t.Fatalf("admin = %q", *admin)
 	}
 	reqs := r.host.execs("mysql -uroot --binary-mode --database=app")
@@ -285,7 +288,7 @@ func TestRestoreAbortsWhenPreBackupFails(t *testing.T) {
 	r.host.reset()
 	failing = true
 
-	if _, err := r.svc.RestoreFromBackup(context.Background(), d.ID, b.ID, "app", "Shop"); err != nil {
+	if _, err := r.svc.RestoreFromBackup(context.Background(), d.ID, b.ID, "app", "Shop", false); err != nil {
 		t.Fatal(err)
 	}
 	r.svc.Wait()
@@ -293,10 +296,13 @@ func TestRestoreAbortsWhenPreBackupFails(t *testing.T) {
 	if got.Status != JobFailed || !strings.Contains(got.Error, "pre-restore backup failed") {
 		t.Fatalf("restore = %+v", got)
 	}
+	// The Backup reads its state before its dump; nothing runs after the dump.
+	dumped := false
 	for _, l := range execLines(r) {
-		if strings.Contains(l, "psql") {
+		if dumped && strings.Contains(l, "psql") {
 			t.Fatalf("a psql exec ran after the pre-restore backup failed: %v", execLines(r))
 		}
+		dumped = dumped || strings.Contains(l, "pg_dump")
 	}
 	if got.PreBackupID == nil {
 		t.Fatal("the failed pre_restore Backup is not linked")
@@ -319,7 +325,7 @@ func TestRestoreRefusesChangedFile(t *testing.T) {
 	}
 	r.host.reset()
 
-	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop"); !errors.Is(err, ErrChangedFile) {
+	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop", false); !errors.Is(err, ErrChangedFile) {
 		t.Fatalf("err = %v, want ErrChangedFile", err)
 	}
 	if rl, _ := r.store.ListRestores(ctx, d.ID); len(rl) != 0 {
@@ -387,7 +393,7 @@ func TestRestoreRefusesOldFormat(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "old.sql.gz"), []byte("x"), 0o600)
 	_ = r.store.FinishBackup(ctx, b.ID, Backup{Status: JobSucceeded, FileName: "old.sql.gz", SHA256: "x"})
 	r.host.reset()
-	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop"); !errors.Is(err, ErrNotRestorable) {
+	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop", false); !errors.Is(err, ErrNotRestorable) {
 		t.Fatalf("err = %v", err)
 	}
 	if len(execLines(r)) != 0 || r.svc.Jobs(d.ID) != "" {
@@ -442,14 +448,14 @@ func TestRestoreWrongConfirmAndTarget(t *testing.T) {
 	r.dumps("pg_dump -U postgres", "X;\n")
 	b := r.manualBackup(t, d.ID)
 	r.host.reset()
-	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "shop"); !errors.Is(err, ErrConfirm) {
+	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "shop", false); !errors.Is(err, ErrConfirm) {
 		t.Fatalf("backup: %v", err)
 	}
 	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "nope", "a.sql", "", strings.NewReader("x")); !errors.Is(err, ErrConfirm) {
 		t.Fatalf("upload: %v", err)
 	}
 	for _, bad := range []string{"", "template1", "-x", "a b"} {
-		if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, bad, "Shop"); !errors.Is(err, ErrBadTarget) {
+		if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, bad, "Shop", false); !errors.Is(err, ErrBadTarget) {
 			t.Fatalf("target %q: %v", bad, err)
 		}
 		if _, err := r.svc.RestoreFromUpload(ctx, d.ID, bad, "Shop", "a.sql", "", strings.NewReader("x")); !errors.Is(err, ErrBadTarget) {
@@ -467,7 +473,7 @@ func TestRestoreOfFailedBackupRefused(t *testing.T) {
 	d := r.create(t, "Shop", "postgres", "18")
 	b, _ := r.store.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual, LogicalName: "app"})
 	_ = r.store.FinishBackup(ctx, b.ID, Backup{Status: JobFailed, Error: "x"})
-	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop"); !errors.Is(err, ErrNotFound) {
+	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop", false); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v", err)
 	}
 	if r.svc.Jobs(d.ID) != "" {
@@ -575,4 +581,101 @@ func TestRestoreDamagedEncryptedUpload(t *testing.T) {
 		t.Fatalf("err = %v, want ErrDamaged", err)
 	}
 	uploadsDirEmpty(t, r, d.ID)
+}
+
+// roleAdmin scripts the Postgres admin command for a Backup and a restore:
+// an inspect prints prev, a superuser check prints super ("t", "f", or ""
+// for a role that does not exist), and every stdin is kept in order.
+func (r *rig) roleAdmin(prev, super string) *[]string {
+	var got []string
+	r.host.script(pgAdmin, func(req ExecRequest) (int, error) {
+		b, _ := io.ReadAll(req.Stdin)
+		sql := string(b)
+		got = append(got, sql)
+		switch {
+		case strings.Contains(sql, "rolsuper"):
+			_, _ = io.WriteString(req.Stdout, super)
+		case strings.Contains(sql, "pg_get_userbyid") && strings.Contains(sql, "datname = 'app';"):
+			_, _ = io.WriteString(req.Stdout, prev)
+		}
+		return 0, nil
+	})
+	return &got
+}
+
+// A Backup keeps what its dump leaves out (review 2026-11-20): restored into
+// a new database "as it was backed up", the database gets its owner back,
+// still restricted like Create database, so the app's user can use it.
+func TestRestoreIntoNewDatabaseAsBackedUp(t *testing.T) {
+	for _, c := range []struct {
+		name, super string
+		asBackedUp  bool
+		owner, note string
+	}{
+		{"owner back", "f\n", true, "app", ""},
+		{"not asked", "f\n", false, "postgres", ""},
+		{"owner gone", "", true, "postgres", "app no longer exists"},
+		{"owner now a superuser", "t\n", true, "postgres", "app is a superuser now"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRig(t)
+			ctx := context.Background()
+			d := r.create(t, "Shop", "postgres", "18")
+			r.dumps("pg_dump -U postgres", "ORIGINAL;\n")
+			admin := r.roleAdmin("app\t{app=CTc/app,reader=c/app}\n", c.super)
+			b := r.manualBackup(t, d.ID)
+			if b.State.Prev != "app\t{app=CTc/app,reader=c/app}" {
+				t.Fatalf("state = %+v, want the inspect line", b.State)
+			}
+			r.captureRestore(pgRestore, "")
+			if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app_copy", "Shop", c.asBackedUp); err != nil {
+				t.Fatal(err)
+			}
+			r.svc.Wait()
+			got := r.lastRestore(t, d.ID)
+			if got.Status != JobSucceeded || !strings.Contains(got.Log, c.note) {
+				t.Fatalf("restore = %+v, want a log with %q", got, c.note)
+			}
+			want := "CREATE DATABASE \"app_copy\" TEMPLATE template0 OWNER \"" + c.owner + "\";\nREVOKE CONNECT ON DATABASE \"app_copy\" FROM PUBLIC;\n"
+			if all := strings.Join(*admin, "\n"); !strings.Contains(all, want) {
+				t.Fatalf("admin SQL lacks %q:\n%s", want, all)
+			}
+		})
+	}
+}
+
+func TestRestoreMySQLIntoNewDatabaseAsBackedUp(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "mysql", "8.4")
+	r.dumps("mysqldump", "CREATE TABLE t (id int);\n")
+	var admin []string
+	r.host.script("mysql -uroot -N", func(req ExecRequest) (int, error) {
+		if req.Stdin == nil { // the list of databases
+			_, err := io.WriteString(req.Stdout, "app\n")
+			return 0, err
+		}
+		b, _ := io.ReadAll(req.Stdin)
+		admin = append(admin, string(b))
+		if strings.Contains(string(b), "SCHEMA_NAME = 'app';") {
+			_, _ = io.WriteString(req.Stdout, "utf8mb4\tutf8mb4_bin\n")
+		}
+		return 0, nil
+	})
+	b := r.manualBackup(t, d.ID)
+	if b.State.Prev != "utf8mb4\tutf8mb4_bin" {
+		t.Fatalf("state = %+v", b.State)
+	}
+	r.captureRestore("mysql -uroot --binary-mode --database=app_copy", "")
+	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app_copy", "Shop", true); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	if got := r.lastRestore(t, d.ID); got.Status != JobSucceeded {
+		t.Fatalf("restore = %+v", got)
+	}
+	want := "CREATE DATABASE `app_copy` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;\n"
+	if all := strings.Join(admin, "\n"); !strings.Contains(all, want) {
+		t.Fatalf("admin SQL lacks %q:\n%s", want, all)
+	}
 }

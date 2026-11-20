@@ -140,7 +140,7 @@ func TestReplaceRestoreKeepsRoleSettings(t *testing.T) {
 	setting := `ALTER ROLE "full_u" IN DATABASE "app" SET "role" TO 'app_owner';`
 	admin := r.stateAdmin("app_owner\n", settingsRow("full_u", "role=app_owner"))
 	r.captureRestore(pgRestore, "")
-	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop"); err != nil {
+	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop", false); err != nil {
 		t.Fatal(err)
 	}
 	r.svc.Wait()

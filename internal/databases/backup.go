@@ -274,6 +274,11 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 // executeBackup dumps into <name>.partial and renames it on success. Any
 // failure removes the partial and records the Backup as failed.
 func (s *Service) executeBackup(ctx context.Context, d Database, dp Dumper, b Backup) Backup {
+	if st := s.readBackupState(ctx, d, dp, b.LogicalName); st.Prev != "" {
+		if err := s.d.Store.SetBackupState(ctx, b.ID, st); err == nil {
+			b.State = st
+		}
+	}
 	dir := filepath.Join(s.dbDir(d.ID), "backups")
 	name := fmt.Sprintf("%s-%d.sql.gz", b.StartedAt.UTC().Format("20060102T150405Z"), b.ID)
 	logs := &tailBuffer{max: logLimit}
@@ -291,6 +296,17 @@ func (s *Service) executeBackup(ctx context.Context, d Database, dp Dumper, b Ba
 	}
 	b.Status, b.Error, b.Log, b.FileName, b.Size, b.SHA256 = fin.Status, fin.Error, fin.Log, fin.FileName, fin.Size, fin.SHA256
 	return b
+}
+
+// readBackupState reads what the dump of logical leaves out (ADR-0050). It
+// is best effort: a Backup never fails for it, and a restore of a Backup
+// without it creates the database the plain way.
+func (s *Service) readBackupState(ctx context.Context, d Database, dp Dumper, logical string) BackupState {
+	prev, _, err := s.admin(ctx, d, dp, dp.InspectSQL(logical))
+	if err != nil {
+		return BackupState{}
+	}
+	return BackupState{Prev: strings.TrimSpace(prev)}
 }
 
 // dumpTo writes the dump of one logical database as one gzip stream to dir/name, through a

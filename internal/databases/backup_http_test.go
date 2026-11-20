@@ -334,3 +334,45 @@ func TestRestoreUploadDamagedIs422(t *testing.T) {
 		t.Fatalf("restore = %d %s, want 422 damaged", w.Code, w.Body)
 	}
 }
+
+// The Backup list says how a restore "as it was backed up" would create a
+// new database, and the restore request carries the choice to the job.
+func TestRestoreAsBackedUpRoute(t *testing.T) {
+	a := newAPIRig(t)
+	a.seed(t, "Shop", "mysql", "8.4")
+	a.dumps("mysqldump", "CREATE TABLE t (id int);\n")
+	var admin []string
+	a.host.script("mysql -uroot -N", func(req ExecRequest) (int, error) {
+		if req.Stdin == nil {
+			_, err := io.WriteString(req.Stdout, "app\n")
+			return 0, err
+		}
+		b, _ := io.ReadAll(req.Stdin)
+		admin = append(admin, string(b))
+		if strings.Contains(string(b), "SCHEMA_NAME = 'app';") {
+			_, _ = io.WriteString(req.Stdout, "utf8mb4\tutf8mb4_bin\n")
+		}
+		return 0, nil
+	})
+	if w := a.do("POST", "/api/databases/1/backups", `{"all":true}`); w.Code != http.StatusAccepted {
+		t.Fatalf("backup = %d %s", w.Code, w.Body)
+	}
+	a.svc.Wait()
+	var list []BackupJSON
+	w := a.do("GET", "/api/databases/1/backups", "")
+	_ = json.Unmarshal(w.Body.Bytes(), &list)
+	if len(list) != 1 || list[0].AsBackedUp != "utf8mb4, utf8mb4_bin" {
+		t.Fatalf("list = %s", w.Body)
+	}
+	a.host.script("mysql -uroot --binary-mode --database=copy", func(req ExecRequest) (int, error) {
+		_, _ = io.Copy(io.Discard, req.Stdin)
+		return 0, nil
+	})
+	if w := a.do("POST", "/api/databases/1/restores", `{"backupId":1,"target":"copy","confirm":"Shop","asBackedUp":true}`); w.Code != http.StatusAccepted {
+		t.Fatalf("restore = %d %s", w.Code, w.Body)
+	}
+	a.svc.Wait()
+	if all := strings.Join(admin, "\n"); !strings.Contains(all, "CREATE DATABASE `copy` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;") {
+		t.Fatalf("admin SQL = %s", all)
+	}
+}

@@ -42,8 +42,9 @@ func fileSHA(path string) (string, error) {
 // RestoreFromBackup restores a succeeded Backup of Database id into target.
 // Everything before the background job runs here and answers with an error:
 // the confirmation, the target, and the file's sha256. The running row is
-// returned.
-func (s *Service) RestoreFromBackup(ctx context.Context, id, backupID int64, target, confirm string) (Restore, error) {
+// returned. With asBackedUp, a new target is created the way the Backup's
+// state says (ADR-0050).
+func (s *Service) RestoreFromBackup(ctx context.Context, id, backupID int64, target, confirm string, asBackedUp bool) (Restore, error) {
 	d, dp, err := s.acquire(ctx, id, JobKindRestore)
 	if err != nil {
 		return Restore{}, err
@@ -77,7 +78,11 @@ func (s *Service) RestoreFromBackup(ctx context.Context, id, backupID int64, tar
 		release()
 		return Restore{}, err
 	}
-	s.startRestore(ctx, d, dp, r, path, replace, false)
+	var from *BackupState
+	if asBackedUp {
+		from = &b.State
+	}
+	s.startRestore(ctx, d, dp, r, path, replace, false, from)
 	return r, nil
 }
 
@@ -134,7 +139,7 @@ func (s *Service) RestoreFromUpload(ctx context.Context, id int64, target, confi
 	if err != nil {
 		return fail(err)
 	}
-	s.startRestore(ctx, d, dp, r, path, replace, true)
+	s.startRestore(ctx, d, dp, r, path, replace, true, nil)
 	return r, nil
 }
 
@@ -231,7 +236,8 @@ func checkUploadFile(engine, path string) error {
 
 // startRestore runs the restore of the file at path in the background and
 // releases the job slot when it ends. An upload's file is removed afterwards.
-func (s *Service) startRestore(ctx context.Context, d Database, dp Dumper, r Restore, path string, replace, temp bool) {
+// from, when set, is the Backup state a new target is created from.
+func (s *Service) startRestore(ctx context.Context, d Database, dp Dumper, r Restore, path string, replace, temp bool, from *BackupState) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -240,7 +246,7 @@ func (s *Service) startRestore(ctx context.Context, d Database, dp Dumper, r Res
 			defer os.Remove(path)
 		}
 		ctx := context.WithoutCancel(ctx)
-		s.containRows(ctx, d.ID, "restore", func() { s.executeRestore(ctx, d, dp, r, path, replace) })
+		s.containRows(ctx, d.ID, "restore", func() { s.executeRestore(ctx, d, dp, r, path, replace, from) })
 	}()
 }
 
@@ -267,7 +273,7 @@ func (s *Service) admin(ctx context.Context, d Database, dp Dumper, sql string) 
 	return stdout.String(), errOut.String(), err
 }
 
-func (s *Service) executeRestore(ctx context.Context, d Database, dp Dumper, r Restore, path string, replace bool) {
+func (s *Service) executeRestore(ctx context.Context, d Database, dp Dumper, r Restore, path string, replace bool, from *BackupState) {
 	target := r.Target
 	var pre *int64
 	if replace {
@@ -293,10 +299,45 @@ func (s *Service) executeRestore(ctx context.Context, d Database, dp Dumper, r R
 		s.finishRestore(ctx, r, pre, JobFailed, "the database "+target+" now exists; it was not replaced", "")
 		return
 	}
+	note := ""
+	if !replace && from != nil {
+		st.From, note = s.createdAs(ctx, d, dp, target, *from)
+	}
 	log, err = s.restoreInto(ctx, d, dp, st, path)
+	if note != "" {
+		log = note + "\n" + log
+	}
 	if err != nil {
 		s.finishRestore(ctx, r, pre, JobFailed, err.Error(), log)
 		return
 	}
 	s.finishRestore(ctx, r, pre, JobSucceeded, "", log)
+}
+
+// createdAs is how a new target is created from a Backup's state: NewSQL's
+// from, and a note for the log when the state cannot be used. A Postgres
+// owner is used only while it exists and is no superuser, which would make
+// the owner's code run as one (ADR-0048); otherwise postgres owns it.
+func (s *Service) createdAs(ctx context.Context, d Database, dp Dumper, target string, st BackupState) (from, note string) {
+	if st.Prev == "" {
+		return "", ""
+	}
+	if d.Engine != "postgres" {
+		return st.Prev, ""
+	}
+	owner, _, _ := strings.Cut(st.Prev, "\t")
+	if owner == "" || owner == "postgres" {
+		return "", ""
+	}
+	out, _, err := s.admin(ctx, d, dp, "SELECT rolsuper FROM pg_roles WHERE rolname = "+pgLit(owner)+";")
+	switch strings.TrimSpace(out) {
+	case "f":
+		return owner, ""
+	case "t":
+		return "", owner + " is a superuser now, so postgres owns " + target + "."
+	}
+	if err != nil {
+		return "", "The owner " + owner + " could not be checked, so postgres owns " + target + "."
+	}
+	return "", owner + " no longer exists, so postgres owns " + target + "."
 }

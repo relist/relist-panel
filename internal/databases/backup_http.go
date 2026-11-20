@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"relist-panel/internal/audit"
@@ -27,6 +28,19 @@ type BackupJSON struct {
 	LocalRemoved bool `json:"localRemoved"`
 	// Upload is the latest copy to a Backup destination; null when none was tried.
 	Upload *UploadJSON `json:"upload"`
+	// AsBackedUp is how a restore "as it was backed up" creates a new
+	// database: its owner (Postgres) or "charset, collation" (MySQL,
+	// MariaDB); "" for a Backup taken before the state was kept.
+	AsBackedUp string `json:"asBackedUp"`
+}
+
+// asBackedUp is BackupJSON.AsBackedUp of st on engine.
+func asBackedUp(engine string, st BackupState) string {
+	first, second, _ := strings.Cut(st.Prev, "\t")
+	if engine == "postgres" || second == "" {
+		return first
+	}
+	return first + ", " + second
 }
 
 // UploadJSON is a Backup's copy in a Backup destination.
@@ -38,14 +52,15 @@ type UploadJSON struct {
 	UploadedAt  *time.Time `json:"uploadedAt"`
 }
 
-func backupJSON(b Backup) BackupJSON {
+func backupJSON(b Backup, engine string) BackupJSON {
 	var up *UploadJSON
 	// A copy Rotation already deleted from its destination is not shown.
 	if b.Upload != nil && b.Upload.DeletedAt == nil {
 		up = &UploadJSON{Destination: b.Upload.DestinationName, Status: b.Upload.Status, Error: b.Upload.Error, Encrypted: b.Upload.Encrypted, UploadedAt: b.Upload.UploadedAt}
 	}
 	return BackupJSON{Upload: up, ID: b.ID, Trigger: b.Trigger, Database: b.LogicalName, Status: b.Status, Error: b.Error, Log: b.Log,
-		Size: b.Size, SHA256: b.SHA256, StartedAt: b.StartedAt, FinishedAt: b.FinishedAt, Pinned: b.Pinned, LocalRemoved: b.LocalRemovedAt != nil}
+		Size: b.Size, SHA256: b.SHA256, StartedAt: b.StartedAt, FinishedAt: b.FinishedAt, Pinned: b.Pinned, LocalRemoved: b.LocalRemovedAt != nil,
+		AsBackedUp: asBackedUp(engine, b.State)}
 }
 
 // RestoreJSON is a restore as the browser sees it.
@@ -91,9 +106,10 @@ func (a *API) listBackups(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	d, _ := a.s.d.Store.Get(r.Context(), n)
 	out := make([]BackupJSON, 0, len(list))
 	for _, b := range list {
-		out = append(out, backupJSON(b))
+		out = append(out, backupJSON(b, d.Engine))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -107,7 +123,7 @@ func (a *API) startBackup(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	a.target(r, n)
+	d := a.target(r, n)
 	list, err := a.s.StartBackup(r.Context(), n, in)
 	if err != nil {
 		writeError(w, err)
@@ -115,7 +131,7 @@ func (a *API) startBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]BackupJSON, 0, len(list))
 	for _, b := range list {
-		out = append(out, backupJSON(b))
+		out = append(out, backupJSON(b, d.Engine))
 	}
 	writeJSON(w, http.StatusAccepted, out)
 }
@@ -204,16 +220,18 @@ func (a *API) startRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		BackupID int64  `json:"backupId"`
-		Target   string `json:"target"`
-		Confirm  string `json:"confirm"`
+		BackupID   int64  `json:"backupId"`
+		Target     string `json:"target"`
+		Confirm    string `json:"confirm"`
+		AsBackedUp bool   `json:"asBackedUp"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
 	a.target(r, n)
 	audit.Detail(r.Context(), "backup", in.BackupID)
-	rs, err := a.s.RestoreFromBackup(r.Context(), n, in.BackupID, in.Target, in.Confirm)
+	audit.Detail(r.Context(), "asBackedUp", in.AsBackedUp)
+	rs, err := a.s.RestoreFromBackup(r.Context(), n, in.BackupID, in.Target, in.Confirm, in.AsBackedUp)
 	if err != nil {
 		writeError(w, err)
 		return

@@ -63,6 +63,7 @@ function backup(over: Partial<DatabaseBackup>): DatabaseBackup {
     log: '',
     database: 'app',
     sha256: 'abc',
+    asBackedUp: '',
     localRemoved: false,
     pinned: false,
     upload: null,
@@ -146,7 +147,7 @@ describe('DatabaseBackupsTab', () => {
     await user.type(within(dialog).getByLabelText('Type Shop to confirm'), 'Shop');
     await waitFor(() => expect(ok.disabled).toBe(false));
     await user.click(ok);
-    await waitFor(() => expect(api.restoreDatabase).toHaveBeenCalledWith(1, 1, 'app', 'Shop'));
+    await waitFor(() => expect(api.restoreDatabase).toHaveBeenCalledWith(1, 1, 'app', 'Shop', false));
   });
 
   it('restores into a new database under the typed name', async () => {
@@ -162,8 +163,31 @@ describe('DatabaseBackupsTab', () => {
     expect(within(dialog).getByText('Creates the database app_copy.')).toBeTruthy();
     await user.type(within(dialog).getByLabelText('Type Shop to confirm'), 'Shop');
     await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
-    await waitFor(() => expect(api.restoreDatabase).toHaveBeenCalledWith(1, 1, 'app_copy', 'Shop'));
+    await waitFor(() => expect(api.restoreDatabase).toHaveBeenCalledWith(1, 1, 'app_copy', 'Shop', false));
   });
+
+  for (const untick of [false, true]) {
+    it(`creates a new database owned as it was backed up${untick ? ', or not when unticked' : ''}`, async () => {
+      api.restoreDatabase.mockResolvedValue({});
+      api.listDatabaseBackups.mockResolvedValue([backup({ asBackedUp: 'app_owner' })]);
+      const user = userEvent.setup();
+      renderTab();
+      await screen.findByText('1.5 KB');
+      await user.click(screen.getByRole('button', { name: 'Restore' }));
+      const dialog = await screen.findByRole('dialog');
+      await within(dialog).findByText(/Replaces the database app/);
+      // Replacing keeps the live database's owner: no choice to make.
+      expect(within(dialog).queryByLabelText('Owned by app_owner, as when it was backed up')).toBeNull();
+      await user.click(within(dialog).getByLabelText('Restore into a new database'));
+      await user.type(within(dialog).getByLabelText('New database name'), 'app_copy');
+      const keep = within(dialog).getByLabelText('Owned by app_owner, as when it was backed up') as HTMLInputElement;
+      expect(keep.checked).toBe(true);
+      if (untick) await user.click(keep);
+      await user.type(within(dialog).getByLabelText('Type Shop to confirm'), 'Shop');
+      await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
+      await waitFor(() => expect(api.restoreDatabase).toHaveBeenCalledWith(1, 1, 'app_copy', 'Shop', !untick));
+    });
+  }
 
   it('defaults to a new database named after a Backup whose database is gone', async () => {
     api.listDatabaseBackups.mockResolvedValue([backup({ database: 'gone' })]);

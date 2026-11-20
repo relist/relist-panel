@@ -34,6 +34,10 @@ type Dumper interface {
 	// ReplaceSQL drops and recreates target. prev is InspectSQL's output
 	// ("" = the target is new).
 	ReplaceSQL(target, prev string) string
+	// NewSQL creates target as a new database the way a Backup's state says
+	// (ADR-0050): from is the owner (Postgres, restricted like Create
+	// database) or "<charset>\t<collation>" (MySQL, MariaDB).
+	NewSQL(target, from string) string
 }
 
 // DumperFor returns the Dumper of an engine, ErrNoBackups for Redis.
@@ -134,12 +138,12 @@ func (pgDumper) ReplaceSQL(target, prev string) string {
 	if owner == "" {
 		owner = "postgres"
 	}
+	if strings.TrimSpace(prev) == "" {
+		return pgDumper{}.NewSQL(target, "")
+	}
 	t := pgIdent(target)
 	out := "DROP DATABASE IF EXISTS " + t + " WITH (FORCE);\n" +
 		"CREATE DATABASE " + t + " TEMPLATE template0 OWNER " + pgIdent(owner) + ";\n"
-	if strings.TrimSpace(prev) == "" {
-		return out + "REVOKE CONNECT ON DATABASE " + t + " FROM PUBLIC;\n"
-	}
 	entries := parseDatACL(strings.TrimSpace(acl))
 	if len(entries) == 0 {
 		return out
@@ -170,6 +174,18 @@ func (pgDumper) ReplaceSQL(target, prev string) string {
 		out += "GRANT " + strings.Join(privs, ", ") + " ON DATABASE " + t + " TO " + to + ";\n"
 	}
 	return out
+}
+
+// NewSQL creates target owned by owner ("" = postgres), restricted like
+// Create database: only the owner and those granted CONNECT may connect.
+func (pgDumper) NewSQL(target, owner string) string {
+	if owner = strings.TrimSpace(owner); owner == "" {
+		owner = "postgres"
+	}
+	t := pgIdent(target)
+	return "DROP DATABASE IF EXISTS " + t + " WITH (FORCE);\n" +
+		"CREATE DATABASE " + t + " TEMPLATE template0 OWNER " + pgIdent(owner) + ";\n" +
+		"REVOKE CONNECT ON DATABASE " + t + " FROM PUBLIC;\n"
 }
 
 // aclEntry is one grant of a database ACL; an empty Grantee is PUBLIC.
@@ -295,6 +311,9 @@ func (mysqlDumper) ReplaceSQL(target, prev string) string {
 	}
 	return out + ";\n"
 }
+
+// NewSQL creates target with the character set and collation of from.
+func (m mysqlDumper) NewSQL(target, from string) string { return m.ReplaceSQL(target, from) }
 
 // execEnv is the env of a command: the password, then the command's own.
 func execEnv(dp Dumper, password string, extra []string) []string {
