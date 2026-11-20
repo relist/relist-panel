@@ -194,7 +194,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 // with which of bash/sh each Container carries. Availability comes first: when
 // the Engine API is unreachable there is nothing the UI can do, so the reason
 // is the answer rather than a failed listing. The Service names come from the
-// Compose's own status — the same `docker compose ps` status the Compose page
+// Compose's own status — the same Engine status the Compose page
 // shows — so a Service whose Container is stopped still appears, with no
 // running Container, which is what the selector needs to render it disabled.
 func (s *Service) listServices(w http.ResponseWriter, r *http.Request) {

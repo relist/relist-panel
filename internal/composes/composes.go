@@ -49,8 +49,7 @@ type RunRequest struct {
 }
 
 // ComposeStatus summarizes a Compose's live container state. Services are the
-// Compose's Service names as `docker compose ps --all` reported them, in
-// first-seen order; a Service whose Containers have all stopped is still
+// Compose's Service names as the Engine lists them, sorted; a Service whose Containers have all stopped is still
 // named. They are not on the wire — the Compose page renders running/total —
 // but they ride the status for the terminal listing, which needs the set of
 // Services without owning a runner or a lookup of its own.
@@ -109,7 +108,6 @@ type ComposeRunner interface {
 	Down(ctx context.Context, req RunRequest) error
 	DownWithVolumes(ctx context.Context, req RunRequest) error
 	Restart(ctx context.Context, req RunRequest) error
-	Status(ctx context.Context, req RunRequest) (ComposeStatus, error)
 	Logs(ctx context.Context, req RunRequest) (string, error)
 	// Config is `docker compose config --format json`: the file as Compose
 	// resolves it, interpolated and with inactive profiles dropped.
@@ -142,6 +140,7 @@ type Service struct {
 	panelDomain string
 	approver    policy.Approver
 	engine      ContainerEngine
+	status      *snapshot
 	canceler    DeploymentCanceler
 	now         func() time.Time
 }
@@ -203,7 +202,7 @@ type composeUpdateInput struct {
 // database. runner drives deploy lifecycle actions; dataDir is the root
 // directory Compose files are resolved under (ADR-0002).
 func New(db *sql.DB, runner ComposeRunner, dataDir string) *Service {
-	return &Service{repository: &repository{db: db}, runner: runner, dataDir: dataDir, domains: domains.NewStore(db), switches: zerodowntime.NewStore(db), now: time.Now}
+	return &Service{repository: &repository{db: db}, runner: runner, dataDir: dataDir, domains: domains.NewStore(db), switches: zerodowntime.NewStore(db), status: newSnapshot(), now: time.Now}
 }
 
 // WithEngine gives the Service the Container engine a Rollout and orphan
@@ -605,7 +604,9 @@ func (s *Service) stop(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := LifecycleContext(r.Context())
 	defer cancel()
-	if err := s.runner.Down(ctx, req); err != nil {
+	err = s.runner.Down(ctx, req)
+	s.status.drop()
+	if err != nil {
 		writeError(w, http.StatusBadGateway, "stop failed: "+err.Error())
 		return
 	}
@@ -641,7 +642,9 @@ func (s *Service) restart(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := LifecycleContext(r.Context())
 	defer cancel()
-	if err := s.runner.Restart(ctx, req); err != nil {
+	err = s.runner.Restart(ctx, req)
+	s.status.drop()
+	if err != nil {
 		writeError(w, http.StatusBadGateway, "restart failed: "+err.Error())
 		return
 	}
@@ -804,33 +807,49 @@ func (s *Service) ComposeRunRequest(ctx context.Context, projectID, environmentI
 	return runRequestFor(s.dataDir, compose), nil
 }
 
-// ServiceNames lists a Compose's Service names as its live status reports them
-// — the same `docker compose ps --all` status the Compose page shows — for a
-// sibling domain that needs the set but owns neither the runner nor the
-// 404 path. It takes an already-resolved RunRequest so the caller shares one
-// resolution with ComposeRunRequest.
+// ServiceNames lists a Compose's Service names as its live containers report
+// them, the same status the Compose page shows, for a sibling domain that
+// needs the set but owns neither the engine nor the 404 path. It takes an
+// already-resolved RunRequest so the caller shares one resolution with
+// ComposeRunRequest. It always reads fresh, not from the list snapshot.
 //
-// Like currentStatus, it only queries the runner once a Compose has actually
-// been deployed (its resolved compose file exists on disk). An undeployed
-// Compose has no Compose file for `docker compose ps` to read, so asking would
-// fail; it lists no Services instead, which the UI renders as its empty state.
+// An undeployed Compose (no resolved compose file on disk) lists no Services,
+// which the UI renders as its empty state.
 func (s *Service) ServiceNames(ctx context.Context, req RunRequest) ([]string, error) {
 	if _, err := os.Stat(req.ComposeFilePath); err != nil {
 		return nil, nil
 	}
-	status, err := s.runner.Status(ctx, req)
+	status, err := s.statusFresh(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	return status.Services, nil
 }
 
+// Status is a Compose's live container state, read fresh from the Engine.
+func (s *Service) Status(ctx context.Context, req RunRequest) (ComposeStatus, error) {
+	return s.statusFresh(ctx, req)
+}
+
+func (s *Service) statusFresh(ctx context.Context, req RunRequest) (ComposeStatus, error) {
+	if s.engine == nil {
+		return ComposeStatus{}, errNoEngine
+	}
+	containers, err := s.engine.ProjectContainers(ctx, req.ProjectName)
+	if err != nil {
+		return ComposeStatus{}, err
+	}
+	return statusOf(containers), nil
+}
+
 // withRefreshedStatus re-reads a Compose's live status immediately after a
 // runner action (deploy/stop/restart) so the response reflects the outcome
 // without a separate round-trip; best-effort like withStatus/withStatuses.
+// The action also made the list snapshot stale, so it is dropped.
 func (s *Service) withRefreshedStatus(ctx context.Context, req RunRequest, compose Compose) Compose {
+	s.status.drop()
 	compose = s.withDeployIdentity(compose)
-	status, err := s.runner.Status(ctx, req)
+	status, err := s.statusFresh(ctx, req)
 	if err != nil {
 		status = ComposeStatus{}
 	}
@@ -838,18 +857,37 @@ func (s *Service) withRefreshedStatus(ctx context.Context, req RunRequest, compo
 	return compose
 }
 
-// withStatus and withStatuses attach each Compose's live container state.
-// They are best-effort: a runner error (e.g. Docker is unreachable) must not
-// fail an otherwise-successful read, so it degrades to a zero-value status.
+// withStatus attaches one Compose's live container state. It is best-effort:
+// an Engine error (e.g. Docker is unreachable) must not fail an
+// otherwise-successful read, so it degrades to a zero-value status.
 func (s *Service) withStatus(ctx context.Context, compose Compose) Compose {
 	compose = s.withDeployIdentity(compose)
 	compose.Status = s.currentStatus(ctx, compose)
 	return compose
 }
 
+// withStatuses attaches every Compose's status from one shared snapshot of
+// all Compose containers, so listing many Composes, or many Environments at
+// once, makes one Engine call (see snapshot).
 func (s *Service) withStatuses(ctx context.Context, composes []Compose) []Compose {
+	deployed := make([]bool, len(composes))
+	any := false
 	for i := range composes {
-		composes[i] = s.withStatus(ctx, composes[i])
+		composes[i] = s.withDeployIdentity(composes[i])
+		deployed[i] = s.isDeployed(ctx, composes[i])
+		any = any || deployed[i]
+	}
+	if !any || s.engine == nil {
+		return composes
+	}
+	byProject, err := s.status.get(ctx, s.engine)
+	if err != nil {
+		return composes
+	}
+	for i := range composes {
+		if deployed[i] {
+			composes[i].Status = statusOf(byProject[composes[i].DeployIdentity.ProjectName])
+		}
 	}
 	return composes
 }
@@ -860,18 +898,23 @@ func (s *Service) withDeployIdentity(compose Compose) Compose {
 	return compose
 }
 
-// currentStatus only queries the runner once a Compose has actually been
-// deployed (its resolved compose file exists on disk); an undeployed Compose
-// always reads as a zero-value status without shelling out.
-func (s *Service) currentStatus(ctx context.Context, compose Compose) ComposeStatus {
+// isDeployed is whether a Compose has a unique identity and its resolved
+// compose file on disk. An undeployed Compose always reads as a zero-value
+// status without asking Docker.
+func (s *Service) isDeployed(ctx context.Context, compose Compose) bool {
 	if err := s.requireUniqueIdentity(ctx, compose); err != nil {
+		return false
+	}
+	_, err := os.Stat(runRequestFor(s.dataDir, compose).ComposeFilePath)
+	return err == nil
+}
+
+// currentStatus reads one deployed Compose's status fresh from the Engine.
+func (s *Service) currentStatus(ctx context.Context, compose Compose) ComposeStatus {
+	if !s.isDeployed(ctx, compose) {
 		return ComposeStatus{}
 	}
-	req := runRequestFor(s.dataDir, compose)
-	if _, err := os.Stat(req.ComposeFilePath); err != nil {
-		return ComposeStatus{}
-	}
-	status, err := s.runner.Status(ctx, req)
+	status, err := s.statusFresh(ctx, runRequestFor(s.dataDir, compose))
 	if err != nil {
 		return ComposeStatus{}
 	}

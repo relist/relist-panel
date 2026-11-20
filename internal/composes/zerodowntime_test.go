@@ -40,6 +40,10 @@ func (e *fakeEngine) ProjectContainers(ctx context.Context, _ string) ([]EngineC
 	return append([]EngineContainer(nil), e.containers...), nil
 }
 
+func (e *fakeEngine) ComposeContainers(ctx context.Context) ([]EngineContainer, error) {
+	return e.ProjectContainers(ctx, "")
+}
+
 func (e *fakeEngine) Inspect(ctx context.Context, id string) (EngineState, error) {
 	if err := ctx.Err(); err != nil {
 		return EngineState{}, err
