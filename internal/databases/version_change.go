@@ -72,7 +72,7 @@ func (s *Service) ChangeVersion(ctx context.Context, id int64, version string, b
 		defer s.wg.Done()
 		ctx := context.WithoutCancel(ctx)
 		run := &versionRun{s: s, d: d, dp: dp, c: c}
-		perr := s.contain(ctx, id, "Change version", func() {
+		perr := s.containRows(ctx, id, "Change version", func() {
 			if method == VersionMethodDumpRestore {
 				run.dumpRestore(ctx)
 			} else {

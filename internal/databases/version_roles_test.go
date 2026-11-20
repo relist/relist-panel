@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -88,5 +90,33 @@ func TestChangeVersionRefusesAnUnsplittableRoleSetting(t *testing.T) {
 		if !strings.HasSuffix(call, pgAdmin) {
 			t.Fatalf("host changed before the refusal: %v", r.host.mutating())
 		}
+	}
+}
+
+// The server failing to answer the settings read is the server's answer,
+// not a fault of the panel: a bad gateway, scrubbed, like other admin reads.
+func TestRoleSettingsReadFailureIsABadGateway(t *testing.T) {
+	r := newPGChangeRig(t)
+	ctx := context.Background()
+	r.host.override(pgAdmin, func(req ExecRequest) (int, error) {
+		b, _ := io.ReadAll(req.Stdin)
+		if strings.Contains(string(b), "setdatabase = 0") {
+			_, _ = io.WriteString(req.Stderr, "FATAL:  the database system is starting up")
+			return 2, nil
+		}
+		return 0, nil
+	})
+	_, err := r.svc.ChangeVersion(ctx, r.d.ID, "18", false)
+	var admin adminError
+	if !errors.As(err, &admin) || !strings.Contains(err.Error(), "starting up") {
+		t.Fatalf("err = %v", err)
+	}
+	w := httptest.NewRecorder()
+	writeError(w, err)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if job := r.svc.Jobs(r.d.ID); job != "" {
+		t.Fatalf("job slot still held: %q", job)
 	}
 }

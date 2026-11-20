@@ -167,7 +167,7 @@ func (s *Service) StartBackup(ctx context.Context, id int64, req BackupRequest) 
 		defer s.wg.Done()
 		defer s.endJob(id)
 		ctx := context.WithoutCancel(ctx)
-		s.contain(ctx, id, "backup", func() {
+		s.containRows(ctx, id, "backup", func() {
 			for _, b := range rows {
 				s.executeBackup(ctx, d, dp, b)
 			}
@@ -304,9 +304,11 @@ func (s *Service) dumpTo(ctx context.Context, d Database, dp Dumper, logical, di
 	if err != nil {
 		return 0, "", err
 	}
-	closed := false
+	// Until the rename, any way out (an error, or a panic, which leaves err
+	// nil) closes the file and removes it.
+	closed, done := false, false
 	defer func() {
-		if err != nil {
+		if !done {
 			if !closed {
 				_ = f.Close()
 			}
@@ -340,6 +342,7 @@ func (s *Service) dumpTo(ctx context.Context, d Database, dp Dumper, logical, di
 	if err = os.Rename(partial, filepath.Join(dir, name)); err != nil {
 		return 0, "", err
 	}
+	done = true
 	return file.n, hex.EncodeToString(h.Sum(nil)), nil
 }
 

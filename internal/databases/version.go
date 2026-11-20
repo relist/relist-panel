@@ -206,7 +206,9 @@ func unsplittableRoleSetting(out string) (*ErrUnsplittableSetting, error) {
 func (s *Service) checkRoleSettings(ctx context.Context, d Database, dp Dumper) error {
 	out, detail, err := s.admin(ctx, d, dp, roleSettingsSQL)
 	if err != nil {
-		return fmt.Errorf("read the role settings: %w: %s", err, strings.TrimSpace(redactPasswords(detail)))
+		// The server's answer, not the panel's fault: a bad gateway.
+		msg := fmt.Sprintf("read the role settings: %v: %s", err, strings.TrimSpace(redactPasswords(detail)))
+		return adminError{scrubAll(msg, d.Password)}
 	}
 	bad, err := unsplittableRoleSetting(out)
 	if err != nil {

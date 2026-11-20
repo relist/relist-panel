@@ -222,7 +222,7 @@ func (s *Service) RetryUpload(ctx context.Context, id, backupID int64) error {
 		defer s.wg.Done()
 		defer s.endJob(id)
 		ctx := context.WithoutCancel(ctx)
-		s.contain(ctx, id, "retry upload", func() {
+		s.containRows(ctx, id, "retry upload", func() {
 			u := s.upload(ctx, d, b, failed.DestinationID)
 			if u.Status == UploadFailed {
 				log.Printf("databases: retry upload of backup %d: %s", backupID, u.Error)

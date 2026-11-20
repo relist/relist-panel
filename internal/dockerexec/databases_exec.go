@@ -11,6 +11,7 @@ import (
 	"net/url"
 
 	"relist-panel/internal/databases"
+	"relist-panel/internal/safely"
 )
 
 // demuxStream copies Docker's multiplexed stream (a non-TTY exec) to stdout
@@ -101,13 +102,21 @@ func (h *DatabaseHost) Exec(ctx context.Context, name string, req databases.Exec
 		src := &readErrReader{r: req.Stdin}
 		go func() {
 			defer close(stdinDone)
-			// A write error here means the command stopped reading (it
-			// exited early); its exit code says why.
-			_, _ = io.Copy(conn, src)
+			// A panic in the stdin chain (gzip, age, the upload checks)
+			// ends the copy like a read error instead of the panel.
+			perr := safely.Call("docker exec stdin", func() error {
+				// A write error here means the command stopped reading (it
+				// exited early); its exit code says why.
+				_, _ = io.Copy(conn, src)
+				return nil
+			})
 			if uc, ok := conn.(*net.UnixConn); ok {
 				_ = uc.CloseWrite()
 			}
 			stdinErr = src.err
+			if perr != nil {
+				stdinErr = perr
+			}
 		}()
 	} else {
 		close(stdinDone)

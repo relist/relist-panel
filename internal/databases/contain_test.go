@@ -46,6 +46,25 @@ func TestPanicInABackupIsContained(t *testing.T) {
 	r.manualBackup(t, d.ID)
 }
 
+// A dump that panics half-way leaves no .partial file and no open handle.
+func TestPanicMidDumpLeavesNoPartialFile(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	r.host.script("pg_dump -U postgres", func(req ExecRequest) (int, error) {
+		_, _ = io.WriteString(req.Stdout, "half a dump;\n")
+		panic("boom")
+	})
+	if _, err := r.svc.StartBackup(ctx, d.ID, BackupRequest{Databases: []string{"app"}}); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	left, err := filepath.Glob(filepath.Join(r.backupsDir(d.ID), "*.partial"))
+	if err != nil || len(left) != 0 {
+		t.Fatalf("left behind: %v, %v", left, err)
+	}
+}
+
 func TestPanicInARestoreIsContained(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
@@ -232,4 +251,56 @@ func TestPanicWhileStartingANewDatabaseIsContained(t *testing.T) {
 	}
 	r.svc.Wait()
 	r.wantContained(t, d.ID)
+}
+
+// A job that makes no Backups, restores or copies never fails one: a
+// password reset, the settle after it and the start after Create only record
+// the panic. Failing rows there could hit a Backup another job just started.
+func TestPanicInAPasswordResetLeavesBackupsAlone(t *testing.T) {
+	r := newAdminRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	r.admin.pingDefault = true
+	b, err := r.store.InsertBackup(ctx, Backup{DatabaseID: d.ID, Trigger: TriggerManual})
+	if err != nil || b.Status != JobRunning {
+		t.Fatalf("backup = %+v, %v", b, err)
+	}
+	r.admin.mu.Lock()
+	r.admin.execErr = func(string, []string) error { panic("boom") }
+	r.admin.mu.Unlock()
+	if err := r.svc.ResetSuperuserPassword(ctx, d.ID, "Shop"); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	if got, _ := r.store.GetBackup(ctx, d.ID, b.ID); got.Status != JobRunning {
+		t.Fatalf("another job's backup = %+v", got)
+	}
+	r.wantContained(t, d.ID)
+}
+
+// The schedule loop outlives a tick that panics.
+func TestSchedulerLoopOutlivesAPanickingTick(t *testing.T) {
+	r := newRig(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ticks := 0
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.svc.runSchedulerEvery(ctx, time.Millisecond, func(context.Context) {
+			ticks++
+			if ticks == 1 {
+				panic("boom")
+			}
+			cancel()
+		})
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the loop did not end")
+	}
+	if ticks != 2 {
+		t.Fatalf("ticks = %d, want a second tick after the panic", ticks)
+	}
 }

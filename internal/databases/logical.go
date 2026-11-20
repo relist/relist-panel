@@ -242,7 +242,7 @@ func (s *Service) DropLogicalDatabase(ctx context.Context, id int64, name, confi
 		defer s.wg.Done()
 		defer s.endJob(id)
 		ctx := context.WithoutCancel(ctx)
-		s.contain(ctx, id, "drop database", func() {
+		s.containRows(ctx, id, "drop database", func() {
 			if b := s.backupNow(ctx, d, dp, name, TriggerPreDrop, nil); b.Status != JobSucceeded {
 				_ = s.d.Store.SetLastError(ctx, id, "the pre-drop backup failed, so "+name+" was not dropped: "+b.Error)
 				return

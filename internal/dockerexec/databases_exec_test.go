@@ -145,3 +145,20 @@ func TestDatabaseExecReturnsStdoutWriteError(t *testing.T) {
 		t.Fatal("a failed stdout write was not returned")
 	}
 }
+
+// panicReader panics on its first read: a fault in the stdin chain (gzip,
+// age, the upload checks) runs on Exec's copy goroutine.
+type panicReader struct{}
+
+func (panicReader) Read([]byte) (int, error) { panic("boom") }
+
+func TestDatabaseExecContainsAPanicReadingStdin(t *testing.T) {
+	d := &execDaemon{}
+	d.reply = func([]byte) []byte { return frame(1, []byte("out")) }
+	host := dockerexec.NewDatabaseHost(newTerminalDaemon(t, d.handler(t)))
+	var out bytes.Buffer
+	_, err := host.Exec(context.Background(), "c", databases.ExecRequest{Cmd: []string{"psql"}, Stdin: panicReader{}, Stdout: &out})
+	if err == nil || !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("Exec = %v, want the stdin panic as an error", err)
+	}
+}
