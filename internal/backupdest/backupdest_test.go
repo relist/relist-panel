@@ -301,6 +301,30 @@ func TestDeleteDestination(t *testing.T) {
 	}
 }
 
+// A tombstone whose Backups were all Remote only in this destination goes
+// with it, however many it had: the check runs after every Backup is removed.
+func TestDeleteDestinationRemovesATombstoneWithSeveralRemoteOnlyBackups(t *testing.T) {
+	r := newRig(t)
+	r.do("POST", "/api/backup-destinations", form("http://minio:9000", secret))
+	now := time.Now().UnixMilli()
+	r.exec(t, `INSERT INTO databases (id, name, slug, engine, version, password, created_at, updated_at, deleted_at) VALUES (2, 'Old (deleted #2)', 'deleted-2', 'postgres', '18', 'x', 1, 1, 1)`)
+	for _, id := range []int64{11, 12} {
+		r.exec(t, `INSERT INTO database_backups (id, database_id, trigger, scope, status, started_at, local_removed_at) VALUES (?, 2, 'scheduled', '{}', 'succeeded', ?, ?)`, id, now, now)
+		r.exec(t, `INSERT INTO database_backup_uploads (backup_id, destination_id, object_key, status, uploaded_at) VALUES (?, 1, 'k', 'uploaded', ?)`, id, now)
+	}
+	var removedFiles []int64
+	r.svc.removeFiles = func(id int64) error { removedFiles = append(removedFiles, id); return nil }
+	if w := r.do("DELETE", "/api/backup-destinations/1?confirm=2", ""); w.Code != 204 {
+		t.Fatalf("confirmed = %d %s", w.Code, w.Body)
+	}
+	var backups, databases int
+	_ = r.db.QueryRow(`SELECT COUNT(*) FROM database_backups`).Scan(&backups)
+	_ = r.db.QueryRow(`SELECT COUNT(*) FROM databases`).Scan(&databases)
+	if backups != 0 || databases != 0 || len(removedFiles) != 1 || removedFiles[0] != 2 {
+		t.Fatalf("backups=%d databases=%d files=%v; want the emptied tombstone removed", backups, databases, removedFiles)
+	}
+}
+
 func TestNoCopiesNeedsNoConfirm(t *testing.T) {
 	r := newRig(t)
 	r.do("POST", "/api/backup-destinations", form("http://minio:9000", secret))

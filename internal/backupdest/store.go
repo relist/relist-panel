@@ -277,7 +277,6 @@ func (s *Store) Delete(ctx context.Context, id int64, confirm int) (removedDatab
 	if _, err := tx.ExecContext(ctx, `DELETE FROM backup_destinations WHERE id = ?`, id); err != nil {
 		return nil, err
 	}
-	seen := map[int64]bool{}
 	for _, h := range maybe {
 		// Remote only, and no other live copy: nothing of it is left.
 		if _, err := tx.ExecContext(ctx, `
@@ -285,6 +284,10 @@ func (s *Store) Delete(ctx context.Context, id int64, confirm int) (removedDatab
 			AND NOT EXISTS (SELECT 1 FROM database_backup_uploads WHERE backup_id = database_backups.id AND status = 'uploaded' AND deleted_at IS NULL)`, h.backup); err != nil {
 			return nil, err
 		}
+	}
+	// Only once every Backup above is gone can a tombstone be found empty.
+	seen := map[int64]bool{}
+	for _, h := range maybe {
 		if seen[h.database] {
 			continue
 		}
