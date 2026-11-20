@@ -245,7 +245,7 @@ data under `/var/lib/postgresql`, while 17 and below use
   (phase 2 adds `pre_update`, the Backups "Back up first" takes of every
   logical database before Update image; a Database with none updates
   straight away).
-- **Concurrency.** Only one job runs per Database at a time. A job is a Backup, a restore, or an Update image with "Back up first". While one runs, Start, Stop, Restart, Update image, Apply settings, Repair and Delete answer 409; Rename and reads still work (phase 2 decision).
+- **Concurrency.** Only one job runs per Database at a time. A job is a Backup, a restore, or an Update image with "Back up first". While one runs, Start, Stop, Restart, Update image, Apply settings, Repair and Delete answer 409; Rename and reads still work (phase 2 decision), except during a Change version, which refuses Rename too (409): a rename re-aliases the container and would put a Postgres server the change cut off back on the network (ADR-0047, review 2026-11-20). To give a Database another name in the middle of a change, wait for it to end.
   Scheduled runs queue host-wide and run one at a time. They do not use the
   Deployment queue.
 - **Panel restart.** A graceful shutdown waits for a running job, until Docker's stop timeout kills the panel. Either way a `running` row is made `failed` ("the panel stopped during this run") at the next start, and its `.partial` and upload files are removed (phase 2).
