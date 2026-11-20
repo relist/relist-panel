@@ -53,11 +53,10 @@ func (s *Service) upload(ctx context.Context, d Database, b Backup, destID int64
 	if dest.Encrypt {
 		// Encrypt beside the Backup first, so the destination gets the
 		// encrypted file with its exact size.
-		if tmp, eerr := encryptToTemp(path, dest.Passphrase); eerr != nil {
-			err = eerr
-		} else {
+		var tmp string
+		if tmp, err = encryptToTemp(path, dest.Passphrase); err == nil {
+			defer os.Remove(tmp) // a panic in put must not leave it either
 			err = s.put(ctx, remote, key, tmp)
-			os.Remove(tmp)
 		}
 	} else {
 		err = s.put(ctx, remote, key, path)
@@ -74,27 +73,38 @@ func (s *Service) upload(ctx context.Context, d Database, b Backup, destID int64
 }
 
 // encryptToTemp writes path's age encryption under passphrase to a temp file
-// in the same directory and returns its path; on any error nothing is left.
+// in the same directory and returns its path; on any error or panic nothing
+// is left.
 func encryptToTemp(path, passphrase string) (string, error) {
 	src, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer src.Close()
+	return encryptReaderToTemp(path, passphrase, src)
+}
+
+// encryptReaderToTemp is encryptToTemp reading src; path names the temp file.
+func encryptReaderToTemp(path, passphrase string, src io.Reader) (string, error) {
 	dir, base := filepath.Split(path)
 	tmp, err := os.CreateTemp(dir, base+"-*.age.tmp")
 	if err != nil {
 		return "", err
 	}
+	done := false
+	defer func() {
+		if !done {
+			tmp.Close()
+			os.Remove(tmp.Name())
+		}
+	}()
 	if err := agefile.Encrypt(tmp, passphrase, src); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
 		return "", err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
 		return "", err
 	}
+	done = true
 	return tmp.Name(), nil
 }
 

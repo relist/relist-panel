@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"relist-panel/internal/backupdest"
 )
 
 // A panic in a Database's background job is contained (internal/safely):
@@ -302,5 +304,47 @@ func TestSchedulerLoopOutlivesAPanickingTick(t *testing.T) {
 	}
 	if ticks != 2 {
 		t.Fatalf("ticks = %d, want a second tick after the panic", ticks)
+	}
+}
+
+// An encrypted copy's temp file goes whether the panic hits while sending it
+// or while encrypting it; a start-up sweep is not the only cleanup.
+func TestPanicSendingAnEncryptedCopyLeavesNoTemp(t *testing.T) {
+	r := newRig(t)
+	d := r.create(t, "Shop", "postgres", "18")
+	remote := r.withDestination(t)
+	remote.putPanic = "boom"
+	r.svc.d.Destinations = fakeOpener{remote: remote, dest: &backupdest.Destination{
+		ID: 1, Name: "minio", Type: "s3", S3: backupdest.S3Config{Prefix: "pfx"}, Encrypt: true, Passphrase: "upload-passphrase-0123456789"}}
+	r.dumps("pg_dump -U postgres", "SELECT 1;\n")
+	r.useClock(day(15, 3, 0))
+	r.schedule(t, d.ID, r.toDestination, day(14, 3, 0))
+	r.svc.tick(context.Background())
+	if b := r.lastBackup(t, d.ID); b.Upload == nil || b.Upload.Status != UploadFailed {
+		t.Fatalf("upload = %+v", b.Upload)
+	}
+	left, err := filepath.Glob(filepath.Join(r.backupsDir(d.ID), "*.age.tmp"))
+	if err != nil || len(left) != 0 {
+		t.Fatalf("left behind: %v, %v", left, err)
+	}
+}
+
+type panicReader struct{}
+
+func (panicReader) Read([]byte) (int, error) { panic("boom") }
+
+func TestPanicEncryptingACopyLeavesNoTemp(t *testing.T) {
+	dir := t.TempDir()
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("encrypting did not panic")
+			}
+		}()
+		_, _ = encryptReaderToTemp(filepath.Join(dir, "app.sql.gz"), "upload-passphrase-0123456789", panicReader{})
+	}()
+	left, err := filepath.Glob(filepath.Join(dir, "*.age.tmp"))
+	if err != nil || len(left) != 0 {
+		t.Fatalf("left behind: %v, %v", left, err)
 	}
 }
