@@ -101,6 +101,33 @@ func TestRestoreIntoAppliesSettingsLast(t *testing.T) {
 	}
 }
 
+// The drop already deleted the settings, so a restore that fails after it
+// still puts them back: otherwise the pre_restore Backup, restored next,
+// would find none to keep. The restore's error comes first.
+func TestFailedRestorePutsSettingsBack(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Pg", "postgres", "16")
+	d, _ = r.store.Get(ctx, d.ID)
+	admin := r.stateAdmin("", "")
+	r.host.script(pgRestore, func(req ExecRequest) (int, error) {
+		_, _ = io.Copy(io.Discard, req.Stdin)
+		_, _ = io.WriteString(req.Stderr, "ERROR: boom")
+		return 3, nil
+	})
+	st := dbState{Name: "shop", Prev: "app", Settings: "ALTER DATABASE \"shop\" SET work_mem TO '8MB';\n"}
+	log, err := r.svc.restoreInto(ctx, d, pgDumper{}, st, sqlFile(t, "SELECT 1;\n"))
+	if err == nil || !strings.HasPrefix(err.Error(), "the restore command exited with code 3") {
+		t.Fatalf("err = %v, want the restore's error first", err)
+	}
+	if !strings.Contains(log, "ERROR: boom") {
+		t.Fatalf("log = %q, want the restore's", log)
+	}
+	if last := (*admin)[len(*admin)-1]; last != st.Settings {
+		t.Fatalf("last admin SQL = %q, want the settings put back", last)
+	}
+}
+
 // DROP DATABASE deletes a database's ALTER ROLE … IN DATABASE … SET rows, and
 // a one-database dump does not carry them: a replace restore puts them back,
 // or a Full user would stop acting as the owner (ADR-0044).
