@@ -644,15 +644,15 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBa
 		if confirm != d.Name {
 			return ErrConfirm
 		}
-		// The proxy goes before the container it points at.
-		if s.d.DirectAccess != nil {
-			if err := s.d.DirectAccess.CloseTarget(ctx, directaccess.KindDatabase, id); err != nil {
-				return err
-			}
-		}
 		if deleteBackups {
 			// Remote copies first: if one stays, nothing else is deleted.
 			if err := s.deleteLiveCopies(ctx, id, nil); err != nil {
+				return err
+			}
+		}
+		// The proxy goes before the container it points at.
+		if s.d.DirectAccess != nil {
+			if err := s.d.DirectAccess.CloseTarget(ctx, directaccess.KindDatabase, id); err != nil {
 				return err
 			}
 		}

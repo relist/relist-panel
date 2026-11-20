@@ -122,6 +122,8 @@ func TestDeleteBackupRemoteFailureKeepsAll(t *testing.T) {
 
 func TestDeleteDatabaseRemoteFailureKeepsAll(t *testing.T) {
 	r := newRig(t)
+	closer := &fakeCloser{host: r.host}
+	r.svc.d.DirectAccess = closer
 	d := r.create(t, "Shop", "postgres", "18")
 	remote := r.withDestination(t)
 	r.dumps("pg_dump -U postgres", "SELECT 1;\n")
@@ -151,6 +153,9 @@ func TestDeleteDatabaseRemoteFailureKeepsAll(t *testing.T) {
 	}
 	if _, err := r.store.Get(context.Background(), d.ID); err != nil {
 		t.Fatalf("Database record gone: %v", err)
+	}
+	if len(closer.calls) != 0 {
+		t.Fatalf("the Direct access was closed though nothing else was deleted: %v", closer.calls)
 	}
 
 	// Bucket back: everything goes, copies first.
