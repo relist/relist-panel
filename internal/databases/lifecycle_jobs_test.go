@@ -193,6 +193,29 @@ func TestDeleteKeepsBackupsAsTombstone(t *testing.T) {
 	}
 }
 
+// A version change's roles dump holds every role's password hash and is no
+// Backup: a Delete that keeps the Backups removes it (plan-phase-10 J).
+func TestTombstoneDropsTheRolesDumps(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	r.dumps("pg_dump -U postgres", "X;\n")
+	b := r.manualBackup(t, d.ID)
+	roles := filepath.Join(r.backupsDir(d.ID), "version-change-7-roles.sql")
+	if err := os.WriteFile(roles, []byte("CREATE ROLE app;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.Delete(ctx, d.ID, "Shop", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(roles); !os.IsNotExist(err) {
+		t.Fatalf("the roles dump survived the Delete: %v", err)
+	}
+	if _, _, err := r.svc.BackupPath(ctx, d.ID, b.ID); err != nil {
+		t.Fatalf("the kept Backup went too: %v", err)
+	}
+}
+
 func TestDeletingLastBackupOfTombstoneDeletesRow(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()

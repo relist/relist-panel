@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -674,8 +675,12 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBa
 				return err
 			}
 			if len(kept) > 0 {
-				// A tombstone has no schedule.
+				// A tombstone has no schedule, and keeps no roles dump: those
+				// hold every role's password hash and are no Backup.
 				if err := s.d.Store.DeleteSchedule(ctx, id); err != nil {
+					return err
+				}
+				if err := s.removeRolesDumps(id); err != nil {
 					return err
 				}
 				return s.d.Store.Tombstone(ctx, id)
@@ -683,6 +688,24 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBa
 		}
 		return s.removeRecord(ctx, id)
 	})
+}
+
+// removeRolesDumps removes the roles dumps version changes kept for
+// Database id (plan-phase-10 J).
+func (s *Service) removeRolesDumps(id int64) error {
+	if s.d.DataDir == "" {
+		return nil
+	}
+	dumps, err := filepath.Glob(filepath.Join(s.dbDir(id), "backups", "version-change-*-roles.sql"))
+	if err != nil {
+		return err
+	}
+	for _, p := range dumps {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // RemoveFiles removes everything the panel keeps on disk for Database id.
