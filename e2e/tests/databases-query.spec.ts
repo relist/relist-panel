@@ -167,6 +167,41 @@ for (const e of ENGINES) {
       expect((await run('DELETE FROM items WHERE id = 3', true)).results[0].affected).toBe(1);
     });
 
+    // Preview (ADR-0045, kept by ADR-0049): DML in a transaction that is
+    // always rolled back.
+    test('Preview reports what DML would do, then rolls it back', async () => {
+      type PreviewAnswer = Omit<Response, 'results'> & { preview?: boolean; results: (Result & { verb?: string; target?: string })[] };
+      const preview = (sql: string, database = e.db) =>
+        panel.json<PreviewAnswer>('POST', `/api/databases/${id}/query`, { database, sql, writes: true, preview: true });
+
+      const del = await preview('DELETE FROM items WHERE id <= 1');
+      expect(del.preview).toBe(true);
+      expect(del.error).toBeNull();
+      expect(del.results[0].affected).toBe(1);
+      expect(del.results[0].verb).toBe('delete');
+      expect(del.results[0].target).toBe('items');
+      expect(await scalar('SELECT count(*) FROM items')).toBe('2');
+
+      const ddl = await preview('TRUNCATE items');
+      expect(ddl.error?.statementIndex).toBe(0);
+      expect(ddl.error?.message).toContain('starts with TRUNCATE');
+      const commit = await preview('DELETE FROM items WHERE id = 1; COMMIT');
+      expect(commit.error?.statementIndex).toBe(1);
+      expect(await scalar('SELECT count(*) FROM items')).toBe('2');
+
+      if (e.engine !== 'postgres') {
+        // A table that cannot roll back refuses every Preview, by name.
+        expect((await run('CREATE TABLE legacy (a int) ENGINE=MyISAM', true)).error).toBeNull();
+        try {
+          const refused = await preview('DELETE FROM items');
+          expect(refused.error?.message).toContain(`${e.db}.legacy (MyISAM)`);
+          expect(await scalar('SELECT count(*) FROM items')).toBe('2');
+        } finally {
+          expect((await run('DROP TABLE legacy', true)).error).toBeNull();
+        }
+      }
+    });
+
     test('row cap stops the server query', async () => {
       for (const sql of e.big) {
         const r = await run(sql, true);

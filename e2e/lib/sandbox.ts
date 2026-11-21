@@ -191,23 +191,6 @@ export class Panel {
   }
 }
 
-/**
- * Creates a non-Admin panel user through the API, accepts its invite with
- * the given password, and signs it in.
- */
-export async function createMember(admin: Panel, email: string, password: string): Promise<Panel> {
-  const created = await admin.json<{ token: string }>('POST', '/api/users', { email, isAdmin: false });
-  const accept = await call(`${sandbox().panelUrl}/api/invites/${created.token}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: sandbox().panelUrl },
-    body: JSON.stringify({ password }),
-  });
-  if (accept.status !== 200) {
-    throw new ApiError(accept.status, accept.body);
-  }
-  return Panel.signIn(email, password);
-}
-
 function safeJSON(text: string): unknown {
   try {
     return JSON.parse(text);

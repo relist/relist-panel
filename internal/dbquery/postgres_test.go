@@ -56,15 +56,3 @@ func TestCountAffected(t *testing.T) {
 		t.Error("SELECT and DDL have no affected count")
 	}
 }
-
-func TestPgConfigCatalogSearchPath(t *testing.T) {
-	tg := Target{Host: "relist-db-1", Port: 5432, User: "postgres", Password: "pw"}
-	plain, _ := pgConfig(tg, Request{Database: "shop"})
-	pinned, _ := pgConfig(tg, Request{Database: "shop", CatalogSearchPath: true})
-	if _, ok := plain.RuntimeParams["search_path"]; ok {
-		t.Fatalf("plain run pins search_path: %v", plain.RuntimeParams)
-	}
-	if pinned.RuntimeParams["search_path"] != "pg_catalog, pg_temp" {
-		t.Fatalf("pinned search_path = %q", pinned.RuntimeParams["search_path"])
-	}
-}

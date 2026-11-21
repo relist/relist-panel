@@ -84,7 +84,7 @@ for (const version of ['8', '7.4']) {
         expect(r.reply).toBeNull();
       }
       // A script is a built-up command, so it would get around the
-      // classifier: never in the console, writes or not (ADR-0045).
+      // classifier: never in the console, writes or not.
       const scripts = [
         `EVAL "return redis.call('set','x','1')" 0`,
         `EVAL_RO "return 1" 0`,

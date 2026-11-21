@@ -192,10 +192,6 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 // Tombstone marks a Database deleted but keeps its row, and so its Backups.
 // The name and slug are rewritten so the name is free for a new Database.
 func (s *Store) Tombstone(ctx context.Context, id int64) error {
-	// Grants first: deleting the managed users only cascades the SQL ones.
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM database_grants WHERE database_id = ?`, id); err != nil {
-		return err
-	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM database_users WHERE database_id = ?`, id); err != nil {
 		return err
 	}

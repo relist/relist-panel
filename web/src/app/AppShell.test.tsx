@@ -241,15 +241,8 @@ describe('Mobile navigation trigger', () => {
   });
 });
 
-describe('Member databases', () => {
+describe('Member and Databases', () => {
   const member = { id: 3, email: 'bob@example.com', isAdmin: false, isOwner: false };
-  const granteeDb = {
-    access: { dbUser: 'shop_ro' },
-    cpus: 0, createdAt: '2026-11-14T00:00:00Z', defaultDatabase: 'postgres', deleted: false,
-    desired: 'running', engine: 'postgres', host: 'relist-db-1', hostReadable: '', id: 1,
-    image: 'postgres:18', job: '', lastError: '', memoryMb: 0, name: 'Shop', port: 5432,
-    settingsOutdated: false, upgrades: [], slug: 'shop', status: 'running', user: 'shop_ro', version: '18', warnings: [],
-  } as never;
 
   function renderMember(path: string) {
     const router = createMemoryRouter(
@@ -268,24 +261,16 @@ describe('Member databases', () => {
   beforeEach(() => {
     vi.spyOn(api, 'listProjects').mockResolvedValue([]);
     vi.spyOn(api, 'globalDeploymentQueue').mockResolvedValue([]);
-  });
-
-  it('shows a member with grants the Data group and opens their Database page', async () => {
-    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member, access: { projects: [] } });
-    vi.spyOn(api, 'listDatabases').mockResolvedValue([granteeDb]);
-    renderMember('/databases/1');
-    expect(await screen.findByRole('menuitem', { name: /Databases/ })).toBeTruthy();
-    expect(screen.getByText('Data', { selector: '.ant-menu-item-group-title' })).toBeTruthy();
-    expect(await screen.findByRole('heading', { name: 'Database screen' })).toBeTruthy();
-    expect(screen.queryByText("You don't have permission")).toBeNull();
-  });
-
-  it('hides the Data group from a member without grants', async () => {
-    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member, access: { projects: [] } });
     vi.spyOn(api, 'listDatabases').mockResolvedValue([]);
-    renderMember('/');
-    expect(await screen.findByRole('heading', { name: 'Projects screen' })).toBeTruthy();
+  });
+
+  // Databases are Admin-only (ADR-0049).
+  it('shows a member the 403 result on a Database page, with no Databases menu and no list request', async () => {
+    vi.spyOn(api, 'authStatus').mockResolvedValue({ authenticated: true, user: member, access: { projects: [] } });
+    renderMember('/databases/1');
+    expect(await screen.findByText("You don't have permission")).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Database screen' })).toBeNull();
     expect(screen.queryByRole('menuitem', { name: /Databases/ })).toBeNull();
-    expect(screen.queryByText('Data', { selector: '.ant-menu-item-group-title' })).toBeNull();
+    expect(api.listDatabases).not.toHaveBeenCalled();
   });
 });

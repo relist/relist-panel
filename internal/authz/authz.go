@@ -46,9 +46,6 @@ const (
 	LevelEditor
 	// LevelProjectEditor needs an editor Project Grant.
 	LevelProjectEditor
-	// LevelDatabase needs a Database grant on the path's Database
-	// (database_grants); an Admin passes without one.
-	LevelDatabase
 )
 
 // Rule is one route's requirement.
@@ -116,7 +113,7 @@ func (a *Authorizer) Middleware(mux *http.ServeMux, next http.Handler) http.Hand
 			ActorUserID: user.ID, Actor: user.Email, IP: clientip.From(r),
 			ProjectID: pathScope.ProjectID, EnvironmentID: pathScope.EnvironmentID, ComposeID: pathScope.ComposeID,
 		}
-		status, access, scope, dbGrant, err := a.decide(r.Context(), user, pattern, path)
+		status, access, scope, err := a.decide(r.Context(), user, pattern, path)
 		if err != nil {
 			log.Printf("authz: %s %s: %v", r.Method, path, err)
 			refuse(w, http.StatusInternalServerError, "authorization is temporarily unavailable")
@@ -152,13 +149,10 @@ func (a *Authorizer) Middleware(mux *http.ServeMux, next http.Handler) http.Hand
 			if err != nil || !ok {
 				return false, err
 			}
-			status, _, _, _, err := a.decide(ctx, current, pattern, path)
+			status, _, _, err := a.decide(ctx, current, pattern, path)
 			return err == nil && status == 0, err
 		}
 		ctx := WithAccess(r.Context(), access)
-		if dbGrant != nil {
-			ctx = WithDatabaseGrant(ctx, *dbGrant)
-		}
 		ctx = context.WithValue(ctx, scopeKey{}, scope)
 		ctx = context.WithValue(ctx, stillKey{}, still)
 		resolve := func(ctx context.Context) string { return a.target(ctx, pattern, scope, path) }
@@ -208,60 +202,41 @@ func (a *Authorizer) write(ctx context.Context, e audit.Event) {
 }
 
 // decide answers 0 to let the request through, or the status to refuse it
-// with. An error is a database failure. The *DatabaseGrant is set only for a
-// non-Admin a Database grant admitted.
-func (a *Authorizer) decide(ctx context.Context, user auth.User, pattern, path string) (int, grants.Access, Scope, *DatabaseGrant, error) {
+// with. An error is a database failure.
+func (a *Authorizer) decide(ctx context.Context, user auth.User, pattern, path string) (int, grants.Access, Scope, error) {
 	scope, ok := scopeOf(pattern, path)
 	if user.IsAdmin {
-		return 0, grants.Access{Admin: true}, scope, nil, nil
+		return 0, grants.Access{Admin: true}, scope, nil
 	}
 	access, err := grants.Load(ctx, a.db, user.ID, false)
 	if err != nil {
-		return 0, grants.Access{}, Scope{}, nil, err
+		return 0, grants.Access{}, Scope{}, err
 	}
 	level := a.routes[pattern].Level
 	if level == LevelPublic || level == LevelSignedIn {
-		return 0, access, scope, nil, nil
+		return 0, access, scope, nil
 	}
 	if !ok {
-		return http.StatusNotFound, access, Scope{}, nil, nil
-	}
-	if level == LevelDatabase {
-		if scope.DatabaseID == 0 {
-			return http.StatusNotFound, access, scope, nil, nil
-		}
-		var dbUser, lvl string
-		err := a.db.QueryRowContext(ctx,
-			`SELECT COALESCE(g.db_user,''), COALESCE(g.level,'') FROM database_grants g
-			 JOIN databases d ON d.id = g.database_id
-			 WHERE g.database_id = ? AND g.user_id = ? AND d.deleted_at IS NULL`,
-			scope.DatabaseID, user.ID).Scan(&dbUser, &lvl)
-		if errors.Is(err, sql.ErrNoRows) {
-			return http.StatusNotFound, access, scope, nil, nil
-		}
-		if err != nil {
-			return 0, grants.Access{}, Scope{}, nil, err
-		}
-		return 0, access, scope, &DatabaseGrant{DatabaseID: scope.DatabaseID, DBUser: dbUser, Level: lvl}, nil
+		return http.StatusNotFound, access, Scope{}, nil
 	}
 	if scope.ProjectID == 0 {
 		// Admin-only, or a scoped level on a pattern without a Project:
 		// refuse rather than guess.
-		return http.StatusForbidden, access, scope, nil, nil
+		return http.StatusForbidden, access, scope, nil
 	}
 	if found, err := a.parentsMatch(ctx, scope); err != nil {
-		return 0, grants.Access{}, Scope{}, nil, err
+		return 0, grants.Access{}, Scope{}, err
 	} else if !found {
-		return http.StatusNotFound, access, scope, nil, nil
+		return http.StatusNotFound, access, scope, nil
 	}
 	role := grants.RoleNone
 	if scope.EnvironmentID != 0 {
 		role = access.EnvironmentRole(scope.EnvironmentID)
 		if role == grants.RoleNone {
-			return http.StatusNotFound, access, scope, nil, nil
+			return http.StatusNotFound, access, scope, nil
 		}
 	} else if !access.ProjectVisible(scope.ProjectID) {
-		return http.StatusNotFound, access, scope, nil, nil
+		return http.StatusNotFound, access, scope, nil
 	}
 	allowed := false
 	switch level {
@@ -275,9 +250,9 @@ func (a *Authorizer) decide(ctx context.Context, user auth.User, pattern, path s
 		allowed = access.ProjectGrant(scope.ProjectID) == grants.RoleEditor
 	}
 	if !allowed {
-		return http.StatusForbidden, access, scope, nil, nil
+		return http.StatusForbidden, access, scope, nil
 	}
-	return 0, access, scope, nil, nil
+	return 0, access, scope, nil
 }
 
 // parentsMatch checks that the path's Compose lives in its Environment and

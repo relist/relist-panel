@@ -16,23 +16,13 @@ type Target struct {
 }
 
 // Request is one run. Engine is "postgres", "mysql" or "mariadb".
-// Restricted runs the server-wide check on the run's own session before the
-// first statement: a non-Admin's user must have no powers beyond its
-// databases (serverwide.go).
 type Request struct {
 	Database, SQL string
 	Writes        bool
 	Engine        string
-	Restricted    bool
 	// Preview runs the batch inside a transaction that is rolled back; only
 	// plain DML is allowed (PreviewStatements). It implies Writes.
 	Preview bool
-	// AsSuperuser is an Admin's choice to run as the superuser inside a
-	// database another role owns; the engines never read it.
-	AsSuperuser bool
-	// CatalogSearchPath starts a Postgres session on search_path
-	// pg_catalog, pg_temp, whatever the database's or role's settings say.
-	CatalogSearchPath bool
 }
 
 // Column is a result column.
@@ -73,8 +63,6 @@ type QueryResponse struct {
 	Cancelled  bool          `json:"cancelled"`
 	// Preview: the run was a Preview, and nothing was kept.
 	Preview bool `json:"preview,omitempty"`
-	// User is the database user the run connected as.
-	User string `json:"user"`
 }
 
 // SchemaNode is a schema and its tables and views. Views names the entries

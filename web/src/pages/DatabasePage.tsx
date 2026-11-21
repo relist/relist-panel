@@ -13,7 +13,6 @@ import { api } from '../data/api';
 import type { Database, DatabaseAction, DatabaseCredentials } from '../data/types';
 import { DatabaseBackupsTab } from './DatabaseBackupsTab';
 import { DatabaseDatabasesTab } from './DatabaseDatabasesTab';
-import { DatabaseGrantsTab } from './DatabaseGrantsTab';
 import { DatabaseUsersTab } from './DatabaseUsersTab';
 import { DatabaseQueryTab } from './DatabaseQueryTab';
 import { DatabaseRedisTab } from './DatabaseRedisTab';
@@ -63,9 +62,6 @@ export function DatabasePage() {
   // Back up first is on by default, and only offered where a Backup can run.
   const [backupFirst, setBackupFirst] = useState(true);
   const sql = data !== undefined && data.engine !== 'redis';
-  // A grantee (ADR-0045): the API filled `access`, and everything beyond
-  // Connection and the Query panel or Console is an Admin's.
-  const grantee = Boolean(data?.access);
   const canBackupFirst = data !== undefined && canBackUp(data);
   const updateImage = async () => {
     if (!data) return;
@@ -102,7 +98,7 @@ export function DatabasePage() {
         ]}
         description={data ? `${data.image}` : undefined}
         extra={
-          data && !data.deleted && !grantee && (
+          data && !data.deleted && (
             <Flex gap={8} wrap>
               {wantsRunning ? (
                 <Button disabled={jobRunning} loading={busy === 'stop'} onClick={() => void act('stop', `Stopped ${name}`)}>
@@ -222,14 +218,10 @@ export function DatabasePage() {
       {data?.deleted && <DatabaseBackupsTab db={data} />}
       {data && !data.deleted && (
         <Tabs
-          activeKey={tabKeys(data, grantee).includes(params.get('tab') ?? '') ? (params.get('tab') ?? defaultTab(data, grantee)) : defaultTab(data, grantee)}
+          activeKey={tabKeys(data).includes(params.get('tab') ?? '') ? (params.get('tab') ?? 'connection') : 'connection'}
           destroyOnHidden
           onChange={openTab}
-          items={grantee ? [
-            ...(sql ? [{ children: <ConnectionTab db={data} grantee />, key: 'connection', label: 'Connection' }] : []),
-            ...(sql ? [{ children: <DatabaseQueryTab db={data} grantee />, key: 'query', label: 'Query' }] : []),
-            ...(data.engine === 'redis' ? [{ children: <DatabaseRedisTab db={data} />, key: 'console', label: 'Console' }] : []),
-          ] : [
+          items={[
             { children: <ConnectionTab db={data} />, key: 'connection', label: 'Connection' },
             ...(sql
               ? [
@@ -237,7 +229,6 @@ export function DatabasePage() {
                   { children: <DatabaseUsersTab db={data} />, key: 'users', label: 'Users' },
                 ]
               : []),
-            { children: <DatabaseGrantsTab db={data} />, key: 'panel-access', label: 'Panel access' },
             ...(sql ? [{ children: <DatabaseQueryTab db={data} />, key: 'query', label: 'Query' }] : []),
             ...(data.engine === 'redis' ? [{ children: <DatabaseRedisTab db={data} />, key: 'console', label: 'Console' }] : []),
             ...(sql ? [{ children: <DatabaseBackupsTab db={data} onOpenUsers={() => openTab('users')} />, key: 'backups', label: 'Backups' }] : []),
@@ -309,21 +300,12 @@ export function DatabasePage() {
 }
 
 /** The tab keys a Database shows: SQL engines add Databases and Users. */
-function tabKeys(db: Database, grantee: boolean): string[] {
+function tabKeys(db: Database): string[] {
   const sqlEngine = db.engine !== 'redis';
-  if (grantee) {
-    return sqlEngine ? ['connection', 'query'] : ['console'];
-  }
-  return ['connection', ...(sqlEngine ? ['databases', 'users'] : []), 'panel-access', ...(sqlEngine ? ['query', 'backups'] : ['console']), 'logs', 'settings'];
+  return ['connection', ...(sqlEngine ? ['databases', 'users', 'query', 'backups'] : ['console']), 'logs', 'settings'];
 }
 
-/** A grantee lands on their work surface, an Admin on Connection. */
-function defaultTab(db: Database, grantee: boolean): string {
-  if (!grantee) return 'connection';
-  return db.engine === 'redis' ? 'console' : 'query';
-}
-
-function ConnectionTab({ db, grantee = false }: { db: Database; grantee?: boolean }) {
+function ConnectionTab({ db }: { db: Database }) {
   const { message } = App.useApp();
   const { mutate: refresh } = useSWRConfig();
   const [creds, setCreds] = useState<DatabaseCredentials>();
@@ -335,7 +317,7 @@ function ConnectionTab({ db, grantee = false }: { db: Database; grantee?: boolea
   const [resetBusy, setResetBusy] = useState(false);
   const [resetError, setResetError] = useState<string>();
   const sqlEngine = db.engine !== 'redis';
-  const users = useSWR(sqlEngine && !grantee ? `/api/databases/${db.id}/users` : null, () => api.listDatabaseUsers(db.id), { shouldRetryOnError: false });
+  const users = useSWR(sqlEngine ? `/api/databases/${db.id}/users` : null, () => api.listDatabaseUsers(db.id), { shouldRetryOnError: false });
   const managed = (users.data?.users ?? []).filter((row) => row.managed);
   const picked = managed.find((row) => row.name === login);
   const shownUser = picked ? picked.name : db.user;
@@ -401,7 +383,7 @@ function ConnectionTab({ db, grantee = false }: { db: Database; grantee?: boolea
             },
             { children: <Text code copyable>{String(db.port)}</Text>, key: 'port', label: 'Port' },
             {
-              children: sqlEngine && !grantee ? (
+              children: sqlEngine ? (
                 <Flex align="center" gap={8} wrap>
                   <Select
                     aria-label="User"
@@ -463,8 +445,6 @@ function ConnectionTab({ db, grantee = false }: { db: Database; grantee?: boolea
           hidden
         )}
       </Card>
-      {!grantee && (
-      <>
       <Card title="Reset superuser password" variant="outlined">
         <Text style={{ display: 'block', marginBottom: 12 }} type="secondary">
           Generates a new password for {db.user} and recreates the container with it. Apps using the superuser password
@@ -497,9 +477,7 @@ function ConnectionTab({ db, grantee = false }: { db: Database; grantee?: boolea
         open={resetting}
         title="Reset superuser password?"
       />
-      </>
-      )}
-      {!grantee && <DirectAccessCard db={db} />}
+      <DirectAccessCard db={db} />
     </Flex>
   );
 }

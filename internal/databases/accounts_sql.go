@@ -3,8 +3,6 @@ package databases
 import (
 	"errors"
 	"strings"
-
-	"relist-panel/internal/dbquery"
 )
 
 // Access is what a user may do in one logical database.
@@ -86,10 +84,6 @@ type accountSQL interface {
 	PrivilegedDatabasesQuery(user string) string
 	DropUser(name string) []string
 	DropOwned(name string) []string
-	// ServerWideQuery reads the powers of user beyond its databases;
-	// ServerWide reads the answer (phase 8, dbquery/serverwide.go).
-	ServerWideQuery(user string) string
-	ServerWide(rows [][]string) bool
 }
 
 // accountsFor returns the statements of an engine, ErrNoQuery for Redis.
@@ -128,10 +122,6 @@ func (pgAccounts) AccessQuery() string {
 }
 
 func (pgAccounts) SuperuserRolesQuery() string { return `SELECT rolname FROM pg_roles WHERE rolsuper` }
-
-func (pgAccounts) ServerWideQuery(user string) string { return dbquery.PgServerWideQuery(pgLit(user)) }
-
-func (pgAccounts) ServerWide(rows [][]string) bool { return len(rows) > 0 }
 
 func (pgAccounts) CreateUser(name, password string) []string {
 	return []string{"CREATE ROLE " + pgIdent(name) + " LOGIN PASSWORD " + pgLit(password)}
@@ -294,18 +284,6 @@ func (myAccounts) AccessQuery() string {
 }
 
 func (myAccounts) SuperuserRolesQuery() string { return "" }
-
-func (myAccounts) ServerWideQuery(user string) string { return "SHOW GRANTS FOR " + myAccount(user) }
-
-func (myAccounts) ServerWide(rows [][]string) bool {
-	lines := make([]string, 0, len(rows))
-	for _, r := range rows {
-		if len(r) > 0 {
-			lines = append(lines, r[0])
-		}
-	}
-	return dbquery.MySQLServerWide(lines)
-}
 
 func (myAccounts) CreateUser(name, password string) []string {
 	return []string{"CREATE USER " + myAccount(name) + " IDENTIFIED BY " + myLit(password)}

@@ -1,5 +1,7 @@
 # Databases phase 8 (Per-Database access for non-Admins, and Preview) Implementation Plan
 
+> **Dropped 2026-11-19 (ADR-0049), except Preview.** Databases are Admin-only; the grants and their protections were removed on `claude/databases-admin-only`. Kept for the record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** An Admin gives a panel user who is not an Admin access to one Database. The user can then see it under **Data → Databases** and work in its Query panel or console:

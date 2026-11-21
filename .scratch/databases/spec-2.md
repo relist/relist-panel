@@ -218,8 +218,8 @@ SQL engines only. Redis has neither tab.
   - MySQL / MariaDB Full: `GRANT ALL ON \`db\`.*`. Read-only: `GRANT SELECT, SHOW
     VIEW ON \`db\`.*`.
 - **Delete user:** refused while it owns a database or objects (Postgres), with
-  the error naming them. Deleting a user that phase 8 access uses asks for
-  confirmation listing those panel users.
+  the error naming them. (Deleting a user that phase 8 access used asked for
+  confirmation listing those panel users; dropped with phase 8, ADR-0049.)
 - **The Connection tab** gains a user picker: the superuser, and every managed
   user, each with its own URL and Compose snippet.
 
@@ -250,6 +250,11 @@ Admin creates the user on the Users tab and restores again. The restore error
 links to the Users tab.
 
 ## Phase 8: Per-Database access for non-Admins
+
+> **Dropped 2026-11-19 (ADR-0049), except Preview.** Databases are
+> Admin-only: the grants, the grantee views and their protections were
+> removed on `claude/databases-admin-only`. Preview and the Redis scripts
+> rule stay. The text below is the original design, kept for the record.
 
 An Admin gives a panel user (not an Admin) access to one Database. Security
 comes from the database's own permissions, not from filtering statements:
