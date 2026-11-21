@@ -43,7 +43,8 @@ func (s *Service) ResetSuperuserPassword(ctx context.Context, id int64, confirm 
 	go func() {
 		defer s.wg.Done()
 		defer s.endJob(id)
-		s.runReset(context.WithoutCancel(ctx), d)
+		ctx := context.WithoutCancel(ctx)
+		s.contain(ctx, id, "reset superuser password", func() { s.runReset(ctx, d) })
 	}()
 	return nil
 }
@@ -182,7 +183,7 @@ func (s *Service) goResolve(ctx context.Context, id int64) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		s.resolvePending(ctx, id)
+		s.contain(ctx, id, "settle the superuser password", func() { s.resolvePending(ctx, id) })
 	}()
 }
 

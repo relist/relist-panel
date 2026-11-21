@@ -239,7 +239,8 @@ func (s *Service) startRestore(ctx context.Context, d Database, dp Dumper, r Res
 		if temp {
 			defer os.Remove(path)
 		}
-		s.executeRestore(context.WithoutCancel(ctx), d, dp, r, path, replace)
+		ctx := context.WithoutCancel(ctx)
+		s.containRows(ctx, d.ID, "restore", func() { s.executeRestore(ctx, d, dp, r, path, replace) })
 	}()
 }
 

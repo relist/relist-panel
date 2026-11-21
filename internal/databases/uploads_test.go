@@ -25,6 +25,8 @@ type fakeRemote struct {
 	sizes   map[string]int64 // the size Put was told
 	putErr  error
 	delErr  error
+	// putPanic makes Put panic with it, as a broken client library would.
+	putPanic string
 	// hang makes Put and Delete read nothing and wait for their context, as
 	// a bucket that stopped answering does.
 	hang    bool
@@ -42,6 +44,9 @@ func (f *fakeRemote) Put(ctx context.Context, key string, r io.Reader, size int6
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.putPanic != "" {
+		panic(f.putPanic)
+	}
 	if f.putErr != nil {
 		return f.putErr
 	}

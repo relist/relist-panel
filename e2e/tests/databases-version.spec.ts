@@ -177,6 +177,44 @@ test.describe('change version', () => {
     await removeDatabase(panel, id, name);
   });
 
+  // A role can keep raw text in a list setting (SET … FROM CURRENT) that
+  // pg_dumpall cannot write back: its roles dump would not restore. Change
+  // version refuses it before anything changes, naming the fix.
+  test('a role setting pg_dumpall cannot copy is refused up front', async () => {
+    const name = `e2e-cv-guc-${runId()}`;
+    const panel = await Panel.signIn();
+    const id = await createRunning(panel, name, 'postgres', '16');
+    await panel.json('POST', `/api/databases/${id}/logical-databases`, { name: 'shop', createOwner: true });
+    const owner = await creds(panel, id, 'shop', 'shop');
+    docker(psql(id, 'shop', owner.password, 'shop',
+      "SELECT set_config('local_preload_libraries', 'a,', false); ALTER ROLE CURRENT_USER SET local_preload_libraries FROM CURRENT"));
+
+    const refused = await panel.raw('POST', `/api/databases/${id}/change-version`, { version: '18' });
+    expect(refused.status).toBe(422);
+    expect((JSON.parse(refused.body) as { error: string }).error).toContain('ALTER ROLE "shop" RESET local_preload_libraries');
+    expect(await panel.json<Change[]>('GET', `/api/databases/${id}/version-changes`)).toEqual([]);
+    const db = await panel.json<DB>('GET', `/api/databases/${id}`);
+    expect(db.job).toBe('');
+    expect(db.version).toBe('16');
+
+    // An empty list is as bad: pg_dumpall writes "SET search_path TO ;".
+    const su = await creds(panel, id);
+    docker(psql(id, 'postgres', su.password, 'postgres', 'ALTER ROLE shop RESET local_preload_libraries'));
+    docker(psql(id, 'shop', owner.password, 'shop',
+      "SELECT set_config('search_path', '', false); ALTER ROLE CURRENT_USER SET search_path FROM CURRENT"));
+    const empty = await panel.raw('POST', `/api/databases/${id}/change-version`, { version: '18' });
+    expect(empty.status).toBe(422);
+    expect((JSON.parse(empty.body) as { error: string }).error).toContain('ALTER ROLE "shop" RESET search_path');
+
+    // Fixed as the message says, the change goes through.
+    docker(psql(id, 'postgres', su.password, 'postgres', 'ALTER ROLE shop RESET search_path'));
+    expect((await panel.raw('POST', `/api/databases/${id}/change-version`, { version: '18' })).status).toBe(202);
+    expect((await settled(panel, id)).version).toBe('18');
+    expect((await lastChange(panel, id)).status).toBe('succeeded');
+
+    await removeDatabase(panel, id, name);
+  });
+
   test('mariadb 11.4 → 11.8 and redis 7.4 → 8 change in place', async () => {
     const panel = await Panel.signIn();
 

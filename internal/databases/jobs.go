@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"relist-panel/internal/safely"
 )
 
 var (
@@ -105,13 +107,15 @@ func (s *Service) HoldJobs() { s.holding.Store(true) }
 // start again at the end, whatever happened.
 func (s *Service) Recover(ctx context.Context) {
 	defer s.holding.Store(false)
-	if err := s.Startup(ctx); err != nil {
+	// Each step contains a panic (internal/safely): it is logged like an
+	// error, and the next step still runs.
+	if err := safely.Call("finish interrupted jobs", func() error { return s.Startup(ctx) }); err != nil {
 		log.Printf("databases: finish interrupted jobs: %v", err)
 	}
-	if err := s.ReconcileAll(ctx); err != nil {
+	if err := safely.Call("reconcile at start", func() error { return s.ReconcileAll(ctx) }); err != nil {
 		log.Printf("databases: reconcile at start: %v", err)
 	}
-	if err := s.SweepFailedVersionVolumes(ctx); err != nil {
+	if err := safely.Call("sweep failed version changes", func() error { return s.SweepFailedVersionVolumes(ctx) }); err != nil {
 		log.Printf("databases: sweep failed version changes: %v", err)
 	}
 }

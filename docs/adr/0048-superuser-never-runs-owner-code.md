@@ -72,7 +72,7 @@ All three reproduced on real servers (`e2e/tests/databases-security.spec.ts`).
 - A MySQL or MariaDB database with Full users needs the switch for every
   run.
 
-**Still open:** Restore and Change version replay an owner's dump as the
-superuser through psql. A CHECK or domain constraint, or a column default,
-that calls an owner-defined function would run during `COPY` with superuser
-rights (not reproduced yet). Closing it means restoring as the owner, a separate change.
+**Accepted in ADR-0049:** Restore and Change version replay an owner's dump
+as the superuser through psql. A CHECK or domain constraint, or a generated
+column, that calls an owner-defined function would run during `COPY` with
+superuser rights (not reproduced). Closing it means restoring as the owner.

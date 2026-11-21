@@ -1,6 +1,7 @@
 package databases
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -147,6 +148,76 @@ func settingsSQL(db, out string) (string, error) {
 		}
 	}
 	return b.String(), nil
+}
+
+// roleSettingsSQL lists the role-wide settings (ALTER ROLE … SET, in no
+// database), hex-encoded like dbSettingsSQL. pg_dumpall --roles-only
+// carries these, and Change version replays its output.
+const roleSettingsSQL = `SELECT encode(convert_to(r.rolname::text, 'UTF8'), 'hex'), encode(convert_to(c.cfg, 'UTF8'), 'hex')
+FROM pg_catalog.pg_db_role_setting s
+JOIN pg_catalog.pg_roles r ON r.oid = s.setrole
+CROSS JOIN LATERAL unnest(s.setconfig) WITH ORDINALITY AS c(cfg, n)
+WHERE s.setdatabase = 0
+ORDER BY r.rolname, c.n;`
+
+// ErrUnsplittableSetting refuses a Postgres Change version: a role-wide list
+// setting does not split the way pg_dump splits it, or splits into no names
+// (a role can store any raw text with SET … FROM CURRENT), so pg_dumpall
+// writes "SET … TO ;" and restoring the roles on the new version would fail.
+type ErrUnsplittableSetting struct{ Role, Setting string }
+
+func (e ErrUnsplittableSetting) Error() string {
+	return fmt.Sprintf("role %s has a %s setting that pg_dumpall cannot copy, so Change version would fail and roll back. "+
+		"Run ALTER ROLE %s RESET %s in the Query tab, then try again", e.Role, e.Setting, pgIdent(e.Role), e.Setting)
+}
+
+// unsplittableRoleSetting reads roleSettingsSQL's output and returns the
+// first role-wide list setting pg_dumpall cannot write back, or nil.
+func unsplittableRoleSetting(out string) (*ErrUnsplittableSetting, error) {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		roleHex, cfgHex, ok := strings.Cut(line, "|")
+		if !ok {
+			return nil, fmt.Errorf("unexpected role settings line %q", line)
+		}
+		role, err1 := hex.DecodeString(roleHex)
+		cfg, err2 := hex.DecodeString(cfgHex)
+		if err := errors.Join(err1, err2); err != nil {
+			return nil, fmt.Errorf("unexpected role settings line %q: %w", line, err)
+		}
+		name, value, _ := strings.Cut(string(cfg), "=")
+		if !listSettings[strings.ToLower(name)] {
+			continue
+		}
+		// No names at all is as bad: pg_dumpall writes "SET … TO ;" for
+		// both (makeAlterConfigCommand appends one literal per name).
+		if names, ok := splitGUCList(value); !ok || len(names) == 0 {
+			return &ErrUnsplittableSetting{Role: string(role), Setting: name}, nil
+		}
+	}
+	return nil, nil
+}
+
+// checkRoleSettings refuses a Postgres Change version whose roles dump would
+// not restore (ErrUnsplittableSetting). It runs before anything changes.
+func (s *Service) checkRoleSettings(ctx context.Context, d Database, dp Dumper) error {
+	out, detail, err := s.admin(ctx, d, dp, roleSettingsSQL)
+	if err != nil {
+		// The server's answer, not the panel's fault: a bad gateway.
+		msg := fmt.Sprintf("read the role settings: %v: %s", err, strings.TrimSpace(redactPasswords(detail)))
+		return adminError{scrubAll(msg, d.Password)}
+	}
+	bad, err := unsplittableRoleSetting(out)
+	if err != nil {
+		return err
+	}
+	if bad != nil {
+		return *bad
+	}
+	return nil
 }
 
 // splitGUCList is pg_dump's SplitGUCList: names separated by commas, each

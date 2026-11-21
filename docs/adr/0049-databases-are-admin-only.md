@@ -31,5 +31,13 @@ console, Run as superuser, and the MySQL / MariaDB root opt-in.
   `search_path` operator that an Admin's run then executes with superuser
   rights. That risk is accepted: the Admin chooses what to run, and the
   table tree no longer runs anything by itself.
+- **Restore and Change version replay a dump as the superuser** (accepted
+  2026-11-20). A CHECK or domain constraint, or a generated column, that
+  calls an owner's function runs with superuser rights during `COPY`. It is
+  the same kind of risk. Closing it would mean restoring as the owner: a
+  session that logs in as the owner (not `SET ROLE`, which a function can
+  undo), and splitting the plain-SQL dump into the parts that need the
+  superuser (extensions, other roles' ownership) and the rest. That was
+  judged not worth its size.
 - Granting a non-Admin access later starts over from this ADR and
   ADR-0045's lessons, not from the removed code.
