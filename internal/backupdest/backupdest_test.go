@@ -67,6 +67,13 @@ func TestObjectKey(t *testing.T) {
 type fakeRemote struct {
 	mu     sync.Mutex
 	testFn func() error
+	seen   string
+}
+
+func (f *fakeRemote) SeenHostKey() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.seen
 }
 
 func (f *fakeRemote) Put(context.Context, string, io.Reader, int64) error { return nil }
@@ -102,13 +109,17 @@ func newRig(t *testing.T) *rig {
 	mux := http.NewServeMux()
 	r.svc.RegisterRoutes(mux)
 	r.h = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		ctx, _ := audit.Begin(req.Context(), audit.Event{}, nil, func(_ context.Context, e audit.Event) error {
+		ctx, p := audit.Begin(req.Context(), audit.Event{}, nil, func(_ context.Context, e audit.Event) error {
 			r.mu.Lock()
 			defer r.mu.Unlock()
 			r.events = append(r.events, e)
 			return nil
 		})
 		mux.ServeHTTP(w, req.WithContext(ctx))
+		// What the request ends up recording: its target and details.
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.events = append(r.events, p.Event())
 	})
 	return r
 }
@@ -295,5 +306,286 @@ func TestNoCopiesNeedsNoConfirm(t *testing.T) {
 	r.do("POST", "/api/backup-destinations", form("http://minio:9000", secret))
 	if w := r.do("DELETE", "/api/backup-destinations/1", ""); w.Code != 204 {
 		t.Fatalf("delete = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestValidateSFTP(t *testing.T) {
+	ok := func(in SFTPConfig) SFTPConfig {
+		t.Helper()
+		if in.Host == "" {
+			in.Host = "box"
+		}
+		if in.User == "" {
+			in.User = "u"
+		}
+		if in.Auth == "" {
+			in.Auth = AuthKey
+		}
+		got, err := ValidateSFTP(in)
+		if err != nil {
+			t.Fatalf("ValidateSFTP(%+v) = %v", in, err)
+		}
+		return got
+	}
+	if got := ok(SFTPConfig{Host: " box.example "}); got.Host != "box.example" || got.Port != 22 {
+		t.Fatalf("got %+v", got)
+	}
+	if got := ok(SFTPConfig{Host: "::1"}); got.Host != "::1" {
+		t.Fatalf("ipv6 = %+v", got)
+	}
+	for in, want := range map[string]string{"backups/": "backups", "/srv//b/": "/srv/b", ".": "", "": "", " /x ": "/x"} {
+		if got := ok(SFTPConfig{Path: in}); got.Path != want {
+			t.Errorf("path %q = %q, want %q", in, got.Path, want)
+		}
+	}
+	base := SFTPConfig{Host: "box", User: "u", Auth: AuthKey}
+	for field, mut := range map[string]func(*SFTPConfig){
+		"path": func(c *SFTPConfig) { c.Path = "/" },
+		"host": func(c *SFTPConfig) { c.Host = "" },
+		"port": func(c *SFTPConfig) { c.Port = 70000 },
+		"user": func(c *SFTPConfig) { c.User = "" },
+		"auth": func(c *SFTPConfig) { c.Auth = "cert" },
+	} {
+		c := base
+		mut(&c)
+		_, err := ValidateSFTP(c)
+		var fe *FieldError
+		if !errors.As(err, &fe) || fe.Field != field {
+			t.Errorf("%s: err = %v", field, err)
+		}
+	}
+	for _, p := range []string{"a/../../x", "../x", "a/.."} {
+		c := base
+		c.Path = p
+		if _, err := ValidateSFTP(c); err == nil {
+			t.Errorf("path %q accepted", p)
+		}
+	}
+	for _, h := range []string{"a b", "a/b", "a\tb"} {
+		c := base
+		c.Host = h
+		if _, err := ValidateSFTP(c); err == nil {
+			t.Errorf("host %q accepted", h)
+		}
+	}
+	c := base
+	c.User = "a b"
+	if _, err := ValidateSFTP(c); err == nil {
+		t.Error("user with space accepted")
+	}
+	c = base
+	c.Path = "/"
+	if _, err := ValidateSFTP(c); err == nil || !strings.Contains(err.Error(), "base path cannot be /") {
+		t.Errorf("slash error = %v", err)
+	}
+	c.Path = "a/../../x"
+	if _, err := ValidateSFTP(c); err == nil || !strings.Contains(err.Error(), "base path cannot contain ..") {
+		t.Errorf("dotdot error = %v", err)
+	}
+}
+
+func TestKeyPrefix(t *testing.T) {
+	if got := (Destination{Type: TypeS3, S3: S3Config{Prefix: "p"}}).KeyPrefix(); got != "p" {
+		t.Fatalf("s3 = %q", got)
+	}
+	if got := (Destination{Type: TypeSFTP, SFTP: SFTPConfig{Path: "/srv/b"}}).KeyPrefix(); got != "/srv/b" {
+		t.Fatalf("sftp = %q", got)
+	}
+	if got := ObjectKey("/srv/b", "app", 3, "main", "x.sql.gz"); got != "/srv/b/app-3/main/x.sql.gz" {
+		t.Fatalf("key = %q", got)
+	}
+}
+
+const sshPriv = "-----BEGIN OPENSSH PRIVATE KEY-----\nfake-private-material\n-----END OPENSSH PRIVATE KEY-----\n"
+const sshPub = "ssh-ed25519 AAAAC3fakepub relist-deploy"
+
+func (r *rig) addKey(t *testing.T) {
+	t.Helper()
+	r.exec(t, `INSERT INTO ssh_keys (id, name, private_key, public_key, created_at) VALUES (1, 'deploy', ?, ?, 1)`, sshPriv, sshPub)
+}
+
+func sftpForm(host, auth, path, secretValue string) string {
+	key := "null"
+	if auth == "key" {
+		key = "1"
+	}
+	return `{"name":"box","type":"sftp","sftp":{"host":"` + host + `","port":22,"user":"u","path":"` + path + `","auth":"` + auth + `","sshKeyId":` + key + `},"secret":"` + secretValue + `"}`
+}
+
+func TestCreateSFTPWithKey(t *testing.T) {
+	r := newRig(t)
+	r.addKey(t)
+	w := r.do("POST", "/api/backup-destinations", sftpForm("box", "key", "/b", ""))
+	if w.Code != 201 {
+		t.Fatalf("create = %d %s", w.Code, w.Body)
+	}
+	var got DestinationJSON
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got.SFTP == nil || got.SFTP.PublicKey != sshPub || got.SFTP.HostKey != "" || got.SFTP.SSHKeyName != "deploy" || got.SFTP.Port != 22 {
+		t.Fatalf("body = %s", w.Body)
+	}
+	if strings.Contains(w.Body.String(), `"s3"`) {
+		t.Fatalf("body has s3: %s", w.Body)
+	}
+	if w := r.do("POST", "/api/backup-destinations", strings.Replace(sftpForm("box2", "key", "", ""), `"sshKeyId":1`, `"sshKeyId":null`, 1)); w.Code != 422 || !strings.Contains(w.Body.String(), `"field":"sshKeyId"`) || !strings.Contains(w.Body.String(), "choose an SSH key") {
+		t.Fatalf("no key = %d %s", w.Code, w.Body)
+	}
+	if w := r.do("POST", "/api/backup-destinations", strings.Replace(sftpForm("box3", "key", "", ""), `"sshKeyId":1`, `"sshKeyId":99`, 1)); w.Code != 422 || !strings.Contains(w.Body.String(), `"field":"sshKeyId"`) {
+		t.Fatalf("missing key = %d %s", w.Code, w.Body)
+	}
+}
+
+func TestSFTPPasswordRules(t *testing.T) {
+	r := newRig(t)
+	r.addKey(t)
+	if w := r.do("POST", "/api/backup-destinations", sftpForm("box", "password", "/b", "")); w.Code != 422 || !strings.Contains(w.Body.String(), `"field":"secret"`) {
+		t.Fatalf("create without password = %d %s", w.Code, w.Body)
+	}
+	if w := r.do("POST", "/api/backup-destinations", sftpForm("box", "password", "/b", "pw-123")); w.Code != 201 {
+		t.Fatalf("create = %d %s", w.Code, w.Body)
+	}
+	stored := func() Destination { d, _ := r.svc.store.Get(context.Background(), 1); return d }
+	if w := r.do("PUT", "/api/backup-destinations/1", sftpForm("box", "password", "/other", "")); w.Code != 200 || stored().Secret != "pw-123" || stored().SFTP.Path != "/other" {
+		t.Fatalf("path edit = %d %s secret=%q", w.Code, w.Body, stored().Secret)
+	}
+	if w := r.do("PUT", "/api/backup-destinations/1", sftpForm("elsewhere", "password", "/other", "")); w.Code != 422 || !strings.Contains(w.Body.String(), `"field":"secret"`) || !strings.Contains(w.Body.String(), "enter the password again") {
+		t.Fatalf("host edit = %d %s", w.Code, w.Body)
+	}
+	if stored().SFTP.Host != "box" || stored().Secret != "pw-123" {
+		t.Fatalf("a refused edit changed the row: %+v", stored())
+	}
+	// Key to password also asks again.
+	r.do("POST", "/api/backup-destinations", strings.Replace(sftpForm("k", "key", "", ""), `"name":"box"`, `"name":"k"`, 1))
+	if w := r.do("PUT", "/api/backup-destinations/2", strings.Replace(sftpForm("k", "password", "", ""), `"name":"box"`, `"name":"k"`, 1)); w.Code != 422 || !strings.Contains(w.Body.String(), "enter the password again") {
+		t.Fatalf("key to password = %d %s", w.Code, w.Body)
+	}
+	if w := r.do("PUT", "/api/backup-destinations/1", sftpForm("box", "key", "/other", "")); w.Code != 200 || stored().Secret != "" {
+		t.Fatalf("to key auth = %d %s secret=%q", w.Code, w.Body, stored().Secret)
+	}
+}
+
+func TestTypeCannotChange(t *testing.T) {
+	r := newRig(t)
+	r.addKey(t)
+	r.do("POST", "/api/backup-destinations", sftpForm("box", "key", "", ""))
+	w := r.do("PUT", "/api/backup-destinations/1", form("http://minio:9000", secret))
+	if w.Code != 422 || !strings.Contains(w.Body.String(), `"field":"type"`) || !strings.Contains(w.Body.String(), "the type of a Backup destination cannot change") {
+		t.Fatalf("= %d %s", w.Code, w.Body)
+	}
+}
+
+func TestTestRecordsHostKeyOnlyOnSuccess(t *testing.T) {
+	r := newRig(t)
+	r.addKey(t)
+	r.do("POST", "/api/backup-destinations", sftpForm("box", "key", "", ""))
+	line := hostKeyLine(newSigner(t, "ed25519"))
+	r.remote.seen = line
+	r.remote.testFn = func() error { return errors.New("login refused") }
+	r.do("POST", "/api/backup-destinations/1/test", "")
+	if d, _ := r.svc.store.Get(context.Background(), 1); d.HostKey != "" {
+		t.Fatalf("a failed Test recorded %q", d.HostKey)
+	}
+	r.remote.testFn = nil
+	r.mu.Lock()
+	r.events = nil
+	r.mu.Unlock()
+	w := r.do("POST", "/api/backup-destinations/1/test", "")
+	var got DestinationJSON
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got.SFTP == nil || !strings.HasPrefix(got.SFTP.HostKey, "ssh-ed25519 SHA256:") || !got.LastTestOK {
+		t.Fatalf("body = %s", w.Body)
+	}
+	if d, _ := r.svc.store.Get(context.Background(), 1); d.HostKey != line {
+		t.Fatalf("stored %q", d.HostKey)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	found := false
+	for _, e := range r.events {
+		if v, ok := e.Detail["hostKey"]; ok && v == got.SFTP.HostKey {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no hostKey detail in %+v", r.events)
+	}
+}
+
+func TestResetHostKeyRoute(t *testing.T) {
+	r := newRig(t)
+	r.addKey(t)
+	r.do("POST", "/api/backup-destinations", sftpForm("box", "key", "", ""))
+	r.remote.seen = hostKeyLine(newSigner(t, "ed25519"))
+	r.do("POST", "/api/backup-destinations/1/test", "")
+	r.mu.Lock()
+	r.events = nil
+	r.mu.Unlock()
+	w := r.do("POST", "/api/backup-destinations/1/reset-host-key", "")
+	var got struct {
+		DestinationJSON
+		LastTestAt *time.Time `json:"lastTestAt"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if w.Code != 200 || got.SFTP == nil || got.SFTP.HostKey != "" || got.LastTestAt != nil || !strings.Contains(w.Body.String(), `"lastTestAt":null`) {
+		t.Fatalf("= %d %s", w.Code, w.Body)
+	}
+	r.mu.Lock()
+	n, target := len(r.events), ""
+	if n > 0 {
+		target = r.events[0].Target
+	}
+	r.mu.Unlock()
+	if n != 1 || target != "box" {
+		t.Fatalf("events = %d, target %q", n, target)
+	}
+	if w := r.do("POST", "/api/backup-destinations/9/reset-host-key", ""); w.Code != 404 {
+		t.Fatalf("missing = %d", w.Code)
+	}
+}
+
+// Review Focus 3: a tested destination moved to another host forgets its key.
+func TestChangingHostForgetsHostKey(t *testing.T) {
+	r := newRig(t)
+	r.do("POST", "/api/backup-destinations", sftpForm("box", "password", "/b", "pw-123"))
+	r.remote.seen = hostKeyLine(newSigner(t, "ed25519"))
+	r.do("POST", "/api/backup-destinations/1/test", "")
+	if d, _ := r.svc.store.Get(context.Background(), 1); d.HostKey == "" || !d.LastTestOK {
+		t.Fatalf("not trusted: %+v", d)
+	}
+	if w := r.do("PUT", "/api/backup-destinations/1", sftpForm("moved", "password", "/b", "pw-456")); w.Code != 200 {
+		t.Fatalf("move = %d %s", w.Code, w.Body)
+	}
+	if d, _ := r.svc.store.Get(context.Background(), 1); d.HostKey != "" || d.LastTestOK {
+		t.Fatalf("after the move: %+v", d)
+	}
+}
+
+func TestSFTPResponsesNeverCarrySecrets(t *testing.T) {
+	r := newRig(t)
+	r.addKey(t)
+	const pw = "sftp-pw-very-secret-1"
+	r.remote.testFn = func() error { return errors.New("denied for " + pw) }
+	var bodies []string
+	add := func(w *httptest.ResponseRecorder) { bodies = append(bodies, w.Body.String()) }
+	add(r.do("POST", "/api/backup-destinations", sftpForm("box", "password", "/b", pw)))
+	add(r.do("POST", "/api/backup-destinations", strings.Replace(sftpForm("k", "key", "", ""), `"name":"box"`, `"name":"k"`, 1)))
+	add(r.do("GET", "/api/backup-destinations", ""))
+	add(r.do("PUT", "/api/backup-destinations/1", sftpForm("box", "password", "/c", "")))
+	add(r.do("POST", "/api/backup-destinations/1/test", ""))
+	r.remote.testFn = func() error { return errors.New("denied") }
+	add(r.do("POST", "/api/backup-destinations/2/test", ""))
+	add(r.do("POST", "/api/backup-destinations/1/reset-host-key", ""))
+	add(r.do("GET", "/api/backup-destinations", ""))
+	for i, b := range bodies {
+		if strings.Contains(b, pw) || strings.Contains(b, "BEGIN OPENSSH PRIVATE KEY") || strings.Contains(b, "fake-private-material") {
+			t.Fatalf("response %d carries a secret: %s", i, b)
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, e := range r.events {
+		if j := jsonString(e); strings.Contains(j, pw) || strings.Contains(j, "fake-private-material") {
+			t.Fatalf("audit event carries a secret: %+v", e)
+		}
 	}
 }

@@ -15,7 +15,7 @@ is still missing, in the operator's order of value:
 - desktop tools (DBeaver, TablePlus) cannot reach a Database, because no host
   port is ever opened;
 - the only off-site destination is S3, while many small operators have an SFTP
-  or WebDAV box (Hetzner Storage Box, Synology, Nextcloud);
+  box (Hetzner Storage Box, Synology, any OpenSSH server);
 - every app connects as the superuser, because the panel cannot create a
   database and a user for it, and the superuser password can never change;
 - only Admins can see a Database at all;
@@ -26,6 +26,10 @@ is still missing, in the operator's order of value:
 
 - **Dropped for good:** Redis backup and restore, and Attach (tools for a
   database Service inside a Compose). Both leave `spec.md`'s Out of scope.
+- **Dropped (2026-11-16):** WebDAV Backup destinations (was phase 6b). Too
+  many server quirks (redirects, MKCOL scope, locks, path escaping) for its
+  value: Hetzner Storage Box and Synology also speak SFTP. Nextcloud-only
+  users have no destination for now.
 - **Still out of scope:** failure notifications (the panel has no notification
   system; that needs its own spec covering Deployments and Certificates too),
   point-in-time recovery, grid editing and schema UI, more engines.
@@ -35,7 +39,7 @@ is still missing, in the operator's order of value:
 ## Phases
 
 5. Direct access (a Database on a host port first).
-6. SFTP (6a) and WebDAV (6b) Backup destinations.
+6. SFTP Backup destinations (6a; 6b WebDAV dropped).
 7. Logical databases and users, and superuser password reset.
 8. Per-Database access for non-Admins.
 9. GFS Rotation (9a) and backup encryption (9b).
@@ -134,10 +138,10 @@ timed, Admin-opened case; ADR-0041 amends ADR-0039.
   - Docker cleanup needs no change: the proxy runs the panel's own image, which
     is in use, and `AutoRemove` leaves no stopped container to prune.
 
-## Phase 6: SFTP and WebDAV Backup destinations
+## Phase 6: SFTP Backup destinations
 
-Two more `type`s of Backup destination. Everything phase 3 decided for S3
-holds for them: the object key layout `<path>/<db slug>-<db id>/<logical>/<file>`,
+One more `type` of Backup destination. Everything phase 3 decided for S3
+holds for it: the object key layout `<path>/<db slug>-<db id>/<logical>/<file>`,
 deleting only recorded copies, the size check after upload, the 5-minute stall
 watchdog, the 1-minute timeouts on Delete and Test, and the secret rules (never
 sent back; changing the host or URL asks for it again).
@@ -163,17 +167,9 @@ sent back; changing the host or URL asks for it again).
 - **Library:** `github.com/pkg/sftp` on `golang.org/x/crypto/ssh` (already a
   dependency).
 
-### 6b: WebDAV
+### 6b: WebDAV (dropped 2026-11-16)
 
-- **Settings:** URL (`http://` or `https://`, path allowed), user, password.
-- **Client:** written on `net/http`, no dependency. It needs only `MKCOL`,
-  `PUT` (with `Content-Length`), `PROPFIND` (depth 0, for the size check),
-  `DELETE` and `GET` (for Test). `MKCOL` answering 405 means the collection
-  exists.
-- **Upload** `PUT`s to the final name, then checks the size with `PROPFIND`;
-  a wrong size deletes the object and fails the upload.
-- Tested against Nextcloud's and Apache's WebDAV in the sandbox (images pinned
-  at plan time).
+Not built; see Decisions.
 
 ## Phase 7: Logical databases and users
 
@@ -392,7 +388,7 @@ Phase-specific checks:
   open connection; expiry closes open connections; the proxy exits on its own
   with the panel stopped; a restart of the panel removes an expired proxy.
 - **6:** SFTP against an OpenSSH server container with key and with password,
-  including a changed host key; WebDAV against two servers.
+  including a changed host key.
 - **7:** a Read-only user cannot write, a Full user can, and one app's user
   cannot connect to another's database (Postgres); superuser reset keeps
   data and the URL works with the new password.

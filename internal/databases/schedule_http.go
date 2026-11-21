@@ -189,10 +189,15 @@ func (s *Service) SaveSchedule(ctx context.Context, sc Schedule) (Schedule, erro
 		if s.d.Destinations == nil {
 			return Schedule{}, ErrInvalidSchedule{ErrNoDestinations.Error()}
 		}
-		if _, _, err := s.d.Destinations.Open(ctx, *sc.DestinationID); errors.Is(err, backupdest.ErrNotFound) {
+		dest, _, err := s.d.Destinations.Open(ctx, *sc.DestinationID)
+		if errors.Is(err, backupdest.ErrNotFound) {
 			return Schedule{}, ErrInvalidSchedule{"no such Backup destination"}
 		} else if err != nil {
 			return Schedule{}, err
+		}
+		// An upload never trusts a host key: only a passed Test does.
+		if dest.Type == backupdest.TypeSFTP && dest.HostKey == "" {
+			return Schedule{}, ErrInvalidSchedule{"test the Backup destination first: it has no trusted host key"}
 		}
 	}
 	if err := s.d.Store.SaveSchedule(ctx, sc); err != nil {

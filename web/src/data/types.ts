@@ -734,6 +734,8 @@ export interface SshKey {
   publicKey: string;
   createdAt: string;
   usedBy: SshKeyUse[];
+  /** Names of the Backup destinations that log in with the key. */
+  usedByDestinations: string[];
 }
 
 /** An uploaded TLS certificate. The API never returns its PEM or private key. */
@@ -1336,23 +1338,38 @@ export interface BackupDestinationS3 {
   pathStyle: boolean;
 }
 
-export interface BackupDestination {
+export interface BackupDestinationSftp {
+  host: string;
+  port: number;
+  user: string;
+  path: string;
+  auth: 'key' | 'password';
+  sshKeyId: number | null;
+  sshKeyName: string;
+  publicKey: string;
+  /** `<type> SHA256:…` of the trusted host key, or '' while none is trusted. */
+  hostKey: string;
+}
+
+export type BackupDestination = {
   id: number;
   name: string;
-  type: 's3';
-  s3: BackupDestinationS3;
   lastTestAt: string | null;
   lastTestOk: boolean;
   lastTestError: string;
-}
+} & ({ type: 's3'; s3: BackupDestinationS3 } | { type: 'sftp'; sftp: BackupDestinationSftp });
 
-/** Add or edit a Backup destination; an empty secret on edit keeps the stored one. */
-export interface BackupDestinationInput {
-  name: string;
-  type: 's3';
-  s3: BackupDestinationS3;
-  secret: string;
-}
+export type BackupDestinationSftpInput = Omit<BackupDestinationSftp, 'hostKey' | 'publicKey' | 'sshKeyName'>;
+
+/**
+ * Add or edit a Backup destination; an empty secret on edit keeps the stored
+ * one. The secret is the S3 secret access key or the SFTP password ('' with
+ * key auth). The type cannot change on edit.
+ */
+export type BackupDestinationInput = { name: string; secret: string } & (
+  | { type: 's3'; s3: BackupDestinationS3 }
+  | { type: 'sftp'; sftp: BackupDestinationSftpInput }
+);
 
 /** A query cell: NULL, a string (numbers keep every digit), or a value cut at 64 KB or not UTF-8. */
 export type QueryCell = null | string | { bytes: number; hex?: string; text?: string };

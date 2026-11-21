@@ -81,6 +81,7 @@ var adminOnly = []string{
 	"PUT /api/backup-destinations/{id}",
 	"DELETE /api/backup-destinations/{id}",
 	"POST /api/backup-destinations/{id}/test",
+	"POST /api/backup-destinations/{id}/reset-host-key",
 	"GET /api/registry/cleanup",
 	"PUT /api/registry/cleanup",
 	"GET /api/registry/cleanup/preview",

@@ -128,4 +128,18 @@ describe('DatabaseScheduleCard', () => {
     expect(screen.queryByRole('spinbutton', { name: 'Destination: last N backups' })).toBeNull();
     expect(screen.getByText('Copy to')).toBeTruthy();
   });
+
+  it('disables an SFTP destination that has no trusted host key yet', async () => {
+    const sftp = { auth: 'key', host: 'box', path: '', port: 22, publicKey: '', sshKeyId: 5, sshKeyName: 'k', user: 'u' };
+    api.listBackupDestinations.mockResolvedValue([
+      { id: 2, lastTestAt: null, lastTestError: '', lastTestOk: false, name: 'fresh', sftp: { ...sftp, hostKey: '' }, type: 'sftp' },
+      { id: 3, lastTestAt: null, lastTestError: '', lastTestOk: true, name: 'trusted', sftp: { ...sftp, hostKey: 'ssh-ed25519 SHA256:x' }, type: 'sftp' },
+    ]);
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(await screen.findByRole('combobox', { name: 'Copy to' }));
+    const fresh = await screen.findByTitle('fresh (Test this destination first)');
+    expect(fresh.getAttribute('aria-disabled')).toBe('true');
+    expect(screen.getByTitle('trusted').getAttribute('aria-disabled')).not.toBe('true');
+  });
 });

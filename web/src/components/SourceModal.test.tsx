@@ -27,8 +27,8 @@ const location = { composeId: 7, environmentId: 2, projectId: 1 };
 const URL = 'git@github.com:acme/shop.git';
 
 const keys: SshKey[] = [
-  { createdAt: '2026-10-01T00:00:00Z', id: 1, name: 'ci', publicKey: 'ssh-ed25519 AAAA relist-ci', usedBy: [] },
-  { createdAt: '2026-10-01T00:00:00Z', id: 2, name: 'deploy', publicKey: 'ssh-ed25519 BBBB relist-deploy', usedBy: [] },
+  { createdAt: '2026-10-01T00:00:00Z', id: 1, name: 'ci', publicKey: 'ssh-ed25519 AAAA relist-ci', usedBy: [], usedByDestinations: [] },
+  { createdAt: '2026-10-01T00:00:00Z', id: 2, name: 'deploy', publicKey: 'ssh-ed25519 BBBB relist-deploy', usedBy: [], usedByDestinations: [] },
 ];
 
 const saved: ComposeSource = {

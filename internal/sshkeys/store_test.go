@@ -198,3 +198,61 @@ func TestDeleteDetachesSources(t *testing.T) {
 		t.Fatalf("second Delete err = %v, want sql.ErrNoRows", err)
 	}
 }
+
+func addDestination(t *testing.T, db *sql.DB, name string, keyID int64) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO backup_destinations (name, type, config, secret, ssh_key_id, created_at, updated_at)
+		VALUES (?, 'sftp', '{}', '', ?, 1, 1)`, name, keyID); err != nil {
+		t.Fatalf("add destination: %v", err)
+	}
+}
+
+// Review Focus 5: a key a Backup destination uses is never deleted.
+func TestDeleteRefusedWhileDestinationUsesKey(t *testing.T) {
+	db, a, _ := newDB(t)
+	s := NewStore(db)
+	ctx := context.Background()
+	k, err := s.Create(ctx, "ci")
+	if err != nil {
+		t.Fatal(err)
+	}
+	useKey(t, db, a, k.ID)
+	addDestination(t, db, "zeta", k.ID)
+	addDestination(t, db, "alpha", k.ID)
+	err = s.Delete(ctx, k.ID)
+	var inUse ErrKeyInUse
+	if !errors.As(err, &inUse) || !reflect.DeepEqual(inUse.Destinations, []string{"alpha", "zeta"}) {
+		t.Fatalf("Delete err = %v", err)
+	}
+	if inUse.Error() != "used by Backup destinations: alpha, zeta" {
+		t.Fatalf("text = %q", inUse.Error())
+	}
+	if _, err := s.Get(ctx, k.ID); err != nil {
+		t.Fatalf("the key is gone: %v", err)
+	}
+	// Nothing was detached either: the refusal comes before any change.
+	var keyID sql.NullInt64
+	if err := db.QueryRow(`SELECT ssh_key_id FROM compose_sources WHERE compose_id = ?`, a).Scan(&keyID); err != nil || !keyID.Valid {
+		t.Fatalf("source key = %v, %v", keyID, err)
+	}
+}
+
+func TestListShowsDestinationUse(t *testing.T) {
+	db, _, _ := newDB(t)
+	s := NewStore(db)
+	ctx := context.Background()
+	k, _ := s.Create(ctx, "ci")
+	other, _ := s.Create(ctx, "unused")
+	addDestination(t, db, "offsite", k.ID)
+	keys, err := s.List(ctx)
+	if err != nil || len(keys) != 2 {
+		t.Fatalf("List = %+v, %v", keys, err)
+	}
+	if !reflect.DeepEqual(keys[0].UsedByDestinations, []string{"offsite"}) || len(keys[1].UsedByDestinations) != 0 || keys[1].ID != other.ID {
+		t.Fatalf("UsedByDestinations = %v / %v", keys[0].UsedByDestinations, keys[1].UsedByDestinations)
+	}
+	got, err := s.Get(ctx, k.ID)
+	if err != nil || !reflect.DeepEqual(got.UsedByDestinations, []string{"offsite"}) {
+		t.Fatalf("Get = %+v, %v", got, err)
+	}
+}
