@@ -56,7 +56,7 @@ const shop: Database = {
   name: 'Shop',
   port: 5432,
   settingsOutdated: false,
-  upgrades: [],
+  higherVersions: [],
   slug: 'shop',
   status: 'running',
   user: 'postgres',
@@ -358,7 +358,7 @@ describe('DatabasePage', () => {
 
 
 describe('Change version', () => {
-  const pg16: Database = { ...shop, version: '16', image: 'postgres:16', upgrades: ['17', '18'] };
+  const pg16: Database = { ...shop, version: '16', image: 'postgres:16', higherVersions: ['17', '18'] };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -442,7 +442,7 @@ describe('Change version', () => {
   });
 
   it('backs mariadb up first by default, and can skip it', async () => {
-    const maria: Database = { ...shop, engine: 'mariadb', version: '11.4', image: 'mariadb:11.4', upgrades: ['11.8'] };
+    const maria: Database = { ...shop, engine: 'mariadb', version: '11.4', image: 'mariadb:11.4', higherVersions: ['11.8'] };
     const { dialog, user } = await openChange(maria);
     expect(within(dialog).getByText(/There is no going back to 11.4 once it starts/)).toBeTruthy();
     const box = within(dialog).getByLabelText('Back up first') as HTMLInputElement;
@@ -453,14 +453,14 @@ describe('Change version', () => {
   });
 
   it('sends Back up first for mariadb when left ticked', async () => {
-    const maria: Database = { ...shop, engine: 'mariadb', version: '11.4', image: 'mariadb:11.4', upgrades: ['11.8'] };
+    const maria: Database = { ...shop, engine: 'mariadb', version: '11.4', image: 'mariadb:11.4', higherVersions: ['11.8'] };
     const { dialog, user } = await openChange(maria);
     await user.click(within(dialog).getByRole('button', { name: 'Change to 11.8' }));
     await waitFor(() => expect(api.changeDatabaseVersion).toHaveBeenCalledWith(1, '11.8', true));
   });
 
   it('warns that redis cannot go back, with no backup option', async () => {
-    const redis: Database = { ...shop, engine: 'redis', version: '7.4', image: 'redis:7.4', upgrades: ['8'] };
+    const redis: Database = { ...shop, engine: 'redis', version: '7.4', image: 'redis:7.4', higherVersions: ['8'] };
     const { dialog } = await openChange(redis);
     expect(within(dialog).getByText(/Redis 8 rewrites the data file in a format 7.4 cannot read/)).toBeTruthy();
     expect(within(dialog).queryByLabelText('Back up first')).toBeNull();

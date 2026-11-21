@@ -28,13 +28,13 @@ export function isInsecureEndpoint(endpoint: string | undefined): boolean {
   return (endpoint ?? '').trim().toLowerCase().startsWith('http://');
 }
 
-/** The sentence a delete shows when copies stay in the bucket. */
+/** The sentence a delete shows when copies stay in the destination. */
 export function copiesWarning(copies: number): string {
   const noun = copies === 1 ? 'backup copy stays' : 'backup copies stay';
-  return `${copies} ${noun} in the bucket. The panel stops tracking them.`;
+  return `${copies} ${noun} in the destination. The panel stops tracking them.`;
 }
 
-/** The numbers a 409 delete carries: copies left in the bucket, or the schedules that use it. */
+/** The numbers a 409 delete carries: copies left in the destination, or the schedules that use it. */
 export function deleteConflict(body: unknown): { copies?: number; schedules?: string[] } {
   if (typeof body !== 'object' || body === null) return {};
   const { copies, schedules } = body as { copies?: unknown; schedules?: unknown };

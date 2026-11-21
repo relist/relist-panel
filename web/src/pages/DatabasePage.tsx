@@ -129,7 +129,7 @@ export function DatabasePage() {
                   Update image
                 </Button>
               </Tooltip>
-              {data.upgrades.length > 0 && (
+              {data.higherVersions.length > 0 && (
                 <Tooltip title={data.status === 'running' ? undefined : 'Start the Database first'}>
                   <Button disabled={jobRunning || data.status !== 'running'} onClick={() => setChanging(true)}>
                     Change version

@@ -405,7 +405,7 @@ func (s *Service) ListRestores(ctx context.Context, id int64) ([]Restore, error)
 
 // ErrRemoteOnly is a download or restore of a Backup whose file Rotation
 // removed and whose only copy is in a Backup destination.
-var ErrRemoteOnly = errors.New("this Backup is only in its Backup destination; download it from the bucket")
+var ErrRemoteOnly = errors.New("this Backup is only in its Backup destination; download it from there")
 
 // BackupPath is the file of a succeeded Backup, for download. A Remote only
 // Backup is ErrRemoteOnly; anything else, including a file that is gone, is

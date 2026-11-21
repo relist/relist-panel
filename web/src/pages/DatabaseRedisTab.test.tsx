@@ -38,7 +38,7 @@ const cache: Database = {
   name: 'Cache',
   port: 6379,
   settingsOutdated: false,
-  upgrades: [],
+  higherVersions: [],
   slug: 'cache',
   status: 'running',
   user: 'default',

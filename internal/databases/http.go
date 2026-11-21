@@ -99,8 +99,8 @@ type DatabaseJSON struct {
 	// ""); Deleted marks a tombstone that only keeps its Backups.
 	Job     string `json:"job"`
 	Deleted bool   `json:"deleted"`
-	// Upgrades are the higher tags Change version can move it to.
-	Upgrades []string `json:"upgrades"`
+	// HigherVersions are the tags Change version can move it to.
+	HigherVersions []string `json:"higherVersions"`
 }
 
 func toJSON(v View) DatabaseJSON {
@@ -113,9 +113,9 @@ func toJSON(v View) DatabaseJSON {
 	if out.Warnings == nil {
 		out.Warnings = []string{}
 	}
-	out.Upgrades = []string{}
+	out.HigherVersions = []string{}
 	if !v.Deleted {
-		out.Upgrades = HigherVersions(v.Engine, v.Version)
+		out.HigherVersions = HigherVersions(v.Engine, v.Version)
 	}
 	if e, ok := Engines[v.Engine]; ok {
 		out.Image, out.Port, out.User, out.DefaultDatabase = e.Image(v.Version), e.Port(), e.User(), e.DefaultDatabase()

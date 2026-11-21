@@ -1238,7 +1238,7 @@ export interface Database {
   /** A tombstone: only its Backups remain. */
   deleted: boolean;
   /** The higher versions Change version can move it to, lowest first. */
-  upgrades: string[];
+  higherVersions: string[];
 }
 
 /**

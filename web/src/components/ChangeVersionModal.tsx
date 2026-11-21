@@ -28,7 +28,7 @@ function explain(db: Database, to: string): string {
 /** Change version: pick a higher version of the engine and start the job. */
 export function ChangeVersionModal({ db, onClose, onStarted }: { db: Database; onClose: () => void; onStarted: () => void }) {
   const { message } = App.useApp();
-  const [to, setTo] = useState(db.upgrades[db.upgrades.length - 1] ?? '');
+  const [to, setTo] = useState(db.higherVersions[db.higherVersions.length - 1] ?? '');
   const [backupFirst, setBackupFirst] = useState(true);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
@@ -63,7 +63,7 @@ export function ChangeVersionModal({ db, onClose, onStarted }: { db: Database; o
             <Select
               aria-label="Version"
               onChange={setTo}
-              options={db.upgrades.map((tag) => ({ label: tag, value: tag }))}
+              options={db.higherVersions.map((tag) => ({ label: tag, value: tag }))}
               style={{ maxWidth: 200 }}
               value={to}
             />

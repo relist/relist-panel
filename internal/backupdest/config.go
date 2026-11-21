@@ -1,4 +1,4 @@
-// Package backupdest owns Backup destinations: the S3-compatible buckets a
+// Package backupdest owns Backup destinations: the S3-compatible buckets and SFTP servers a
 // Database's scheduled Backups are copied to (ADR-0040). A destination's
 // secret lives in the panel database and never leaves it: no response, log,
 // error or audit detail carries it.
@@ -122,7 +122,7 @@ func (e ErrInUse) Error() string {
 type ErrCopies struct{ Copies int }
 
 func (e ErrCopies) Error() string {
-	return fmt.Sprintf("%d backup copies stay in the bucket and the panel stops tracking them", e.Copies)
+	return fmt.Sprintf("%d backup copies stay in the destination and the panel stops tracking them", e.Copies)
 }
 
 // ErrNotFound is a destination that does not exist.
