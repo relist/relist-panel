@@ -6,6 +6,7 @@ import {
   IMAGES_URL,
   api,
   listImages,
+  onSessionLost,
   uploadImage,
   volumeArchiveUrl,
   volumeContentUrl,
@@ -709,5 +710,30 @@ describe('version changes', () => {
     [url, init] = fetch.mock.calls[2];
     expect(url).toBe('/api/databases/1/version-changes/3/previous-data');
     expect(init?.method).toBe('DELETE');
+  });
+});
+
+describe('session lost', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    onSessionLost(undefined);
+  });
+
+  it('tells the listener when a request answers 401, and still throws', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'authentication required' }), { status: 401 })));
+    const listener = vi.fn();
+    onSessionLost(listener);
+
+    await expect(api.listProjects()).rejects.toMatchObject({ status: 401 });
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not tell the listener about other failures', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 })));
+    const listener = vi.fn();
+    onSessionLost(listener);
+
+    await expect(api.listProjects()).rejects.toBeInstanceOf(ApiError);
+    expect(listener).not.toHaveBeenCalled();
   });
 });

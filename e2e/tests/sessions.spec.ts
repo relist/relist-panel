@@ -38,3 +38,23 @@ test('a tab whose session the server ended goes back to sign-in', async ({ page,
   await expect(page).toHaveURL((u) => u.pathname.startsWith('/signin'));
   await expect(page.getByRole('button', { name: /sign in/i })).toBeVisible();
 });
+
+test('a tab whose session the server ended goes to sign-in on its next request, without a reload', async ({ page, context }) => {
+  await signIn(page);
+  await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible();
+
+  const cookie = (await context.cookies()).find((c) => c.name === 'relist_session')!;
+  await context.addCookies([{ ...cookie, value: 'ended-on-the-server' }]);
+
+  // A marker a reload would wipe, then a client-side navigation: the next API
+  // read answers 401. (The page's own reads may get there first; either way
+  // the tab must reach sign-in without a reload.)
+  await page.evaluate(() => {
+    (window as unknown as { stillThisPage: boolean }).stillThisPage = true;
+    window.history.pushState({}, '', '/projects');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(page).toHaveURL((u) => u.pathname.startsWith('/signin'));
+  await expect(page.getByRole('button', { name: /sign in/i })).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { stillThisPage?: boolean }).stillThisPage)).toBe(true);
+});
