@@ -97,3 +97,32 @@ describe('RequireAuth under a Migration lock', () => {
     expect(mocks.migrationStatus).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('RequireAuth boot splash', () => {
+  it('covers the mounted app until the Migration lock has been read', async () => {
+    vi.useFakeTimers();
+    let answer: (status: typeof idle) => void = () => {};
+    mocks.migrationStatus.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    render(
+      <App>
+        <MemoryRouter>
+          <Routes>
+            <Route element={<RequireAuth />}>
+              <Route element={<p>the app</p>} path="/" />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </App>,
+    );
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByRole('status', { name: 'Loading' })).toBeTruthy();
+    expect(screen.getByText('Checking sign-in')).toBeTruthy();
+    expect(screen.getByText('the app')).toBeTruthy();
+    await act(async () => { answer(idle); });
+    // The splash keeps its minimum, then fades.
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.queryByRole('status', { name: 'Loading' })).toBeNull();
+    expect(screen.getByText('the app')).toBeTruthy();
+  });
+});

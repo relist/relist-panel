@@ -47,7 +47,7 @@ type QueueControl interface {
 	Running() (composeID int64, number int, ok bool)
 }
 
-// StatusReader reports a Compose's Containers; composes.ComposeRunner has it.
+// StatusReader reports a Compose's Containers; composes.Service has it.
 type StatusReader interface {
 	Status(ctx context.Context, req composes.RunRequest) (composes.ComposeStatus, error)
 }

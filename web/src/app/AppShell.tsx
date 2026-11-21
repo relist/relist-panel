@@ -35,6 +35,7 @@ import { summaryBadge } from '../pages/vulnerabilities-view';
 import { usePanel } from '../data/store';
 import { api } from '../data/api';
 import { composeState, projectComposes, summarize } from '../data/types';
+import { useBootHold } from './BootGate';
 import { COMPOSE_STATE_META, LAYOUT } from './theme';
 import { paths, resolvePath } from './paths';
 
@@ -73,7 +74,7 @@ export function AppShell() {
   // older panel) is read as an admin; the API decides either way.
   const isAdmin = useIsAdmin();
   const adminView = auth.authenticated && isAdmin;
-  const { data: deploymentQueue } = useGlobalDeploymentQueue(auth.authenticated);
+  const { data: deploymentQueue, error: deploymentQueueError } = useGlobalDeploymentQueue(auth.authenticated);
   // A member's granted Databases decide whether their sider shows Data.
   const { data: memberDatabases } = useSWR(
     auth.authenticated && !isAdmin ? '/api/databases' : null,
@@ -81,8 +82,8 @@ export function AppShell() {
   );
   const diskPressure = useDiskPressure(adminView);
   const queuedCount = deploymentQueue?.filter((d) => d.status === 'queued').length ?? 0;
-  const { data: vulnSummary } = useVulnSummary({}, adminView);
-  const updateStatus = usePanelUpdateStatus(adminView);
+  const { data: vulnSummary, error: vulnSummaryError } = useVulnSummary({}, adminView);
+  const { data: updateStatus, error: updateStatusError } = usePanelUpdateStatus(adminView);
   const updateAvailable = !!updateStatus?.available && !updateStatus.development;
   const criticalCount = summaryBadge(vulnSummary)?.critical ?? 0;
   const [loadError, setLoadError] = useState<string>();
@@ -101,11 +102,20 @@ export function AppShell() {
     });
   }, [loadProjects]);
 
+  const [treeSettled, setTreeSettled] = useState(false);
   useEffect(() => {
     if (auth.authenticated) {
-      void loadTree();
+      void loadTree().finally(() => setTreeSettled(true));
     }
   }, [auth.authenticated, loadTree]);
+
+  // The boot splash stays until the tree and the sider's badges have answered,
+  // either way (a failure shows its own Alert or no badge once the splash goes).
+  const answered = (data: unknown, error: unknown) => data !== undefined || error !== undefined;
+  const badgesAnswered = answered(deploymentQueue, deploymentQueueError) && (!adminView || (
+    answered(vulnSummary, vulnSummaryError) && answered(updateStatus, updateStatusError) && diskPressure.kind !== 'loading'
+  ));
+  useBootHold(!treeSettled ? 'Loading projects' : !badgesAnswered ? 'Reading host status' : null);
 
   const resolved = useMemo(() => resolvePath(pathname), [pathname]);
 

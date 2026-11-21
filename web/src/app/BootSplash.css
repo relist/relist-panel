@@ -1,0 +1,89 @@
+/*
+ * The boot splash's motion (BootSplash.tsx). antd has no prop for keyframes, so
+ * they live here; colours come from tokens through the inline style. Every loop
+ * divides 9.6s and starts at --rp-boot-loop-offset, so the splash keeps its
+ * rhythm when RequireAuth hands it to BootGate.
+ */
+
+.rp-boot {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 16px;
+  opacity: 1;
+  transition: opacity var(--rp-boot-fade) ease-out;
+}
+
+.rp-boot--leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.rp-boot__stage {
+  position: relative;
+  width: 248px;
+  height: 236px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rp-boot__mascot {
+  position: relative;
+  width: 224px;
+  height: 224px;
+  user-select: none;
+  animation: rp-boot-float 3.2s ease-in-out infinite;
+  animation-delay: var(--rp-boot-loop-offset);
+}
+
+/* Soft light behind the ink, tinted per look (BootSplash.tsx). */
+.rp-boot__glow {
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--rp-boot-glow) 0%, transparent 66%);
+  animation: rp-boot-glow 4.8s ease-in-out infinite;
+  animation-delay: var(--rp-boot-loop-offset);
+}
+
+.rp-boot__label {
+  font-size: 14px;
+  letter-spacing: 0.01em;
+}
+
+.rp-boot__dots span {
+  display: inline-block;
+  animation: rp-boot-dot 1.2s ease-in-out infinite;
+  animation-delay: var(--rp-boot-loop-offset);
+}
+
+.rp-boot__dots span:nth-child(2) { animation-delay: calc(var(--rp-boot-loop-offset) + 0.15s); }
+.rp-boot__dots span:nth-child(3) { animation-delay: calc(var(--rp-boot-loop-offset) + 0.3s); }
+
+@keyframes rp-boot-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@keyframes rp-boot-glow {
+  0%, 100% { opacity: 0.7; transform: scale(0.94); }
+  50% { opacity: 1; transform: scale(1.04); }
+}
+
+@keyframes rp-boot-dot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.45; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-boot__mascot,
+  .rp-boot__glow,
+  .rp-boot__dots span {
+    animation: none;
+  }
+}

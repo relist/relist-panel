@@ -483,7 +483,7 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 			Manifests:       migration.ManifestBuilder{DB: db, Composes: composesService, Volumes: d.VolumeResolver, Docker: migrationOptions.Docker, DataDir: dataDir, DatabaseVolumes: databaseVolumes(databaseService)},
 			Queue:           queue,
 			Docker:          migrationOptions.Docker,
-			Status:          runner,
+			Status:          composesService,
 			Composes:        composesService,
 			Domains:         domainStore,
 			Terminals:       terminals,

@@ -12,6 +12,7 @@ import { Alert, App, Button, Card, Col, Empty, Flex, List, Row, Table, Tag, Tool
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 
+import { useBootHold } from '../app/BootGate';
 import { paths } from '../app/paths';
 import { ComposeStatusInline, ComposeStatusTag, EmptyState, PageHeader, RelativeTime, StatCard } from '../components/primitives';
 import { VulnBadges } from '../components/VulnBadges';
@@ -47,11 +48,17 @@ export function OverviewPage() {
   // rows come from the Services endpoint (the Compose carries no services
   // array), so they are loaded alongside the tree and refetched whenever it
   // changes. A failed read leaves the counts in charge.
+  // The boot splash waits until every Compose's first read has answered, so
+  // the attention list never opens on counts that are about to change.
+  const [servicesRead, setServicesRead] = useState<ReadonlySet<number>>(() => new Set());
   useEffect(() => {
     for (const { compose } of flat) {
-      loadServices(compose.id).catch(() => {});
+      loadServices(compose.id).catch(() => {}).finally(() => {
+        setServicesRead((read) => read.has(compose.id) ? read : new Set(read).add(compose.id));
+      });
     }
   }, [flat, loadServices]);
+  useBootHold(flat.some(({ compose }) => !servicesRead.has(compose.id)) ? 'Checking services' : null);
 
   // Loading belongs to the control that started it (§8): the button carries
   // the spinner, the table keeps showing what it read before.

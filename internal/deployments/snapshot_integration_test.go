@@ -125,9 +125,6 @@ func TestSourceBuildSnapshotsComposeRelativeDockerfileOutsideSrc(t *testing.T) {
 func (*snapshotRunner) Down(context.Context, composes.RunRequest) error            { return nil }
 func (*snapshotRunner) DownWithVolumes(context.Context, composes.RunRequest) error { return nil }
 func (*snapshotRunner) Restart(context.Context, composes.RunRequest) error         { return nil }
-func (*snapshotRunner) Status(context.Context, composes.RunRequest) (composes.ComposeStatus, error) {
-	return composes.ComposeStatus{}, nil
-}
 func (*snapshotRunner) Config(context.Context, composes.RunRequest) ([]byte, error) {
 	return []byte(`{"services":{}}`), nil
 }

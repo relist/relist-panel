@@ -78,7 +78,9 @@ func (s *Service) RunRollout(ctx context.Context, t DeployTarget, service string
 	if len(old) == 0 {
 		warning := service + " had no running container; deployed without rollout"
 		fmt.Fprintf(out, "warning: %s\n", warning)
-		if err := s.runner.Up(ctx, req, UpOptions{NoPull: true, Services: []string{service}, Out: opts.Out}); err != nil {
+		upErr := s.runner.Up(ctx, req, UpOptions{NoPull: true, Services: []string{service}, Out: opts.Out})
+		s.status.drop()
+		if err := upErr; err != nil {
 			return nil, failure(FailureRunner, "deploy failed: "+err.Error(), err)
 		}
 		return []string{warning}, nil
@@ -137,6 +139,7 @@ func (s *Service) RunRollout(ctx context.Context, t DeployTarget, service string
 		before[c.ID] = true
 	}
 	scaleErr := s.runner.Scale(ctx, req, ScaleOptions{Service: service, Replicas: len(old) + 1, NoPull: true, Out: opts.Out})
+	s.status.drop()
 	// Listed past the deadline too, so whatever the scale created is removed.
 	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	started, listErr := s.serviceContainers(lctx, req.ProjectName, service, before)
