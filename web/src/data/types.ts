@@ -1177,3 +1177,68 @@ export interface RegistryCleanupState {
   /** The zone the schedule's time is in, e.g. "UTC (UTC+00:00)". */
   timeZone: string;
 }
+
+// Databases (ADR-0039): Postgres, MySQL, MariaDB and Redis servers the panel runs.
+
+export type DatabaseStatus =
+  | 'creating'
+  | 'running'
+  | 'starting'
+  | 'unhealthy'
+  | 'stopped'
+  | 'drift'
+  | 'error'
+  | 'volume_missing';
+
+export interface Database {
+  id: number;
+  name: string;
+  slug: string;
+  engine: string;
+  version: string;
+  image: string;
+  /** What the Admin wants: the status is what Docker says. */
+  desired: 'running' | 'stopped';
+  status: DatabaseStatus;
+  /** This panel would create the container with newer settings; only Apply settings or Update image applies them. */
+  settingsOutdated: boolean;
+  lastError: string;
+  warnings: string[];
+  memoryMb: number;
+  cpus: number;
+  /** The stable name on relist-network; it never changes on rename. */
+  host: string;
+  /** The readable alias, or "" when the name has none. */
+  hostReadable: string;
+  port: number;
+  user: string;
+  defaultDatabase: string;
+  createdAt: string;
+}
+
+export interface DatabaseEngine {
+  name: string;
+  label: string;
+  port: number;
+  versions: { tag: string; default: boolean }[];
+}
+
+export interface DatabaseInput {
+  name: string;
+  engine: string;
+  version: string;
+  memoryMb?: number;
+  cpus?: number;
+}
+
+export type DatabaseAction = 'start' | 'stop' | 'restart' | 'repair' | 'update-image' | 'apply-settings';
+
+export interface DatabaseCredentials {
+  password: string;
+  /** With the stable host. */
+  url: string;
+  /** With the readable host, or "". */
+  urlReadable: string;
+  /** `DATABASE_URL=<url>` */
+  env: string;
+}

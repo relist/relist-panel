@@ -479,3 +479,94 @@ func TestStartWaitsForRegistryCleanup(t *testing.T) {
 		t.Fatalf("waited %d times, %d stops before it", w.waited, w.stopsBefore)
 	}
 }
+
+// fakeDatabases records into the fake Docker's call log, so a test sees its
+// order against the Compose stops and the maintenance page.
+type fakeDatabases struct {
+	docker        *FakeDocker
+	startWantedFn func() error
+	started       int
+}
+
+func (d *fakeDatabases) StopAll(context.Context) error {
+	d.docker.mu.Lock()
+	defer d.docker.mu.Unlock()
+	d.docker.Calls = append(d.docker.Calls, "databases-stop-all")
+	return nil
+}
+
+func (d *fakeDatabases) StartWanted(context.Context) error {
+	d.started++
+	if d.startWantedFn != nil {
+		return d.startWantedFn()
+	}
+	return nil
+}
+
+func TestStartStopsDatabasesAfterComposes(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	f.src.d.Databases = &fakeDatabases{docker: f.docker}
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, c := range f.docker.Calls {
+		switch {
+		case strings.HasPrefix(c, "compose-stop"), c == "databases-stop-all", c == "run-maintenance":
+			order = append(order, strings.Fields(c)[0])
+		}
+	}
+	if want := []string{"compose-stop", "databases-stop-all", "run-maintenance"}; !slices.Equal(order, want) {
+		t.Fatalf("order = %q, want %q", order, want)
+	}
+}
+
+func TestResumeLockStopsDatabasesAgain(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	f.src.d.Databases = &fakeDatabases{docker: f.docker}
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	f.docker.mu.Lock()
+	f.docker.Calls = nil
+	f.docker.mu.Unlock()
+	booted := NewOldHost(OldHostDeps{Store: f.store, Manifests: f.builder(), Queue: f.queue, Docker: f.docker,
+		Status: statusFromDocker{f.docker}, Composes: f.targets, Domains: fakeDomains{httpsDomain}, Databases: &fakeDatabases{docker: f.docker}})
+	if err := booted.ResumeLock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.docker.CallsOf("databases-stop-all"); len(got) != 1 {
+		t.Fatalf("calls = %q, want one databases-stop-all", f.docker.Calls)
+	}
+}
+
+func TestResumeStartsWantedDatabasesOnly(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	dbs := &fakeDatabases{docker: f.docker}
+	f.src.d.Databases = dbs
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.src.Resume(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if dbs.started != 1 {
+		t.Fatalf("StartWanted called %d times, want 1", dbs.started)
+	}
+}
+
+func TestResumeClearsTheLockWhenADatabaseFailsToStart(t *testing.T) {
+	f := newSourceFixture(t, httpsDomain)
+	dbs := &fakeDatabases{docker: f.docker, startWantedFn: func() error { return errors.New("pg: no space") }}
+	f.src.d.Databases = dbs
+	if _, err := f.src.Start(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	err := f.src.Resume(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "no space") {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if step, _, _ := f.store.Lock(context.Background()); step != StepNone {
+		t.Fatalf("step = %q: a Database wedged the lock", step)
+	}
+}

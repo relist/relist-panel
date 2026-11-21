@@ -80,6 +80,7 @@ answering one question. A group is a title, not a page: it has no route and no b
 | *(none)* | How is my work doing? | Overview, Projects, Deployments |
 | Host | How is the machine doing? | Monitoring, Docker |
 | Build & images | Where do images come from? | Images, Registry, Builders, SSH keys |
+| Data | Where does my data live? | Databases |
 | Routing | How does traffic get in? | Traefik, Certificates, Basic auth |
 | Security | What is exposed, and who did what? | Vulnerabilities, Audit log |
 | Panel | The panel itself | Users, Panel update |

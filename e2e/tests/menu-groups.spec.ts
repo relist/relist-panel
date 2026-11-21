@@ -10,6 +10,7 @@ const groups: [string | null, [string, string][]][] = [
   [null, [['Overview', '/'], ['Projects', '/projects'], ['Deployments', '/deployments']]],
   ['Host', [['Monitoring', '/monitoring'], ['Docker', '/docker']]],
   ['Build & images', [['Images', '/images'], ['Registry', '/registry'], ['Builders', '/builders'], ['SSH keys', '/ssh-keys']]],
+  ['Data', [['Databases', '/databases']]],
   ['Routing', [['Traefik', '/traefik'], ['Certificates', '/certificates'], ['Basic auth', '/basic-auth']]],
   ['Security', [['Vulnerabilities', '/vulnerabilities'], ['Audit log', '/audit']]],
   ['Panel', [['Users', '/users'], ['Panel update', '/panel-update']]],

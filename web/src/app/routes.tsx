@@ -5,6 +5,8 @@ import { SignInPage } from '../pages/AuthPages';
 import { InvitePage } from '../pages/InvitePage';
 import { AccountPage } from '../pages/AccountPage';
 import { ComposePage } from '../pages/ComposePage';
+import { DatabasePage } from '../pages/DatabasePage';
+import { DatabasesPage } from '../pages/DatabasesPage';
 import { DeploymentsPage } from '../pages/DeploymentsPage';
 import { DockerPage } from '../pages/DockerPage';
 import { BuildersPage } from '../pages/BuildersPage';
@@ -46,6 +48,8 @@ const elements: Record<string, ReactElement> = {
   'images': <ImagesPage />,
   'builders': <BuildersPage />,
   'registry': <RegistryPage />,
+  'databases': <DatabasesPage />,
+  'databases/:databaseId': <DatabasePage />,
   'ssh-keys': <SshKeysPage />,
   'certificates': <CertificatesPage />,
   'basic-auth': <BasicAuthPage />,

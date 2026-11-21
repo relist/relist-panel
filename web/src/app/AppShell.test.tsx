@@ -202,6 +202,7 @@ describe('Users and non-admins', () => {
     expect(groups).toEqual([
       { title: 'Host', items: ['Monitoring', 'Docker'] },
       { title: 'Build & images', items: ['Images', 'Registry', 'Builders', 'SSH keys'] },
+      { title: 'Data', items: ['Databases'] },
       { title: 'Routing', items: ['Traefik', 'Certificates', 'Basic auth'] },
       { title: 'Security', items: ['Vulnerabilities', 'Audit log'] },
       { title: 'Panel', items: ['Users', 'Panel update'] },

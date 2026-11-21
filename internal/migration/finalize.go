@@ -53,7 +53,8 @@ type FinalizeDeps struct {
 	Sources SourceLookup
 	Domains DomainLister
 	// BeforeDeploy starts what the panel runs itself and a Compose may pull
-	// from (the Registry), before any Deployment is queued. Nil when there
+	// from (the Registry) or connect to (a Database), before any Deployment
+	// is queued. Nil when there
 	// is nothing to start.
 	BeforeDeploy func(context.Context) error
 }
@@ -160,7 +161,7 @@ func (f *finalizer) Complete(ctx context.Context, m Manifest) (Summary, error) {
 		// A Compose pulling from this panel's own Registry would fail its
 		// first pull if the Registry came up after it.
 		if err := f.d.BeforeDeploy(ctx); err != nil {
-			summary.Warnings = append(summary.Warnings, "could not start the Registry before deploying, so a Compose pulling from it may fail; deploy it again once the Registry runs: "+err.Error())
+			summary.Warnings = append(summary.Warnings, "could not start the Registry or a Database before deploying, so a Compose using it may fail; deploy it again once it runs: "+err.Error())
 		}
 	}
 	reportStep(ctx, FinalizeDeploy)

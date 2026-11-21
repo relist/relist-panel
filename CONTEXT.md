@@ -1,6 +1,6 @@
 # Relist Panel
 
-A minimal self-hosted web UI for managing Docker Compose deployments on a single Docker host, using Traefik as the reverse-proxy gateway. Scoped to Compose files — a Compose may build its images from a Source (ADR-0016), but there is no separate Application type, no database-as-a-service and no multi-host support.
+A minimal self-hosted web UI for managing Docker Compose deployments on a single Docker host, using Traefik as the reverse-proxy gateway. Scoped to Compose files — a Compose may build its images from a Source (ADR-0016), but there is no separate Application type and no multi-host support. Databases are the exception to "Compose only": the panel runs them itself (ADR-0039).
 
 ## Language
 
@@ -51,6 +51,12 @@ _Avoid_: Reload (Traefik cannot reload static config; this is a restart).
 **Internal hostname**:
 A `.internal` alias a Service answers to on `relist-network`, injected on deploy (ADR-0014): the stable `<service>.<docker compose project>.internal` and the readable `<service>.<compose>.<environment>.<project>.internal`. Only Services with a Domain, Traefik labels or an explicit `relist-network` get them.
 _Avoid_: Service name (the bare name is ambiguous across Composes), DNS name
+
+**Database**:
+A Postgres, MySQL, MariaDB or Redis server the panel runs host-wide in its own container and volume, managed on the Databases page by Admins. Other Composes reach it on `relist-network` by its host. _Avoid_: DB service, Add-on (a Database is not a Compose and has no Services).
+
+**Engine**:
+The kind of server a Database runs (postgres, mysql, mariadb, redis), with the versions, settings and tools the panel offers for it. _Avoid_: Type, Driver (the driver is the code).
 
 **Container**:
 One running instance of a Service, created by a deploy. Its identity is not stable: every deploy mints a new one, so anything that outlives a single deploy — metric history, for one — is keyed by Service, never by Container.

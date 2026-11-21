@@ -88,6 +88,14 @@ type OldHostDeps struct {
 	RegistryCleanup interface {
 		WaitIdle(ctx context.Context) error
 	}
+	// Databases, when set, has every Database stopped after the Composes (a
+	// running database's files copy inconsistently) and its wanted ones
+	// started again on Resume (ADR-0039). Both calls ignore the Migration
+	// lock they run under.
+	Databases interface {
+		StopAll(ctx context.Context) error
+		StartWanted(ctx context.Context) error
+	}
 }
 
 // TerminalCloser ends every open Terminal Session; *terminal.Service is one.
@@ -240,6 +248,9 @@ func (s *OldHost) start(ctx context.Context, hostPaths []string, includeRegistry
 		if err := s.stopComposes(ctx, st.RunningComposeIDs); err != nil {
 			return Manifest{}, err
 		}
+		if err := s.stopDatabases(ctx); err != nil {
+			return Manifest{}, err
+		}
 		step = StepMaintenance
 		if err := s.setLock(ctx, step, st); err != nil {
 			return Manifest{}, err
@@ -360,7 +371,21 @@ func (s *OldHost) ResumeLock(ctx context.Context) error {
 	if err := s.stopComposes(ctx, running); err != nil {
 		return err
 	}
+	// The same restart policy brings the Databases back.
+	if err := s.stopDatabases(ctx); err != nil {
+		return err
+	}
 	s.settled.Store(true)
+	return nil
+}
+
+func (s *OldHost) stopDatabases(ctx context.Context) error {
+	if s.d.Databases == nil {
+		return nil
+	}
+	if err := s.d.Databases.StopAll(ctx); err != nil {
+		return fmt.Errorf("stop the Databases: %w", err)
+	}
 	return nil
 }
 
@@ -394,6 +419,11 @@ func (s *OldHost) Resume(ctx context.Context) error {
 			}
 			if err := s.d.Docker.ComposeStart(ctx, target.Request); err != nil {
 				failed = append(failed, fmt.Errorf("%s did not start, deploy it again: %w", target.Compose.Name, err))
+			}
+		}
+		if s.d.Databases != nil {
+			if err := s.d.Databases.StartWanted(ctx); err != nil {
+				failed = append(failed, fmt.Errorf("a Database did not start, repair it on the Databases page: %w", err))
 			}
 		}
 	}

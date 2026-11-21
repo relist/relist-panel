@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -555,7 +556,7 @@ func (c *checker) networks(name string, value any) {
 			continue
 		}
 		if key == sharedNetwork && def["name"] == sharedNetwork && def["external"] == true {
-			c.registryAlias(name, joined[key])
+			c.reservedAlias(name, joined[key])
 			continue
 		}
 		if def["external"] == true {
@@ -580,10 +581,18 @@ func (c *checker) networks(name string, value any) {
 // so a service answering to it there would get that login from Docker's DNS.
 const registryHost = "relist-registry"
 
-// registryAlias refuses a service on the shared network that Docker's DNS
-// would answer for relist-registry: its service name, its container_name or
-// one of its aliases there. DNS names match in any case and with a final dot.
-func (c *checker) registryAlias(name string, attachment any) {
+// databaseHost matches the stable name of a panel Database (ADR-0039).
+var databaseHost = regexp.MustCompile(`^relist-db-[0-9]+$`)
+
+// databaseAliasSuffix ends every readable Database name on the shared network.
+const databaseAliasSuffix = ".db.internal"
+
+// reservedAlias refuses a service on the shared network that Docker's DNS
+// would answer for a name the panel owns: relist-registry, a Database's
+// relist-db-<n> or any *.db.internal. The names checked are its service name,
+// its container_name and its aliases there. DNS names match in any case and
+// with a final dot.
+func (c *checker) reservedAlias(name string, attachment any) {
 	names := []string{name}
 	if container, ok := c.services[name]["container_name"].(string); ok {
 		names = append(names, container)
@@ -595,8 +604,13 @@ func (c *checker) registryAlias(name string, attachment any) {
 		}
 	}
 	for _, n := range names {
-		if strings.EqualFold(strings.TrimSuffix(n, "."), registryHost) {
+		n = strings.ToLower(strings.TrimSuffix(n, "."))
+		if n == registryHost {
 			c.add(name, "%s on %s is the panel's Registry", registryHost, sharedNetwork)
+			return
+		}
+		if databaseHost.MatchString(n) || strings.HasSuffix(n, databaseAliasSuffix) {
+			c.add(name, "%s on %s is reserved for the panel's Databases", n, sharedNetwork)
 			return
 		}
 	}
