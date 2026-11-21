@@ -21,11 +21,14 @@ type BackupJSON struct {
 	SHA256     string     `json:"sha256"`
 	StartedAt  time.Time  `json:"startedAt"`
 	FinishedAt *time.Time `json:"finishedAt"`
+	Pinned     bool       `json:"pinned"`
+	// LocalRemoved: Rotation removed the file; it cannot be downloaded or restored.
+	LocalRemoved bool `json:"localRemoved"`
 }
 
 func backupJSON(b Backup) BackupJSON {
 	return BackupJSON{ID: b.ID, Trigger: b.Trigger, Database: b.LogicalName, Status: b.Status, Error: b.Error, Log: b.Log,
-		Size: b.Size, SHA256: b.SHA256, StartedAt: b.StartedAt, FinishedAt: b.FinishedAt}
+		Size: b.Size, SHA256: b.SHA256, StartedAt: b.StartedAt, FinishedAt: b.FinishedAt, Pinned: b.Pinned, LocalRemoved: b.LocalRemovedAt != nil}
 }
 
 // RestoreJSON is a restore as the browser sees it.

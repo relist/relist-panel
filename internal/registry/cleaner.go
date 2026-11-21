@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"relist-panel/internal/audit"
+	"relist-panel/internal/schedule"
 	"slices"
 	"strings"
 	"sync"
@@ -507,7 +508,7 @@ func (c *Cleaner) tick(ctx context.Context) {
 		}
 		return
 	}
-	if !Due(now, settings) || c.Running() || (c.d.Gate != nil && c.d.Gate.Locked()) {
+	if !settings.Enabled || !schedule.Due(now, schedule.Rule{Days: settings.Days, Minute: settings.Minute}, settings.LastRunAt) || c.Running() || (c.d.Gate != nil && c.d.Gate.Locked()) {
 		return
 	}
 	if err := c.store().SetLastRunAt(ctx, now); err != nil {

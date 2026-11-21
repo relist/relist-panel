@@ -1,10 +1,11 @@
-import { CloudUploadOutlined, DownloadOutlined } from '@ant-design/icons';
+import { CloudUploadOutlined, DownloadOutlined, PushpinFilled, PushpinOutlined } from '@ant-design/icons';
 import { Alert, App, Button, Card, Checkbox, Flex, Input, Modal, Popconfirm, Radio, Select, Table, Tag, Tooltip, Typography, Upload } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useEffect, useState } from 'react';
 import useSWR from 'swr';
 
 import { DangerModal } from '../components/DangerModal';
+import { DatabaseScheduleCard } from '../components/DatabaseScheduleCard';
 import { RelativeTime } from '../components/primitives';
 import { api } from '../data/api';
 import type { BackupRequest, Database, DatabaseBackup, DatabaseRestore, JobStatus } from '../data/types';
@@ -12,6 +13,7 @@ import { backupsPollInterval, canBackUp, formatBytes, restoreWarning, triggerLab
 
 const { Text } = Typography;
 
+const REMOTE_ONLY = 'Rotation removed the file from this server. Download it from the Backup destination.';
 const NOT_RESTORABLE = 'This Backup holds several databases (an earlier format); download it and restore by hand.';
 
 const STATUS_TAG: Record<JobStatus, { color: string; label: string }> = {
@@ -155,6 +157,16 @@ export function DatabaseBackupsTab({ db }: { db: Database }) {
     }
   };
 
+  const pin = async (backup: DatabaseBackup) => {
+    setActionError(undefined);
+    try {
+      await api.pinDatabaseBackup(db.id, backup.id, !backup.pinned);
+      await mutate();
+    } catch (reasonError: unknown) {
+      setActionError(failure(reasonError, 'Could not change the pin'));
+    }
+  };
+
   const columns: TableColumnsType<DatabaseBackup> = [
     {
       key: 'database',
@@ -162,22 +174,49 @@ export function DatabaseBackupsTab({ db }: { db: Database }) {
       title: 'Database',
     },
     { key: 'started', render: (_, row) => <RelativeTime value={row.startedAt} />, title: 'Started' },
-    { key: 'trigger', render: (_, row) => <Tag>{triggerLabel(row.trigger)}</Tag>, title: 'Trigger' },
+    {
+      key: 'trigger',
+      render: (_, row) => (
+        <Flex gap={4} wrap>
+          <Tag>{triggerLabel(row.trigger)}</Tag>
+          {row.localRemoved && <Tag color="warning">Remote only</Tag>}
+        </Flex>
+      ),
+      title: 'Trigger',
+    },
     { key: 'size', render: (_, row) => (row.status === 'succeeded' ? formatBytes(row.size) : '—'), title: 'Size' },
     { key: 'status', render: (_, row) => <StatusTag status={row.status} />, title: 'Status' },
     {
       key: 'actions',
       render: (_, row) => (
         <Flex gap={4} wrap>
-          {row.status === 'succeeded' && (
+          {row.trigger === 'scheduled' && row.status !== 'running' && (
+            <Tooltip title={row.pinned ? 'Pinned: Rotation keeps it' : 'Pin: Rotation never deletes it'}>
+              <Button
+                aria-label={row.pinned ? 'Unpin' : 'Pin'}
+                icon={row.pinned ? <PushpinFilled /> : <PushpinOutlined />}
+                onClick={() => void pin(row)}
+                size="small"
+                type="link"
+              />
+            </Tooltip>
+          )}
+          {row.status === 'succeeded' && row.localRemoved && (
+            <Tooltip title={REMOTE_ONLY}>
+              <Button disabled icon={<DownloadOutlined />} size="small" type="link">
+                Download
+              </Button>
+            </Tooltip>
+          )}
+          {row.status === 'succeeded' && !row.localRemoved && (
             <Button href={api.databaseBackupUrl(db.id, row.id)} icon={<DownloadOutlined />} size="small" type="link">
               Download
             </Button>
           )}
           {row.status === 'succeeded' && !db.deleted && (
-            <Tooltip title={!row.database ? NOT_RESTORABLE : reading ? undefined : reason}>
+            <Tooltip title={row.localRemoved ? REMOTE_ONLY : !row.database ? NOT_RESTORABLE : reading ? undefined : reason}>
               <Button
-                disabled={!reading || !row.database}
+                disabled={!reading || !row.database || row.localRemoved}
                 onClick={() => setSource({ backup: row, kind: 'backup' })}
                 size="small"
                 type="link"
@@ -239,6 +278,7 @@ export function DatabaseBackupsTab({ db }: { db: Database }) {
       {actionError && (
         <Alert closable={{ onClose: () => setActionError(undefined) }} showIcon title={actionError} type="error" />
       )}
+      {!db.deleted && db.engine !== 'redis' && <DatabaseScheduleCard db={db} />}
       <Card
         extra={
           !db.deleted && (
