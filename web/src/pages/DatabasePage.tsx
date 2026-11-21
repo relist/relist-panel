@@ -137,7 +137,12 @@ export function DatabasePage() {
                 </Tooltip>
               )}
               {canRepair(data) && (
-                <Button disabled={jobRunning} loading={busy === 'repair'} onClick={() => void act('repair', `Repaired ${name}`)} type="primary">
+                <Button
+                  disabled={jobRunning}
+                  loading={busy === 'repair'}
+                  onClick={() => void act('repair', `Repaired ${name}`)}
+                  type={wantsRunning ? 'primary' : 'default'}
+                >
                   Repair
                 </Button>
               )}

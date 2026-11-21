@@ -182,7 +182,7 @@ function OpenAccess({ access, db, onChanged }: { access: DirectAccess; db: Datab
         bordered
         column={1}
         items={[
-          { children: <Tag color="green">Open</Tag>, key: 'state', label: 'State' },
+          { children: <Tag color="success">Open</Tag>, key: 'state', label: 'State' },
           { children: <Text code>{access.bind}</Text>, key: 'bind', label: 'Bind address' },
           { children: <Text code copyable>{String(access.hostPort)}</Text>, key: 'port', label: 'Host port' },
           {

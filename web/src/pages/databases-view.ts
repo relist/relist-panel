@@ -5,7 +5,7 @@ type Meta = { color: string; label: string };
 const STATUS: Record<DatabaseStatus, Meta> = {
   creating: { color: 'processing', label: 'Creating' },
   deleted: { color: 'default', label: 'Deleted' },
-  drift: { color: 'orange', label: 'Drift' },
+  drift: { color: 'warning', label: 'Drift' },
   error: { color: 'error', label: 'Error' },
   running: { color: 'success', label: 'Running' },
   starting: { color: 'processing', label: 'Starting' },

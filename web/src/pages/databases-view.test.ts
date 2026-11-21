@@ -116,6 +116,12 @@ describe('canBackUp', () => {
   });
 });
 
+describe('statusMeta', () => {
+  it('colours a status with a functional colour, never a preset one', () => {
+    expect(statusMeta('drift').color).toBe('warning');
+  });
+});
+
 describe('every job kind', () => {
   it('has a notice and a label', () => {
     for (const job of DATABASE_JOBS) {

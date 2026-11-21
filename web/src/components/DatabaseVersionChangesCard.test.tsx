@@ -96,13 +96,28 @@ describe('DatabaseVersionChangesCard', () => {
     expect(await screen.findByText(/✗ Restore legacy: boom/)).toBeTruthy();
   });
 
-  it('deletes previous version data after a confirm', async () => {
+  it('deletes previous version data only after its volume name is typed', async () => {
     const user = userEvent.setup();
     renderCard();
     await user.click(await screen.findByRole('button', { name: 'Delete' }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('Deletes the 16 data kept from before the change. It cannot be undone.')).toBeTruthy();
-    await user.click(within(dialog).getByRole('button', { name: 'Delete previous data' }));
+    const ok = within(dialog).getByRole('button', { name: 'Delete previous data' }) as HTMLButtonElement;
+    expect(ok.disabled).toBe(true);
+    await user.type(within(dialog).getByLabelText('Type relist-db-1 to confirm'), 'relist-db-1');
+    await waitFor(() => expect(ok.disabled).toBe(false));
+    await user.click(ok);
     await waitFor(() => expect(api.deletePreviousData).toHaveBeenCalledWith(1, 3));
+  });
+
+  it('keeps a failed delete in the dialog', async () => {
+    api.deletePreviousData.mockRejectedValue(new Error('the volume is in use'));
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Type relist-db-1 to confirm'), 'relist-db-1');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete previous data' }));
+    expect(await within(dialog).findByText('the volume is in use')).toBeTruthy();
   });
 });

@@ -231,6 +231,15 @@ describe('DatabasePage', () => {
     await waitFor(() => expect(api.recreateDatabase).toHaveBeenCalledWith(1, 'Shop', [4]));
   });
 
+  it('keeps one primary button: Start, when a stopped Database also needs Repair', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, desired: 'stopped', lastError: 'boom', status: 'error' });
+    renderPage();
+    const start = await screen.findByRole('button', { name: 'Start' });
+    const repair = screen.getByRole('button', { name: 'Repair' });
+    expect(start.className).toContain('ant-btn-primary');
+    expect(repair.className).not.toContain('ant-btn-primary');
+  });
+
   it('offers no Recreate for Redis, which keeps no Backups', async () => {
     api.getDatabase.mockResolvedValue({ ...shop, engine: 'redis', status: 'volume_missing' });
     renderPage();
