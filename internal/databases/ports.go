@@ -50,6 +50,9 @@ type ContainerState struct {
 	Hash            string
 	ImageID         string
 	Aliases         []string // on relist-network
+	// OnNetwork: connected to relist-network. A version change disconnects
+	// a Postgres container to cut its clients off before the dumps.
+	OnNetwork bool
 }
 
 // ExecRequest is one non-interactive command run inside a Database's
@@ -78,6 +81,10 @@ type Host interface {
 	// Realias disconnects the container from relist-network and connects it
 	// again with alias ("" = none), without restarting it.
 	Realias(ctx context.Context, name, alias string) error
+	// Disconnect takes the container off relist-network, which ends every
+	// client connection; docker exec keeps working. Not connected and not
+	// found are nil.
+	Disconnect(ctx context.Context, name string) error
 	// Remove deletes the container only; not found is nil.
 	Remove(ctx context.Context, name string) error
 	// RemoveVolume deletes the volume; not found is nil.
@@ -92,3 +99,10 @@ type Host interface {
 // OwnerName is who the Docker page shows as the owner of a Database's volume
 // and image, so cleanup never offers them.
 const OwnerName = "Databases"
+
+// targetVolume is the volume a version change moves a Database's data to.
+// The change's ID makes the name unique to that one attempt, so a volume a
+// failed or interrupted attempt left behind is never live data (ADR-0047).
+func targetVolume(id, changeID int64) string {
+	return fmt.Sprintf("relist-db-%d-v%d", id, changeID)
+}

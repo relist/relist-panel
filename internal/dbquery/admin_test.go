@@ -27,3 +27,26 @@ func TestAdminPgConfigSilencesStatements(t *testing.T) {
 		t.Errorf("default Database = %q, want postgres", def.Database)
 	}
 }
+
+// Security review: a database's owner can set its search_path ahead of
+// pg_catalog and shadow the operators the panel's catalog queries use; the
+// superuser sessions the panel opens inside it would run the owner's code.
+func TestSuperuserCatalogSessionsPinSearchPath(t *testing.T) {
+	tg := Target{Host: "relist-db-1", Port: 5432, User: "postgres", Password: "pw"}
+	admin, err := adminPgConfig(tg, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := schemaPgConfig(tg, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, cfg := range map[string]map[string]string{"admin": admin.RuntimeParams, "schema": schema.RuntimeParams} {
+		if cfg["search_path"] != "pg_catalog, pg_temp" {
+			t.Errorf("%s search_path = %q", name, cfg["search_path"])
+		}
+	}
+	if schema.RuntimeParams["default_transaction_read_only"] != "on" || schema.Database != "app" {
+		t.Errorf("schema config = %+v", schema.RuntimeParams)
+	}
+}

@@ -19,6 +19,9 @@ const api = vi.hoisted(() => ({
   getDatabase: vi.fn(),
   renameDatabase: vi.fn(),
   updateDatabaseImage: vi.fn(),
+  changeDatabaseVersion: vi.fn(),
+  listVersionChanges: vi.fn(),
+  deletePreviousData: vi.fn(),
   databaseBackupUrl: (id: number, backupId: number) => `/api/databases/${id}/backups/${backupId}/download`,
   listDatabaseBackups: vi.fn(),
   listDatabaseRestores: vi.fn(),
@@ -52,6 +55,7 @@ const shop: Database = {
   name: 'Shop',
   port: 5432,
   settingsOutdated: false,
+  upgrades: [],
   slug: 'shop',
   status: 'running',
   user: 'postgres',
@@ -83,6 +87,8 @@ describe('DatabasePage', () => {
     api.listDatabaseRestores.mockResolvedValue([]);
     api.listDirectAccesses.mockResolvedValue({ accesses: [] });
     api.updateDatabaseImage.mockResolvedValue(undefined);
+    api.changeDatabaseVersion.mockResolvedValue({ id: 1 });
+    api.listVersionChanges.mockResolvedValue([]);
     api.listDatabaseUsers.mockResolvedValue({
       users: [
         { access: { app: 'full', postgres: 'none' }, managed: true, name: 'app', owns: ['app'] },
@@ -349,5 +355,115 @@ describe('DatabasePage Panel access tab', () => {
     const tabs = await screen.findAllByRole('tab');
     const names = tabs.map((tab) => tab.textContent);
     expect(names.indexOf('Panel access')).toBe(names.indexOf('Users') + 1);
+  });
+});
+
+describe('Change version', () => {
+  const pg16: Database = { ...shop, version: '16', image: 'postgres:16', upgrades: ['17', '18'] };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.databaseLogs.mockResolvedValue({ logs: 'ready' });
+    api.listDatabaseBackups.mockResolvedValue([]);
+    api.listDatabaseRestores.mockResolvedValue([]);
+    api.listDirectAccesses.mockResolvedValue({ accesses: [] });
+    api.listDatabaseUsers.mockResolvedValue({ users: [] });
+    api.databaseLogicalDetails.mockResolvedValue({ databases: [] });
+    api.getDatabaseSchedule.mockResolvedValue(undefined);
+    api.changeDatabaseVersion.mockResolvedValue({ id: 1 });
+    api.listVersionChanges.mockResolvedValue([]);
+  });
+
+  async function openChange(db: Database) {
+    api.getDatabase.mockResolvedValue(db);
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Change version' }));
+    return { dialog: await screen.findByRole('dialog'), user };
+  }
+
+  it('shows the running change on the Settings tab as soon as it starts', async () => {
+    api.getDatabase.mockResolvedValue(pg16);
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('tab', { name: 'Settings' }));
+    await waitFor(() => expect(api.listVersionChanges).toHaveBeenCalled());
+    expect(screen.queryByText('Version changes')).toBeNull();
+    api.listVersionChanges.mockResolvedValue([
+      {
+        error: '',
+        finishedAt: null,
+        fromVersion: '16',
+        id: 1,
+        log: '',
+        method: 'dump_restore',
+        previousData: '',
+        startedAt: '2026-11-17T10:00:00Z',
+        status: 'running',
+        toVersion: '18',
+      },
+    ]);
+    await user.click(screen.getByRole('button', { name: 'Change version' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Change to 18' }));
+    const card = (await screen.findByText('Version changes')).closest('.ant-card') as HTMLElement;
+    expect(within(card).getByText('Running')).toBeTruthy();
+  });
+
+  it('is not offered without a higher version', async () => {
+    api.getDatabase.mockResolvedValue(shop);
+    renderPage();
+    await screen.findByRole('button', { name: 'Update image' });
+    expect(screen.queryByRole('button', { name: 'Change version' })).toBeNull();
+  });
+
+  it('is disabled while a job runs', async () => {
+    api.getDatabase.mockResolvedValue({ ...pg16, job: 'backup' });
+    renderPage();
+    const button = (await screen.findByRole('button', { name: 'Change version' })) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it('moves postgres to the newest version by default, with no Back up first', async () => {
+    const { dialog, user } = await openChange(pg16);
+    expect(within(dialog).getByText(/moves the data to PostgreSQL 18 on a new volume/)).toBeTruthy();
+    expect(within(dialog).getByText(/Clients are disconnected from the start/)).toBeTruthy();
+    expect(within(dialog).queryByLabelText('Back up first')).toBeNull();
+    await user.click(within(dialog).getByRole('combobox', { name: 'Version' }));
+    expect((await screen.findAllByText('17')).length).toBeGreaterThan(0);
+    await user.click(within(dialog).getByRole('button', { name: 'Change to 18' }));
+    await waitFor(() => expect(api.changeDatabaseVersion).toHaveBeenCalledWith(1, '18', false));
+  });
+
+  it('can pick a lower step', async () => {
+    const { dialog, user } = await openChange(pg16);
+    await user.click(within(dialog).getByRole('combobox', { name: 'Version' }));
+    await user.click((await screen.findAllByTitle('17')).at(-1)!);
+    await user.click(within(dialog).getByRole('button', { name: 'Change to 17' }));
+    await waitFor(() => expect(api.changeDatabaseVersion).toHaveBeenCalledWith(1, '17', false));
+  });
+
+  it('backs mariadb up first by default, and can skip it', async () => {
+    const maria: Database = { ...shop, engine: 'mariadb', version: '11.4', image: 'mariadb:11.4', upgrades: ['11.8'] };
+    const { dialog, user } = await openChange(maria);
+    expect(within(dialog).getByText(/There is no going back to 11.4 once it starts/)).toBeTruthy();
+    const box = within(dialog).getByLabelText('Back up first') as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    await user.click(box);
+    await user.click(within(dialog).getByRole('button', { name: 'Change to 11.8' }));
+    await waitFor(() => expect(api.changeDatabaseVersion).toHaveBeenCalledWith(1, '11.8', false));
+  });
+
+  it('sends Back up first for mariadb when left ticked', async () => {
+    const maria: Database = { ...shop, engine: 'mariadb', version: '11.4', image: 'mariadb:11.4', upgrades: ['11.8'] };
+    const { dialog, user } = await openChange(maria);
+    await user.click(within(dialog).getByRole('button', { name: 'Change to 11.8' }));
+    await waitFor(() => expect(api.changeDatabaseVersion).toHaveBeenCalledWith(1, '11.8', true));
+  });
+
+  it('warns that redis cannot go back, with no backup option', async () => {
+    const redis: Database = { ...shop, engine: 'redis', version: '7.4', image: 'redis:7.4', upgrades: ['8'] };
+    const { dialog } = await openChange(redis);
+    expect(within(dialog).getByText(/Redis 8 rewrites the data file in a format 7.4 cannot read/)).toBeTruthy();
+    expect(within(dialog).queryByLabelText('Back up first')).toBeNull();
   });
 });

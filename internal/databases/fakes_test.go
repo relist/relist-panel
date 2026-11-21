@@ -19,10 +19,15 @@ type fakeHost struct {
 	calls      []string
 	containers map[string]*ContainerState
 	specs      map[string]ContainerSpec
+	created    []ContainerSpec // every Create, in order
 	volumes    map[string]bool
 	images     map[string]string // ref -> image ID after a pull
 	failOn     map[string]error  // call prefix -> error
 	logs       string
+	// health is the Health a container of that image has after Create
+	// (default "healthy"); stopOnStart images exit at once.
+	health      map[string]string
+	stopOnStart map[string]bool
 	// onCreate, when set, runs before each Create (outside the lock), so a
 	// test can hold a recreate half-way.
 	onCreate func()
@@ -40,11 +45,13 @@ type execScript struct {
 
 func newFakeHost() *fakeHost {
 	return &fakeHost{
-		containers: map[string]*ContainerState{},
-		specs:      map[string]ContainerSpec{},
-		volumes:    map[string]bool{},
-		images:     map[string]string{},
-		failOn:     map[string]error{},
+		containers:  map[string]*ContainerState{},
+		specs:       map[string]ContainerSpec{},
+		volumes:     map[string]bool{},
+		images:      map[string]string{},
+		failOn:      map[string]error{},
+		health:      map[string]string{},
+		stopOnStart: map[string]bool{},
 	}
 }
 
@@ -155,7 +162,11 @@ func (f *fakeHost) Create(_ context.Context, spec ContainerSpec) error {
 	}
 	f.volumes[spec.Volume] = true
 	f.specs[spec.Name] = spec
-	st := &ContainerState{Exists: true, Running: true, Health: "healthy", Hash: spec.Labels[HashLabel], ImageID: "sha256:img-" + spec.Image}
+	f.created = append(f.created, spec)
+	st := &ContainerState{Exists: true, Running: !f.stopOnStart[spec.Image], Health: "healthy", Hash: spec.Labels[HashLabel], ImageID: "sha256:img-" + spec.Image, OnNetwork: true}
+	if h, ok := f.health[spec.Image]; ok {
+		st.Health = h
+	}
 	if id, ok := f.images[spec.Image]; ok {
 		st.ImageID = id
 	}
@@ -189,6 +200,18 @@ func (f *fakeHost) Stop(_ context.Context, name string) error {
 func (f *fakeHost) Restart(_ context.Context, name string) error {
 	return f.with(name, "restart", func(c *ContainerState) { c.Running = true })
 }
+func (f *fakeHost) Disconnect(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("disconnect " + name); err != nil {
+		return err
+	}
+	if c, ok := f.containers[name]; ok {
+		c.OnNetwork = false
+	}
+	return nil
+}
+
 func (f *fakeHost) Realias(_ context.Context, name, alias string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -199,7 +222,7 @@ func (f *fakeHost) Realias(_ context.Context, name, alias string) error {
 	if !ok {
 		return errors.New("docker: no such container " + name)
 	}
-	c.Aliases = nil
+	c.Aliases, c.OnNetwork = nil, true
 	if alias != "" {
 		c.Aliases = []string{alias}
 	}
@@ -240,6 +263,13 @@ func (f *fakeHost) script(prefix string, fn func(req ExecRequest) (int, error)) 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.scripts = append(f.scripts, execScript{prefix, fn})
+}
+
+// override is script for a prefix that already has one: it answers first.
+func (f *fakeHost) override(prefix string, fn func(req ExecRequest) (int, error)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scripts = append([]execScript{{prefix, fn}}, f.scripts...)
 }
 
 // execs returns the recorded Exec requests whose command starts with prefix.

@@ -378,6 +378,22 @@ that is higher than the current one. Downgrades are never offered.
   `relist-db-<id>` for existing Databases.
 - Runs as a job; the Database is unavailable from step 2 to the end.
 
+**Phase 10 decisions (2026-11-17, plan-phase-10.md, ADR-0047):**
+
+- Clients are cut off (the container leaves `relist-network`) before the
+  Postgres backups, so the Database is unavailable from step 1, not step 2:
+  writes during the dumps would otherwise be lost.
+- `v<n>` is the version change's record ID, unique per attempt.
+- Each database's owner, ACL and `ALTER ROLE … IN DATABASE` /
+  `ALTER DATABASE … SET` settings are read before the stop and put back
+  after its restore; a replace Restore now does the same (it had been
+  dropping a Full user's `SET role`).
+- MariaDB and Redis do not roll back once the new image has started (Redis
+  7.4 cannot read Redis 8's RDB). `MARIADB_AUTO_UPGRADE=1` is on the first
+  start only.
+- Refused up front: a pending superuser password reset, a tag not strictly
+  higher, a stopped Database, a running job.
+
 ## Testing
 
 Each phase follows `spec.md`'s Testing section: unit tests for pure parts,

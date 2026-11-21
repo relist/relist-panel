@@ -44,6 +44,9 @@ func pgConfig(t Target, r Request) (*pgx.ConnConfig, error) {
 	if !r.Writes {
 		cfg.RuntimeParams["default_transaction_read_only"] = "on"
 	}
+	if r.CatalogSearchPath {
+		cfg.RuntimeParams["search_path"] = catalogSearchPath
+	}
 	cfg.BuildContextWatcherHandler = func(c *pgconn.PgConn) ctxwatch.Handler {
 		// The socket deadline must outlive the cancel request, or the
 		// request's own context ends with it before it is sent.
@@ -250,11 +253,23 @@ func finishPg(resp *QueryResponse, runCtx, parent context.Context, err error, be
 	}
 }
 
+// schemaPgConfig is the table tree's session: read-only, on
+// catalogSearchPath, since it may be the superuser's inside a database
+// another role owns.
+func schemaPgConfig(t Target, database string) (*pgx.ConnConfig, error) {
+	cfg, err := pgConfig(t, Request{Database: database})
+	if err != nil {
+		return nil, err
+	}
+	cfg.RuntimeParams["search_path"] = catalogSearchPath
+	return cfg, nil
+}
+
 // SchemaPostgres lists the schemas of database with their tables and views.
 func SchemaPostgres(ctx context.Context, t Target, database string) ([]SchemaNode, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	cfg, err := pgConfig(t, Request{Database: database})
+	cfg, err := schemaPgConfig(t, database)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +282,7 @@ func SchemaPostgres(ctx context.Context, t Target, database string) ([]SchemaNod
 		defer c()
 		_ = conn.Close(cctx)
 	}()
-	rows, err := conn.Query(ctx, `SELECT n.nspname, c.relname
+	rows, err := conn.Query(ctx, `SELECT n.nspname, c.relname, c.relkind IN ('v','m')
 		FROM pg_namespace n LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relkind IN ('r','v','m','p','f')
 		WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg\_toast%' AND n.nspname NOT LIKE 'pg\_temp\_%'
 		ORDER BY n.nspname, c.relname`)
@@ -279,14 +294,19 @@ func SchemaPostgres(ctx context.Context, t Target, database string) ([]SchemaNod
 	for rows.Next() {
 		var schema string
 		var table *string
-		if err := rows.Scan(&schema, &table); err != nil {
+		var view *bool
+		if err := rows.Scan(&schema, &table, &view); err != nil {
 			return nil, err
 		}
 		if len(out) == 0 || out[len(out)-1].Name != schema {
-			out = append(out, SchemaNode{Name: schema, Tables: []string{}})
+			out = append(out, SchemaNode{Name: schema, Tables: []string{}, Views: []string{}})
 		}
 		if table != nil {
-			out[len(out)-1].Tables = append(out[len(out)-1].Tables, *table)
+			node := &out[len(out)-1]
+			node.Tables = append(node.Tables, *table)
+			if view != nil && *view {
+				node.Views = append(node.Views, *table)
+			}
 		}
 	}
 	return out, rows.Err()

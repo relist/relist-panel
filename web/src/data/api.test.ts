@@ -689,3 +689,25 @@ describe('restoreDatabaseUpload', () => {
     expect((init?.headers as Record<string, string>)['X-Passphrase']).toBe(encodeURIComponent(thai));
   });
 });
+
+describe('version changes', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('posts, lists and deletes previous data', async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{"id":3}', { status: 202 }));
+    vi.stubGlobal('fetch', fetch);
+    await api.changeDatabaseVersion(1, '18', false);
+    let [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/databases/1/change-version');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ version: '18', backupFirst: false });
+    fetch.mockImplementation(async () => new Response('[]'));
+    await expect(api.listVersionChanges(1)).resolves.toEqual([]);
+    expect(fetch.mock.calls[1][0]).toBe('/api/databases/1/version-changes');
+    fetch.mockImplementation(async () => new Response(null, { status: 204 }));
+    await api.deletePreviousData(1, 3);
+    [url, init] = fetch.mock.calls[2];
+    expect(url).toBe('/api/databases/1/version-changes/3/previous-data');
+    expect(init?.method).toBe('DELETE');
+  });
+});

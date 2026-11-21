@@ -117,8 +117,13 @@ function ResultView({ result, database }: { database: string; result: QueryResul
   );
 }
 
-/** The SQL console of a Postgres, MySQL or MariaDB Database (GUIDELINES §4.6a). */
-export function DatabaseQueryTab({ db }: { db: Database }) {
+/**
+ * The SQL console of a Postgres, MySQL or MariaDB Database (GUIDELINES §4.6a).
+ * An Admin's Postgres runs connect as the chosen database's owner, and root
+ * needs Run as superuser in a MySQL or MariaDB database other users have
+ * Full access to; a grantee always runs as its own database user.
+ */
+export function DatabaseQueryTab({ db, grantee = false }: { db: Database; grantee?: boolean }) {
   const mysql = db.engine !== 'postgres';
   const mode = useContext(ThemeModeContext);
   const monacoStatus = useMonaco();
@@ -140,7 +145,17 @@ export function DatabaseQueryTab({ db }: { db: Database }) {
   const treeData: DataNode[] = useMemo(
     () =>
       (schema.data ?? []).map((node) => ({
-        children: node.tables.map((table) => ({ isLeaf: true, key: `t:${node.name}\u0000${table}`, title: table })),
+        children: node.tables.map((table) => ({
+          isLeaf: true,
+          key: `t:${node.name}\u0000${table}`,
+          title: node.views?.includes(table) ? (
+            <span>
+              <span>{table}</span> <Tag bordered={false}>view</Tag>
+            </span>
+          ) : (
+            table
+          ),
+        })),
         key: `s:${node.name}`,
         title: node.name,
       })),
@@ -149,6 +164,7 @@ export function DatabaseQueryTab({ db }: { db: Database }) {
 
   const [sql, setSql] = useState('');
   const [writes, setWrites] = useState(false);
+  const [asSuperuser, setAsSuperuser] = useState(false);
   const [busy, setBusy] = useState(false);
   const [response, setResponse] = useState<QueryResponse>();
   const [notice, setNotice] = useState<string>();
@@ -206,7 +222,8 @@ export function DatabaseQueryTab({ db }: { db: Database }) {
       mark(null, '');
       const entry = { at: Date.now(), database, sql: text, writes };
       try {
-        const answer = await api.runDatabaseQuery(db.id, { database, preview, sql: text, writes }, controller.signal);
+        const body = { database, preview, sql: text, writes, ...(asSuperuser ? { asSuperuser: true } : {}) };
+        const answer = await api.runDatabaseQuery(db.id, body, controller.signal);
         setResponse(answer);
         setActive('0');
         pushHistory(db.id, { ...entry, outcome: outcomeOf(answer) });
@@ -226,7 +243,7 @@ export function DatabaseQueryTab({ db }: { db: Database }) {
         setBusy(false);
       }
     },
-    [busy, database, db.id, mark, running, sql, writes],
+    [asSuperuser, busy, database, db.id, mark, running, sql, writes],
   );
 
   // The editor's Ctrl/Cmd+Enter command is registered once; it calls the latest run.
@@ -242,12 +259,13 @@ export function DatabaseQueryTab({ db }: { db: Database }) {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => void runRef.current());
   };
 
+  // A click only fills the editor: reading a view runs the functions it
+  // calls, so nothing runs until Run is pressed.
   const pickTable = (schemaName: string, table: string) => {
     const query = mysql
       ? `SELECT * FROM \`${table.replaceAll('`', '``')}\` LIMIT 100`
       : `SELECT * FROM "${schemaName.replaceAll('"', '""')}"."${table.replaceAll('"', '""')}" LIMIT 100`;
     setSql(query);
-    void run(query);
   };
 
   return (
@@ -273,6 +291,12 @@ export function DatabaseQueryTab({ db }: { db: Database }) {
           <Text>Allow writes</Text>
           {writes && <Tag color="red">Writes allowed</Tag>}
         </Flex>
+        {!grantee && (
+          <Flex align="center" gap={8}>
+            <Switch aria-label="Run as superuser" checked={asSuperuser} onChange={setAsSuperuser} />
+            <Text>Run as superuser</Text>
+          </Flex>
+        )}
         <Flex gap={8} style={{ marginInlineStart: 'auto' }}>
           <Button
             onClick={() => {
@@ -333,6 +357,18 @@ export function DatabaseQueryTab({ db }: { db: Database }) {
             )}
           </div>
           <Text type="secondary">Runs the selection, or the whole editor. Ctrl or Cmd + Enter runs.</Text>
+          {asSuperuser && !grantee && (
+            <Alert
+              showIcon
+              title={
+                mysql
+                  ? 'Runs as root. Views and functions that users with Full access created then run with root’s rights.'
+                  : 'Runs as the superuser. In a database another role owns, its views, triggers and functions then run with superuser rights, and only pg_catalog is on the search path: write schema.table.'
+              }
+              type="warning"
+            />
+          )}
+          {response?.user && <Text type="secondary">Ran as {response.user}</Text>}
           {notice && <Alert showIcon title={notice} type={notice === 'Cancelled.' ? 'info' : 'error'} />}
           {response?.stopped && <Alert showIcon title={response.stopped} type="warning" />}
           {response?.error && (

@@ -32,6 +32,7 @@ import type {
   BackupDestination,
   BackupDestinationInput,
   Database,
+  VersionChange,
   DatabaseAction,
   DatabaseBackup,
   DatabaseRestore,
@@ -625,6 +626,11 @@ export const api = {
     request<void>(`/api/databases/${id}/${action}`, { method: 'POST' }),
   updateDatabaseImage: (id: number, backupFirst: boolean) =>
     request<void>(`/api/databases/${id}/update-image`, jsonInit('POST', { backupFirst })),
+  changeDatabaseVersion: (id: number, version: string, backupFirst: boolean) =>
+    request<VersionChange>(`/api/databases/${id}/change-version`, jsonInit('POST', { version, backupFirst })),
+  listVersionChanges: (id: number) => request<VersionChange[]>(`/api/databases/${id}/version-changes`),
+  deletePreviousData: (id: number, changeId: number) =>
+    request<void>(`/api/databases/${id}/version-changes/${changeId}/previous-data`, { method: 'DELETE' }),
   deleteDatabase: (id: number, confirm: string, deleteBackups = false) =>
     request<void>(`/api/databases/${id}`, jsonInit('DELETE', { confirm, deleteBackups })),
   // Backups and restores (SQL engines only).

@@ -127,6 +127,7 @@ func granteeJSON(v View, g authz.DatabaseGrant) DatabaseJSON {
 	out.LastError = ""
 	out.Warnings = []string{}
 	out.SettingsOutdated = false
+	out.Upgrades = []string{}
 	out.MemoryMB, out.CPUs = 0, 0
 	out.User = g.DBUser
 	// The engine's default database is the superuser's home; a grantee's

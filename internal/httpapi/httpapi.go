@@ -401,16 +401,12 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		}()
 	}
 	if databaseService != nil {
+		databaseService.HoldJobs()
 		databases.NewAPI(databaseService).RegisterRoutes(mux)
 		worker.Add(1)
 		go func() {
 			defer worker.Done()
-			if err := databaseService.Startup(ctx); err != nil {
-				log.Printf("databases: finish interrupted backups: %v", err)
-			}
-			if err := databaseService.ReconcileAll(ctx); err != nil {
-				log.Printf("databases: reconcile at start: %v", err)
-			}
+			databaseService.Recover(ctx)
 			if err := databaseService.ResolvePendingPasswords(ctx); err != nil {
 				log.Printf("databases: settle a pending superuser password: %v", err)
 			}
