@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"relist-panel/internal/backupdest"
 	"relist-panel/internal/slug"
 )
 
@@ -51,6 +52,9 @@ type Deps struct {
 	// DataDir is the panel's data dir; Backups live under .databases/<id>/.
 	DataDir string
 	Now     func() time.Time
+	// Destinations opens Backup destinations for uploads (nil = scheduled
+	// Backups cannot be copied anywhere).
+	Destinations backupdest.Opener
 }
 
 type CreateInput struct {
@@ -87,13 +91,19 @@ type Service struct {
 	// "update_image"); jobsChanged is closed and replaced whenever one ends.
 	jobs        map[int64]string
 	jobsChanged chan struct{}
+	// uploadStall is how long an upload may send nothing before it is cut
+	// off; remoteTimeout bounds one delete in a Backup destination. A bucket
+	// that stops answering would otherwise hold the job slot, and the
+	// host-wide scheduler with it, for ever.
+	uploadStall, remoteTimeout time.Duration
 }
 
 func New(d Deps) *Service {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	return &Service{d: d, locks: map[int64]*sync.Mutex{}, inflight: map[int64]bool{}, jobs: map[int64]string{}, jobsChanged: make(chan struct{})}
+	return &Service{d: d, locks: map[int64]*sync.Mutex{}, inflight: map[int64]bool{}, jobs: map[int64]string{}, jobsChanged: make(chan struct{}),
+		uploadStall: 5 * time.Minute, remoteTimeout: time.Minute}
 }
 
 func (s *Service) locked(ctx context.Context) bool {
@@ -578,6 +588,12 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBa
 		if confirm != d.Name {
 			return ErrConfirm
 		}
+		if deleteBackups {
+			// Remote copies first: if one stays, nothing else is deleted.
+			if err := s.deleteLiveCopies(ctx, id, nil); err != nil {
+				return err
+			}
+		}
 		if err := s.d.Host.Remove(ctx, ContainerName(id)); err != nil {
 			return err
 		}
@@ -599,6 +615,14 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBa
 		}
 		return s.removeRecord(ctx, id)
 	})
+}
+
+// RemoveFiles removes everything the panel keeps on disk for Database id.
+func (s *Service) RemoveFiles(id int64) error {
+	if s.d.DataDir == "" {
+		return nil
+	}
+	return os.RemoveAll(s.dbDir(id))
 }
 
 // removeRecord deletes a Database's row and its files.

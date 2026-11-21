@@ -107,9 +107,22 @@ func (s *Service) runScheduled(ctx context.Context, sc Schedule) {
 		log.Printf("databases: record backup schedule: %v", err)
 		return
 	}
-	firstErr := s.scheduledBackups(ctx, sc)
+	firstErr, made := s.scheduledBackups(ctx, sc)
+	if sc.DestinationID != nil {
+		// Copy first, so a fresh copy exists before old files go.
+		if d, err := s.d.Store.Get(ctx, sc.DatabaseID); err == nil {
+			for _, b := range made {
+				if u := s.upload(ctx, d, b, *sc.DestinationID); u.Status == UploadFailed && firstErr == "" {
+					firstErr = s.uploadFailure(ctx, u)
+				}
+			}
+		}
+	}
 	if err := s.rotateLocal(ctx, sc.DatabaseID, sc.Local); err != nil {
 		log.Printf("databases: rotate backups of database %d: %v", sc.DatabaseID, err)
+	}
+	if err := s.rotateRemote(ctx, sc.DatabaseID, sc); err != nil {
+		log.Printf("databases: rotate remote backups of database %d: %v", sc.DatabaseID, err)
 	}
 	if firstErr != "" {
 		if err := s.d.Store.SetScheduleRun(ctx, sc.DatabaseID, now, firstErr); err != nil {
@@ -118,20 +131,20 @@ func (s *Service) runScheduled(ctx context.Context, sc Schedule) {
 	}
 }
 
-// scheduledBackups dumps what sc selects and returns the first failure, "" if
-// every Backup succeeded.
-func (s *Service) scheduledBackups(ctx context.Context, sc Schedule) string {
+// scheduledBackups dumps what sc selects. It returns the first failure, ""
+// if every Backup succeeded, and the Backups that succeeded.
+func (s *Service) scheduledBackups(ctx context.Context, sc Schedule) (string, []Backup) {
 	d, err := s.d.Store.Get(ctx, sc.DatabaseID)
 	if err != nil {
-		return err.Error()
+		return err.Error(), nil
 	}
 	dp, err := DumperFor(d.Engine)
 	if err != nil {
-		return err.Error()
+		return err.Error(), nil
 	}
 	have, err := s.listLogical(ctx, d, dp)
 	if err != nil {
-		return err.Error()
+		return err.Error(), nil
 	}
 	names := have
 	var gone []string
@@ -148,9 +161,10 @@ func (s *Service) scheduledBackups(ctx context.Context, sc Schedule) string {
 		}
 	}
 	if len(names) == 0 && len(gone) == 0 {
-		return ErrNothingToBackUp.Error()
+		return ErrNothingToBackUp.Error(), nil
 	}
 	var firstErr string
+	var made []Backup
 	fail := func(msg string) {
 		if firstErr == "" {
 			firstErr = msg
@@ -166,9 +180,11 @@ func (s *Service) scheduledBackups(ctx context.Context, sc Schedule) string {
 	for _, n := range names {
 		if b := s.backupNow(ctx, d, dp, n, TriggerScheduled, nil); b.Status != JobSucceeded {
 			fail(n + ": " + b.Error)
+		} else {
+			made = append(made, b)
 		}
 	}
-	return firstErr
+	return firstErr, made
 }
 
 // rotateAll applies local Rotation for every enabled schedule whose Database
@@ -190,6 +206,9 @@ func (s *Service) rotateAll(ctx context.Context) {
 		}
 		if err := s.rotateLocal(context.WithoutCancel(ctx), sc.DatabaseID, sc.Local); err != nil {
 			log.Printf("databases: rotate backups of database %d: %v", sc.DatabaseID, err)
+		}
+		if err := s.rotateRemote(context.WithoutCancel(ctx), sc.DatabaseID, sc); err != nil {
+			log.Printf("databases: rotate remote backups of database %d: %v", sc.DatabaseID, err)
 		}
 		s.endJob(sc.DatabaseID)
 	}
@@ -220,6 +239,19 @@ func (s *Service) rotateLocal(ctx context.Context, id int64, k Keep) error {
 				errs = append(errs, err)
 				continue
 			}
+		}
+		// A live copy in a destination keeps the row, as Remote only: deleting
+		// the row would lose track of the object.
+		live, err := s.d.Store.LiveUpload(ctx, bid)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if live != nil {
+			if err := s.d.Store.SetLocalRemoved(ctx, bid, s.d.Now()); err != nil {
+				errs = append(errs, err)
+			}
+			continue
 		}
 		if err := s.d.Store.DeleteBackup(ctx, bid); err != nil && !errors.Is(err, ErrNotFound) {
 			errs = append(errs, err)

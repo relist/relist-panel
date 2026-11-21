@@ -389,6 +389,11 @@ func (s *Service) DeleteBackup(ctx context.Context, id, backupID int64) error {
 	if b.Status == JobRunning {
 		return ErrBusy
 	}
+	// The remote copy goes first. If it cannot, nothing else changes, so no
+	// object is left behind untracked.
+	if err := s.deleteLiveCopies(ctx, id, map[int64]bool{backupID: true}); err != nil {
+		return err
+	}
 	if b.FileName != "" {
 		if err := os.Remove(filepath.Join(s.dbDir(id), "backups", filepath.Base(b.FileName))); err != nil && !os.IsNotExist(err) {
 			return err
