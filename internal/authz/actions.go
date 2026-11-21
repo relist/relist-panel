@@ -106,6 +106,7 @@ var Actions = map[string]string{
 	"PUT /api/databases/{id}/backups/{backupID}/pin":           "database.backup_pin",
 	"POST /api/databases/{id}/restores":                        "database.restore",
 	"POST /api/databases/{id}/restores/upload":                 "database.restore",
+	"POST /api/databases/{id}/query":                           "database.query",
 	"POST /api/backup-destinations":                            "backup_destination.create",
 	"PUT /api/backup-destinations/{id}":                        "backup_destination.update",
 	"DELETE /api/backup-destinations/{id}":                     "backup_destination.delete",

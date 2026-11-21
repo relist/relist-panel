@@ -1,6 +1,9 @@
 import { loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
 import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js';
+// The Query tab's SQL editor highlights Postgres and MySQL/MariaDB.
+import 'monaco-editor/esm/vs/basic-languages/pgsql/pgsql.contribution.js';
+import 'monaco-editor/esm/vs/basic-languages/mysql/mysql.contribution.js';
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import { configureMonacoYaml } from 'monaco-yaml';
 // Wrapping the worker import in a local file is the documented Vite workaround: importing

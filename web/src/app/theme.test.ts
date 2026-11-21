@@ -15,6 +15,7 @@ describe('LAYOUT', () => {
       editorAutoMinHeight: 320,
       editorAutoMaxHeight: '80vh',
       terminalHeight: 'clamp(420px, 65vh, 800px)',
+      queryEditorHeight: 'clamp(200px, 30vh, 360px)',
     });
   });
 });

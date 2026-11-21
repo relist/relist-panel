@@ -175,8 +175,10 @@ data under `/var/lib/postgresql`, while 17 and below use
   - The dump tool always matches the server version. This avoids the classic
     `pg_dump` version mismatch.
   - No extra image needs pulling or patching.
-- **The Query panel connects directly with Go drivers** (`pgx`,
-  `go-sql-driver/mysql`, `go-redis`) over `relist-network`. The panel is already
+- **The Query panel connects directly with Go drivers** (`pgx` v5.12.0 and
+  `go-sql-driver/mysql` v1.10.1; Redis through a small RESP2 client in the
+  panel, phase 4 decision: no new dependency, and every reply is read with a
+  size cap) over `relist-network`. The panel is already
   on that network; it reaches the Registry at `relist-registry:5000`. A direct
   connection gives typed columns, server-side statement timeouts, cancellation
   through context, and row limits. Parsing CLI output cannot give these
@@ -433,14 +435,48 @@ data under `/var/lib/postgresql`, while 17 and below use
 - **Run.** Runs the selection if there is one, otherwise the whole editor.
   Each statement's result appears in its own tab, either as a table or as
   affected rows.
-- **Read-only by default.** Statements run in a `READ ONLY` transaction. The
-  **Allow writes** switch is per page view and resets on reload.
+- **Read-only by default.** The session starts read-only
+  (`default_transaction_read_only=on` for Postgres, `transaction_read_only=ON`
+  for MySQL and MariaDB). The **Allow writes** switch is per page view and
+  resets on reload.
+  - Probed in phase 4 planning on pg 18, mysql 8.4 and mariadb 11.8: INSERT,
+    CREATE/ALTER/DROP/TRUNCATE TABLE, CREATE/DROP DATABASE, CREATE USER, GRANT,
+    `nextval`, `DO` blocks, functions and procedures that write, and
+    `COMMIT; INSERT …` are all refused. `VACUUM` runs.
+  - It is a guard against accidents, not a security boundary (phase 4
+    decision): an Admin is a superuser and can type `BEGIN READ WRITE`
+    (Postgres) or `SET SESSION transaction_read_only=OFF` (MySQL).
+- **Batches** (phase 4 decision):
+  - **Postgres** sends the text as one simple-protocol query. The server splits
+    it, and runs it as one transaction unless it holds its own `BEGIN` /
+    `COMMIT`, so an error stops the batch and undoes it.
+  - **MySQL and MariaDB** are split by the panel the way the `mysql` client
+    does: quotes, backticks, `--`/`#`/`/* */` comments, and `DELIMITER` lines.
+    Each statement commits on its own; an error stops the batch, and the
+    statements before it stay.
 - **Limits.**
-  - Timeout of 30 s (server-side statement timeout plus context).
+  - Timeout of 30 s for the whole batch: the context, plus `statement_timeout`
+    (Postgres), `max_statement_time` (MariaDB) or `max_execution_time` (MySQL,
+    which covers SELECT only; the rest relies on the context and `KILL QUERY`).
   - At most 1,000 rows returned per result, with a "truncated" flag.
   - Cell values are cut at 64 KB for display.
-- **Cancel** aborts the HTTP request. The request context is cancelled, which
-  makes the driver cancel the query on the server.
+  - At most 20 results and 16 MB of results per batch (phase 4 decision).
+  - The request body is at most 1 MB.
+  - **Reaching a limit stops the batch** (phase 4 decision): the panel cancels
+    the statement on the server and closes the connection, rather than reading
+    millions of rows it would throw away. The response says why it stopped. On
+    Postgres with writes allowed, that also undoes the batch's earlier
+    statements, and the response says so.
+- **Cells** are strings or null, never JSON numbers, so 64-bit integers and
+  numerics keep every digit. A value that is not valid UTF-8 is sent as hex
+  and shown with a marker (phase 4 decision).
+- **Errors** show the server's message. Postgres gives a position in the text;
+  MySQL gives a line inside one statement, so the response names the statement
+  and where it starts, and the editor marks it.
+- **Cancel** aborts the HTTP request. The request context is cancelled, and
+  the panel cancels the query on the server: pgx's cancel-request context
+  handler for Postgres, `KILL QUERY <connection id>` on a second connection for
+  MySQL and MariaDB (phase 4 decision: neither driver does it by default).
 - **CSV export** of the displayed result happens in the browser. Bulk export is
   what Backups are for.
 - **History** of the last 50 queries per Database is kept in the browser's
@@ -452,19 +488,37 @@ data under `/var/lib/postgresql`, while 17 and below use
 - **Key browser** that uses `SCAN` with a pattern. It shows type and TTL, and
   shows the value by type (string, hash, list, set, zset), capped at 1,000
   elements.
-- **Read-only by default.** Commands whose `COMMAND INFO` flags include `write`
-  are refused unless Allow writes is on.
+- **Read-only by default** (phase 4 decision, after probing `COMMAND INFO` on
+  Redis 8 and 7.4: `EVAL`, `FCALL`, `CONFIG`, `SCRIPT`, `FUNCTION` and `ACL`
+  carry no `write` flag). With writes off, only a command or subcommand whose
+  flags include `readonly` runs, plus `PING`, `ECHO`, `INFO`, `TIME`,
+  `COMMAND …`, `CONFIG GET`, `CLIENT LIST`, `CLIENT INFO`, `SLOWLOG GET`,
+  `SLOWLOG LEN`, `MEMORY USAGE`, `MEMORY STATS` and `LATENCY LATEST`.
+  Anything the server does not know is refused.
+- **Never in the console**, writes or not: `SUBSCRIBE` and the other pub/sub
+  subscriptions, `MONITOR`, `SYNC`, `PSYNC`, `MULTI`, `EXEC`, `DISCARD`,
+  `WATCH`, `UNWATCH`, `SELECT` (use the database selector), `AUTH`, `HELLO`,
+  `RESET`, `QUIT` and `CLIENT REPLY`.
 - **Dangerous commands** need a second confirmation even when writes are
-  allowed: `FLUSHALL`, `FLUSHDB`, `CONFIG SET`, `SHUTDOWN`, `DEBUG`, `SCRIPT
-  FLUSH`, `FUNCTION FLUSH`.
+  allowed, checked by the server: `FLUSHALL`, `FLUSHDB`, `CONFIG SET`,
+  `SHUTDOWN`, `DEBUG`, `SCRIPT FLUSH`, `FUNCTION FLUSH`, and (phase 4
+  decision) `SWAPDB`, `REPLICAOF`, `SLAVEOF`, `FAILOVER`, `MODULE LOAD`,
+  `MODULE UNLOAD`, `ACL SETUSER` and `ACL DELUSER`.
 
 **Audit.** Every run records:
 
 - who;
 - which Database and logical database;
-- the statement text (cut at 4 KB);
+- the statement text (cut at 4 KB), with passwords replaced by `***` (phase 4
+  decision): the quoted value after `PASSWORD` or `IDENTIFIED … BY`, and in
+  Redis the arguments of `AUTH`, `CONFIG SET requirepass|masterauth`,
+  `MIGRATE … AUTH|AUTH2` and `ACL SETUSER` rules starting with `>` or `#`;
 - whether writes were allowed;
 - duration, row count and error.
+
+Every run is recorded, including refused, failed, stopped and cancelled ones
+(phase 4 decision): a run answers 200 with its outcome in the body, so the
+audit middleware records it even when the browser has gone.
 
 Create, delete, start, stop, update, repair, backup, download, restore, pin,
 Backup destination changes and password reveal are audited too.
@@ -582,4 +636,5 @@ numbers are picked at implementation time.
    - Moving the schedule rules into a shared package.
    - Upload and retry.
    - Remote rotation.
-4. **Query panel.** SQL and Redis, plus audit.
+4. **Query panel.** SQL and Redis, plus audit. Shipped as two stacked PRs:
+   SQL (4a), then Redis (4b).

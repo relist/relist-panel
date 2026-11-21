@@ -40,6 +40,9 @@ import type {
   DatabaseCredentials,
   DatabaseEngine,
   DatabaseInput,
+  QueryRequest,
+  QueryResponse,
+  QuerySchemaNode,
   ExternalRegistry,
   ExternalRegistryInput,
   PushCredential,
@@ -617,6 +620,11 @@ export const api = {
     request<void>(`/api/databases/${id}`, jsonInit('DELETE', { confirm, deleteBackups })),
   // Backups and restores (SQL engines only).
   databaseLogicalDatabases: (id: number) => request<{ databases: string[] }>(`/api/databases/${id}/logical-databases`),
+  /** Runs SQL. Every outcome answers 200; aborting `signal` cancels the query on the server. */
+  runDatabaseQuery: (id: number, body: QueryRequest, signal?: AbortSignal) =>
+    request<QueryResponse>(`/api/databases/${id}/query`, { ...jsonInit('POST', body), signal }),
+  databaseQuerySchema: (id: number, database: string) =>
+    request<QuerySchemaNode[]>(`/api/databases/${id}/query/schema?database=${encodeURIComponent(database)}`),
   listDatabaseBackups: (id: number) => request<DatabaseBackup[]>(`/api/databases/${id}/backups`),
   startDatabaseBackup: (id: number, body: BackupRequest) =>
     request<DatabaseBackup[]>(`/api/databases/${id}/backups`, jsonInit('POST', body)),
