@@ -161,7 +161,8 @@ func (s *Service) Startup(ctx context.Context) error {
 	if s.d.DataDir == "" {
 		return nil
 	}
-	var errs []error
+	// Before ReconcileAll, which would start a half-made Recreate.
+	errs := []error{s.finishInterruptedRecreates(ctx)}
 	for _, pattern := range []string{"backups/*.partial", "backups/*.age.tmp", "uploads/*"} {
 		files, err := filepath.Glob(filepath.Join(s.d.DataDir, ".databases", "*", pattern))
 		if err != nil {

@@ -360,7 +360,12 @@ func (s *Service) create(ctx context.Context, d Database, spec ContainerSpec) er
 // caller holds d's lock. changed is true when the container was created or
 // started.
 func (s *Service) reconcile(ctx context.Context, d Database) (changed bool, err error) {
-	defer func() { s.record(ctx, d, err) }()
+	keepError := false
+	defer func() {
+		if !keepError {
+			s.record(ctx, d, err)
+		}
+	}()
 	spec, err := appliedSpec(d)
 	if err != nil {
 		return false, err
@@ -387,7 +392,10 @@ func (s *Service) reconcile(ctx context.Context, d Database) (changed bool, err 
 				return false, err
 			}
 			if !ok {
-				return false, nil // volume_missing: never recreate it silently
+				// volume_missing: never recreate it silently, and keep the
+				// last error, which may say why a Recreate failed.
+				keepError = true
+				return false, nil
 			}
 		}
 		return true, s.create(ctx, d, spec)
@@ -807,10 +815,12 @@ func (s *Service) view(ctx context.Context, d Database) View {
 	volumeGone, err := s.volumeGoneFor(ctx, d, spec, st)
 	volumeGone = volumeGone && err == nil
 	switch {
+	case volumeGone:
+		// Before the last error, which may say why a Recreate failed: the
+		// page offers Recreate for this status only.
+		v.Status = StatusVolumeMissing
 	case d.LastError != "":
 		v.Status = StatusError
-	case volumeGone:
-		v.Status = StatusVolumeMissing
 	case d.Desired == DesiredStopped:
 		v.Status = StatusStopped
 	case !st.Exists || st.Hash != spec.Labels[HashLabel]:

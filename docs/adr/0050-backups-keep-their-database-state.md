@@ -49,9 +49,28 @@ database).
 
   Every check runs before anything is created: the volume is really gone,
   the name matches, each Backup succeeded and its file is unchanged, and no
-  database is picked twice. A step that fails is kept on its Restore row and
-  in the last error, and nothing is rolled back: a running server with some
-  databases back beats none. Users made outside the panel cannot come back,
+  database is picked twice.
+
+  A failure before step 3 removes the container and the volume the job
+  made, so the Database is `volume_missing` again and Recreate can run again
+  on a new volume. The volume is the job's own: it was gone when the
+  Recreate started, and the job slot kept everything else off it. The last
+  error says why, and stays on the page beside the Recreate button: Reconcile
+  leaves the last error of a `volume_missing` Database alone. Retrying is
+  what keeps the users' passwords: the Users tab would make a new one.
+
+  From step 3 on, a step that fails is kept on its Restore row and in the
+  last error ("Recreated, but: …"), and nothing is rolled back: a running
+  server with some databases back beats none. A Backup taken before `00055`
+  comes back owned by `postgres` with no user's access; the dialog warns
+  before, and the last error names the fix after.
+
+  The job keeps a marker file, `.databases/<id>/recreating`, from before it
+  makes the container until it ends. A panel that stops during the job
+  leaves it behind. The next Startup, before ReconcileAll can start the
+  half-made server, removes the container and the volume as a failure would.
+  That throws away any restores already done, and whatever an app wrote in
+  the meantime: the Recreate never said it was done. Users made outside the panel cannot come back,
   because the panel has no password for them; a restore whose objects
   belong to one fails on the missing role, as any restore does. Redis keeps
   no Backups, so it is deleted instead.

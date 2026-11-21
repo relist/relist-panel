@@ -233,7 +233,7 @@ export function DatabasePage() {
           type="info"
         />
       )}
-      {data?.lastError && data.status !== 'volume_missing' && (
+      {data?.lastError && (
         <Alert
           description={canRepair(data) ? 'Repair tries again.' : undefined}
           showIcon

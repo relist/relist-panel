@@ -5,7 +5,7 @@ import useSWR from 'swr';
 
 import { api } from '../data/api';
 import type { Database, DatabaseBackup } from '../data/types';
-import { formatBytes, triggerLabel } from '../pages/databases-view';
+import { formatBytes, statelessWarning, triggerLabel } from '../pages/databases-view';
 import { DangerModal } from './DangerModal';
 
 const { Text } = Typography;
@@ -73,25 +73,31 @@ export function DatabaseRecreateModal({ db, onClose, open }: { db: Database; onC
           {backups.data && byDatabase.size === 0 && (
             <Text type="secondary">No Backup is on disk: the new volume starts empty.</Text>
           )}
-          {[...byDatabase].map(([name, list]) => (
-            <Flex align="center" gap={8} key={name} wrap>
-              <Checkbox
-                aria-label={`Restore ${name}`}
-                checked={picked[name] !== undefined}
-                onChange={(event) => setPicked((current) => ({ ...current, [name]: event.target.checked ? list[0].id : undefined }))}
-              >
-                <Text code>{name}</Text>
-              </Checkbox>
-              <Select
-                aria-label={`Backup of ${name}`}
-                disabled={picked[name] === undefined}
-                onChange={(id: number) => setPicked((current) => ({ ...current, [name]: id }))}
-                options={list.map((b) => ({ label: backupLabel(b), value: b.id }))}
-                style={{ flex: '1 1 240px', minWidth: 0 }}
-                value={picked[name]}
-              />
-            </Flex>
-          ))}
+          {[...byDatabase].map(([name, list]) => {
+            const pick = list.find((b) => b.id === picked[name]);
+            return (
+              <Flex gap={4} key={name} vertical>
+                <Flex align="center" gap={8} wrap>
+                  <Checkbox
+                    aria-label={`Restore ${name}`}
+                    checked={picked[name] !== undefined}
+                    onChange={(event) => setPicked((current) => ({ ...current, [name]: event.target.checked ? list[0].id : undefined }))}
+                  >
+                    <Text code>{name}</Text>
+                  </Checkbox>
+                  <Select
+                    aria-label={`Backup of ${name}`}
+                    disabled={picked[name] === undefined}
+                    onChange={(id: number) => setPicked((current) => ({ ...current, [name]: id }))}
+                    options={list.map((b) => ({ label: backupLabel(b), value: b.id }))}
+                    style={{ flex: '1 1 240px', minWidth: 0 }}
+                    value={picked[name]}
+                  />
+                </Flex>
+                {pick && pick.asBackedUp === '' && <Text type="warning">{statelessWarning(db.engine, name)}</Text>}
+              </Flex>
+            );
+          })}
         </Flex>
       }
       description={`Creates an empty volume and starts ${db.name} with its password, so its hosts and credentials stay the same. The users the panel made come back with their passwords, then each ticked database is restored as it was backed up, with its owner and its users' access. Users made outside the panel do not come back.`}

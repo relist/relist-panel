@@ -15,6 +15,7 @@ import {
   restoreWarning,
   validTargetName,
   snippet,
+  statelessWarning,
   statusMeta,
   triggerLabel,
 } from './databases-view';
@@ -162,5 +163,14 @@ describe('phase 7 helpers', () => {
     expect(credentialsDatabase({ name: 'app', access: { app: 'full', web: 'read' } }, 'postgres')).toBe('app');
     expect(credentialsDatabase({ name: 'reader', access: { web: 'read', api: 'none', abc: 'read' } }, 'postgres')).toBe('abc');
     expect(credentialsDatabase({ name: 'x', access: { web: 'none' } }, 'postgres')).toBe('postgres');
+  });
+});
+
+describe('statelessWarning', () => {
+  it('says what a Backup without its database state brings back', () => {
+    expect(statelessWarning('postgres', 'app')).toBe(
+      'Taken before Backups kept the owner and access: postgres will own app, and no user can reach it.',
+    );
+    expect(statelessWarning('mysql', 'shop')).toBe("Taken before Backups kept users' access: no user can reach shop.");
   });
 });

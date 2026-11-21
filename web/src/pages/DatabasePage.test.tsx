@@ -231,6 +231,32 @@ describe('DatabasePage', () => {
     await waitFor(() => expect(api.recreateDatabase).toHaveBeenCalledWith(1, 'Shop', [4]));
   });
 
+  it('shows why a Recreate failed next to the Recreate button', async () => {
+    const why = 'Recreate failed: the server did not get healthy. The volume it made was removed, so Recreate can run again.';
+    api.getDatabase.mockResolvedValue({ ...shop, lastError: why, status: 'volume_missing' });
+    renderPage();
+    expect(await screen.findByText(why)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Recreate and restore…' })).toBeTruthy();
+  });
+
+  it('warns when a picked Backup was taken before Backups kept the owner and access', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, status: 'volume_missing' });
+    const backup = (id: number, database: string, asBackedUp: string) => ({
+      asBackedUp, database, error: '', finishedAt: '2026-11-20T10:00:00Z', id, localRemoved: false, log: '', pinned: false,
+      sha256: 'x', size: 1024, startedAt: '2026-11-20T10:00:00Z', status: 'succeeded', trigger: 'manual', upload: null,
+    });
+    api.listDatabaseBackups.mockResolvedValue([backup(1, 'app', ''), backup(2, 'shop', 'shop_owner')]);
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Recreate and restore…' }));
+    const dialog = await screen.findByRole('dialog');
+    const warning = await within(dialog).findByText(/postgres will own app, and no user can reach it/);
+    expect(within(dialog).queryByText(/postgres will own shop/)).toBeNull();
+    // A database left out is not restored, so there is nothing to warn about.
+    await user.click(within(dialog).getByLabelText('Restore app'));
+    await waitFor(() => expect(warning.isConnected).toBe(false));
+  });
+
   it('keeps one primary button: Start, when a stopped Database also needs Repair', async () => {
     api.getDatabase.mockResolvedValue({ ...shop, desired: 'stopped', lastError: 'boom', status: 'error' });
     renderPage();

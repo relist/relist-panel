@@ -228,3 +228,141 @@ func TestRecreateKeepsGoingAfterAFailedRestore(t *testing.T) {
 		t.Fatal("access was given on a database whose restore failed")
 	}
 }
+
+// recreatingMarker is where a running Recreate says so on disk.
+func (r *recreateRig) recreatingMarker() string {
+	return filepath.Join(filepath.Dir(r.backupsDir(r.d.ID)), "recreating")
+}
+
+// A Recreate that fails before any restore starts removes the container and
+// the volume it made, so the Database is volume_missing again, the reason
+// stays on the page, and Recreate can run again with the stored passwords.
+func TestRecreateThatFailsBeforeRestoringCanRunAgain(t *testing.T) {
+	r := newRecreateRig(t)
+	ctx := context.Background()
+	eng, _ := Lookup("postgres", "18")
+	r.host.mu.Lock()
+	r.host.health[eng.Image("18")] = "starting"
+	r.host.mu.Unlock()
+	if err := r.svc.Recreate(ctx, r.d.ID, "Shop", []int64{r.b.ID}); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+
+	if rs := r.lastRestore(t, r.d.ID); rs.Status != JobFailed {
+		t.Fatalf("restore = %+v", rs)
+	}
+	if err := r.svc.ReconcileAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	v := r.view(t, r.d.ID)
+	if v.Status != StatusVolumeMissing || !strings.Contains(v.LastError, "Recreate") {
+		t.Fatalf("status = %s, last error = %q", v.Status, v.LastError)
+	}
+	if _, err := os.Stat(r.recreatingMarker()); !os.IsNotExist(err) {
+		t.Fatalf("marker left behind: %v", err)
+	}
+	users, _ := r.store.ListUsers(ctx, r.d.ID)
+	for _, u := range users {
+		if u.Password != "pw-"+u.Name {
+			t.Fatalf("stored password of %s changed", u.Name)
+		}
+	}
+
+	r.host.mu.Lock()
+	r.host.health[eng.Image("18")] = "healthy"
+	r.host.mu.Unlock()
+	if err := r.svc.Recreate(ctx, r.d.ID, "Shop", []int64{r.b.ID}); err != nil {
+		t.Fatalf("second Recreate: %v", err)
+	}
+	r.svc.Wait()
+	got, _ := r.store.Get(ctx, r.d.ID)
+	if got.LastError != "" {
+		t.Fatalf("last error = %q", got.LastError)
+	}
+	if !slices.Contains(r.admin.stmts(), `CREATE ROLE "app_owner" LOGIN PASSWORD 'pw-app_owner'`) {
+		t.Fatalf("admin statements = %v", r.admin.stmts())
+	}
+}
+
+// The marker is on disk while the container is made, and gone after a
+// Recreate that ran to its end.
+func TestRecreateMarksItselfUntilItEnds(t *testing.T) {
+	r := newRecreateRig(t)
+	ctx := context.Background()
+	marked := false
+	r.host.mu.Lock()
+	r.host.onCreate = func() {
+		_, err := os.Stat(r.recreatingMarker())
+		marked = err == nil
+	}
+	r.host.mu.Unlock()
+	if err := r.svc.Recreate(ctx, r.d.ID, "Shop", []int64{r.b.ID}); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	if !marked {
+		t.Fatal("no marker while the container was made")
+	}
+	if _, err := os.Stat(r.recreatingMarker()); !os.IsNotExist(err) {
+		t.Fatalf("marker left behind: %v", err)
+	}
+}
+
+// A panel that stopped during a Recreate leaves its marker: the next start
+// removes the half-made container and volume, before reconcile can start
+// them, and says why.
+func TestStartupRemovesAnInterruptedRecreate(t *testing.T) {
+	r := newRecreateRig(t)
+	ctx := context.Background()
+	if err := r.svc.Recreate(ctx, r.d.ID, "Shop", []int64{r.b.ID}); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	// As if the panel had stopped before the job ended.
+	if err := os.WriteFile(r.recreatingMarker(), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.host.reset()
+
+	if err := r.svc.Startup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.ReconcileAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if r.host.count("create") != 0 {
+		t.Fatalf("host calls = %v", r.host.all())
+	}
+	v := r.view(t, r.d.ID)
+	if v.Status != StatusVolumeMissing || !strings.Contains(v.LastError, "did not finish") {
+		t.Fatalf("status = %s, last error = %q", v.Status, v.LastError)
+	}
+	if _, err := os.Stat(r.recreatingMarker()); !os.IsNotExist(err) {
+		t.Fatalf("marker left behind: %v", err)
+	}
+}
+
+// A Backup taken before Backups kept their database's state comes back
+// owned by postgres with no user's access: the last error says so, with the
+// fix, and so does the Restore's log.
+func TestRecreateFromABackupWithoutStateSaysSo(t *testing.T) {
+	r := newRecreateRig(t)
+	ctx := context.Background()
+	if err := r.store.SetBackupState(ctx, r.b.ID, BackupState{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.Recreate(ctx, r.d.ID, "Shop", []int64{r.b.ID}); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	got, _ := r.store.Get(ctx, r.d.ID)
+	for _, want := range []string{"Recreated, but", "app", `ALTER DATABASE "app" OWNER TO`, "Users tab"} {
+		if !strings.Contains(got.LastError, want) {
+			t.Fatalf("last error lacks %q: %q", want, got.LastError)
+		}
+	}
+	if rs := r.lastRestore(t, r.d.ID); rs.Status != JobSucceeded || !strings.Contains(rs.Log, "postgres owns app") {
+		t.Fatalf("restore = %+v", rs)
+	}
+}

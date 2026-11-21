@@ -101,6 +101,13 @@ export function asBackedUpLabel(engine: string, backedUpAs: string): string {
     : `Character set ${backedUpAs}, as when it was backed up`;
 }
 
+/** What a Recreate says about a Backup taken before Backups kept their database's owner and access. */
+export function statelessWarning(engine: string, database: string): string {
+  return engine === 'postgres'
+    ? `Taken before Backups kept the owner and access: postgres will own ${database}, and no user can reach it.`
+    : `Taken before Backups kept users' access: no user can reach ${database}.`;
+}
+
 /** The line under the header while a job runs. */
 export function jobNotice(job: Database['job']): string {
   switch (job) {
