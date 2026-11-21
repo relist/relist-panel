@@ -68,7 +68,7 @@ func runBatch(ctx context.Context, q queryer, stmts []Statement, stop func()) (Q
 		var num uint16
 		var me *mysql.MySQLError
 		if errors.As(err, &me) {
-			qe.Message, num = me.Message, me.Number
+			qe.Message, qe.Code, num = me.Message, strconv.Itoa(int(me.Number)), me.Number
 		}
 		resp.Error = qe
 		resp.DurationMs = sinceMs(began)

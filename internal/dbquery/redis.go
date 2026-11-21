@@ -174,6 +174,10 @@ func ParseCommandInfo(r Reply) CommandInfo {
 type Class struct {
 	Refused, Dangerous bool
 	Reason             string
+	// Command is the command (and subcommand) the server's table knows args
+	// to be, upper case, or "" for one it does not know. It holds no argument,
+	// so the audit log keeps it.
+	Command string
 }
 
 // Never in the console, writes or not: they change the connection's own state
@@ -215,7 +219,7 @@ func Classify(info CommandInfo, args []string, writes bool) Class {
 		if cmd == "SELECT" {
 			reason += ": use the database selector"
 		}
-		return Class{Refused: true, Reason: reason}
+		return Class{Refused: true, Reason: reason, Command: name}
 	}
 	if !info.Known {
 		return Class{Refused: true, Reason: "unknown command"}
@@ -223,12 +227,12 @@ func Classify(info CommandInfo, args []string, writes bool) Class {
 	flags, sub := info.Flags, ""
 	if len(info.Subcommands) > 0 {
 		if len(args) < 2 {
-			return Class{Refused: true, Reason: cmd + " needs a subcommand"}
+			return Class{Refused: true, Reason: cmd + " needs a subcommand", Command: cmd}
 		}
 		sub = strings.ToLower(args[1])
 		f, ok := info.Subcommands[sub]
 		if !ok {
-			return Class{Refused: true, Reason: "unknown subcommand " + strings.ToUpper(sub) + " of " + cmd}
+			return Class{Refused: true, Reason: "unknown subcommand " + strings.ToUpper(sub) + " of " + cmd, Command: cmd}
 		}
 		flags = f
 	}
@@ -236,7 +240,7 @@ func Classify(info CommandInfo, args []string, writes bool) Class {
 	if sub != "" {
 		full = cmd + " " + strings.ToUpper(sub)
 	}
-	out := Class{Dangerous: dangerous[cmd] || dangerous[full]}
+	out := Class{Dangerous: dangerous[cmd] || dangerous[full], Command: full}
 	if writes {
 		return out
 	}
@@ -255,6 +259,9 @@ func Classify(info CommandInfo, args []string, writes bool) Class {
 // RedisResponse is a console run's outcome. Like every run it is data, never
 // an HTTP error, so the audit middleware records it.
 type RedisResponse struct {
+	// Command is Classify's name of what ran or was refused; it holds no
+	// argument. The audit log keeps it instead of the line.
+	Command      string `json:"command,omitempty"`
 	Reply        *Reply `json:"reply"`
 	Refused      string `json:"refused,omitempty"`
 	NeedsConfirm bool   `json:"needsConfirm,omitempty"`
@@ -334,6 +341,7 @@ func RunRedis(parent context.Context, t Target, db int, line string, writes, con
 		return resp
 	}
 	class := Classify(ParseCommandInfo(infoReply), args, writes)
+	resp.Command = class.Command
 	if class.Refused {
 		resp.Refused = class.Reason
 		return resp

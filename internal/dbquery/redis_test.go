@@ -147,3 +147,26 @@ func TestClassifyAdminRefusesScripts(t *testing.T) {
 		}
 	}
 }
+
+// Classify names the command it read, from the server's own table, for the
+// audit log: a known command and subcommand, never an argument.
+func TestClassifyNamesTheCommand(t *testing.T) {
+	config := info("", map[string]string{"set": "admin noscript loading stale"})
+	cases := []struct {
+		info CommandInfo
+		args []string
+		want string
+	}{
+		{info("readonly fast", nil), []string{"get", "k"}, "GET"},
+		{config, []string{"config", "set", "requirepass", "hunter2"}, "CONFIG SET"},
+		{config, []string{"CONFIG", "hunter2"}, "CONFIG"},
+		{config, []string{"CONFIG"}, "CONFIG"},
+		{CommandInfo{}, []string{"hunter2", "x"}, ""},
+		{CommandInfo{}, []string{"AUTH", "hunter2"}, "AUTH"},
+	}
+	for _, c := range cases {
+		if got := Classify(c.info, c.args, true).Command; got != c.want {
+			t.Errorf("Classify(%q).Command = %q, want %q", c.args, got, c.want)
+		}
+	}
+}

@@ -274,7 +274,7 @@ func (myAccounts) UsersQuery() string {
 // AccessQuery reads the schema grants of the '%' accounts. A GRANTEE is
 // 'name'@'%'; the schema name holds the \_ a grant was written with.
 func (myAccounts) AccessQuery() string {
-	return `SELECT u, db, CASE WHEN ins > 0 THEN 'full' ELSE 'read' END FROM (
+	return `SELECT u, db, CASE WHEN ins > 0 THEN 'full' ELSE 'read' END AS lvl FROM (
  SELECT SUBSTRING(p.GRANTEE, 2, CHAR_LENGTH(p.GRANTEE) - 6) AS u,
  REPLACE(p.TABLE_SCHEMA, CONCAT(CHAR(92), '_'), '_') AS db,
  SUM(p.PRIVILEGE_TYPE = 'INSERT') AS ins, SUM(p.PRIVILEGE_TYPE = 'SELECT') AS sel

@@ -62,7 +62,10 @@ Downgrades are never offered or accepted.
   job still marked running and the sweep removes failed changes' volumes,
   so the server holds new jobs (409, "still starting") until both have run,
   and ReconcileAll leaves alone a Database whose job owns its container.
-  While a change runs, its pre-update Backups cannot be deleted.
+  While a change runs, its pre-update Backups cannot be deleted, and Rename
+  answers 409: a rename re-aliases the container, which would put a
+  Postgres server the change cut off back on `relist-network`. Every other
+  job still lets Rename through.
 - **Refused before anything starts:** a superuser password reset still
   pending, a tag that is not strictly higher (compared by dot-separated
   numbers, 422), an unknown tag, a stopped Database, a running job, or a

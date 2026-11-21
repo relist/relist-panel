@@ -26,7 +26,7 @@ func TestDatabaseRoutesAreAdminOnly(t *testing.T) {
 		"GET /api/databases", "GET /api/databases/engines", "GET /api/databases/{id}", "GET /api/databases/{id}/credentials",
 		"GET /api/databases/{id}/logical-databases", "POST /api/databases/{id}/query", "GET /api/databases/{id}/query/schema",
 		"POST /api/databases/{id}/redis/command", "GET /api/databases/{id}/redis/keys", "GET /api/databases/{id}/redis/key",
-		"POST /api/databases", "DELETE /api/databases/{id}",
+		"POST /api/databases", "DELETE /api/databases/{id}", "POST /api/databases/{id}/recreate",
 	}
 	mux := http.NewServeMux()
 	for _, p := range patterns {

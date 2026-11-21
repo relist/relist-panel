@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,7 +107,7 @@ type Service struct {
 	jobs        map[int64]string
 	jobsChanged chan struct{}
 	// uploadStall is how long an upload may send nothing before it is cut
-	// off; remoteTimeout bounds one delete in a Backup destination. A bucket
+	// off; remoteTimeout bounds one delete in a Backup destination. A destination
 	// that stops answering would otherwise hold the job slot, and the
 	// host-wide scheduler with it, for ever.
 	uploadStall, remoteTimeout time.Duration
@@ -359,7 +360,12 @@ func (s *Service) create(ctx context.Context, d Database, spec ContainerSpec) er
 // caller holds d's lock. changed is true when the container was created or
 // started.
 func (s *Service) reconcile(ctx context.Context, d Database) (changed bool, err error) {
-	defer func() { s.record(ctx, d, err) }()
+	keepError := false
+	defer func() {
+		if !keepError {
+			s.record(ctx, d, err)
+		}
+	}()
 	spec, err := appliedSpec(d)
 	if err != nil {
 		return false, err
@@ -386,7 +392,10 @@ func (s *Service) reconcile(ctx context.Context, d Database) (changed bool, err 
 				return false, err
 			}
 			if !ok {
-				return false, nil // volume_missing: never recreate it silently
+				// volume_missing: never recreate it silently, and keep the
+				// last error, which may say why a Recreate failed.
+				keepError = true
+				return false, nil
 			}
 		}
 		return true, s.create(ctx, d, spec)
@@ -644,15 +653,15 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBa
 		if confirm != d.Name {
 			return ErrConfirm
 		}
-		// The proxy goes before the container it points at.
-		if s.d.DirectAccess != nil {
-			if err := s.d.DirectAccess.CloseTarget(ctx, directaccess.KindDatabase, id); err != nil {
-				return err
-			}
-		}
 		if deleteBackups {
 			// Remote copies first: if one stays, nothing else is deleted.
 			if err := s.deleteLiveCopies(ctx, id, nil); err != nil {
+				return err
+			}
+		}
+		// The proxy goes before the container it points at.
+		if s.d.DirectAccess != nil {
+			if err := s.d.DirectAccess.CloseTarget(ctx, directaccess.KindDatabase, id); err != nil {
 				return err
 			}
 		}
@@ -674,8 +683,12 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBa
 				return err
 			}
 			if len(kept) > 0 {
-				// A tombstone has no schedule.
+				// A tombstone has no schedule, and keeps no roles dump: those
+				// hold every role's password hash and are no Backup.
 				if err := s.d.Store.DeleteSchedule(ctx, id); err != nil {
+					return err
+				}
+				if err := s.removeRolesDumps(id); err != nil {
 					return err
 				}
 				return s.d.Store.Tombstone(ctx, id)
@@ -683,6 +696,24 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBa
 		}
 		return s.removeRecord(ctx, id)
 	})
+}
+
+// removeRolesDumps removes the roles dumps version changes kept for
+// Database id (plan-phase-10 J).
+func (s *Service) removeRolesDumps(id int64) error {
+	if s.d.DataDir == "" {
+		return nil
+	}
+	dumps, err := filepath.Glob(filepath.Join(s.dbDir(id), "backups", "version-change-*-roles.sql"))
+	if err != nil {
+		return err
+	}
+	for _, p := range dumps {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // RemoveFiles removes everything the panel keeps on disk for Database id.
@@ -781,16 +812,15 @@ func (s *Service) view(ctx context.Context, d Database) View {
 		v.Warnings = append(v.Warnings, err.Error())
 		return v
 	}
-	volumeGone := false
-	if d.Initialized && !st.Exists {
-		ok, err := s.d.Host.VolumeExists(ctx, spec.Volume)
-		volumeGone = err == nil && !ok
-	}
+	volumeGone, err := s.volumeGoneFor(ctx, d, spec, st)
+	volumeGone = volumeGone && err == nil
 	switch {
+	case volumeGone:
+		// Before the last error, which may say why a Recreate failed: the
+		// page offers Recreate for this status only.
+		v.Status = StatusVolumeMissing
 	case d.LastError != "":
 		v.Status = StatusError
-	case volumeGone:
-		v.Status = StatusVolumeMissing
 	case d.Desired == DesiredStopped:
 		v.Status = StatusStopped
 	case !st.Exists || st.Hash != spec.Labels[HashLabel]:

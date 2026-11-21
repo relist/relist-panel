@@ -94,6 +94,9 @@ A timed way into one container's port that skips Traefik: a small proxy the pane
 **Restore**:
 Replaying a Backup, or an uploaded `.sql`/`.sql.gz` of one database, into a target logical database the Admin picks, replacing it (after a `pre_restore` Backup of it) or creating it. _Avoid_: Rollback.
 
+**Recreate and restore**:
+The explicit way back for a Database whose volume is gone (`volume_missing`, ADR-0050): an empty volume and the same password, the users the panel made, then one Backup of each picked database restored as it was backed up, with its users' access. Reconcile never does it on its own. _Avoid_: Repair (that fixes a container, never data)
+
 **Change version**:
 Moving a Database to a higher version of its engine from its page (ADR-0047). Postgres is dumped and restored onto a new volume `relist-db-<id>-v<change id>`, with its clients cut off from the first backup, and is rolled back on any failure; MariaDB and Redis change the image in place and do not roll back once the new version has started. Downgrades are never offered. _Avoid_: Upgrade (Update image re-pulls the same tag), Migration (that moves the whole panel to another server).
 

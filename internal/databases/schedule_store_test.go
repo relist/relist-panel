@@ -120,7 +120,7 @@ func TestBackupPathRemoteOnly(t *testing.T) {
 	if _, _, err := r.svc.BackupPath(context.Background(), d.ID, b.ID); !errors.Is(err, ErrRemoteOnly) {
 		t.Fatalf("BackupPath = %v, want ErrRemoteOnly", err)
 	}
-	if _, err := r.svc.RestoreFromBackup(context.Background(), d.ID, b.ID, "app", d.Name); !errors.Is(err, ErrRemoteOnly) {
+	if _, err := r.svc.RestoreFromBackup(context.Background(), d.ID, b.ID, "app", d.Name, false); !errors.Is(err, ErrRemoteOnly) {
 		t.Fatalf("restore = %v, want ErrRemoteOnly", err)
 	}
 }

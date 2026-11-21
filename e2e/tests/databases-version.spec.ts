@@ -146,7 +146,9 @@ test.describe('change version', () => {
     await expect(page.getByText('16 → 18')).toBeVisible();
     await expect(page.getByRole('cell', { name: `relist-db-${id} Delete` })).toBeVisible();
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
-    await page.getByRole('dialog').getByRole('button', { name: 'Delete previous data' }).click();
+    const deleteDialog = page.getByRole('dialog');
+    await deleteDialog.getByLabel(`Type relist-db-${id} to confirm`).fill(`relist-db-${id}`);
+    await deleteDialog.getByRole('button', { name: 'Delete previous data' }).click();
     await expect(page.getByRole('cell', { name: `relist-db-${id} Delete` })).toBeHidden();
     const vols = volumes();
     expect(vols).not.toContain(`relist-db-${id}`);

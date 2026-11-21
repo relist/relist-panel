@@ -118,7 +118,18 @@ Registry (ADR-0033) and Builders (ADR-0028):
 - **A missing volume is never silently recreated.** Reconcile sets the status
   to `volume_missing` and stops. An empty new volume would look like data loss
   that happened silently. The Admin either restores from a backup into a fresh
-  volume (an explicit action) or deletes the Database.
+  volume (an explicit action) or deletes the Database. That action is
+  **Recreate and restore** (review decision 2026-11-20, ADR-0050), on the
+  "The data volume is gone" alert, for every engine with Backups: the Admin
+  ticks which databases come back and picks a Backup of each (newest by
+  default, only those still on disk), then types the name. The panel makes
+  an empty volume and starts the server with the Database's password, so
+  hosts and credentials stay the same; creates again, with their stored
+  passwords, the users it made; restores each Backup as it was backed up;
+  then gives each of those users the access the Backup recorded. Users made
+  outside the panel cannot come back (the panel has no password for them).
+  A failed step is kept on its Restore and in the last error; nothing is
+  rolled back. Redis keeps no Backups, so it can only be deleted.
 - **Reserved names.** The Compose policy refuses a Service that answers on
   `relist-network` to `relist-db-<n>` or to any `*.db.internal` name. Such a
   Service would receive connections, and passwords, meant for a Database. The
@@ -245,7 +256,7 @@ data under `/var/lib/postgresql`, while 17 and below use
   (phase 2 adds `pre_update`, the Backups "Back up first" takes of every
   logical database before Update image; a Database with none updates
   straight away).
-- **Concurrency.** Only one job runs per Database at a time. A job is a Backup, a restore, or an Update image with "Back up first". While one runs, Start, Stop, Restart, Update image, Apply settings, Repair and Delete answer 409; Rename and reads still work (phase 2 decision).
+- **Concurrency.** Only one job runs per Database at a time. A job is a Backup, a restore, or an Update image with "Back up first". While one runs, Start, Stop, Restart, Update image, Apply settings, Repair and Delete answer 409; Rename and reads still work (phase 2 decision), except during a Change version, which refuses Rename too (409): a rename re-aliases the container and would put a Postgres server the change cut off back on the network (ADR-0047, review 2026-11-20). To give a Database another name in the middle of a change, wait for it to end.
   Scheduled runs queue host-wide and run one at a time. They do not use the
   Deployment queue.
 - **Panel restart.** A graceful shutdown waits for a running job, until Docker's stop timeout kills the panel. Either way a `running` row is made `failed` ("the panel stopped during this run") at the next start, and its `.partial` and upload files are removed (phase 2).
@@ -274,7 +285,17 @@ data under `/var/lib/postgresql`, while 17 and below use
   it. The Database keeps running.
   - **Postgres:** `DROP DATABASE … WITH (FORCE)`, which ends the sessions on
     it in the same step, then `CREATE DATABASE … TEMPLATE template0 OWNER
-    <its owner before>`. A new database is owned by `postgres`.
+    <its owner before>`. A new database is owned by `postgres`, unless it
+    is restored "as it was backed up" (review decision 2026-11-20,
+    ADR-0050): every Backup keeps its database's owner and ACL (Postgres)
+    or character set and collation (MySQL, MariaDB), read before the dump,
+    and the restore dialog offers a box, ticked by default, that creates the
+    new database with that owner, or that character set. The owner is used
+    only while it exists and is no superuser; otherwise `postgres` owns it
+    and the restore's log says why. Backups from before keep no state and
+    restore the old way. Without the owner, the app's user owns the tables
+    but not the database, and the Users tab names the fix:
+    `ALTER DATABASE … OWNER TO …`.
   - **MySQL / MariaDB:** `DROP DATABASE`, then `CREATE DATABASE` with its
     default character set and collation from before.
   - The file then runs connected to the target: `psql -v ON_ERROR_STOP=1`, or
@@ -496,12 +517,21 @@ data under `/var/lib/postgresql`, while 17 and below use
 
 - who;
 - which Database and logical database;
-- the statement text (cut at 4 KB), with passwords replaced by `***` (phase 4
-  decision): the quoted value after `PASSWORD` or `IDENTIFIED … BY`, and in
-  Redis the arguments of `AUTH`, `CONFIG SET requirepass|masterauth`,
-  `MIGRATE … AUTH|AUTH2` and `ACL SETUSER` rules starting with `>` or `#`;
+- what kinds of statement ran, never their text (review decision
+  2026-11-20, replacing phase 4's redacted text): for SQL the leading
+  keyword of each statement, and for `CREATE`, `ALTER` and `DROP` its
+  object, from a fixed list, with anything else recorded as `OTHER`
+  (`SELECT ×2, ALTER ROLE`); for Redis the command and subcommand the
+  server's command table knows. No pattern finds every way to write a
+  password literal (`$tag$…$tag$`, `U&'…'`, `_utf8mb4'…'`, `X'…'`, a
+  comment in between), and the History drawer already keeps the text in the
+  Admin's own browser;
 - whether writes were allowed;
-- duration, row count and error.
+- duration, rows returned and rows affected;
+- on an error, the server's code (a Postgres SQLSTATE, a MySQL error number,
+  the leading word of a Redis error such as `WRONGTYPE`) and the failing
+  statement's number. Never the message: servers quote the statement in it
+  (MySQL's `near '…'`, Redis's `unknown command '…'`).
 
 Every run is recorded, including refused, failed, stopped and cancelled ones
 (phase 4 decision): a run answers 200 with its outcome in the body, so the
@@ -555,7 +585,7 @@ numbers are picked at implementation time.
 | Image pull fails | Status `error` with the pull error; **Repair** retries |
 | Healthcheck never passes | Status `error`; logs available |
 | Container gone | Reconcile recreates it on the same volume |
-| Volume gone | Status `volume_missing`; no automatic action |
+| Volume gone | Status `volume_missing`; no automatic action; Recreate and restore on request |
 | Disk full during backup | Run fails, partial file deleted, error shown |
 | Selected logical database missing | Run fails, naming the database |
 | Upload fails | Local Backup succeeds, upload marked failed, **Retry upload** |

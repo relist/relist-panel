@@ -31,6 +31,7 @@ const api = vi.hoisted(() => ({
   databaseLogicalDetails: vi.fn(),
   getDatabaseSchedule: vi.fn(),
   resetSuperuserPassword: vi.fn(),
+  recreateDatabase: vi.fn(),
 }));
 
 vi.mock('../data/api', async (importOriginal) => ({
@@ -55,7 +56,7 @@ const shop: Database = {
   name: 'Shop',
   port: 5432,
   settingsOutdated: false,
-  upgrades: [],
+  higherVersions: [],
   slug: 'shop',
   status: 'running',
   user: 'postgres',
@@ -199,6 +200,86 @@ describe('DatabasePage', () => {
     expect(screen.queryByRole('button', { name: 'Repair' })).toBeNull();
   });
 
+  it('recreates a lost volume from the Backups the Admin picks, newest of each database first', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, status: 'volume_missing' });
+    const backup = (id: number, database: string, startedAt: string, over = {}) => ({
+      asBackedUp: '', database, error: '', finishedAt: startedAt, id, localRemoved: false, log: '', pinned: false,
+      sha256: 'x', size: 1024, startedAt, status: 'succeeded', trigger: 'manual', upload: null, ...over,
+    });
+    api.listDatabaseBackups.mockResolvedValue([
+      backup(4, 'app', '2026-11-20T10:00:00Z'),
+      backup(3, 'app', '2026-11-19T10:00:00Z'),
+      backup(2, 'shop', '2026-11-18T10:00:00Z'),
+      backup(5, 'gone', '2026-11-20T11:00:00Z', { localRemoved: true }),
+      backup(6, 'shop', '2026-11-21T10:00:00Z', { status: 'failed' }),
+    ]);
+    api.recreateDatabase.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Recreate and restore…' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByLabelText('Restore app')).toBeTruthy();
+    expect(within(dialog).getByLabelText('Restore shop')).toBeTruthy();
+    // Only a Backup on disk can be restored: a Remote only one is left out.
+    expect(within(dialog).queryByLabelText('Restore gone')).toBeNull();
+    await user.click(within(dialog).getByLabelText('Restore shop'));
+    const ok = within(dialog).getByRole('button', { name: 'Recreate' }) as HTMLButtonElement;
+    expect(ok.disabled).toBe(true);
+    await user.type(within(dialog).getByLabelText('Type Shop to confirm'), 'Shop');
+    await waitFor(() => expect(ok.disabled).toBe(false));
+    await user.click(ok);
+    await waitFor(() => expect(api.recreateDatabase).toHaveBeenCalledWith(1, 'Shop', [4]));
+  });
+
+  it('shows why a Recreate failed next to the Recreate button', async () => {
+    const why = 'Recreate failed: the server did not get healthy. The volume it made was removed, so Recreate can run again.';
+    api.getDatabase.mockResolvedValue({ ...shop, lastError: why, status: 'volume_missing' });
+    renderPage();
+    expect(await screen.findByText(why)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Recreate and restore…' })).toBeTruthy();
+  });
+
+  it('warns when a picked Backup was taken before Backups kept the owner and access', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, status: 'volume_missing' });
+    const backup = (id: number, database: string, asBackedUp: string) => ({
+      asBackedUp, database, error: '', finishedAt: '2026-11-20T10:00:00Z', id, localRemoved: false, log: '', pinned: false,
+      sha256: 'x', size: 1024, startedAt: '2026-11-20T10:00:00Z', status: 'succeeded', trigger: 'manual', upload: null,
+    });
+    api.listDatabaseBackups.mockResolvedValue([backup(1, 'app', ''), backup(2, 'shop', 'shop_owner')]);
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Recreate and restore…' }));
+    const dialog = await screen.findByRole('dialog');
+    const warning = await within(dialog).findByText(/postgres will own app, and no user can reach it/);
+    expect(within(dialog).queryByText(/postgres will own shop/)).toBeNull();
+    // A database left out is not restored, so there is nothing to warn about.
+    await user.click(within(dialog).getByLabelText('Restore app'));
+    await waitFor(() => expect(warning.isConnected).toBe(false));
+  });
+
+  it('keeps one primary button: Start, when a stopped Database also needs Repair', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, desired: 'stopped', lastError: 'boom', status: 'error' });
+    renderPage();
+    const start = await screen.findByRole('button', { name: 'Start' });
+    const repair = screen.getByRole('button', { name: 'Repair' });
+    expect(start.className).toContain('ant-btn-primary');
+    expect(repair.className).not.toContain('ant-btn-primary');
+  });
+
+  it('lets no second Recreate start while one runs', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, job: 'recreate', status: 'volume_missing' });
+    renderPage();
+    const button = (await screen.findByRole('button', { name: 'Recreate and restore…' })) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it('offers no Recreate for Redis, which keeps no Backups', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, engine: 'redis', status: 'volume_missing' });
+    renderPage();
+    expect(await screen.findByText('The data volume is gone')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Recreate and restore…' })).toBeNull();
+  });
+
   it('applies new settings only when the Admin asks', async () => {
     api.getDatabase.mockResolvedValue({ ...shop, settingsOutdated: true });
     api.databaseAction.mockResolvedValue(undefined);
@@ -310,7 +391,7 @@ describe('DatabasePage', () => {
 
 
 describe('Change version', () => {
-  const pg16: Database = { ...shop, version: '16', image: 'postgres:16', upgrades: ['17', '18'] };
+  const pg16: Database = { ...shop, version: '16', image: 'postgres:16', higherVersions: ['17', '18'] };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -394,7 +475,7 @@ describe('Change version', () => {
   });
 
   it('backs mariadb up first by default, and can skip it', async () => {
-    const maria: Database = { ...shop, engine: 'mariadb', version: '11.4', image: 'mariadb:11.4', upgrades: ['11.8'] };
+    const maria: Database = { ...shop, engine: 'mariadb', version: '11.4', image: 'mariadb:11.4', higherVersions: ['11.8'] };
     const { dialog, user } = await openChange(maria);
     expect(within(dialog).getByText(/There is no going back to 11.4 once it starts/)).toBeTruthy();
     const box = within(dialog).getByLabelText('Back up first') as HTMLInputElement;
@@ -405,14 +486,14 @@ describe('Change version', () => {
   });
 
   it('sends Back up first for mariadb when left ticked', async () => {
-    const maria: Database = { ...shop, engine: 'mariadb', version: '11.4', image: 'mariadb:11.4', upgrades: ['11.8'] };
+    const maria: Database = { ...shop, engine: 'mariadb', version: '11.4', image: 'mariadb:11.4', higherVersions: ['11.8'] };
     const { dialog, user } = await openChange(maria);
     await user.click(within(dialog).getByRole('button', { name: 'Change to 11.8' }));
     await waitFor(() => expect(api.changeDatabaseVersion).toHaveBeenCalledWith(1, '11.8', true));
   });
 
   it('warns that redis cannot go back, with no backup option', async () => {
-    const redis: Database = { ...shop, engine: 'redis', version: '7.4', image: 'redis:7.4', upgrades: ['8'] };
+    const redis: Database = { ...shop, engine: 'redis', version: '7.4', image: 'redis:7.4', higherVersions: ['8'] };
     const { dialog } = await openChange(redis);
     expect(within(dialog).getByText(/Redis 8 rewrites the data file in a format 7.4 cannot read/)).toBeTruthy();
     expect(within(dialog).queryByLabelText('Back up first')).toBeNull();

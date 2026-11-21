@@ -220,7 +220,7 @@ func finishPg(resp *QueryResponse, runCtx, parent context.Context, err error, be
 		resp.Cancelled = true
 		resp.Error = &QueryError{Message: msgTimedOut, StatementIndex: len(resp.Results)}
 	case asPg:
-		qe := &QueryError{Message: pgErr.Message, StatementIndex: len(resp.Results)}
+		qe := &QueryError{Message: pgErr.Message, Code: pgErr.Code, StatementIndex: len(resp.Results)}
 		if pgErr.Position > 0 {
 			p := int(pgErr.Position) - 1
 			qe.Position = &p

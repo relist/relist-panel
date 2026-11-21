@@ -3,6 +3,7 @@ package databases
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -43,6 +44,20 @@ type Backup struct {
 	LocalRemovedAt *time.Time
 	// Upload is the latest copy to a Backup destination; ListBackups fills it.
 	Upload *Upload
+	// State is what the dump leaves out, as it was when the Backup was
+	// taken; empty for Backups from before it was kept.
+	State BackupState
+}
+
+// BackupState is what a one-database dump leaves out, read when the Backup
+// is taken (ADR-0050): a restore into a new database can create it the way
+// it was.
+type BackupState struct {
+	// Prev is InspectSQL's line: "<owner>\t<ACL>" (Postgres) or
+	// "<charset>\t<collation>" (MySQL, MariaDB).
+	Prev string `json:"prev,omitempty"`
+	// Access is each login user's level on the database, for Recreate.
+	Access map[string]Access `json:"access,omitempty"`
 }
 
 // The state of an Upload.
@@ -75,18 +90,23 @@ type Restore struct {
 	FinishedAt         *time.Time
 }
 
-const backupColumns = `id, database_id, trigger, logical_name, status, error, log, file_name, size, sha256, started_at, finished_at, pinned, local_removed_at`
+const backupColumns = `id, database_id, trigger, logical_name, status, error, log, file_name, size, sha256, started_at, finished_at, pinned, local_removed_at, state`
 
 func scanBackup(row interface{ Scan(...any) error }) (Backup, error) {
 	var b Backup
 	var started int64
 	var finished, removed sql.NullInt64
-	err := row.Scan(&b.ID, &b.DatabaseID, &b.Trigger, &b.LogicalName, &b.Status, &b.Error, &b.Log, &b.FileName, &b.Size, &b.SHA256, &started, &finished, &b.Pinned, &removed)
+	var state string
+	err := row.Scan(&b.ID, &b.DatabaseID, &b.Trigger, &b.LogicalName, &b.Status, &b.Error, &b.Log, &b.FileName, &b.Size, &b.SHA256, &started, &finished, &b.Pinned, &removed, &state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Backup{}, ErrNotFound
 	}
 	if err != nil {
 		return Backup{}, err
+	}
+	if state != "" {
+		// A state that does not read is no state: the restore falls back.
+		_ = json.Unmarshal([]byte(state), &b.State)
 	}
 	b.StartedAt = time.UnixMilli(started)
 	if finished.Valid {
@@ -114,6 +134,16 @@ func (s *Store) InsertBackup(ctx context.Context, b Backup) (Backup, error) {
 		return Backup{}, err
 	}
 	return scanBackup(s.db.QueryRowContext(ctx, `SELECT `+backupColumns+` FROM database_backups WHERE id = ?`, id))
+}
+
+// SetBackupState records what Backup id's dump leaves out.
+func (s *Store) SetBackupState(ctx context.Context, id int64, st BackupState) error {
+	raw, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE database_backups SET state = ? WHERE id = ?`, string(raw), id)
+	return err
 }
 
 // FinishBackup records how a running Backup ended.

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -274,6 +275,11 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 // executeBackup dumps into <name>.partial and renames it on success. Any
 // failure removes the partial and records the Backup as failed.
 func (s *Service) executeBackup(ctx context.Context, d Database, dp Dumper, b Backup) Backup {
+	if st := s.readBackupState(ctx, d, dp, b.LogicalName); st.Prev != "" {
+		if err := s.d.Store.SetBackupState(ctx, b.ID, st); err == nil {
+			b.State = st
+		}
+	}
 	dir := filepath.Join(s.dbDir(d.ID), "backups")
 	name := fmt.Sprintf("%s-%d.sql.gz", b.StartedAt.UTC().Format("20060102T150405Z"), b.ID)
 	logs := &tailBuffer{max: logLimit}
@@ -291,6 +297,40 @@ func (s *Service) executeBackup(ctx context.Context, d Database, dp Dumper, b Ba
 	}
 	b.Status, b.Error, b.Log, b.FileName, b.Size, b.SHA256 = fin.Status, fin.Error, fin.Log, fin.FileName, fin.Size, fin.SHA256
 	return b
+}
+
+// readBackupState reads what the dump of logical leaves out (ADR-0050). It
+// is best effort: a Backup never fails for it, and a restore of a Backup
+// without it creates the database the plain way.
+//
+// One admin session reads both: the inspect prints one line while the
+// database exists, then the access query prints one JSON line of hex user
+// names to levels. psql prints a name as it is, newlines and tabs too, so
+// only that last line, which no name can break, is read as access.
+func (s *Service) readBackupState(ctx context.Context, d Database, dp Dumper, logical string) BackupState {
+	out, _, err := s.admin(ctx, d, dp, dp.InspectSQL(logical)+"\n"+dp.AccessSQL(logical))
+	if err != nil {
+		return BackupState{}
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	var st BackupState
+	var levels map[string]string
+	if json.Unmarshal([]byte(strings.TrimSpace(lines[len(lines)-1])), &levels) == nil {
+		lines = lines[:len(lines)-1]
+		for key, level := range levels {
+			user, err := hex.DecodeString(key)
+			if lvl := Access(level); err == nil && len(user) > 0 && (lvl == AccessRead || lvl == AccessFull) {
+				if st.Access == nil {
+					st.Access = map[string]Access{}
+				}
+				st.Access[string(user)] = lvl
+			}
+		}
+	}
+	if len(lines) > 0 {
+		st.Prev = strings.TrimSpace(lines[0])
+	}
+	return st
 }
 
 // dumpTo writes the dump of one logical database as one gzip stream to dir/name, through a
@@ -375,7 +415,7 @@ func (s *Service) ListRestores(ctx context.Context, id int64) ([]Restore, error)
 
 // ErrRemoteOnly is a download or restore of a Backup whose file Rotation
 // removed and whose only copy is in a Backup destination.
-var ErrRemoteOnly = errors.New("this Backup is only in its Backup destination; download it from the bucket")
+var ErrRemoteOnly = errors.New("this Backup is only in its Backup destination; download it from there")
 
 // BackupPath is the file of a succeeded Backup, for download. A Remote only
 // Backup is ErrRemoteOnly; anything else, including a file that is gone, is

@@ -421,12 +421,13 @@ func TestRestoreReplaceKeepsACL(t *testing.T) {
 	b := r.manualBackup(t, d.ID)
 	admin := r.adminSQL(pgAdmin, "app\t{=Tc/app,app=CTc/app,ro=c/app}\n", nil)
 	r.captureRestore(pgRestore, "")
-	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop"); err != nil {
+	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop", false); err != nil {
 		t.Fatal(err)
 	}
 	r.svc.Wait()
-	// inspect, the per-database settings, then the replace.
-	if len(*admin) != 3 || !strings.Contains((*admin)[2], `GRANT CONNECT ON DATABASE "app" TO "ro";`) || !strings.Contains((*admin)[2], `REVOKE ALL ON DATABASE "app" FROM PUBLIC;`) {
+	// The pre_restore Backup's state, the inspect, the per-database
+	// settings, then the replace.
+	if len(*admin) != 4 || !strings.Contains((*admin)[3], `GRANT CONNECT ON DATABASE "app" TO "ro";`) || !strings.Contains((*admin)[3], `REVOKE ALL ON DATABASE "app" FROM PUBLIC;`) {
 		t.Fatalf("admin sql = %q", *admin)
 	}
 }
@@ -440,7 +441,7 @@ func TestRestoreIntoNewRestricts(t *testing.T) {
 	b := r.manualBackup(t, d.ID)
 	admin := r.adminSQL(pgAdmin, "", nil)
 	r.captureRestore(pgRestore, "")
-	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "fresh", "Shop"); err != nil {
+	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "fresh", "Shop", false); err != nil {
 		t.Fatal(err)
 	}
 	r.svc.Wait()

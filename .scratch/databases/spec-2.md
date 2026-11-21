@@ -398,6 +398,9 @@ that is higher than the current one. Downgrades are never offered.
   start only.
 - Refused up front: a pending superuser password reset, a tag not strictly
   higher, a stopped Database, a running job.
+- Rename answers 409 while a change runs (review 2026-11-20): a rename
+  re-aliases the container, which would put a Postgres server the change
+  cut off back on `relist-network`.
 
 ## Testing
 

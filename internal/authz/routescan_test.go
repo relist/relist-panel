@@ -80,6 +80,7 @@ var adminOnly = []string{
 	"GET /api/databases/{id}/restores",
 	"POST /api/databases/{id}/restores",
 	"POST /api/databases/{id}/restores/upload",
+	"POST /api/databases/{id}/recreate",
 	"POST /api/databases/{id}/query",
 	"GET /api/databases/{id}/query/schema",
 	"POST /api/databases/{id}/redis/command",

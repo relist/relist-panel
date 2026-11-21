@@ -226,7 +226,7 @@ export function DatabaseScheduleCard({ db }: { db: Database }) {
             extra={
               destinations.data && destinations.data.length === 0
                 ? 'No Backup destinations yet. Add one under Data → Backup destinations.'
-                : 'Scheduled backups are also copied to this bucket.'
+                : 'Scheduled backups are also copied to this destination.'
             }
             label="Copy to"
             name="destinationId"

@@ -165,15 +165,15 @@ describe('BackupDestinationsPage', () => {
     expect(await within(dialog).findByText('enter the secret access key again when changing the endpoint')).toBeTruthy();
   });
 
-  it('asks to confirm the copies that stay in the bucket, and sends the number', async () => {
+  it('asks to confirm the copies that stay in the destination, and sends the number', async () => {
     api.deleteBackupDestination
-      .mockRejectedValueOnce(new ApiError(409, '2 backup copies stay in the bucket', undefined, { copies: 2 }))
+      .mockRejectedValueOnce(new ApiError(409, '2 backup copies stay in the destination', undefined, { copies: 2 }))
       .mockResolvedValueOnce(undefined);
     const user = userEvent.setup();
     show();
     await user.click(await screen.findByRole('button', { name: 'Delete minio' }));
     await user.click(await screen.findByRole('button', { name: 'Delete' }));
-    expect(await screen.findByText('2 backup copies stay in the bucket. The panel stops tracking them.')).toBeTruthy();
+    expect(await screen.findByText('2 backup copies stay in the destination. The panel stops tracking them.')).toBeTruthy();
     const dialog = await screen.findByRole('dialog');
     await user.click(within(dialog).getByRole('button', { name: 'Delete destination' }));
     await waitFor(() => expect(api.deleteBackupDestination).toHaveBeenLastCalledWith(1, 2));

@@ -5,7 +5,7 @@ type Meta = { color: string; label: string };
 const STATUS: Record<DatabaseStatus, Meta> = {
   creating: { color: 'processing', label: 'Creating' },
   deleted: { color: 'default', label: 'Deleted' },
-  drift: { color: 'orange', label: 'Drift' },
+  drift: { color: 'warning', label: 'Drift' },
   error: { color: 'error', label: 'Error' },
   running: { color: 'success', label: 'Running' },
   starting: { color: 'processing', label: 'Starting' },
@@ -94,6 +94,20 @@ export function restoreWarning(target: string, replace: boolean): string {
     : `Creates the database ${target}.`;
 }
 
+/** The restore dialog's choice to create a new database as its Backup recorded it. */
+export function asBackedUpLabel(engine: string, backedUpAs: string): string {
+  return engine === 'postgres'
+    ? `Owned by ${backedUpAs}, as when it was backed up`
+    : `Character set ${backedUpAs}, as when it was backed up`;
+}
+
+/** What a Recreate says about a Backup taken before Backups kept their database's owner and access. */
+export function statelessWarning(engine: string, database: string): string {
+  return engine === 'postgres'
+    ? `Taken before Backups kept the owner and access: postgres will own ${database}, and no user can reach it.`
+    : `Taken before Backups kept users' access: no user can reach ${database}.`;
+}
+
 /** The line under the header while a job runs. */
 export function jobNotice(job: Database['job']): string {
   switch (job) {
@@ -111,6 +125,10 @@ export function jobNotice(job: Database['job']): string {
       return 'Old scheduled backups are being deleted. Other changes wait until it ends.';
     case 'change_version':
       return 'The version is being changed. The Database is unavailable until it ends; other changes wait.';
+    case 'upload':
+      return 'A Backup is being copied to its Backup destination again. Other changes wait until it ends.';
+    case 'recreate':
+      return 'The Database is being recreated on a new volume and its Backups restored. Other changes wait until it ends.';
     default:
       return '';
   }
@@ -124,6 +142,8 @@ const JOBS: Record<string, string> = {
   drop_database: 'Dropping a database',
   reset_password: 'Resetting the password',
   change_version: 'Changing the version',
+  upload: 'Copying a Backup',
+  recreate: 'Recreating',
 };
 
 const ENGINES: Record<string, string> = { mariadb: 'MariaDB', mysql: 'MySQL', postgres: 'PostgreSQL', redis: 'Redis' };

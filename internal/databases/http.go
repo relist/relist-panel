@@ -63,6 +63,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/databases/{id}/restores", a.listRestores)
 	mux.HandleFunc("POST /api/databases/{id}/restores", a.startRestore)
 	mux.HandleFunc("POST /api/databases/{id}/restores/upload", a.uploadRestore)
+	mux.HandleFunc("POST /api/databases/{id}/recreate", a.recreate)
 	mux.HandleFunc("POST /api/databases/{id}/query", a.query)
 	mux.HandleFunc("GET /api/databases/{id}/query/schema", a.querySchema)
 	mux.HandleFunc("POST /api/databases/{id}/redis/command", a.redisCommand)
@@ -98,8 +99,8 @@ type DatabaseJSON struct {
 	// ""); Deleted marks a tombstone that only keeps its Backups.
 	Job     string `json:"job"`
 	Deleted bool   `json:"deleted"`
-	// Upgrades are the higher tags Change version can move it to.
-	Upgrades []string `json:"upgrades"`
+	// HigherVersions are the tags Change version can move it to.
+	HigherVersions []string `json:"higherVersions"`
 }
 
 func toJSON(v View) DatabaseJSON {
@@ -112,9 +113,9 @@ func toJSON(v View) DatabaseJSON {
 	if out.Warnings == nil {
 		out.Warnings = []string{}
 	}
-	out.Upgrades = []string{}
+	out.HigherVersions = []string{}
 	if !v.Deleted {
-		out.Upgrades = HigherVersions(v.Engine, v.Version)
+		out.HigherVersions = HigherVersions(v.Engine, v.Version)
 	}
 	if e, ok := Engines[v.Engine]; ok {
 		out.Image, out.Port, out.User, out.DefaultDatabase = e.Image(v.Version), e.Port(), e.User(), e.DefaultDatabase()
@@ -194,10 +195,15 @@ func id(w http.ResponseWriter, r *http.Request) (int64, bool) {
 }
 
 // target names the Database in the audit event.
-func (a *API) target(r *http.Request, n int64) {
-	if d, err := a.s.d.Store.Get(r.Context(), n); err == nil {
-		audit.Target(r.Context(), d.Name)
+// target names Database n as the audit row's target and returns it (the
+// zero Database when it cannot be read).
+func (a *API) target(r *http.Request, n int64) Database {
+	d, err := a.s.d.Store.Get(r.Context(), n)
+	if err != nil {
+		return Database{}
 	}
+	audit.Target(r.Context(), d.Name)
+	return d
 }
 
 func (a *API) get(w http.ResponseWriter, r *http.Request) {
@@ -392,6 +398,7 @@ func writeError(w http.ResponseWriter, err error) {
 	var unknownUser ErrUnknownUser
 	var admin adminError
 	var unsplittable ErrUnsplittableSetting
+	var twice ErrSameDatabaseTwice
 	switch {
 	case errors.As(err, &invalid), errors.As(err, &fullOnSuper), errors.As(err, &reserved), errors.As(err, &ownerAccess),
 		errors.As(err, &protected), errors.Is(err, ErrBadUserName),
@@ -415,7 +422,10 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, "Database not found")
-	case errors.Is(err, ErrDuplicateName), errors.Is(err, ErrLocked), errors.Is(err, ErrStarting), errors.Is(err, ErrBusy), errors.Is(err, ErrNotRunning), errors.Is(err, ErrChangedFile), errors.Is(err, ErrRemoteOnly), errors.Is(err, ErrNotScheduled), errors.Is(err, ErrNoFailedUpload):
+	case errors.As(err, &twice):
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrDuplicateName), errors.Is(err, ErrLocked), errors.Is(err, ErrStarting), errors.Is(err, ErrBusy), errors.Is(err, ErrNotRunning), errors.Is(err, ErrChangedFile), errors.Is(err, ErrRemoteOnly), errors.Is(err, ErrNotScheduled), errors.Is(err, ErrNoFailedUpload),
+		errors.Is(err, ErrVolumeNotMissing):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrRemoteDelete):
 		writeJSONError(w, http.StatusBadGateway, err.Error())

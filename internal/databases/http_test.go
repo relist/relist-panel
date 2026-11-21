@@ -214,14 +214,14 @@ func TestLockedIs409(t *testing.T) {
 	}
 }
 
-func TestDatabaseJSONUpgrades(t *testing.T) {
+func TestDatabaseJSONHigherVersions(t *testing.T) {
 	a := newAPIRig(t)
 	a.seed(t, "Shop", "postgres", "16")
 	w := a.do("GET", "/api/databases/1", "")
 	var got struct {
-		Upgrades []string `json:"upgrades"`
+		HigherVersions []string `json:"higherVersions"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || !slices.Equal(got.Upgrades, []string{"17", "18"}) {
-		t.Fatalf("upgrades = %v, %v (%s)", got.Upgrades, err, w.Body)
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || !slices.Equal(got.HigherVersions, []string{"17", "18"}) {
+		t.Fatalf("higherVersions = %v, %v (%s)", got.HigherVersions, err, w.Body)
 	}
 }

@@ -1194,8 +1194,21 @@ export type DatabaseStatus =
   /** A tombstone: deleted, with its Backups kept. */
   | 'deleted';
 
+/** Every job a Database can run: the server's JobKind values, in one place. */
+export const DATABASE_JOBS = [
+  'backup',
+  'restore',
+  'update_image',
+  'rotate',
+  'drop_database',
+  'reset_password',
+  'change_version',
+  'upload',
+  'recreate',
+] as const;
+
 /** The job running on a Database; while one runs, lifecycle actions answer 409. */
-export type DatabaseJob = '' | 'backup' | 'restore' | 'update_image' | 'rotate' | 'drop_database' | 'reset_password' | 'change_version';
+export type DatabaseJob = '' | (typeof DATABASE_JOBS)[number];
 
 export interface Database {
   id: number;
@@ -1225,7 +1238,7 @@ export interface Database {
   /** A tombstone: only its Backups remain. */
   deleted: boolean;
   /** The higher versions Change version can move it to, lowest first. */
-  upgrades: string[];
+  higherVersions: string[];
 }
 
 /**
@@ -1301,6 +1314,12 @@ export interface DatabaseBackup {
   localRemoved: boolean;
   /** The latest copy to a Backup destination; null when none was tried. */
   upload: DatabaseBackupUpload | null;
+  /**
+   * How a restore "as it was backed up" creates a new database: its owner
+   * (PostgreSQL) or "charset, collation" (MySQL, MariaDB). Empty for a
+   * Backup taken before the panel kept it.
+   */
+  asBackedUp: string;
 }
 
 export interface DatabaseBackupUpload {

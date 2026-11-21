@@ -75,7 +75,7 @@ func TestPanicInARestoreIsContained(t *testing.T) {
 	b := r.manualBackup(t, d.ID)
 	r.adminSQL(pgAdmin, "postgres\n", nil)
 	r.host.script(pgRestore, func(ExecRequest) (int, error) { panic("boom") })
-	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop"); err != nil {
+	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "Shop", false); err != nil {
 		t.Fatal(err)
 	}
 	r.svc.Wait()

@@ -9,7 +9,7 @@ import { DatabaseScheduleCard } from '../components/DatabaseScheduleCard';
 import { RelativeTime } from '../components/primitives';
 import { api } from '../data/api';
 import type { BackupRequest, Database, DatabaseBackup, DatabaseRestore, JobStatus } from '../data/types';
-import { backupsPollInterval, canBackUp, formatBytes, missingRole, restoreWarning, triggerLabel, validTargetName } from './databases-view';
+import { asBackedUpLabel, backupsPollInterval, canBackUp, formatBytes, missingRole, restoreWarning, triggerLabel, validTargetName } from './databases-view';
 
 const { Text } = Typography;
 
@@ -126,17 +126,22 @@ export function DatabaseBackupsTab({ db, onOpenUsers }: { db: Database; onOpenUs
   const [replaceName, setReplaceName] = useState('');
   const [newName, setNewName] = useState('');
   const [agePassphrase, setAgePassphrase] = useState('');
+  // A new database is created as it was backed up unless the Admin unticks it.
+  const [keepState, setKeepState] = useState(true);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const logical = useSWR(source || (backingUp && scopeMode === 'selected') ? `${key}/logical` : null, () => api.databaseLogicalDatabases(db.id));
 
   const existing = logical.data?.databases ?? [];
+  const backedUpAs = source?.kind === 'backup' ? source.backup.asBackedUp : '';
+  const keepStateShown = targetMode === 'new' && backedUpAs !== '';
 
   useEffect(() => {
     setTargetMode(undefined);
     setReplaceName('');
     setNewName('');
     setAgePassphrase('');
+    setKeepState(true);
   }, [source]);
 
   // A Backup restores into its own database when it still exists, and into a
@@ -185,7 +190,7 @@ export function DatabaseBackupsTab({ db, onOpenUsers }: { db: Database; onOpenUs
     setActionError(undefined);
     try {
       if (source.kind === 'backup') {
-        await api.restoreDatabase(db.id, source.backup.id, resolvedTarget, db.name);
+        await api.restoreDatabase(db.id, source.backup.id, resolvedTarget, db.name, keepStateShown && keepState);
       } else if (source.encrypted) {
         await api.restoreDatabaseUpload(db.id, source.file, resolvedTarget, db.name, agePassphrase);
       } else {
@@ -504,6 +509,11 @@ export function DatabaseBackupsTab({ db, onOpenUsers }: { db: Database; onOpenUs
                 status={newName && !validTargetName(newName) ? 'error' : undefined}
                 value={newName}
               />
+            )}
+            {keepStateShown && (
+              <Checkbox checked={keepState} onChange={(event) => setKeepState(event.target.checked)}>
+                {asBackedUpLabel(db.engine, backedUpAs)}
+              </Checkbox>
             )}
           </Flex>
         }

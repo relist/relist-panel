@@ -1,8 +1,10 @@
-import { App, Button, Card, Flex, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Flex, Table, Tag, Typography } from 'antd';
+import { useState } from 'react';
 import useSWR from 'swr';
 
 import { api } from '../data/api';
 import type { Database, VersionChange } from '../data/types';
+import { DangerModal } from './DangerModal';
 import { RelativeTime } from './primitives';
 
 const { Text } = Typography;
@@ -19,29 +21,32 @@ const STATUS: Record<VersionChange['status'], { color: string; label: string }> 
  * renders before the first change.
  */
 export function DatabaseVersionChangesCard({ db }: { db: Database }) {
-  const { message, modal } = App.useApp();
+  const { message } = App.useApp();
   const key = `/api/databases/${db.id}/version-changes`;
   const { data, mutate } = useSWR(key, () => api.listVersionChanges(db.id), {
     refreshInterval: (rows) => (rows?.some((row) => row.status === 'running') ? 2000 : 0),
   });
+  // The change whose previous version data the Admin is deleting: a volume,
+  // so the volume's name is typed (GUIDELINES §8).
+  const [deleting, setDeleting] = useState<VersionChange>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
   if (!data || data.length === 0) return null;
 
-  const remove = (row: VersionChange) =>
-    void modal.confirm({
-      content: `Deletes the ${row.fromVersion} data kept from before the change. It cannot be undone.`,
-      okText: 'Delete previous data',
-      okType: 'danger',
-      onOk: async () => {
-        try {
-          await api.deletePreviousData(db.id, row.id);
-          void message.success(`Deleted the ${row.fromVersion} data`);
-        } catch (reason: unknown) {
-          void message.error(reason instanceof Error ? reason.message : 'Could not delete the previous data');
-        }
-        await mutate();
-      },
-      title: 'Delete previous version data',
-    });
+  const remove = async (row: VersionChange) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.deletePreviousData(db.id, row.id);
+      void message.success(`Deleted the ${row.fromVersion} data`);
+      setDeleting(undefined);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : 'Could not delete the previous data');
+    } finally {
+      setBusy(false);
+      await mutate();
+    }
+  };
 
   return (
     <Card title="Version changes" variant="outlined">
@@ -62,7 +67,14 @@ export function DatabaseVersionChangesCard({ db }: { db: Database }) {
               row.previousData && (
                 <Flex align="center" gap={8} wrap>
                   <Text code>{row.previousData}</Text>
-                  <Button danger onClick={() => remove(row)} size="small">
+                  <Button
+                    danger
+                    onClick={() => {
+                      setError(undefined);
+                      setDeleting(row);
+                    }}
+                    size="small"
+                  >
                     Delete
                   </Button>
                 </Flex>
@@ -79,6 +91,17 @@ export function DatabaseVersionChangesCard({ db }: { db: Database }) {
         rowKey="id"
         scroll={{ x: 'max-content' }}
         size="small"
+      />
+      <DangerModal
+        confirmWord={deleting?.previousData ?? ''}
+        consequences={error && <Alert showIcon title={error} type="error" />}
+        description={deleting && `Deletes the ${deleting.fromVersion} data kept from before the change. It cannot be undone.`}
+        loading={busy}
+        okText="Delete previous data"
+        onCancel={() => setDeleting(undefined)}
+        onConfirm={() => deleting && void remove(deleting)}
+        open={deleting !== undefined}
+        title="Delete previous version data"
       />
     </Card>
   );

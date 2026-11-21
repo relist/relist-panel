@@ -80,7 +80,7 @@ answering one question. A group is a title, not a page: it has no route and no b
 | *(none)* | How is my work doing? | Overview, Projects, Deployments |
 | Host | How is the machine doing? | Monitoring, Docker |
 | Build & images | Where do images come from? | Images, Registry, Builders, SSH keys |
-| Data | Where does my data live? | Databases |
+| Data | Where does my data live? | Databases, Backup destinations |
 | Routing | How does traffic get in? | Traefik, Certificates, Basic auth |
 | Security | What is exposed, and who did what? | Vulnerabilities, Audit log |
 | Panel | The panel itself | Users, Panel update |
@@ -305,7 +305,7 @@ SQL console of a Postgres, MySQL or MariaDB Database, after Connection. Redis ha
 
 - **Top bar:** a logical-database `Select`, the **Allow writes** `Switch` (per page view, never stored; on it shows a red `Writes allowed` tag), **History** (a right Drawer of the last 50 runs in this browser), **Cancel** while a run is in flight, and a primary **Run**.
 - **Run** takes the editor's selection, else the whole text (Ctrl or Cmd + Enter). Cancel aborts the request, which stops the query on the server.
-- **Left:** a schema → table `Tree`. Clicking a table puts `SELECT * FROM <table> LIMIT 100` in the editor and runs it.
+- **Left:** a schema → table `Tree`. Clicking a table puts `SELECT * FROM <table> LIMIT 100` in the editor; it runs only when the Admin presses Run, because reading a view runs the functions it calls (ADR-0048, ADR-0049). A view carries a `view` Tag.
 - **Editor:** Monaco, a bounded box (`LAYOUT.queryEditorHeight`). An error from the server is marked at its position in the text that ran (Postgres), or at the failing statement's start (MySQL and MariaDB).
 - **Results:** one tab per result (`1 · SELECT 100`), each a virtual `Table`. NULL is italic `NULL`; a cut cell carries a `cut, <size>` tag and a binary one `binary, <size>`. **Export CSV** builds the file from the rows shown. A statement without columns shows its affected rows.
 - **Stops and errors stay on screen:** a `warning` `Alert` names the limit that stopped the batch; an `error` `Alert` carries the server's words. Neither is a toast.

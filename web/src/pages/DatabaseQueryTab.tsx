@@ -1,6 +1,6 @@
 import Editor from '@monaco-editor/react';
 import type { OnMount } from '@monaco-editor/react';
-import { Alert, Button, Drawer, Empty, Flex, Select, Switch, Table, Tabs, Tag, Tree, Typography } from 'antd';
+import { Alert, Button, Drawer, Empty, Flex, Select, Switch, Table, Tabs, Tag, Tree, Typography, theme } from 'antd';
 import type { DataNode } from 'antd/es/tree';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import useSWR from 'swr';
@@ -121,6 +121,7 @@ function ResultView({ result, database }: { database: string; result: QueryResul
 export function DatabaseQueryTab({ db }: { db: Database }) {
   const mysql = db.engine !== 'postgres';
   const mode = useContext(ThemeModeContext);
+  const { token } = theme.useToken();
   const monacoStatus = useMonaco();
   const running = db.status === 'running';
 
@@ -145,7 +146,7 @@ export function DatabaseQueryTab({ db }: { db: Database }) {
           key: `t:${node.name}\u0000${table}`,
           title: node.views?.includes(table) ? (
             <span>
-              <span>{table}</span> <Tag bordered={false}>view</Tag>
+              <span>{table}</span> <Tag variant="filled">view</Tag>
             </span>
           ) : (
             table
@@ -326,7 +327,7 @@ export function DatabaseQueryTab({ db }: { db: Database }) {
           )}
         </div>
         <Flex gap={16} style={{ flex: '4 1 480px', minWidth: 0 }} vertical>
-          <div style={{ border: '1px solid var(--ant-color-border-secondary, #f0f0f0)', height: LAYOUT.queryEditorHeight }}>
+          <div style={{ border: `1px solid ${token.colorBorderSecondary}`, height: LAYOUT.queryEditorHeight }}>
             {monacoStatus === 'ready' ? (
               <Editor
                 height="100%"

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { DATABASE_JOBS } from '../data/types';
+
 import {
   backupsPollInterval,
   canBackUp,
@@ -13,6 +15,7 @@ import {
   restoreWarning,
   validTargetName,
   snippet,
+  statelessWarning,
   statusMeta,
   triggerLabel,
 } from './databases-view';
@@ -114,6 +117,21 @@ describe('canBackUp', () => {
   });
 });
 
+describe('statusMeta', () => {
+  it('colours a status with a functional colour, never a preset one', () => {
+    expect(statusMeta('drift').color).toBe('warning');
+  });
+});
+
+describe('every job kind', () => {
+  it('has a notice and a label', () => {
+    for (const job of DATABASE_JOBS) {
+      expect(jobNotice(job), job).not.toBe('');
+      expect(jobLabel(job), job).not.toBe(job);
+    }
+  });
+});
+
 describe('jobNotice', () => {
   it('names the job', () => {
     expect(jobNotice('backup')).toContain('backup is running');
@@ -145,5 +163,14 @@ describe('phase 7 helpers', () => {
     expect(credentialsDatabase({ name: 'app', access: { app: 'full', web: 'read' } }, 'postgres')).toBe('app');
     expect(credentialsDatabase({ name: 'reader', access: { web: 'read', api: 'none', abc: 'read' } }, 'postgres')).toBe('abc');
     expect(credentialsDatabase({ name: 'x', access: { web: 'none' } }, 'postgres')).toBe('postgres');
+  });
+});
+
+describe('statelessWarning', () => {
+  it('says what a Backup without its database state brings back', () => {
+    expect(statelessWarning('postgres', 'app')).toBe(
+      'Taken before Backups kept the owner and access: postgres will own app, and no user can reach it.',
+    );
+    expect(statelessWarning('mysql', 'shop')).toBe("Taken before Backups kept users' access: no user can reach shop.");
   });
 });
