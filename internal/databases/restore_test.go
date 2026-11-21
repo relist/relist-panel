@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"relist-panel/internal/agefile"
 )
 
 const (
@@ -160,7 +162,7 @@ func TestRestoreUploadRunsInTarget(t *testing.T) {
 	stdin := r.captureRestore(pgRestore, "")
 	r.host.reset()
 
-	rs, err := r.svc.RestoreFromUpload(ctx, d.ID, "shop", "Shop", "plain.sql", strings.NewReader("CREATE TABLE t (id int);\n"))
+	rs, err := r.svc.RestoreFromUpload(ctx, d.ID, "shop", "Shop", "plain.sql", "", strings.NewReader("CREATE TABLE t (id int);\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +197,7 @@ func TestRestoreUploadRefusedBeforeAnything(t *testing.T) {
 	ctx := context.Background()
 	d := r.create(t, "Shop", "postgres", "18")
 	r.host.reset()
-	_, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "Shop", "all.sql", strings.NewReader("CREATE ROLE x;\n"))
+	_, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "Shop", "all.sql", "", strings.NewReader("CREATE ROLE x;\n"))
 	var f ErrForbiddenStatement
 	if !errors.As(err, &f) || f.Line != 1 {
 		t.Fatalf("err = %v, want ErrForbiddenStatement at line 1", err)
@@ -231,7 +233,7 @@ func TestReplaceKeepsOwner(t *testing.T) {
 		}
 	})
 	r.captureRestore(pgRestore, "")
-	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "Shop", "a.sql", strings.NewReader("SELECT 1;\n")); err != nil {
+	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "Shop", "a.sql", "", strings.NewReader("SELECT 1;\n")); err != nil {
 		t.Fatal(err)
 	}
 	r.svc.Wait()
@@ -249,7 +251,7 @@ func TestRestoreMySQLKeepsCharset(t *testing.T) {
 	d := r.create(t, "Shop", "mysql", "8.4")
 	admin := r.adminSQL("mysql -uroot -N", "utf8mb4\tutf8mb4_bin\n", nil)
 	stdin := r.captureRestore("mysql -uroot --binary-mode --database=app", "")
-	if _, err := r.svc.RestoreFromUpload(context.Background(), d.ID, "app", "Shop", "a.sql", strings.NewReader("CREATE TABLE t (id int);")); err != nil {
+	if _, err := r.svc.RestoreFromUpload(context.Background(), d.ID, "app", "Shop", "a.sql", "", strings.NewReader("CREATE TABLE t (id int);")); err != nil {
 		t.Fatal(err)
 	}
 	r.svc.Wait()
@@ -342,11 +344,11 @@ func TestRestoreUploadDetectsGzipByContent(t *testing.T) {
 	r.adminSQL(pgAdmin, "postgres\n", nil)
 	stdin := r.captureRestore(pgRestore, "")
 
-	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "Shop", "x.sql", bytes.NewReader(gz("SELECT 1;\n"))); err != nil {
+	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "Shop", "x.sql", "", bytes.NewReader(gz("SELECT 1;\n"))); err != nil {
 		t.Fatal(err)
 	}
 	r.svc.Wait()
-	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "Shop", "y.sql.gz", strings.NewReader("SELECT 2;\n")); err != nil {
+	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "Shop", "y.sql.gz", "", strings.NewReader("SELECT 2;\n")); err != nil {
 		t.Fatal(err)
 	}
 	r.svc.Wait()
@@ -362,13 +364,13 @@ func TestRestoreUploadDetectsGzipByContent(t *testing.T) {
 	}
 	r.host.reset()
 	var f ErrForbiddenStatement
-	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "Shop", "z.sql", bytes.NewReader(gz("\\connect x\n"))); !errors.As(err, &f) || f.Line != 1 {
+	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "Shop", "z.sql", "", bytes.NewReader(gz("\\connect x\n"))); !errors.As(err, &f) || f.Line != 1 {
 		t.Fatalf("gzipped \\connect: err = %v", err)
 	}
 	if len(execLines(r)) != 0 || len(uploadsLeft(r)) != 0 {
 		t.Fatalf("something ran: %v", execLines(r))
 	}
-	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "Shop", "bad.gz", strings.NewReader("\x1f\x8bnot gzip")); !errors.Is(err, ErrBadUpload) {
+	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "Shop", "bad.gz", "", strings.NewReader("\x1f\x8bnot gzip")); !errors.Is(err, ErrBadUpload) {
 		t.Fatalf("broken gzip: err = %v", err)
 	}
 }
@@ -401,7 +403,7 @@ func TestRestoreStopsAtFirstError(t *testing.T) {
 		_, _ = io.WriteString(req.Stderr, "psql:<stdin>:12: ERROR:  syntax error")
 		return 3, nil
 	})
-	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "fresh", "Shop", "a.sql", strings.NewReader("x;")); err != nil {
+	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "fresh", "Shop", "a.sql", "", strings.NewReader("x;")); err != nil {
 		t.Fatal(err)
 	}
 	r.svc.Wait()
@@ -423,7 +425,7 @@ func TestRestoreFailsWhenReplaceFails(t *testing.T) {
 		return 0, nil
 	})
 	r.captureRestore(pgRestore, "")
-	_, _ = r.svc.RestoreFromUpload(context.Background(), d.ID, "fresh", "Shop", "a.sql", strings.NewReader("x;"))
+	_, _ = r.svc.RestoreFromUpload(context.Background(), d.ID, "fresh", "Shop", "a.sql", "", strings.NewReader("x;"))
 	r.svc.Wait()
 	got := r.lastRestore(t, d.ID)
 	if got.Status != JobFailed || !strings.Contains(got.Log, "is being accessed") || r.host.count("exec relist-db-1 "+pgRestore) != 0 {
@@ -441,14 +443,14 @@ func TestRestoreWrongConfirmAndTarget(t *testing.T) {
 	if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, "app", "shop"); !errors.Is(err, ErrConfirm) {
 		t.Fatalf("backup: %v", err)
 	}
-	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "nope", "a.sql", strings.NewReader("x")); !errors.Is(err, ErrConfirm) {
+	if _, err := r.svc.RestoreFromUpload(ctx, d.ID, "app", "nope", "a.sql", "", strings.NewReader("x")); !errors.Is(err, ErrConfirm) {
 		t.Fatalf("upload: %v", err)
 	}
 	for _, bad := range []string{"", "template1", "-x", "a b"} {
 		if _, err := r.svc.RestoreFromBackup(ctx, d.ID, b.ID, bad, "Shop"); !errors.Is(err, ErrBadTarget) {
 			t.Fatalf("target %q: %v", bad, err)
 		}
-		if _, err := r.svc.RestoreFromUpload(ctx, d.ID, bad, "Shop", "a.sql", strings.NewReader("x")); !errors.Is(err, ErrBadTarget) {
+		if _, err := r.svc.RestoreFromUpload(ctx, d.ID, bad, "Shop", "a.sql", "", strings.NewReader("x")); !errors.Is(err, ErrBadTarget) {
 			t.Fatalf("upload target %q: %v", bad, err)
 		}
 	}
@@ -469,4 +471,106 @@ func TestRestoreOfFailedBackupRefused(t *testing.T) {
 	if r.svc.Jobs(d.ID) != "" {
 		t.Fatal("slot not released")
 	}
+}
+
+const agePass = "restore-passphrase-0123456789"
+
+func ageBytes(t *testing.T, pass, plain string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := agefile.Encrypt(&buf, pass, strings.NewReader(plain)); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func uploadsDirEmpty(t *testing.T, r *rig, id int64) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(r.svc.dbDir(id), "uploads"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("uploads dir not empty: %v", entries)
+	}
+}
+
+func TestRestoreEncryptedUpload(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	r.adminSQL(pgAdmin, "", nil)
+	stdin := r.captureRestore(pgRestore, "")
+	r.host.reset()
+	_, err := r.svc.RestoreFromUpload(ctx, d.ID, "shop", "Shop", "p.sql.age", agePass,
+		bytes.NewReader(ageBytes(t, agePass, "CREATE TABLE t (id int);\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	if len(*stdin) != 1 || (*stdin)[0] != "CREATE TABLE t (id int);\n" {
+		t.Fatalf("stdin = %q", *stdin)
+	}
+	if got := r.lastRestore(t, d.ID); got.Status != JobSucceeded {
+		t.Fatalf("restore = %+v", got)
+	}
+	uploadsDirEmpty(t, r, d.ID)
+}
+
+// Review Focus 4: a wrong passphrase answers cleanly and leaves no temp file.
+func TestRestoreEncryptedUploadWrongPassphrase(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	r.adminSQL(pgAdmin, "", nil)
+	r.host.reset()
+	_, err := r.svc.RestoreFromUpload(ctx, d.ID, "shop", "Shop", "p.sql.age", "not-the-passphrase-00000000",
+		bytes.NewReader(ageBytes(t, agePass, "SELECT 1;\n")))
+	if !errors.Is(err, agefile.ErrWrongPassphrase) {
+		t.Fatalf("err = %v, want ErrWrongPassphrase", err)
+	}
+	uploadsDirEmpty(t, r, d.ID)
+}
+
+func TestRestoreEncryptedUploadNeedsPassphrase(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	r.adminSQL(pgAdmin, "", nil)
+	r.host.reset()
+	_, err := r.svc.RestoreFromUpload(ctx, d.ID, "shop", "Shop", "p.sql.age", "",
+		bytes.NewReader(ageBytes(t, agePass, "SELECT 1;\n")))
+	if !errors.Is(err, ErrNeedPassphrase) {
+		t.Fatalf("err = %v, want ErrNeedPassphrase", err)
+	}
+	uploadsDirEmpty(t, r, d.ID)
+}
+
+func TestRestoreTooExpensiveUploadRefused(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	r.adminSQL(pgAdmin, "", nil)
+	r.host.reset()
+	enc := bytes.Replace(ageBytes(t, agePass, "SELECT 1;\n"), []byte(" 15"), []byte(" 22"), 1)
+	_, err := r.svc.RestoreFromUpload(ctx, d.ID, "shop", "Shop", "p.sql.age", agePass, bytes.NewReader(enc))
+	if !errors.Is(err, agefile.ErrTooExpensive) {
+		t.Fatalf("err = %v, want ErrTooExpensive", err)
+	}
+	uploadsDirEmpty(t, r, d.ID)
+}
+
+func TestRestoreDamagedEncryptedUpload(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	d := r.create(t, "Shop", "postgres", "18")
+	r.adminSQL(pgAdmin, "", nil)
+	r.host.reset()
+	enc := ageBytes(t, agePass, "SELECT 1;\n")
+	enc[len(enc)-1] ^= 0xff
+	_, err := r.svc.RestoreFromUpload(ctx, d.ID, "shop", "Shop", "p.sql.age", agePass, bytes.NewReader(enc))
+	if !errors.Is(err, agefile.ErrDamaged) {
+		t.Fatalf("err = %v, want ErrDamaged", err)
+	}
+	uploadsDirEmpty(t, r, d.ID)
 }

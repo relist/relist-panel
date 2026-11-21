@@ -18,7 +18,7 @@ type Store struct {
 func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 
 const columns = `d.id, d.name, d.type, d.config, d.secret, d.last_test_at, d.last_test_ok, d.last_test_error,
-	d.ssh_key_id, COALESCE(k.name, ''), COALESCE(k.private_key, ''), COALESCE(k.public_key, ''), d.host_key`
+	d.ssh_key_id, COALESCE(k.name, ''), COALESCE(k.private_key, ''), COALESCE(k.public_key, ''), d.host_key, d.encrypt, d.passphrase`
 
 const from = ` FROM backup_destinations d LEFT JOIN ssh_keys k ON k.id = d.ssh_key_id`
 
@@ -27,7 +27,7 @@ func scan(row interface{ Scan(...any) error }) (Destination, error) {
 	var cfg string
 	var at, keyID sql.NullInt64
 	err := row.Scan(&d.ID, &d.Name, &d.Type, &cfg, &d.Secret, &at, &d.LastTestOK, &d.LastTestError,
-		&keyID, &d.SSHKeyName, &d.PrivateKey, &d.PublicKey, &d.HostKey)
+		&keyID, &d.SSHKeyName, &d.PrivateKey, &d.PublicKey, &d.HostKey, &d.Encrypt, &d.Passphrase)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Destination{}, ErrNotFound
 	}
@@ -103,9 +103,12 @@ func (s *Store) Create(ctx context.Context, d Destination, now time.Time) (Desti
 	if d.Type == TypeSFTP && d.SFTP.Auth == AuthKey {
 		secret = ""
 	}
+	if !d.Encrypt {
+		d.Passphrase = ""
+	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO backup_destinations (name, type, config, secret, ssh_key_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		d.Name, d.Type, configJSON(d), secret, d.SSHKeyID, now.Unix(), now.Unix())
+		`INSERT INTO backup_destinations (name, type, config, secret, ssh_key_id, encrypt, passphrase, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.Name, d.Type, configJSON(d), secret, d.SSHKeyID, d.Encrypt, d.Passphrase, now.Unix(), now.Unix())
 	if err != nil {
 		return Destination{}, duplicate(err)
 	}
@@ -146,9 +149,19 @@ func (s *Store) Update(ctx context.Context, d Destination, now time.Time) error 
 		}
 		testOK, testErr = old.LastTestOK, old.LastTestError
 	}
+	// The passphrase follows Secret's pattern: empty keeps the stored one.
+	// Turning encryption off forgets it. Neither touches the Test result:
+	// encryption changes nothing about reaching the bucket.
+	passphrase := old.Passphrase
+	if d.Passphrase != "" {
+		passphrase = d.Passphrase
+	}
+	if !d.Encrypt {
+		passphrase = ""
+	}
 	_, err = s.db.ExecContext(ctx, `
-		UPDATE backup_destinations SET name = ?, config = ?, secret = ?, ssh_key_id = ?, host_key = ?, last_test_at = ?, last_test_ok = ?, last_test_error = ?, updated_at = ?
-		WHERE id = ?`, d.Name, configJSON(d), secret, d.SSHKeyID, hostKey, testAt, testOK, testErr, now.Unix(), d.ID)
+		UPDATE backup_destinations SET name = ?, config = ?, secret = ?, ssh_key_id = ?, host_key = ?, encrypt = ?, passphrase = ?, last_test_at = ?, last_test_ok = ?, last_test_error = ?, updated_at = ?
+		WHERE id = ?`, d.Name, configJSON(d), secret, d.SSHKeyID, hostKey, d.Encrypt, passphrase, testAt, testOK, testErr, now.Unix(), d.ID)
 	return duplicate(err)
 }
 

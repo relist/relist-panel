@@ -114,7 +114,7 @@ func (s *Service) Startup(ctx context.Context) error {
 		return nil
 	}
 	var errs []error
-	for _, pattern := range []string{"backups/*.partial", "uploads/*"} {
+	for _, pattern := range []string{"backups/*.partial", "backups/*.age.tmp", "uploads/*"} {
 		files, err := filepath.Glob(filepath.Join(s.d.DataDir, ".databases", "*", pattern))
 		if err != nil {
 			return err

@@ -1305,6 +1305,8 @@ export interface DatabaseBackupUpload {
   destination: string;
   status: 'running' | 'uploaded' | 'failed';
   error: string;
+  /** The copy is an age file (`<file>.age`), opened with the destination's passphrase. */
+  encrypted: boolean;
   uploadedAt: string | null;
 }
 
@@ -1317,10 +1319,21 @@ export interface DatabaseSchedule {
   minute: number;
   all: boolean;
   databases: string[];
+  /** Simple keeps by count/days; GFS keeps calendar tiers (ADR-0046). */
+  localMode: 'simple' | 'gfs';
   localKeepCount: number | null;
   localKeepDays: number | null;
+  localGfsDays: number | null;
+  localGfsWeeks: number | null;
+  localGfsMonths: number | null;
+  localGfsYears: number | null;
+  remoteMode: 'simple' | 'gfs';
   remoteKeepCount: number | null;
   remoteKeepDays: number | null;
+  remoteGfsDays: number | null;
+  remoteGfsWeeks: number | null;
+  remoteGfsMonths: number | null;
+  remoteGfsYears: number | null;
   /** The Backup destination its scheduled Backups are copied to; null = none. */
   destinationId: number | null;
   lastRunAt: string | null;
@@ -1373,6 +1386,8 @@ export interface BackupDestinationSftp {
 export type BackupDestination = {
   id: number;
   name: string;
+  /** Copies to this destination are age-encrypted with the stored passphrase. */
+  encrypt: boolean;
   lastTestAt: string | null;
   lastTestOk: boolean;
   lastTestError: string;
@@ -1385,7 +1400,7 @@ export type BackupDestinationSftpInput = Omit<BackupDestinationSftp, 'hostKey' |
  * one. The secret is the S3 secret access key or the SFTP password ('' with
  * key auth). The type cannot change on edit.
  */
-export type BackupDestinationInput = { name: string; secret: string } & (
+export type BackupDestinationInput = { name: string; secret: string; encrypt: boolean; passphrase: string } & (
   | { type: 's3'; s3: BackupDestinationS3 }
   | { type: 'sftp'; sftp: BackupDestinationSftpInput }
 );

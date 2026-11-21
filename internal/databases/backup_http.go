@@ -2,6 +2,7 @@ package databases
 
 import (
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -33,6 +34,7 @@ type UploadJSON struct {
 	Destination string     `json:"destination"`
 	Status      string     `json:"status"`
 	Error       string     `json:"error"`
+	Encrypted   bool       `json:"encrypted"`
 	UploadedAt  *time.Time `json:"uploadedAt"`
 }
 
@@ -40,7 +42,7 @@ func backupJSON(b Backup) BackupJSON {
 	var up *UploadJSON
 	// A copy Rotation already deleted from its destination is not shown.
 	if b.Upload != nil && b.Upload.DeletedAt == nil {
-		up = &UploadJSON{Destination: b.Upload.DestinationName, Status: b.Upload.Status, Error: b.Upload.Error, UploadedAt: b.Upload.UploadedAt}
+		up = &UploadJSON{Destination: b.Upload.DestinationName, Status: b.Upload.Status, Error: b.Upload.Error, Encrypted: b.Upload.Encrypted, UploadedAt: b.Upload.UploadedAt}
 	}
 	return BackupJSON{Upload: up, ID: b.ID, Trigger: b.Trigger, Database: b.LogicalName, Status: b.Status, Error: b.Error, Log: b.Log,
 		Size: b.Size, SHA256: b.SHA256, StartedAt: b.StartedAt, FinishedAt: b.FinishedAt, Pinned: b.Pinned, LocalRemoved: b.LocalRemovedAt != nil}
@@ -247,7 +249,15 @@ func (a *API) uploadRestore(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	a.target(r, n)
 	audit.Detail(r.Context(), "file", q.Get("name"))
-	rs, err := a.s.RestoreFromUpload(r.Context(), n, q.Get("target"), q.Get("confirm"), q.Get("name"), r.Body)
+	// The passphrase of an encrypted file rides in a header: a query string
+	// can end up in access logs. fetch header values are byte strings, so the
+	// browser percent-encodes it; a value that does not decode is taken as
+	// sent, for hand-written clients.
+	pass := r.Header.Get("X-Passphrase")
+	if dec, perr := url.PathUnescape(pass); perr == nil {
+		pass = dec
+	}
+	rs, err := a.s.RestoreFromUpload(r.Context(), n, q.Get("target"), q.Get("confirm"), q.Get("name"), pass, r.Body)
 	if err != nil {
 		writeError(w, err)
 		return

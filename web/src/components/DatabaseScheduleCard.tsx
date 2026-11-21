@@ -13,22 +13,80 @@ interface ScheduleForm extends ScheduleFormValues {
   enabled: boolean;
   scope: 'all' | 'selected';
   databases: string[];
+  localMode: 'simple' | 'gfs';
   localKeepCount: number | null;
   localKeepDays: number | null;
+  localGfsDays: number | null;
+  localGfsWeeks: number | null;
+  localGfsMonths: number | null;
+  localGfsYears: number | null;
   /** 0 = none. */
   destinationId: number;
+  remoteMode: 'simple' | 'gfs';
   remoteKeepCount: number | null;
   remoteKeepDays: number | null;
+  remoteGfsDays: number | null;
+  remoteGfsWeeks: number | null;
+  remoteGfsMonths: number | null;
+  remoteGfsYears: number | null;
 }
 
-type KeepName = 'localKeepCount' | 'localKeepDays' | 'remoteKeepCount' | 'remoteKeepDays';
+type KeepName =
+  | 'localKeepCount'
+  | 'localKeepDays'
+  | 'localGfsDays'
+  | 'localGfsWeeks'
+  | 'localGfsMonths'
+  | 'localGfsYears'
+  | 'remoteKeepCount'
+  | 'remoteKeepDays'
+  | 'remoteGfsDays'
+  | 'remoteGfsWeeks'
+  | 'remoteGfsMonths'
+  | 'remoteGfsYears';
 
-/** An InputNumber that is blank means no limit. */
-function KeepField({ label, name }: { label: string; name: KeepName }) {
+/**
+ * An InputNumber whose blank means "no limit" in Simple mode — but "keep
+ * nothing for this rule" in GFS, where the placeholder must say so.
+ */
+function KeepField({ extra, label, name, placeholder = 'No limit' }: { extra?: string; label: string; name: KeepName; placeholder?: string }) {
   return (
-    <Form.Item label={label} name={name}>
-      <InputNumber aria-label={label} min={1} placeholder="No limit" precision={0} />
+    <Form.Item extra={extra} label={label} name={name}>
+      <InputNumber aria-label={label} min={1} placeholder={placeholder} precision={0} />
     </Form.Item>
+  );
+}
+
+/** One Rotation set: the Simple/GFS switch and the fields of the mode on. */
+function RotationSet({ mode, prefix }: { mode: 'simple' | 'gfs'; prefix: '' | 'Destination: ' }) {
+  const names = (prefix === '' ? 'local' : 'remote') as 'local' | 'remote';
+  const label = prefix === '' ? 'Rotation' : 'Destination: rotation';
+  const field = (base: string) => (prefix === '' ? base : prefix + base.charAt(0).toLowerCase() + base.slice(1));
+  return (
+    <>
+      <Form.Item label={label} name={`${names}Mode`} style={{ marginBottom: 8, marginTop: 8 }}>
+        <Radio.Group
+          aria-label={label}
+          options={[
+            { label: 'Simple', value: 'simple' },
+            { label: 'GFS', value: 'gfs' },
+          ]}
+        />
+      </Form.Item>
+      <Flex gap={16} wrap>
+        <KeepField label={field('Last N backups')} name={`${names}KeepCount`} placeholder={mode === 'gfs' ? 'Keep none' : 'No limit'} />
+        {mode === 'gfs' ? (
+          <>
+            <KeepField label={field('Daily for D days')} name={`${names}GfsDays`} placeholder="Keep none" />
+            <KeepField extra="ISO weeks, Monday first." label={field('Weekly for W weeks')} name={`${names}GfsWeeks`} placeholder="Keep none" />
+            <KeepField label={field('Monthly for M months')} name={`${names}GfsMonths`} placeholder="Keep none" />
+            <KeepField label={field('Yearly for Y years')} name={`${names}GfsYears`} placeholder="Keep none" />
+          </>
+        ) : (
+          <KeepField label={field('At most X days')} name={`${names}KeepDays`} />
+        )}
+      </Flex>
+    </>
   );
 }
 
@@ -42,6 +100,8 @@ export function DatabaseScheduleCard({ db }: { db: Database }) {
   const [form] = Form.useForm<ScheduleForm>();
   const scope = Form.useWatch('scope', form);
   const destinationId = Form.useWatch('destinationId', form);
+  const localMode = Form.useWatch('localMode', form) ?? 'simple';
+  const remoteMode = Form.useWatch('remoteMode', form) ?? 'simple';
   const destinations = useSWR('/api/backup-destinations', () => api.listBackupDestinations());
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string>();
@@ -60,19 +120,43 @@ export function DatabaseScheduleCard({ db }: { db: Database }) {
     setFailure(undefined);
     try {
       const { days, minute } = scheduleFromValues(values);
+      const gfs = values.localMode === 'gfs';
       const saved: DatabaseScheduleState = await api.saveDatabaseSchedule(db.id, {
         all: values.scope === 'all',
         databases: values.scope === 'all' ? [] : values.databases,
         days,
         destinationId: values.destinationId || null,
         enabled: values.enabled,
+        localMode: values.localMode,
         localKeepCount: values.localKeepCount ?? null,
-        localKeepDays: values.localKeepDays ?? null,
+        // Each mode owns its fields: the other mode's are sent as null.
+        localKeepDays: gfs ? null : (values.localKeepDays ?? null),
+        localGfsDays: gfs ? (values.localGfsDays ?? null) : null,
+        localGfsWeeks: gfs ? (values.localGfsWeeks ?? null) : null,
+        localGfsMonths: gfs ? (values.localGfsMonths ?? null) : null,
+        localGfsYears: gfs ? (values.localGfsYears ?? null) : null,
         minute,
         // The fields are only on screen with a destination; without one the
         // stored values are sent back unchanged.
-        remoteKeepCount: values.destinationId ? (values.remoteKeepCount ?? null) : data.remoteKeepCount,
-        remoteKeepDays: values.destinationId ? (values.remoteKeepDays ?? null) : data.remoteKeepDays,
+        ...(values.destinationId
+          ? {
+              remoteMode: values.remoteMode,
+              remoteKeepCount: values.remoteKeepCount ?? null,
+              remoteKeepDays: values.remoteMode === 'gfs' ? null : (values.remoteKeepDays ?? null),
+              remoteGfsDays: values.remoteMode === 'gfs' ? (values.remoteGfsDays ?? null) : null,
+              remoteGfsWeeks: values.remoteMode === 'gfs' ? (values.remoteGfsWeeks ?? null) : null,
+              remoteGfsMonths: values.remoteMode === 'gfs' ? (values.remoteGfsMonths ?? null) : null,
+              remoteGfsYears: values.remoteMode === 'gfs' ? (values.remoteGfsYears ?? null) : null,
+            }
+          : {
+              remoteMode: data.remoteMode,
+              remoteKeepCount: data.remoteKeepCount,
+              remoteKeepDays: data.remoteKeepDays,
+              remoteGfsDays: data.remoteGfsDays,
+              remoteGfsWeeks: data.remoteGfsWeeks,
+              remoteGfsMonths: data.remoteGfsMonths,
+              remoteGfsYears: data.remoteGfsYears,
+            }),
       });
       await mutate(saved, { revalidate: false });
     } catch (reason: unknown) {
@@ -97,10 +181,20 @@ export function DatabaseScheduleCard({ db }: { db: Database }) {
             databases: data.databases,
             destinationId: data.destinationId ?? 0,
             enabled: data.enabled,
+            localMode: data.localMode,
             localKeepCount: data.localKeepCount,
             localKeepDays: data.localKeepDays,
+            localGfsDays: data.localGfsDays,
+            localGfsWeeks: data.localGfsWeeks,
+            localGfsMonths: data.localGfsMonths,
+            localGfsYears: data.localGfsYears,
+            remoteMode: data.remoteMode,
             remoteKeepCount: data.remoteKeepCount,
             remoteKeepDays: data.remoteKeepDays,
+            remoteGfsDays: data.remoteGfsDays,
+            remoteGfsWeeks: data.remoteGfsWeeks,
+            remoteGfsMonths: data.remoteGfsMonths,
+            remoteGfsYears: data.remoteGfsYears,
             scope: data.all ? 'all' : 'selected',
             ...scheduleFormValues(data.days, data.minute),
           }}
@@ -127,10 +221,7 @@ export function DatabaseScheduleCard({ db }: { db: Database }) {
             </Form.Item>
           )}
           <Text strong>Keep on this server</Text>
-          <Flex gap={16} style={{ marginTop: 8 }} wrap>
-            <KeepField label="Last N backups" name="localKeepCount" />
-            <KeepField label="At most X days" name="localKeepDays" />
-          </Flex>
+          <RotationSet mode={localMode} prefix="" />
           <Form.Item
             extra={
               destinations.data && destinations.data.length === 0
@@ -160,15 +251,12 @@ export function DatabaseScheduleCard({ db }: { db: Database }) {
           {destinationId ? (
             <>
               <Text strong>Keep in the destination</Text>
-              <Flex gap={16} style={{ marginTop: 8 }} wrap>
-                <KeepField label="Destination: last N backups" name="remoteKeepCount" />
-                <KeepField label="Destination: at most X days" name="remoteKeepDays" />
-              </Flex>
+              <RotationSet mode={remoteMode} prefix="Destination: " />
             </>
           ) : null}
           <Text style={{ display: 'block', marginBottom: 12 }} type="secondary">
             Rotation deletes only scheduled backups that are not pinned. The newest successful one of each database is
-            always kept. Leave a field blank for no limit.
+            always kept. A blank Simple field is no limit; a blank GFS field keeps nothing for that rule.
           </Text>
           <Flex align="center" gap={12} wrap>
             <Button htmlType="submit" loading={saving}>

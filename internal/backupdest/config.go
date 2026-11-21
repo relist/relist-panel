@@ -61,8 +61,12 @@ type Destination struct {
 	// store never saves them.
 	SSHKeyName, PrivateKey, PublicKey string
 	// HostKey is the trusted server host key, one authorized_keys line, or "".
-	HostKey       string
-	Secret        string
+	HostKey string
+	Secret  string
+	// Encrypt turns copies to this destination into age files; Passphrase is
+	// their scrypt passphrase, a secret like Secret.
+	Encrypt       bool
+	Passphrase    string
 	LastTestAt    *time.Time
 	LastTestOK    bool
 	LastTestError string

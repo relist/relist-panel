@@ -38,7 +38,7 @@ func TestOpenAndMigrateRefusesASchemaNewerThanTheBinary(t *testing.T) {
 	if !errors.Is(err, ErrSchemaAhead) {
 		t.Fatalf("error = %v, want ErrSchemaAhead", err)
 	}
-	for _, want := range []string{"52", "51"} {
+	for _, want := range []string{"53", "52"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not name version %s", err, want)
 		}
@@ -169,11 +169,11 @@ func TestUpgradeFrom17Boots(t *testing.T) {
 		t.Fatalf("project after upgrade = %q, %v", name, err)
 	}
 	version, err := SchemaVersion(t.Context(), db)
-	if err != nil || version != 51 {
+	if err != nil || version != 52 {
 		t.Fatalf("SchemaVersion() = %d, %v, want 51", version, err)
 	}
 	var recorded int
-	if err := db.QueryRow("SELECT COUNT(*) FROM migration_files").Scan(&recorded); err != nil || recorded != 51 {
+	if err := db.QueryRow("SELECT COUNT(*) FROM migration_files").Scan(&recorded); err != nil || recorded != 52 {
 		t.Fatalf("migration_files rows = %d, %v, want 51 (backfilled)", recorded, err)
 	}
 }

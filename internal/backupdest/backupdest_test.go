@@ -589,3 +589,129 @@ func TestSFTPResponsesNeverCarrySecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestEncryptPassphraseRoundTrip(t *testing.T) {
+	db, err := database.OpenAndMigrate(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	s := NewStore(db)
+	ctx := context.Background()
+	now := time.Unix(1000, 0)
+	d, err := s.Create(ctx, Destination{Name: "minio", Type: TypeS3,
+		S3:     S3Config{Endpoint: "http://minio:9000", Bucket: "b", AccessKeyID: "AKIA"},
+		Secret: "sec", Encrypt: true, Passphrase: "p-0123456789-0123456789"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Encrypt || got.Passphrase != "p-0123456789-0123456789" {
+		t.Fatalf("got = encrypt %v passphrase %q", got.Encrypt, got.Passphrase)
+	}
+	// An empty Passphrase on Update keeps the stored one, like Secret.
+	got.Passphrase = ""
+	if err := s.Update(ctx, got, now); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx, d.ID); !got.Encrypt || got.Passphrase != "p-0123456789-0123456789" {
+		t.Fatalf("after keep-update = encrypt %v passphrase %q", got.Encrypt, got.Passphrase)
+	}
+	// Turning encryption off clears the stored passphrase.
+	got.Encrypt = false
+	if err := s.Update(ctx, got, now); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Get(ctx, d.ID); got.Encrypt || got.Passphrase != "" {
+		t.Fatalf("after off-update = encrypt %v passphrase %q", got.Encrypt, got.Passphrase)
+	}
+}
+
+const passphrase23 = "p-0123456789-012345678x"
+
+func encForm(encrypt bool, pass string) string {
+	return `{"name":"vault","type":"s3","s3":{"endpoint":"http://minio:9000","region":"","bucket":"backups","prefix":"p","accessKeyId":"AKIA","pathStyle":true},"secret":"` + secret + `","encrypt":` + map[bool]string{true: "true", false: "false"}[encrypt] + `,"passphrase":"` + pass + `"}`
+}
+
+func TestEncryptionAPI(t *testing.T) {
+	r := newRig(t)
+	// A short passphrase is refused by field.
+	if w := r.do("POST", "/api/backup-destinations", encForm(true, "short-pass")); w.Code != 422 || !strings.Contains(w.Body.String(), `"field":"passphrase"`) {
+		t.Fatalf("short passphrase = %d %s", w.Code, w.Body)
+	}
+	// Encryption without a passphrase is refused too.
+	if w := r.do("POST", "/api/backup-destinations", encForm(true, "")); w.Code != 422 || !strings.Contains(w.Body.String(), `"field":"passphrase"`) {
+		t.Fatalf("missing passphrase = %d %s", w.Code, w.Body)
+	}
+	w := r.do("POST", "/api/backup-destinations", encForm(true, passphrase23))
+	if w.Code != 201 || !strings.Contains(w.Body.String(), `"encrypt":true`) {
+		t.Fatalf("create = %d %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), passphrase23) {
+		t.Fatalf("create response carries the passphrase: %s", w.Body)
+	}
+	// Reveal answers the passphrase and audits it as a secret read.
+	w = r.do("GET", "/api/backup-destinations/1/passphrase", "")
+	var rev struct {
+		Passphrase string `json:"passphrase"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &rev)
+	if w.Code != 200 || rev.Passphrase != passphrase23 {
+		t.Fatalf("reveal = %d", w.Code)
+	}
+	r.mu.Lock()
+	seen := false
+	for _, e := range r.events {
+		if e.Action == "secret.read" {
+			seen = true
+		}
+	}
+	r.mu.Unlock()
+	if !seen {
+		t.Fatal("no secret.read audit event for the reveal")
+	}
+	// An update with a blank passphrase keeps the stored one.
+	if w := r.do("PUT", "/api/backup-destinations/1", encForm(true, "")); w.Code != 200 {
+		t.Fatalf("keep update = %d %s", w.Code, w.Body)
+	}
+	if d, _ := r.svc.store.Get(context.Background(), 1); d.Passphrase != passphrase23 {
+		t.Fatal("stored passphrase lost on a keep update")
+	}
+	// A short new passphrase on update is refused.
+	if w := r.do("PUT", "/api/backup-destinations/1", encForm(true, "short-pass")); w.Code != 422 || !strings.Contains(w.Body.String(), `"field":"passphrase"`) {
+		t.Fatalf("short update = %d %s", w.Code, w.Body)
+	}
+	// A test failure naming the passphrase never reaches the browser.
+	r.remote.testFn = func() error { return errors.New("denied for " + passphrase23) }
+	if w := r.do("POST", "/api/backup-destinations/1/test", ""); strings.Contains(w.Body.String(), passphrase23) {
+		t.Fatalf("test response carries the passphrase: %s", w.Body)
+	}
+	// Turning encryption off forgets the passphrase; the reveal then refuses.
+	if w := r.do("PUT", "/api/backup-destinations/1", encForm(false, "")); w.Code != 200 {
+		t.Fatalf("off update = %d %s", w.Code, w.Body)
+	}
+	w = r.do("GET", "/api/backup-destinations/1/passphrase", "")
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "does not encrypt") {
+		t.Fatalf("reveal on plain = %d %s", w.Code, w.Body)
+	}
+}
+
+// Review: turning encryption on over the API without any passphrase, stored
+// or sent, must refuse — the row would otherwise encrypt with an empty passphrase and every
+// copy would fail.
+func TestEncryptOnNeedsAPassphrase(t *testing.T) {
+	r := newRig(t)
+	if w := r.do("POST", "/api/backup-destinations", encForm(false, "")); w.Code != 201 {
+		t.Fatalf("create = %d %s", w.Code, w.Body)
+	}
+	w := r.do("PUT", "/api/backup-destinations/1", encForm(true, ""))
+	if w.Code != 422 || !strings.Contains(w.Body.String(), `"field":"passphrase"`) {
+		t.Fatalf("encrypt on without passphrase = %d %s", w.Code, w.Body)
+	}
+	if d, _ := r.svc.store.Get(context.Background(), 1); d.Encrypt {
+		t.Fatalf("refused update changed the row: %+v", d)
+	}
+}

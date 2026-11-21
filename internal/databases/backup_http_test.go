@@ -8,10 +8,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"relist-panel/internal/agefile"
 )
 
 func (a *apiRig) seed(t *testing.T, name, engine, version string) {
@@ -249,5 +253,84 @@ func TestDownloadAudited(t *testing.T) {
 	defer a.mu.Unlock()
 	if e := a.last.Event(); e.Target != "Shop" || e.Detail["backup"] != int64(1) {
 		t.Fatalf("audit event = %+v", e)
+	}
+}
+
+// The passphrase travels in the X-Passphrase header, never the query string.
+func TestRestoreUploadPassphraseHeader(t *testing.T) {
+	a := newAPIRig(t)
+	a.seed(t, "Shop", "postgres", "18")
+	a.dumps("pg_dump -U postgres", "PRE;\n")
+	a.adminSQL(pgAdmin, "postgres\n", nil)
+	got := a.captureRestore(pgRestore, "")
+	var buf bytes.Buffer
+	if err := agefile.Encrypt(&buf, agePass, strings.NewReader("SELECT 1;\n")); err != nil {
+		t.Fatal(err)
+	}
+	enc := buf.Bytes()
+	base := "/api/databases/1/restores/upload?name=a.sql.age&confirm=Shop&target=app"
+	// Without the passphrase: a 422 that names it.
+	req := httptest.NewRequest("POST", base, bytes.NewReader(enc))
+	w := httptest.NewRecorder()
+	a.h.ServeHTTP(w, req)
+	a.svc.Wait()
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "enter its passphrase") {
+		t.Fatalf("missing passphrase = %d %s", w.Code, w.Body)
+	}
+	// A wrong one: 422 with the message.
+	req = httptest.NewRequest("POST", base, bytes.NewReader(enc))
+	req.Header.Set("X-Passphrase", "not-the-passphrase-00000000")
+	w = httptest.NewRecorder()
+	a.h.ServeHTTP(w, req)
+	a.svc.Wait()
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "wrong passphrase") {
+		t.Fatalf("wrong passphrase = %d %s", w.Code, w.Body)
+	}
+	// The right one reaches the service and restores.
+	req = httptest.NewRequest("POST", base, bytes.NewReader(enc))
+	req.Header.Set("X-Passphrase", agePass)
+	w = httptest.NewRecorder()
+	a.h.ServeHTTP(w, req)
+	a.svc.Wait()
+	if w.Code != http.StatusAccepted || len(*got) != 1 || (*got)[0] != "SELECT 1;\n" {
+		t.Fatalf("restore = %d %s, stdin %q", w.Code, w.Body, *got)
+	}
+}
+
+// Review: fetch header values are byte strings, so the browser percent-encodes
+// the passphrase; the server decodes it, and a non-ASCII passphrase works.
+func TestRestoreUploadPassphraseHeaderEncoded(t *testing.T) {
+	a := newAPIRig(t)
+	a.seed(t, "Shop", "postgres", "18")
+	a.dumps("pg_dump -U postgres", "PRE;\n")
+	a.adminSQL(pgAdmin, "postgres\n", nil)
+	got := a.captureRestore(pgRestore, "")
+	thai := "รหัสลับ-0123456789-ยาว"
+	var buf bytes.Buffer
+	if err := agefile.Encrypt(&buf, thai, strings.NewReader("SELECT 1;\n")); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/api/databases/1/restores/upload?name=a.sql.age&confirm=Shop&target=app", bytes.NewReader(buf.Bytes()))
+	req.Header.Set("X-Passphrase", url.PathEscape(thai))
+	w := httptest.NewRecorder()
+	a.h.ServeHTTP(w, req)
+	a.svc.Wait()
+	if w.Code != http.StatusAccepted || len(*got) != 1 || (*got)[0] != "SELECT 1;\n" {
+		t.Fatalf("restore = %d %s, stdin %q", w.Code, w.Body, *got)
+	}
+}
+
+func TestRestoreUploadDamagedIs422(t *testing.T) {
+	a := newAPIRig(t)
+	a.seed(t, "Shop", "postgres", "18")
+	a.adminSQL(pgAdmin, "postgres\n", nil)
+	enc := []byte("age-encryption.org/v1\nnot a stanza\n")
+	req := httptest.NewRequest("POST", "/api/databases/1/restores/upload?name=a.sql.age&confirm=Shop&target=app", bytes.NewReader(enc))
+	req.Header.Set("X-Passphrase", "restore-passphrase-0123456789")
+	w := httptest.NewRecorder()
+	a.h.ServeHTTP(w, req)
+	a.svc.Wait()
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "damaged") {
+		t.Fatalf("restore = %d %s, want 422 damaged", w.Code, w.Body)
 	}
 }

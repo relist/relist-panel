@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"relist-panel/internal/agefile"
 	"relist-panel/internal/audit"
 	"relist-panel/internal/auth"
 	"relist-panel/internal/authz"
@@ -456,7 +457,9 @@ func writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrUnknownPanelUser):
 		writeJSONError(w, http.StatusNotFound, err.Error())
 	case errors.As(err, &invalid), errors.As(err, &fullOnSuper), errors.As(err, &reserved), errors.As(err, &ownerAccess),
-		errors.As(err, &protected), errors.Is(err, ErrBadUserName):
+		errors.As(err, &protected), errors.Is(err, ErrBadUserName),
+		errors.Is(err, ErrNeedPassphrase), errors.Is(err, agefile.ErrWrongPassphrase), errors.Is(err, agefile.ErrTooExpensive),
+		errors.Is(err, agefile.ErrDamaged):
 		writeJSONError(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.As(err, &userOwns), errors.As(err, &userOwnsIn), errors.As(err, &userExists), errors.As(err, &dbExists), errors.Is(err, ErrPendingPassword), errors.Is(err, ErrUserNotManaged):
 		writeJSONError(w, http.StatusConflict, err.Error())

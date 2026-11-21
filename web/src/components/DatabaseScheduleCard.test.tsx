@@ -32,12 +32,22 @@ function state(over: Partial<DatabaseScheduleState> = {}): DatabaseScheduleState
     enabled: false,
     lastError: '',
     lastRunAt: null,
+    localMode: 'simple',
     localKeepCount: 7,
     localKeepDays: null,
+    localGfsDays: null,
+    localGfsWeeks: null,
+    localGfsMonths: null,
+    localGfsYears: null,
     minute: 150,
     next: null,
+    remoteMode: 'simple',
     remoteKeepCount: 30,
     remoteKeepDays: null,
+    remoteGfsDays: null,
+    remoteGfsWeeks: null,
+    remoteGfsMonths: null,
+    remoteGfsYears: null,
     destinationId: null,
     timeZone: 'UTC (UTC+00:00)',
     ...over,
@@ -76,11 +86,21 @@ describe('DatabaseScheduleCard', () => {
         databases: [],
         days: ['mon', 'thu'],
         enabled: true,
+        localMode: 'simple',
         localKeepCount: 7,
         localKeepDays: null,
+        localGfsDays: null,
+        localGfsWeeks: null,
+        localGfsMonths: null,
+        localGfsYears: null,
         minute: 150,
+        remoteMode: 'simple',
         remoteKeepCount: 30,
         remoteKeepDays: null,
+        remoteGfsDays: null,
+        remoteGfsWeeks: null,
+        remoteGfsMonths: null,
+        remoteGfsYears: null,
         destinationId: null,
       }),
     );
@@ -127,6 +147,46 @@ describe('DatabaseScheduleCard', () => {
     await screen.findByRole('button', { name: 'Save schedule' });
     expect(screen.queryByRole('spinbutton', { name: 'Destination: last N backups' })).toBeNull();
     expect(screen.getByText('Copy to')).toBeTruthy();
+  });
+
+  it('shows a GFS schedule and switching to Simple clears the tiers', async () => {
+    api.getDatabaseSchedule.mockResolvedValue(state({ localGfsDays: 7, localKeepCount: 3, localMode: 'gfs' }));
+    const user = userEvent.setup();
+    renderCard();
+    const gfs = await screen.findByRole('radio', { name: 'GFS' });
+    expect((gfs as HTMLInputElement).checked).toBe(true);
+    const daily = screen.getByRole('spinbutton', { name: 'Daily for D days' });
+    expect((daily as HTMLInputElement).value).toBe('7');
+    await user.click(screen.getByRole('radio', { name: 'Simple' }));
+    expect(screen.queryByRole('spinbutton', { name: 'Daily for D days' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }));
+    await waitFor(() => expect(api.saveDatabaseSchedule).toHaveBeenCalled());
+    const sent = api.saveDatabaseSchedule.mock.calls[0][1];
+    expect(sent.localMode).toBe('simple');
+    expect(sent.localGfsDays).toBeNull();
+  });
+
+  it('says a blank GFS field keeps nothing, not "no limit"', async () => {
+    api.getDatabaseSchedule.mockResolvedValue(state({ localKeepCount: 3, localMode: 'gfs' }));
+    renderCard();
+    const daily = await screen.findByRole('spinbutton', { name: 'Daily for D days' });
+    expect((daily as HTMLInputElement).placeholder).toBe('Keep none');
+    expect((screen.getByRole('spinbutton', { name: 'Last N backups' }) as HTMLInputElement).placeholder).toBe('Keep none');
+  });
+
+  it('saves a GFS set with its tiers and no keep-days', async () => {
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(await screen.findByRole('radio', { name: 'GFS' }));
+    const daily = screen.getByRole('spinbutton', { name: 'Daily for D days' });
+    await user.clear(daily);
+    await user.type(daily, '7');
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }));
+    await waitFor(() => expect(api.saveDatabaseSchedule).toHaveBeenCalled());
+    const sent = api.saveDatabaseSchedule.mock.calls[0][1];
+    expect(sent.localMode).toBe('gfs');
+    expect(sent.localGfsDays).toBe(7);
+    expect(sent.localKeepDays).toBeNull();
   });
 
   it('disables an SFTP destination that has no trusted host key yet', async () => {

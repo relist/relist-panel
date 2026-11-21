@@ -157,3 +157,57 @@ func TestScheduleRefusesUntestedSFTP(t *testing.T) {
 		t.Fatalf("tested sftp = %d %s", w.Code, w.Body)
 	}
 }
+
+func TestScheduleGFSAPI(t *testing.T) {
+	a := newAPIRig(t)
+	a.seed(t, "Shop", "postgres", "18")
+	get := func() ScheduleJSON {
+		var got ScheduleJSON
+		w := a.do("GET", "/api/databases/1/schedule", "")
+		_ = json.Unmarshal(w.Body.Bytes(), &got)
+		return got
+	}
+	// A stored Simple schedule answers mode "simple".
+	if w := a.do("PUT", "/api/databases/1/schedule", `{"days":["daily"],"minute":180,"all":true,"localKeepCount":7}`); w.Code != 200 {
+		t.Fatalf("simple PUT = %d %s", w.Code, w.Body)
+	}
+	if got := get(); got.LocalMode != "simple" || got.RemoteMode != "simple" {
+		t.Fatalf("modes = %q / %q, want simple", got.LocalMode, got.RemoteMode)
+	}
+	// A GFS set round-trips its tiers, and localKeepDays is cleared.
+	body := `{"days":["daily"],"minute":180,"all":true,"localMode":"gfs","localKeepCount":3,"localKeepDays":9,"localGfsDays":7,"localGfsWeeks":4,"localGfsMonths":12,"localGfsYears":2}`
+	if w := a.do("PUT", "/api/databases/1/schedule", body); w.Code != 200 {
+		t.Fatalf("gfs PUT = %d %s", w.Code, w.Body)
+	}
+	got := get()
+	if got.LocalMode != "gfs" || got.LocalGfsDays == nil || *got.LocalGfsDays != 7 || got.LocalGfsWeeks == nil || *got.LocalGfsWeeks != 4 ||
+		got.LocalGfsMonths == nil || *got.LocalGfsMonths != 12 || got.LocalGfsYears == nil || *got.LocalGfsYears != 2 || *got.LocalKeepCount != 3 {
+		t.Fatalf("gfs round trip = %+v", got)
+	}
+	if got.LocalKeepDays != nil {
+		t.Fatalf("localKeepDays = %d, want cleared on a GFS save", *got.LocalKeepDays)
+	}
+	// A Simple save clears the GFS tiers.
+	if w := a.do("PUT", "/api/databases/1/schedule", `{"days":["daily"],"minute":180,"all":true,"localMode":"simple","localKeepCount":7,"localGfsDays":7}`); w.Code != 200 {
+		t.Fatalf("back to simple = %d %s", w.Code, w.Body)
+	}
+	if got := get(); got.LocalGfsDays != nil {
+		t.Fatalf("localGfsDays = %d, want cleared on a Simple save", *got.LocalGfsDays)
+	}
+	// Review Focus 2: GFS with nothing set would delete everything but the
+	// newest success; it is refused.
+	w := a.do("PUT", "/api/databases/1/schedule", `{"days":["daily"],"minute":180,"all":true,"remoteMode":"gfs"}`)
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "keep at least one tier") {
+		t.Fatalf("empty gfs = %d %s", w.Code, w.Body)
+	}
+	// An unknown mode is refused.
+	w = a.do("PUT", "/api/databases/1/schedule", `{"days":["daily"],"minute":180,"all":true,"localMode":"x","localKeepCount":1}`)
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "rotation mode must be simple or gfs") {
+		t.Fatalf("bad mode = %d %s", w.Code, w.Body)
+	}
+	// Tier values below 1 are refused like the Simple ones.
+	w = a.do("PUT", "/api/databases/1/schedule", `{"days":["daily"],"minute":180,"all":true,"localMode":"gfs","localGfsWeeks":0}`)
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "keep at least 1") {
+		t.Fatalf("zero tier = %d %s", w.Code, w.Body)
+	}
+}

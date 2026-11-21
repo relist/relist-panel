@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"relist-panel/internal/audit"
 )
@@ -71,6 +72,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/backup-destinations/{id}", s.delete)
 	mux.HandleFunc("POST /api/backup-destinations/{id}/test", s.test)
 	mux.HandleFunc("POST /api/backup-destinations/{id}/reset-host-key", s.resetHostKey)
+	mux.HandleFunc("GET /api/backup-destinations/{id}/passphrase", s.revealPassphrase)
 }
 
 // S3JSON is the settings of an s3 destination as the browser sees them: no secret.
@@ -105,13 +107,14 @@ type DestinationJSON struct {
 	Type          string     `json:"type"`
 	S3            *S3JSON    `json:"s3,omitempty"`
 	SFTP          *SFTPJSON  `json:"sftp,omitempty"`
+	Encrypt       bool       `json:"encrypt"`
 	LastTestAt    *time.Time `json:"lastTestAt"`
 	LastTestOK    bool       `json:"lastTestOk"`
 	LastTestError string     `json:"lastTestError"`
 }
 
 func toJSON(d Destination) DestinationJSON {
-	out := DestinationJSON{ID: d.ID, Name: d.Name, Type: d.Type,
+	out := DestinationJSON{ID: d.ID, Name: d.Name, Type: d.Type, Encrypt: d.Encrypt,
 		LastTestAt: d.LastTestAt, LastTestOK: d.LastTestOK, LastTestError: d.LastTestError}
 	if d.Type == TypeSFTP {
 		out.SFTP = &SFTPJSON{Host: d.SFTP.Host, Port: d.SFTP.Port, User: d.SFTP.User, Path: d.SFTP.Path, Auth: d.SFTP.Auth,
@@ -140,11 +143,13 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 }
 
 type input struct {
-	Name   string   `json:"name"`
-	Type   string   `json:"type"`
-	S3     S3JSON   `json:"s3"`
-	SFTP   SFTPJSON `json:"sftp"`
-	Secret string   `json:"secret"`
+	Name       string   `json:"name"`
+	Type       string   `json:"type"`
+	S3         S3JSON   `json:"s3"`
+	SFTP       SFTPJSON `json:"sftp"`
+	Secret     string   `json:"secret"`
+	Encrypt    bool     `json:"encrypt"`
+	Passphrase string   `json:"passphrase"`
 }
 
 func writeFormError(w http.ResponseWriter, err error) {
@@ -175,6 +180,15 @@ func (s *Service) readInput(w http.ResponseWriter, r *http.Request, requireSecre
 		return Destination{}, false
 	}
 	secret := strings.Trim(in.Secret, "\r\n")
+	pass := strings.TrimSpace(in.Passphrase)
+	if !in.Encrypt {
+		// The store forgets the stored passphrase when encryption is off.
+		pass = ""
+	} else if (requireSecret || pass != "") && utf8.RuneCountInString(pass) < 20 {
+		// On edit an empty passphrase keeps the stored one, like the secret.
+		writeFieldError(w, http.StatusUnprocessableEntity, "passphrase", "the passphrase must be at least 20 characters")
+		return Destination{}, false
+	}
 	switch in.Type {
 	case TypeS3:
 		cfg, err := ValidateS3(S3Config(in.S3))
@@ -186,14 +200,14 @@ func (s *Service) readInput(w http.ResponseWriter, r *http.Request, requireSecre
 			writeFieldError(w, http.StatusUnprocessableEntity, "secret", "secret access key is required")
 			return Destination{}, false
 		}
-		return Destination{Name: name, Type: TypeS3, S3: cfg, Secret: secret}, true
+		return Destination{Name: name, Type: TypeS3, S3: cfg, Secret: secret, Encrypt: in.Encrypt, Passphrase: pass}, true
 	case TypeSFTP:
 		cfg, err := ValidateSFTP(SFTPConfig{Host: in.SFTP.Host, Port: in.SFTP.Port, User: in.SFTP.User, Path: in.SFTP.Path, Auth: in.SFTP.Auth})
 		if err != nil {
 			writeFormError(w, err)
 			return Destination{}, false
 		}
-		d := Destination{Name: name, Type: TypeSFTP, SFTP: cfg, Secret: secret}
+		d := Destination{Name: name, Type: TypeSFTP, SFTP: cfg, Secret: secret, Encrypt: in.Encrypt, Passphrase: pass}
 		if cfg.Auth == AuthKey {
 			d.Secret = ""
 			if in.SFTP.SSHKeyID == nil || !s.keyExists(r.Context(), *in.SFTP.SSHKeyID) {
@@ -245,6 +259,12 @@ func (s *Service) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = id
+	// Encryption without any passphrase, sent or stored, would encrypt with
+	// '' and fail every copy: refuse it here, not only in the form.
+	if in.Encrypt && in.Passphrase == "" && old.Passphrase == "" {
+		writeFieldError(w, http.StatusUnprocessableEntity, "passphrase", "the passphrase must be at least 20 characters")
+		return
+	}
 	// A kept secret stays with the endpoint it was given for: it is never
 	// sent to another host.
 	if old.Type == TypeS3 && in.Secret == "" && old.S3.Endpoint != in.S3.Endpoint {
@@ -323,7 +343,7 @@ func (s *Service) test(w http.ResponseWriter, r *http.Request) {
 	audit.Target(r.Context(), d.Name)
 	msg := ""
 	if remote, err := s.connect(d); err != nil {
-		msg = scrub(err.Error(), d.Secret)
+		msg = scrub(scrub(err.Error(), d.Secret), d.Passphrase)
 	} else {
 		// A bucket that does not answer fails the test instead of hanging it.
 		ctx, cancel := context.WithTimeout(r.Context(), testTimeout)
@@ -333,7 +353,7 @@ func (s *Service) test(w http.ResponseWriter, r *http.Request) {
 		if err != nil && timedOut {
 			msg = fmt.Sprintf("no answer within %s", testTimeout)
 		} else if err != nil {
-			msg = scrub(err.Error(), d.Secret)
+			msg = scrub(scrub(err.Error(), d.Secret), d.Passphrase)
 		} else if rec, ok := remote.(HostKeyRecorder); ok {
 			// The first successful Test trusts the key the server showed.
 			if line := rec.SeenHostKey(); line != "" {
@@ -384,6 +404,26 @@ func (s *Service) resetHostKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toJSON(d))
+}
+
+// revealPassphrase answers the stored passphrase, audited as a secret read.
+func (s *Service) revealPassphrase(w http.ResponseWriter, r *http.Request) {
+	id, ok := readID(w, r)
+	if !ok {
+		return
+	}
+	d, err := s.store.Get(r.Context(), id)
+	if err != nil {
+		writeStoreError(w, err, "could not read the Backup destination")
+		return
+	}
+	audit.Target(r.Context(), d.Name)
+	if !d.Encrypt {
+		writeError(w, http.StatusUnprocessableEntity, "this destination does not encrypt copies")
+		return
+	}
+	audit.Emit(r.Context(), "secret.read", map[string]any{"keys": []string{"passphrase"}})
+	writeJSON(w, http.StatusOK, map[string]string{"passphrase": d.Passphrase})
 }
 
 func readID(w http.ResponseWriter, r *http.Request) (int64, bool) {

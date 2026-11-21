@@ -1,5 +1,5 @@
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Flex, Form, Input, InputNumber, Modal, Popconfirm, Radio, Segmented, Select, Switch, Table, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Button, Card, Checkbox, Flex, Form, Input, InputNumber, Modal, Popconfirm, Radio, Segmented, Select, Switch, Table, Tag, Tooltip, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { useState } from 'react';
 import useSWR from 'swr';
@@ -40,6 +40,24 @@ interface DestinationForm {
   accessKeyId: string;
   secret: string;
   pathStyle: boolean;
+  encrypt: boolean;
+  passphrase: string;
+}
+
+const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+/** 24 base58 characters from crypto randomness, about 140 bits. */
+function generatePassphrase(): string {
+  const out: string[] = [];
+  while (out.length < 24) {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    for (const byte of bytes) {
+      // Rejection sampling: 232 = 4 × 58 keeps the draw uniform.
+      if (byte < 232 && out.length < 24) out.push(BASE58[byte % 58]);
+    }
+  }
+  return out.join('');
 }
 
 /**
@@ -107,7 +125,12 @@ export function BackupDestinationsPage() {
     { dataIndex: 'name', key: 'name', render: (name: string) => <Text strong>{name}</Text>, title: 'Name' },
     {
       key: 'type',
-      render: (_, destination) => (destination.type === 'sftp' ? 'SFTP' : 'S3'),
+      render: (_, destination) => (
+        <Flex align="center" gap={6}>
+          {destination.type === 'sftp' ? 'SFTP' : 'S3'}
+          {destination.encrypt && <Tag>Encrypted</Tag>}
+        </Flex>
+      ),
       title: 'Type',
     },
     {
@@ -247,7 +270,7 @@ export function BackupDestinationsPage() {
   );
 }
 
-const FIELDS = ['name', 'endpoint', 'bucket', 'accessKeyId', 'secret', 'region', 'prefix', 'host', 'port', 'user', 'path', 'auth', 'sshKeyId'] as const;
+const FIELDS = ['name', 'endpoint', 'bucket', 'accessKeyId', 'secret', 'region', 'prefix', 'host', 'port', 'user', 'path', 'auth', 'sshKeyId', 'passphrase'] as const;
 
 function DestinationModal({
   destination,
@@ -271,7 +294,11 @@ function DestinationModal({
   const [busy, setBusy] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [failure, setFailure] = useState<string>();
+  const [revealed, setRevealed] = useState<string>();
+  const [revealing, setRevealing] = useState(false);
   const editing = destination !== undefined;
+  const encrypt = Form.useWatch('encrypt', form) ?? destination?.encrypt ?? false;
+  const wasEncrypting = destination?.encrypt ?? false;
   const old = destination?.type === 'sftp' ? destination.sftp : undefined;
   // A kept password stays with its host: the server asks for it again when
   // the host or port moves, or when the login switches from a key.
@@ -281,7 +308,12 @@ function DestinationModal({
   const submit = async (values: DestinationForm) => {
     setBusy(true);
     setFailure(undefined);
-    const base = { name: values.name.trim(), secret: values.secret ?? '' };
+    const base = {
+      encrypt: values.encrypt,
+      name: values.name.trim(),
+      passphrase: values.encrypt ? (values.passphrase ?? '').trim() : '',
+      secret: values.secret ?? '',
+    };
     const input: BackupDestinationInput =
       values.type === 'sftp'
         ? {
@@ -323,6 +355,37 @@ function DestinationModal({
       }
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Turning encryption off, or entering a new passphrase, applies to new
+  // copies only; the stored passphrase is forgotten, so ask first.
+  const confirmThenSubmit = (values: DestinationForm) => {
+    const changes = wasEncrypting && (!values.encrypt || (values.passphrase ?? '').trim() !== '');
+    if (!changes) {
+      void submit(values);
+      return;
+    }
+    Modal.confirm({
+      content: 'Existing copies keep the old passphrase and the panel forgets it. Make sure you have it somewhere else.',
+      okButtonProps: { danger: true },
+      okText: values.encrypt ? 'Change the passphrase' : 'Forget the passphrase',
+      onOk: () => submit(values),
+      title: values.encrypt ? 'Change the passphrase?' : 'Turn encryption off?',
+    });
+  };
+
+  const reveal = async () => {
+    if (!destination) return;
+    setRevealing(true);
+    setFailure(undefined);
+    try {
+      const { passphrase } = await api.revealDestinationPassphrase(destination.id);
+      setRevealed(passphrase);
+    } catch (reason: unknown) {
+      setFailure(reason instanceof Error ? reason.message : 'Could not reveal the passphrase');
+    } finally {
+      setRevealing(false);
     }
   };
 
@@ -368,13 +431,15 @@ function DestinationModal({
           port: old?.port ?? 22,
           prefix: s3?.prefix ?? '',
           region: s3?.region ?? '',
+          encrypt: destination?.encrypt ?? false,
+          passphrase: '',
           secret: '',
           sshKeyId: old?.sshKeyId ?? undefined,
           type: destination?.type ?? 's3',
           user: old?.user ?? '',
         }}
         layout="vertical"
-        onFinish={(values) => void submit(values)}
+        onFinish={confirmThenSubmit}
         preserve={false}
       >
         {failure && <Alert showIcon style={{ marginBottom: 16 }} title={failure} type="error" />}
@@ -505,6 +570,37 @@ function DestinationModal({
                 </Flex>
               </Form.Item>
             )}
+          </>
+        )}
+        <Form.Item name="encrypt" style={{ marginBottom: 8 }} valuePropName="checked">
+          <Checkbox>Encrypt copies with a passphrase</Checkbox>
+        </Form.Item>
+        {encrypt && (
+          <>
+            <Form.Item
+              label="Passphrase"
+              name="passphrase"
+              rules={wasEncrypting ? [] : [{ message: 'Enter or generate a passphrase', required: true }]}
+            >
+              <Input.Password autoComplete="new-password" placeholder={wasEncrypting ? 'Leave blank to keep' : undefined} />
+            </Form.Item>
+            <Flex align="center" gap={8} style={{ marginBottom: 12 }} wrap>
+              <Button onClick={() => form.setFieldValue('passphrase', generatePassphrase())}>Generate</Button>
+              {wasEncrypting &&
+                (revealed === undefined ? (
+                  <Button loading={revealing} onClick={() => void reveal()}>
+                    Reveal passphrase
+                  </Button>
+                ) : (
+                  <Text code copyable>
+                    {revealed}
+                  </Text>
+                ))}
+            </Flex>
+            <Text strong style={{ display: 'block', marginBottom: 16 }}>
+              The panel cannot help if this server is lost: keep a copy of the passphrase somewhere else, or every
+              encrypted copy is unreadable.
+            </Text>
           </>
         )}
       </Form>
