@@ -127,7 +127,7 @@ func (p *progressReader) Read(b []byte) (int, error) {
 
 // put sends the file with its exact size, so nothing is buffered in memory.
 // An upload that reads nothing for uploadStall, including the wait for the
-// bucket's answer after the last byte, is cut off: a bucket that stops
+// destination's answer after the last byte, is cut off: a destination that stops
 // answering must not hold the job slot, and the scheduler, for ever.
 func (s *Service) put(ctx context.Context, remote backupdest.Remote, key, path string) error {
 	f, err := os.Open(path)

@@ -107,7 +107,7 @@ type Service struct {
 	jobs        map[int64]string
 	jobsChanged chan struct{}
 	// uploadStall is how long an upload may send nothing before it is cut
-	// off; remoteTimeout bounds one delete in a Backup destination. A bucket
+	// off; remoteTimeout bounds one delete in a Backup destination. A destination
 	// that stops answering would otherwise hold the job slot, and the
 	// host-wide scheduler with it, for ever.
 	uploadStall, remoteTimeout time.Duration
