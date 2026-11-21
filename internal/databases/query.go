@@ -20,6 +20,8 @@ type Querier interface {
 	// RunRedis never sends a refused command, nor a dangerous one before
 	// confirmDangerous.
 	RunRedis(ctx context.Context, t dbquery.Target, db int, line string, writes, confirmDangerous bool) dbquery.RedisResponse
+	// RunRedisGrantee is a non-Admin's run: stricter, and never confirmable.
+	RunRedisGrantee(ctx context.Context, t dbquery.Target, db int, line string, readWrite bool) dbquery.RedisResponse
 	ScanKeys(ctx context.Context, t dbquery.Target, db int, pattern, cursor string) ([]dbquery.KeyInfo, string, error)
 	ReadKey(ctx context.Context, t dbquery.Target, db int, key string) (dbquery.KeyValue, error)
 }
@@ -36,6 +38,10 @@ func (engineQuerier) Run(ctx context.Context, t dbquery.Target, r dbquery.Reques
 
 func (engineQuerier) RunRedis(ctx context.Context, t dbquery.Target, db int, line string, writes, confirm bool) dbquery.RedisResponse {
 	return dbquery.RunRedis(ctx, t, db, line, writes, confirm)
+}
+
+func (engineQuerier) RunRedisGrantee(ctx context.Context, t dbquery.Target, db int, line string, readWrite bool) dbquery.RedisResponse {
+	return dbquery.RunRedisGrantee(ctx, t, db, line, readWrite)
 }
 
 func (engineQuerier) ScanKeys(ctx context.Context, t dbquery.Target, db int, pattern, cursor string) ([]dbquery.KeyInfo, string, error) {
@@ -87,32 +93,68 @@ func (s *Service) queryTarget(ctx context.Context, id int64, wantRedis bool) (Da
 	return d, dbquery.Target{Host: ContainerName(id), Port: eng.Port(), User: eng.User(), Password: d.Password}, nil
 }
 
-// Query runs r against Database id. Whatever the server answers, an error
-// included, is in the response; the returned error is only for a run that
-// could not start.
-func (s *Service) Query(ctx context.Context, id int64, r dbquery.Request) (dbquery.QueryResponse, error) {
+// granteeTarget swaps the superuser for managed user dbUser on t, and says
+// which passwords a response must be scrubbed of. An empty dbUser is the
+// superuser; it is never a fallback for a non-Admin, which the HTTP layer
+// guarantees before calling.
+func (s *Service) granteeTarget(ctx context.Context, d Database, t dbquery.Target, dbUser string) (dbquery.Target, []string, error) {
+	passwords := []string{d.Password}
+	if dbUser == "" {
+		return t, passwords, nil
+	}
+	u, err := s.d.Store.GetUser(ctx, d.ID, dbUser)
+	if err != nil {
+		return dbquery.Target{}, nil, err
+	}
+	t.User, t.Password = dbUser, u.Password
+	return t, append(passwords, u.Password), nil
+}
+
+// Query runs r against Database id, as the superuser (dbUser "") or as a
+// managed user, restricted. Whatever the server answers, an error included,
+// is in the response; the returned error is only for a run that could not
+// start.
+func (s *Service) Query(ctx context.Context, id int64, dbUser string, r dbquery.Request) (dbquery.QueryResponse, error) {
 	d, t, err := s.queryTarget(ctx, id, false)
 	if err != nil {
 		return dbquery.QueryResponse{}, err
 	}
+	t, passwords, err := s.granteeTarget(ctx, d, t, dbUser)
+	if err != nil {
+		return dbquery.QueryResponse{}, err
+	}
+	r.Restricted = dbUser != ""
+	if r.Preview {
+		r.Writes = true
+	}
 	r.Engine = d.Engine
 	resp := s.d.Querier.Run(ctx, t, r)
-	if resp.Error != nil {
-		resp.Error.Message = scrub(resp.Error.Message, d.Password)
+	if r.Preview {
+		// A Preview whatever came of it: a run that failed before the engine
+		// marked the response still answers and audits as one.
+		resp.Preview = true
 	}
-	resp.Stopped = scrub(resp.Stopped, d.Password)
+	if resp.Error != nil {
+		resp.Error.Message = scrubAll(resp.Error.Message, passwords...)
+	}
+	resp.Stopped = scrubAll(resp.Stopped, passwords...)
 	return resp, nil
 }
 
-// Schema lists the schemas and tables of one logical database.
-func (s *Service) Schema(ctx context.Context, id int64, database string) ([]dbquery.SchemaNode, error) {
+// Schema lists the schemas and tables of one logical database, connected as
+// dbUser when it is set.
+func (s *Service) Schema(ctx context.Context, id int64, dbUser, database string) ([]dbquery.SchemaNode, error) {
 	d, t, err := s.queryTarget(ctx, id, false)
+	if err != nil {
+		return nil, err
+	}
+	t, passwords, err := s.granteeTarget(ctx, d, t, dbUser)
 	if err != nil {
 		return nil, err
 	}
 	nodes, err := s.d.Querier.Schema(ctx, t, d.Engine, database)
 	if err != nil {
-		return nil, errors.New(scrub(err.Error(), d.Password))
+		return nil, errors.New(scrubAll(err.Error(), passwords...))
 	}
 	return nodes, nil
 }
@@ -126,13 +168,25 @@ func scrub(s, password string) string {
 	return strings.ReplaceAll(s, password, "***")
 }
 
-// RedisCommand runs one console line on logical database db.
-func (s *Service) RedisCommand(ctx context.Context, id int64, db int, line string, writes, confirmDangerous bool) (dbquery.RedisResponse, error) {
+// RedisCommand runs one console line on logical database db. level "" is an
+// Admin; a grantee's level picks the stricter classifier, and its confirm is
+// ignored: nothing it runs is confirmable.
+func (s *Service) RedisCommand(ctx context.Context, id int64, level RedisLevel, db int, line string, writes, confirmDangerous bool) (dbquery.RedisResponse, error) {
 	d, t, err := s.queryTarget(ctx, id, true)
 	if err != nil {
 		return dbquery.RedisResponse{}, err
 	}
-	resp := s.d.Querier.RunRedis(ctx, t, db, line, writes, confirmDangerous)
+	var resp dbquery.RedisResponse
+	switch level {
+	case "":
+		resp = s.d.Querier.RunRedis(ctx, t, db, line, writes, confirmDangerous)
+	case LevelRead:
+		resp = s.d.Querier.RunRedisGrantee(ctx, t, db, line, false)
+	case LevelReadWrite:
+		resp = s.d.Querier.RunRedisGrantee(ctx, t, db, line, writes)
+	default:
+		return dbquery.RedisResponse{}, ErrBadGrant{Reason: "unknown level"}
+	}
 	resp.Error = scrub(resp.Error, d.Password)
 	return resp, nil
 }

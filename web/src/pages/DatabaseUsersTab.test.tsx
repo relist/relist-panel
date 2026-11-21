@@ -7,6 +7,7 @@ import { SWRConfig } from 'swr';
 import { App } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '../data/api';
 import type { Database, DatabaseUser, LogicalDatabase } from '../data/types';
 import { DatabaseUsersTab } from './DatabaseUsersTab';
 
@@ -174,5 +175,31 @@ describe('DatabaseUsersTab', () => {
     await user.click(screen.getByRole('button', { name: 'Delete app' }));
     await user.click(await screen.findByRole('button', { name: 'Delete' }));
     expect(await screen.findByText(/app owns databases: app, web/)).toBeTruthy();
+  });
+});
+
+describe('Delete with grants', () => {
+  it('confirms listing the panel users, then resends with confirmGrants', async () => {
+    api.listDatabaseUsers.mockResolvedValue({
+      users: [{ access: {}, managed: true, name: 'shop_ro', owns: [] }],
+    });
+    api.databaseLogicalDetails.mockResolvedValue({ databases: dbs });
+    api.deleteDatabaseUser
+      .mockRejectedValueOnce(new ApiError(409, 'shop_ro is used by alice@example.com; confirm to delete it and their access', undefined, { error: 'x', users: ['alice@example.com'] }))
+      .mockResolvedValueOnce(undefined);
+    render(
+      <SWRConfig value={{ provider: () => new Map() }}>
+        <App>
+          <DatabaseUsersTab db={shop} />
+        </App>
+      </SWRConfig>,
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Delete shop_ro' }));
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/alice@example\.com/)).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: /Delete/ }));
+    await waitFor(() => expect(api.deleteDatabaseUser).toHaveBeenLastCalledWith(shop.id, 'shop_ro', true));
   });
 });

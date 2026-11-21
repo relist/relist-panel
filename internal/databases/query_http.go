@@ -44,6 +44,8 @@ func cutText(s string, n int) string {
 
 func outcomeOf(resp dbquery.QueryResponse) string {
 	switch {
+	case resp.Preview:
+		return "preview"
 	case resp.Cancelled:
 		return "cancelled"
 	case resp.Error != nil:
@@ -66,6 +68,7 @@ func (a *API) query(w http.ResponseWriter, r *http.Request) {
 		Database string `json:"database"`
 		SQL      string `json:"sql"`
 		Writes   bool   `json:"writes"`
+		Preview  bool   `json:"preview"`
 	}
 	if !decodeBig(w, r, maxQueryBody, &in) {
 		return
@@ -74,8 +77,18 @@ func (a *API) query(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "there is nothing to run")
 		return
 	}
+	c, ok := callerOf(r)
+	if !ok {
+		writeError(w, ErrNotFound)
+		return
+	}
+	dbUser, err := a.sqlCaller(r, n, c)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	a.target(r, n)
-	resp, err := a.s.Query(r.Context(), n, dbquery.Request{Database: in.Database, SQL: in.SQL, Writes: in.Writes})
+	resp, err := a.s.Query(r.Context(), n, dbUser, dbquery.Request{Database: in.Database, SQL: in.SQL, Writes: in.Writes, Preview: in.Preview})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -85,7 +98,16 @@ func (a *API) query(w http.ResponseWriter, r *http.Request) {
 		rows += len(res.Rows)
 	}
 	ctx := r.Context()
+	auditUser := dbUser
+	if auditUser == "" {
+		if d, derr := a.s.d.Store.Get(r.Context(), n); derr == nil {
+			if e, ok := Engines[d.Engine]; ok {
+				auditUser = e.User()
+			}
+		}
+	}
 	audit.Detail(ctx, "database", in.Database)
+	audit.Detail(ctx, "dbUser", auditUser)
 	audit.Detail(ctx, "statement", cutText(dbquery.RedactSQL(in.SQL), auditText))
 	audit.Detail(ctx, "writes", in.Writes)
 	audit.Detail(ctx, "durationMs", resp.DurationMs)
@@ -104,12 +126,38 @@ func (a *API) querySchema(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	nodes, err := a.s.Schema(r.Context(), n, r.URL.Query().Get("database"))
+	c, ok := callerOf(r)
+	if !ok {
+		writeError(w, ErrNotFound)
+		return
+	}
+	dbUser := ""
+	if !c.Admin {
+		if c.Grant.DBUser == "" {
+			writeError(w, ErrNoQuery)
+			return
+		}
+		dbUser = c.Grant.DBUser
+	}
+	nodes, err := a.s.Schema(r.Context(), n, dbUser, r.URL.Query().Get("database"))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, nodes)
+}
+
+// sqlCaller is which database user a SQL run connects as: the grant's for a
+// grantee ("" is the superuser, an Admin's). The dbUser audit detail names
+// it, with the engine's superuser spelled out.
+func (a *API) sqlCaller(r *http.Request, n int64, c caller) (string, error) {
+	if !c.Admin {
+		if c.Grant.DBUser == "" {
+			return "", ErrNoQuery
+		}
+		return c.Grant.DBUser, nil
+	}
+	return "", nil
 }
 
 // redisDB reads the logical database number: 0 to 15.
@@ -159,8 +207,21 @@ func (a *API) redisCommand(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "there is nothing to run")
 		return
 	}
+	c, ok := callerOf(r)
+	if !ok {
+		writeError(w, ErrNotFound)
+		return
+	}
+	level := RedisLevel("")
+	if !c.Admin {
+		if c.Grant.Level == "" {
+			writeError(w, ErrNoConsole)
+			return
+		}
+		level = RedisLevel(c.Grant.Level)
+	}
 	a.target(r, n)
-	resp, err := a.s.RedisCommand(r.Context(), n, in.DB, in.Command, in.Writes, in.ConfirmDangerous)
+	resp, err := a.s.RedisCommand(r.Context(), n, level, in.DB, in.Command, in.Writes, in.ConfirmDangerous)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -181,6 +242,9 @@ func (a *API) redisCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	audit.Detail(ctx, "database", in.DB)
+	if level != "" {
+		audit.Detail(ctx, "level", string(level))
+	}
 	audit.Detail(ctx, "statement", auditStatement(in.Command))
 	audit.Detail(ctx, "writes", in.Writes)
 	audit.Detail(ctx, "durationMs", resp.DurationMs)
@@ -192,6 +256,10 @@ func (a *API) redisCommand(w http.ResponseWriter, r *http.Request) {
 func (a *API) redisKeys(w http.ResponseWriter, r *http.Request) {
 	n, ok := id(w, r)
 	if !ok {
+		return
+	}
+	if _, ok := callerOf(r); !ok {
+		writeError(w, ErrNotFound)
 		return
 	}
 	q := r.URL.Query()
@@ -210,6 +278,10 @@ func (a *API) redisKeys(w http.ResponseWriter, r *http.Request) {
 func (a *API) redisKey(w http.ResponseWriter, r *http.Request) {
 	n, ok := id(w, r)
 	if !ok {
+		return
+	}
+	if _, ok := callerOf(r); !ok {
+		writeError(w, ErrNotFound)
 		return
 	}
 	q := r.URL.Query()

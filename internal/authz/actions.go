@@ -114,6 +114,8 @@ var Actions = map[string]string{
 	"POST /api/databases/{id}/users/{name}/reset-password":       "database.user_reset_password",
 	"DELETE /api/databases/{id}/users/{name}":                    "database.user_delete",
 	"POST /api/databases/{id}/reset-password":                    "database.reset_password",
+	"PUT /api/databases/{id}/grants/{userID}":                    "database.grant_set",
+	"DELETE /api/databases/{id}/grants/{userID}":                 "database.grant_delete",
 	"POST /api/databases/{id}/query":                             "database.query",
 	"POST /api/databases/{id}/redis/command":                     "database.redis_command",
 	"POST /api/direct-accesses":                                  "direct_access.open",

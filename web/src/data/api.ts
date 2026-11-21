@@ -113,7 +113,7 @@ import type {
   BuildersResponse,
   ComposeBuilderChoice,
 } from './types';
-import type { MetricWindow } from './types';
+import type { DatabaseGrantRow, MetricWindow } from './types';
 import type { MigrationStatus } from './migration';
 import type { PanelUpdateStatus, PreviewResponse } from './panel-update';
 
@@ -705,8 +705,13 @@ export const api = {
     request<void>(`/api/databases/${id}/users/${encodeURIComponent(name)}/access`, jsonInit('PUT', { access })),
   resetDatabaseUserPassword: (id: number, name: string) =>
     request<void>(`/api/databases/${id}/users/${encodeURIComponent(name)}/reset-password`, { method: 'POST' }),
-  deleteDatabaseUser: (id: number, name: string) =>
-    request<void>(`/api/databases/${id}/users/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  deleteDatabaseUser: (id: number, name: string, confirmGrants = false) =>
+    request<void>(`/api/databases/${id}/users/${encodeURIComponent(name)}${confirmGrants ? '?confirmGrants=1' : ''}`, { method: 'DELETE' }),
+  databaseGrants: (id: number) => request<DatabaseGrantRow[]>(`/api/databases/${id}/grants`),
+  setDatabaseGrant: (id: number, userId: number, grant: { dbUser?: string; level?: string }) =>
+    request<void>(`/api/databases/${id}/grants/${userId}`, jsonInit('PUT', grant)),
+  deleteDatabaseGrant: (id: number, userId: number) =>
+    request<void>(`/api/databases/${id}/grants/${userId}`, { method: 'DELETE' }),
   resetSuperuserPassword: (id: number, confirm: string) =>
     request<void>(`/api/databases/${id}/reset-password`, jsonInit('POST', { confirm })),
   databaseLogs: (id: number, tail = 200) => request<{ logs: string }>(`/api/databases/${id}/logs?tail=${tail}`),

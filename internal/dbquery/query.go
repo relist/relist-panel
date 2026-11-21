@@ -16,10 +16,17 @@ type Target struct {
 }
 
 // Request is one run. Engine is "postgres", "mysql" or "mariadb".
+// Restricted runs the server-wide check on the run's own session before the
+// first statement: a non-Admin's user must have no powers beyond its
+// databases (serverwide.go).
 type Request struct {
 	Database, SQL string
 	Writes        bool
 	Engine        string
+	Restricted    bool
+	// Preview runs the batch inside a transaction that is rolled back; only
+	// plain DML is allowed (PreviewStatements). It implies Writes.
+	Preview bool
 }
 
 // Column is a result column.
@@ -37,6 +44,9 @@ type QueryResult struct {
 	Command        string   `json:"command"`
 	Affected       *int64   `json:"affected"`
 	DurationMs     int64    `json:"durationMs"`
+	// Verb and Target are set on Preview results: "delete" from "orders".
+	Verb   string `json:"verb,omitempty"`
+	Target string `json:"target,omitempty"`
 }
 
 // QueryError is the server's error, placed in the text that was sent.
@@ -55,6 +65,8 @@ type QueryResponse struct {
 	Error      *QueryError   `json:"error"`
 	Stopped    string        `json:"stopped"`
 	Cancelled  bool          `json:"cancelled"`
+	// Preview: the run was a Preview, and nothing was kept.
+	Preview bool `json:"preview,omitempty"`
 }
 
 // SchemaNode is a schema and its tables and views.

@@ -3,6 +3,7 @@ package dbquery
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -122,6 +123,10 @@ type CommandInfo struct {
 	Known       bool
 	Flags       []string
 	Subcommands map[string][]string
+	// Categories are the ACL categories (entry 7 of COMMAND INFO), lower
+	// case, "@admin" for one; SubcommandCategories theirs by name.
+	Categories           []string
+	SubcommandCategories map[string][]string
 }
 
 func flagList(r Reply) []string {
@@ -149,6 +154,9 @@ func ParseCommandInfo(r Reply) CommandInfo {
 		return CommandInfo{}
 	}
 	info := CommandInfo{Known: true, Flags: flagList(entry[2])}
+	if len(entry) >= 7 {
+		info.Categories = flagList(entry[6])
+	}
 	if len(entry) >= 10 {
 		subs, _ := entry[9].Value.([]Reply)
 		for _, s := range subs {
@@ -165,6 +173,12 @@ func ParseCommandInfo(r Reply) CommandInfo {
 				info.Subcommands = map[string][]string{}
 			}
 			info.Subcommands[name] = flagList(row[2])
+			if len(row) >= 7 {
+				if info.SubcommandCategories == nil {
+					info.SubcommandCategories = map[string][]string{}
+				}
+				info.SubcommandCategories[name] = flagList(row[6])
+			}
 		}
 	}
 	return info
@@ -182,13 +196,16 @@ var neverCommands = map[string]bool{
 	"SUBSCRIBE": true, "PSUBSCRIBE": true, "SSUBSCRIBE": true, "UNSUBSCRIBE": true, "PUNSUBSCRIBE": true, "SUNSUBSCRIBE": true,
 	"MONITOR": true, "SYNC": true, "PSYNC": true, "MULTI": true, "EXEC": true, "DISCARD": true, "WATCH": true, "UNWATCH": true,
 	"SELECT": true, "AUTH": true, "HELLO": true, "RESET": true, "QUIT": true,
+	// Scripts and modules, for everyone: a script is a built-up command, so
+	// it gets around the classifier (EVAL "redis.call(\'FLUSHALL\')").
+	"EVAL": true, "EVALSHA": true, "EVAL_RO": true, "EVALSHA_RO": true,
+	"FCALL": true, "FCALL_RO": true, "FUNCTION": true, "SCRIPT": true, "MODULE": true,
 }
 
 // Need a second confirmation even with writes on.
 var dangerous = map[string]bool{
 	"FLUSHALL": true, "FLUSHDB": true, "SHUTDOWN": true, "DEBUG": true, "SWAPDB": true, "REPLICAOF": true, "SLAVEOF": true, "FAILOVER": true,
-	"CONFIG SET": true, "SCRIPT FLUSH": true, "FUNCTION FLUSH": true, "MODULE LOAD": true, "MODULE UNLOAD": true,
-	"ACL SETUSER": true, "ACL DELUSER": true,
+	"CONFIG SET": true, "ACL SETUSER": true, "ACL DELUSER": true,
 }
 
 // Run read-only although no flag says readonly.
@@ -249,6 +266,31 @@ func Classify(info CommandInfo, args []string, writes bool) Class {
 	return out
 }
 
+// ClassifyGrantee decides whether a non-Admin grantee's args may run.
+// readWrite is the grant's level. On top of Classify, everything Dangerous,
+// flagged admin, or in the @admin or @dangerous ACL categories is refused
+// outright — CONFIG GET would answer the superuser password — and nothing a
+// grantee runs ever waits on a confirmation.
+func ClassifyGrantee(info CommandInfo, args []string, readWrite bool) Class {
+	out := Classify(info, args, readWrite)
+	if out.Refused {
+		return Class{Refused: true, Reason: out.Reason}
+	}
+	cmd := strings.ToUpper(args[0])
+	full, flags, cats := cmd, info.Flags, info.Categories
+	if len(info.Subcommands) > 0 && len(args) > 1 {
+		sub := strings.ToLower(args[1])
+		full = cmd + " " + strings.ToUpper(sub)
+		flags = info.Subcommands[sub]
+		cats = info.SubcommandCategories[sub]
+	}
+	if out.Dangerous || slices.Contains(flags, "admin") ||
+		slices.Contains(cats, "@admin") || slices.Contains(cats, "@dangerous") {
+		return Class{Refused: true, Reason: full + " is not available to non-Admins"}
+	}
+	return Class{}
+}
+
 // RedisResponse is a console run's outcome. Like every run it is data, never
 // an HTTP error, so the audit middleware records it.
 type RedisResponse struct {
@@ -305,6 +347,16 @@ func redisFail(resp *RedisResponse, ctx, parent context.Context, err error) {
 // RunRedis runs one console line on database db. It sends nothing the
 // classifier refuses, and nothing dangerous before confirmDangerous.
 func RunRedis(parent context.Context, t Target, db int, line string, writes, confirmDangerous bool) RedisResponse {
+	return runRedis(parent, t, db, line, func(i CommandInfo, a []string) Class { return Classify(i, a, writes) }, confirmDangerous)
+}
+
+// RunRedisGrantee is a non-Admin's run: ClassifyGrantee decides, and there
+// is no confirmation to give, so it never answers NeedsConfirm.
+func RunRedisGrantee(parent context.Context, t Target, db int, line string, readWrite bool) RedisResponse {
+	return runRedis(parent, t, db, line, func(i CommandInfo, a []string) Class { return ClassifyGrantee(i, a, readWrite) }, false)
+}
+
+func runRedis(parent context.Context, t Target, db int, line string, classify func(CommandInfo, []string) Class, confirmDangerous bool) RedisResponse {
 	began := time.Now()
 	resp := RedisResponse{}
 	defer func() { resp.DurationMs = sinceMs(began) }()
@@ -330,7 +382,7 @@ func RunRedis(parent context.Context, t Target, db int, line string, writes, con
 		redisFail(&resp, ctx, parent, err)
 		return resp
 	}
-	class := Classify(ParseCommandInfo(infoReply), args, writes)
+	class := classify(ParseCommandInfo(infoReply), args)
 	if class.Refused {
 		resp.Refused = class.Reason
 		return resp

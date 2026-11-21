@@ -279,9 +279,19 @@ func RunMySQL(ctx context.Context, t Target, r Request) QueryResponse {
 		}
 		return resp
 	}
-	stmts, err := SplitMySQL(r.SQL)
-	if err != nil {
-		return failed(err)
+	var stmts []Statement
+	if r.Preview {
+		var qe *QueryError
+		stmts, qe = PreviewStatements(r.Engine, r.SQL)
+		if qe != nil {
+			return QueryResponse{Results: []QueryResult{}, Preview: true, Error: qe, DurationMs: sinceMs(began)}
+		}
+	} else {
+		var err error
+		stmts, err = SplitMySQL(r.SQL)
+		if err != nil {
+			return failed(err)
+		}
 	}
 	cfg := mysqlConfig(t, r.Database)
 	db, conn, err := openConn(runCtx, cfg)
@@ -290,9 +300,29 @@ func RunMySQL(ctx context.Context, t Target, r Request) QueryResponse {
 	}
 	defer db.Close()
 	defer conn.Close()
-	for _, s := range mysqlSessionSQL(r.Engine, r.Writes) {
+	for _, s := range mysqlSessionSQL(r.Engine, r.Writes || r.Preview) {
 		if _, err := conn.ExecContext(runCtx, s); err != nil {
 			return failed(err)
+		}
+	}
+	if r.Restricted {
+		refusal, err := refuseServerWide(runCtx, sqlConn{conn}, t.User)
+		if err != nil {
+			return failed(err)
+		}
+		if refusal != nil {
+			refusal.DurationMs = sinceMs(began)
+			return *refusal
+		}
+	}
+	if r.Preview {
+		refusal, err := mysqlPreviewRefusal(runCtx, sqlConn{conn})
+		if err != nil {
+			return failed(err)
+		}
+		if refusal != nil {
+			refusal.DurationMs = sinceMs(began)
+			return *refusal
 		}
 	}
 	var id uint64
@@ -335,7 +365,11 @@ func RunMySQL(ctx context.Context, t Target, r Request) QueryResponse {
 		<-killed
 	}
 
-	resp, num := runBatch(runCtx, sqlConn{conn}, stmts, stop)
+	run := runBatch
+	if r.Preview {
+		run = runPreviewBatch
+	}
+	resp, num := run(runCtx, sqlConn{conn}, stmts, stop)
 	close(finished)
 	watch.Wait()
 

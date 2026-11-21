@@ -34,6 +34,8 @@ function entryFor(id: number, command: string, response: RedisResponse): LogEntr
 /** The console and key browser of a Redis Database (GUIDELINES §4.6b). */
 export function DatabaseRedisTab({ db }: { db: Database }) {
   const running = db.status === 'running';
+  // A Read grantee (ADR-0045): the API refuses writes, so the switch goes.
+  const readOnly = db.access?.level === 'read';
   const [dbNumber, setDbNumber] = useState(0);
   const [writes, setWrites] = useState(false);
   const [line, setLine] = useState('');
@@ -139,11 +141,13 @@ export function DatabaseRedisTab({ db }: { db: Database }) {
           style={{ minWidth: 120 }}
           value={dbNumber}
         />
-        <Flex align="center" gap={8}>
-          <Switch aria-label="Allow writes" checked={writes} onChange={setWrites} />
-          <Text>Allow writes</Text>
-          {writes && <Tag color="red">Writes allowed</Tag>}
-        </Flex>
+        {!readOnly && (
+          <Flex align="center" gap={8}>
+            <Switch aria-label="Allow writes" checked={writes} onChange={setWrites} />
+            <Text>Allow writes</Text>
+            {writes && <Tag color="red">Writes allowed</Tag>}
+          </Flex>
+        )}
       </Flex>
 
       <Flex gap={16} wrap>

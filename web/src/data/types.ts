@@ -1224,6 +1224,23 @@ export interface Database {
   job: DatabaseJob;
   /** A tombstone: only its Backups remain. */
   deleted: boolean;
+  /** Set for a grantee: how they reach this Database (ADR-0045). */
+  access?: DatabaseGrantAccess;
+}
+
+/** A grantee's own grant: the managed user they work as, or a Redis level. */
+export interface DatabaseGrantAccess {
+  dbUser?: string;
+  level?: 'read' | 'read_write';
+}
+
+/** One Database grant on the Panel access tab (ADR-0045). */
+export interface DatabaseGrantRow {
+  userId: number;
+  email: string;
+  dbUser?: string;
+  level?: 'read' | 'read_write';
+  createdAt: string;
 }
 
 export interface DatabaseEngine {
@@ -1390,6 +1407,9 @@ export interface QueryResult {
   rows: QueryCell[][];
   statementIndex: number;
   truncated: boolean;
+  /** Preview only: "delete" from "orders" ("" when unsure). */
+  verb?: string;
+  target?: string;
 }
 
 export interface QueryResponse {
@@ -1405,6 +1425,8 @@ export interface QueryResponse {
   results: QueryResult[];
   /** Why the batch stopped, "" when it did not. */
   stopped: string;
+  /** The run was a Preview: everything was rolled back. */
+  preview?: boolean;
 }
 
 export interface QuerySchemaNode {
@@ -1416,6 +1438,8 @@ export interface QueryRequest {
   database: string;
   sql: string;
   writes: boolean;
+  /** Run in a transaction and roll back; DML only. */
+  preview?: boolean;
 }
 
 /** A RESP2 reply; a bulk string cut at 64 KB carries its full size in `bytes`, a collection cut at 1,000 elements `more`. */

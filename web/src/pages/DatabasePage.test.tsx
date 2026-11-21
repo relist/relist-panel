@@ -98,7 +98,7 @@ describe('DatabasePage', () => {
     renderPage();
     await screen.findByText('Host (stable)');
     const names = screen.getAllByRole('tab').map((tab) => tab.textContent);
-    expect(names).toEqual(['Connection', 'Databases', 'Users', 'Query', 'Backups', 'Logs', 'Settings']);
+    expect(names).toEqual(['Connection', 'Databases', 'Users', 'Panel access', 'Query', 'Backups', 'Logs', 'Settings']);
   });
 
   it('opens the tab named by ?tab=', async () => {
@@ -298,5 +298,56 @@ describe('DatabasePage', () => {
     expect(await screen.findByText('Backups')).toBeTruthy();
     expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Update image' })).toBeNull();
+  });
+});
+
+describe('DatabasePage for a grantee', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.databaseLogicalDatabases.mockResolvedValue({ databases: ['shop'] });
+    api.listDirectAccesses.mockResolvedValue({ accesses: [] });
+  });
+
+  it('shows an SQL grantee only Connection and Query, with their own user', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, access: { dbUser: 'shop_ro' }, user: 'shop_ro' });
+    renderPage();
+    const tabs = await screen.findAllByRole('tab');
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Connection', 'Query']);
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Restart' })).toBeNull();
+    expect(screen.queryByText('New container settings are available')).toBeNull();
+    await userEvent.setup().click(screen.getByRole('tab', { name: 'Connection' }));
+    expect(await screen.findByText('shop_ro')).toBeTruthy();
+    expect(screen.queryByText('Reset superuser password')).toBeNull();
+    expect(screen.queryByLabelText('User')).toBeNull();
+    expect(api.listDatabaseUsers).not.toHaveBeenCalled();
+  });
+
+  it('hides admin alerts from a grantee', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, access: { dbUser: 'shop_ro' }, lastError: '', settingsOutdated: false, user: 'shop_ro' });
+    renderPage();
+    await screen.findAllByRole('tab');
+    expect(screen.queryByText(/Apply settings/)).toBeNull();
+  });
+
+  it('shows a Redis grantee only the Console', async () => {
+    api.getDatabase.mockResolvedValue({
+      ...shop, access: { level: 'read' }, defaultDatabase: '0', engine: 'redis', id: 2, name: 'Cache', port: 6379, user: '',
+    });
+    renderPage('/databases/2');
+    const tabs = await screen.findAllByRole('tab');
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['Console']);
+  });
+});
+
+describe('DatabasePage Panel access tab', () => {
+  it('sits after Users for an Admin', async () => {
+    vi.clearAllMocks();
+    api.getDatabase.mockResolvedValue(shop);
+    api.listDatabaseUsers.mockResolvedValue({ users: [] });
+    renderPage();
+    const tabs = await screen.findAllByRole('tab');
+    const names = tabs.map((tab) => tab.textContent);
+    expect(names.indexOf('Panel access')).toBe(names.indexOf('Users') + 1);
   });
 });

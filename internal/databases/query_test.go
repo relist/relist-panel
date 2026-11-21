@@ -29,6 +29,22 @@ type fakeQuerier struct {
 	calls []redisCall
 	sent  []string
 	redis func(line string) dbquery.RedisResponse
+	// granteeCalls records every RunRedisGrantee.
+	granteeCalls []granteeCall
+}
+
+type granteeCall struct {
+	db        int
+	line      string
+	readWrite bool
+}
+
+func (f *fakeQuerier) RunRedisGrantee(_ context.Context, t dbquery.Target, db int, line string, readWrite bool) dbquery.RedisResponse {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.targets = append(f.targets, t)
+	f.granteeCalls = append(f.granteeCalls, granteeCall{db, line, readWrite})
+	return dbquery.RedisResponse{Reply: &dbquery.Reply{Type: "string", Value: "OK"}}
 }
 
 type redisCall struct {
@@ -70,8 +86,12 @@ func (f *fakeQuerier) last() dbquery.Request {
 // the audit rows are the ones production writes.
 type queryRig struct {
 	*rig
-	q      *fakeQuerier
-	h      http.Handler
+	q     *fakeQuerier
+	admin *fakeAdmin
+	h     http.Handler
+	// user, when set, makes every request this signed-in user's; nil is the
+	// admin.
+	user   *auth.User
 	mu     sync.Mutex
 	events []audit.Event
 }
@@ -80,10 +100,11 @@ func newQueryRig(t *testing.T) *queryRig {
 	t.Helper()
 	r := newRig(t)
 	q := &fakeQuerier{resp: map[string]dbquery.QueryResponse{}}
-	r.svc = New(Deps{Store: r.store, Host: r.host, DataDir: r.dataDir, Querier: q,
+	admin := newFakeAdmin()
+	r.svc = New(Deps{Store: r.store, Host: r.host, DataDir: r.dataDir, Querier: q, Admin: admin,
 		Locked:       func(context.Context) bool { return r.locked },
 		UpdateLocked: func() bool { return r.updateLocked }})
-	qr := &queryRig{rig: r, q: q}
+	qr := &queryRig{rig: r, q: q, admin: admin}
 	mux := http.NewServeMux()
 	NewAPI(r.svc).RegisterRoutes(mux)
 	lookup := func(*http.Request) (auth.User, bool, error) { return auth.User{}, false, nil }
@@ -94,7 +115,11 @@ func newQueryRig(t *testing.T) *queryRig {
 		return nil
 	}).Middleware(mux, mux)
 	qr.h = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		mw.ServeHTTP(w, req.WithContext(auth.WithUser(req.Context(), auth.User{ID: 1, Email: "owner@example.com", IsAdmin: true})))
+		u := auth.User{ID: 1, Email: "owner@example.com", IsAdmin: true}
+		if qr.user != nil {
+			u = *qr.user
+		}
+		mw.ServeHTTP(w, req.WithContext(auth.WithUser(req.Context(), u)))
 	})
 	return qr
 }
@@ -178,6 +203,22 @@ func TestQueryAuditsEveryOutcome(t *testing.T) {
 	ev := qr.take()
 	if w.Code != 200 || len(ev) != 1 || ev[0].Detail["outcome"] != "cancelled" || ev[0].Action != "database.query" {
 		t.Fatalf("cancelled: status %d, events %+v", w.Code, ev)
+	}
+}
+
+// A Preview is a preview whatever came of it: a run that failed before the
+// engine could mark the response still answers and audits as one.
+func TestFailedPreviewIsStillAPreview(t *testing.T) {
+	qr := newQueryRig(t)
+	qr.create(t, "Shop", "postgres", "18")
+	qr.q.resp["boom"] = dbquery.QueryResponse{Results: []dbquery.QueryResult{}, Error: &dbquery.QueryError{Message: "connection refused"}}
+	w := qr.do(context.Background(), "POST", "/api/databases/1/query", `{"database":"shop","sql":"boom","preview":true}`)
+	ev := qr.take()
+	if w.Code != 200 || len(ev) != 1 || ev[0].Detail["outcome"] != "preview" {
+		t.Fatalf("failed preview: status %d, events %+v", w.Code, ev)
+	}
+	if !strings.Contains(w.Body.String(), `"preview":true`) {
+		t.Fatalf("response lost the preview flag: %s", w.Body)
 	}
 }
 

@@ -114,7 +114,7 @@ describe('DatabaseQueryTab', () => {
     await typeSql('SELECT 1');
     await userEvent.click(screen.getByRole('button', { name: /^run/i }));
     await waitFor(() => expect(api.runDatabaseQuery).toHaveBeenCalled());
-    expect(api.runDatabaseQuery.mock.calls[0][1]).toEqual({ database: 'postgres', sql: 'SELECT 1', writes: false });
+    expect(api.runDatabaseQuery.mock.calls[0][1]).toEqual({ database: 'postgres', preview: false, sql: 'SELECT 1', writes: false });
     expect(await screen.findByText('1 · SELECT 1')).toBeTruthy();
   });
 
@@ -172,7 +172,7 @@ describe('DatabaseQueryTab', () => {
     view({ ...shop, defaultDatabase: '', engine: 'mysql', image: 'mysql:8.4' });
     await userEvent.click(await screen.findByText('users'));
     await waitFor(() => expect(api.runDatabaseQuery).toHaveBeenCalled());
-    expect(api.runDatabaseQuery.mock.calls[0][1]).toEqual({ database: 'app', sql: 'SELECT * FROM `users` LIMIT 100', writes: false });
+    expect(api.runDatabaseQuery.mock.calls[0][1]).toEqual({ database: 'app', preview: false, sql: 'SELECT * FROM `users` LIMIT 100', writes: false });
     expect(screen.getByLabelText('SQL').getAttribute('data-language')).toBe('mysql');
   });
 
@@ -191,5 +191,72 @@ describe('DatabaseQueryTab', () => {
     view({ ...shop, status: 'stopped' });
     expect(await screen.findByText(/not running/i)).toBeTruthy();
     expect((screen.getByRole('button', { name: /^run/i }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('Preview', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.databaseLogicalDatabases.mockResolvedValue({ databases: ['shop'] });
+    api.databaseQuerySchema.mockResolvedValue([]);
+  });
+
+  function renderTab() {
+    render(
+      <SWRConfig value={{ provider: () => new Map() }}>
+        <App>
+          <DatabaseQueryTab db={shop} />
+        </App>
+      </SWRConfig>,
+    );
+  }
+
+  it('shows Preview beside Run only while writes are on', async () => {
+    renderTab();
+    expect(await screen.findByRole('button', { name: 'Run' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+    await userEvent.setup().click(screen.getByRole('switch', { name: 'Allow writes' }));
+    expect(await screen.findByRole('button', { name: 'Preview' })).toBeTruthy();
+  });
+
+  it('renders what a Preview would change, and what it cannot undo', async () => {
+    api.runDatabaseQuery.mockResolvedValue({
+      cancelled: false,
+      durationMs: 5,
+      error: null,
+      preview: true,
+      results: [{ affected: 3412, columns: [], command: 'DELETE 3412', durationMs: 4, rows: [], statementIndex: 0, target: 'orders', truncated: false, verb: 'delete' }],
+      stopped: '',
+    });
+    renderTab();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('switch', { name: 'Allow writes' }));
+    await user.type(screen.getByLabelText('SQL'), 'DELETE FROM orders');
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(await screen.findByText(/Would delete 3,412 rows from/)).toBeTruthy();
+    expect(screen.getByText('orders').tagName).toBe('CODE');
+    expect(screen.getByText(/It cannot undo sequence values/)).toBeTruthy();
+    expect(api.runDatabaseQuery).toHaveBeenCalledWith(
+      shop.id,
+      expect.objectContaining({ preview: true, writes: true }),
+      expect.anything(),
+    );
+  });
+
+  it('renders a refused Preview', async () => {
+    api.runDatabaseQuery.mockResolvedValue({
+      cancelled: false,
+      durationMs: 1,
+      error: { message: 'Preview runs only INSERT, UPDATE and DELETE statements. Statement 1 starts with TRUNCATE.', position: null, statementIndex: 0, statementStart: 0 },
+      preview: true,
+      results: [],
+      stopped: '',
+    });
+    renderTab();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('switch', { name: 'Allow writes' }));
+    await user.type(screen.getByLabelText('SQL'), 'TRUNCATE t');
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(await screen.findByText(/starts with TRUNCATE/)).toBeTruthy();
   });
 });

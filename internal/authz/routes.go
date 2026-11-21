@@ -118,6 +118,20 @@ var Routes = map[string]Rule{
 	"PUT " + compose + "/volumes/restore":                            {Level: LevelEditor},
 	"GET " + compose + "/volumes/stat":                               {Level: LevelEditor},
 
+	// Databases (phase 8). The lists filter for non-Admins; the grantee
+	// routes need a Database grant, and the handler reads it from the
+	// context. Everything else under /api/databases stays admin-only.
+	"GET /api/databases":                        {Level: LevelSignedIn},
+	"GET /api/databases/engines":                {Level: LevelSignedIn},
+	"GET /api/databases/{id}":                   {Level: LevelDatabase},
+	"GET /api/databases/{id}/credentials":       {Level: LevelDatabase},
+	"GET /api/databases/{id}/logical-databases": {Level: LevelDatabase},
+	"POST /api/databases/{id}/query":            {Level: LevelDatabase},
+	"GET /api/databases/{id}/query/schema":      {Level: LevelDatabase},
+	"POST /api/databases/{id}/redis/command":    {Level: LevelDatabase},
+	"GET /api/databases/{id}/redis/keys":        {Level: LevelDatabase},
+	"GET /api/databases/{id}/redis/key":         {Level: LevelDatabase},
+
 	// Project Editor: the Project's own details and its Environments.
 	"PUT " + project: {Level: LevelProjectEditor},
 	"POST /api/projects/{projectID}/environments":                  {Level: LevelProjectEditor},

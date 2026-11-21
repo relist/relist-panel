@@ -11,8 +11,8 @@ func TestKnownVersionIsHighestEmbeddedMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("KnownVersion() error = %v", err)
 	}
-	if got != 50 {
-		t.Fatalf("KnownVersion() = %d, want 50", got)
+	if got != 51 {
+		t.Fatalf("KnownVersion() = %d, want 51", got)
 	}
 }
 
