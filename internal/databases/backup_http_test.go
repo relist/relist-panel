@@ -376,3 +376,31 @@ func TestRestoreAsBackedUpRoute(t *testing.T) {
 		t.Fatalf("admin SQL = %s", all)
 	}
 }
+
+// POST /recreate takes the typed name and the picked Backups; a Database
+// whose volume is there is a conflict, two Backups of one database a bad
+// request.
+func TestRecreateRoute(t *testing.T) {
+	a := newAPIRig(t)
+	a.seed(t, "Shop", "postgres", "18")
+	a.svc.Wait()
+	a.dumps("pg_dump -U postgres", "SELECT 1;\n")
+	if w := a.do("POST", "/api/databases/1/backups", `{"all":true}`); w.Code != http.StatusAccepted {
+		t.Fatalf("backup = %d %s", w.Code, w.Body)
+	}
+	a.svc.Wait()
+	if w := a.do("POST", "/api/databases/1/recreate", `{"confirm":"Shop","backupIds":[1]}`); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "not missing") {
+		t.Fatalf("live volume = %d %s", w.Code, w.Body)
+	}
+	a.loseVolume(t, 1)
+	if w := a.do("POST", "/api/databases/1/recreate", `{"confirm":"Shop","backupIds":[1,1]}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "two Backups of app") {
+		t.Fatalf("twice = %d %s", w.Code, w.Body)
+	}
+	if w := a.do("POST", "/api/databases/1/recreate", `{"confirm":"Shop","backupIds":[1]}`); w.Code != http.StatusAccepted {
+		t.Fatalf("recreate = %d %s", w.Code, w.Body)
+	}
+	a.svc.Wait()
+	if e := a.last.Event(); e.Target != "Shop" || fmt.Sprint(e.Detail["backups"]) != "[1]" {
+		t.Fatalf("audit = %+v", e)
+	}
+}

@@ -679,3 +679,43 @@ func TestRestoreMySQLIntoNewDatabaseAsBackedUp(t *testing.T) {
 		t.Fatalf("admin SQL lacks %q:\n%s", want, all)
 	}
 }
+
+// A Backup also keeps each login user's access to its database: Recreate
+// gives it back, since a one-database dump carries no CONNECT or MySQL
+// schema grant. It is read in the same admin session as the owner.
+func TestBackupKeepsUsersAccess(t *testing.T) {
+	r := newRig(t)
+	d := r.create(t, "Shop", "postgres", "18")
+	r.dumps("pg_dump -U postgres", "X;\n")
+	var sent string
+	r.host.script(pgAdmin, func(req ExecRequest) (int, error) {
+		b, _ := io.ReadAll(req.Stdin)
+		sent = string(b)
+		_, _ = io.WriteString(req.Stdout, "app\t{app=CTc/app,reader=c/app}\nreader\tread\napp\tfull\n")
+		return 0, nil
+	})
+	b := r.manualBackup(t, d.ID)
+	if b.State.Prev != "app\t{app=CTc/app,reader=c/app}" || len(b.State.Access) != 2 || b.State.Access["reader"] != AccessRead || b.State.Access["app"] != AccessFull {
+		t.Fatalf("state = %+v", b.State)
+	}
+	if !strings.Contains(sent, "pg_get_userbyid") || !strings.Contains(sent, pgDumper{}.AccessSQL("app")) {
+		t.Fatalf("one session must read both: %q", sent)
+	}
+	got, _ := r.store.GetBackup(context.Background(), d.ID, b.ID)
+	if got.State.Access["reader"] != AccessRead {
+		t.Fatalf("stored state = %+v", got.State)
+	}
+}
+
+// The access query reads the same rows as the Users tab, for one database,
+// as "<user>\t<level>" lines the admin command prints.
+func TestAccessSQL(t *testing.T) {
+	pg := pgDumper{}.AccessSQL("my-app")
+	if !strings.Contains(pg, pgAccounts{}.AccessQuery()) || !strings.Contains(pg, "x.d = 'my-app'") || !strings.Contains(pg, `E'\t'`) {
+		t.Errorf("postgres = %s", pg)
+	}
+	my := mysqlDumper{}.AccessSQL("my_app")
+	if !strings.Contains(my, myAccounts{}.AccessQuery()) || !strings.Contains(my, "y.db = 'my_app'") || !strings.Contains(myAccounts{}.AccessQuery(), "END AS lvl") {
+		t.Errorf("mysql = %s", my)
+	}
+}

@@ -804,11 +804,8 @@ func (s *Service) view(ctx context.Context, d Database) View {
 		v.Warnings = append(v.Warnings, err.Error())
 		return v
 	}
-	volumeGone := false
-	if d.Initialized && !st.Exists {
-		ok, err := s.d.Host.VolumeExists(ctx, spec.Volume)
-		volumeGone = err == nil && !ok
-	}
+	volumeGone, err := s.volumeGoneFor(ctx, d, spec, st)
+	volumeGone = volumeGone && err == nil
 	switch {
 	case d.LastError != "":
 		v.Status = StatusError

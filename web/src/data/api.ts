@@ -678,6 +678,9 @@ export const api = {
   revealDestinationPassphrase: (id: number) =>
     request<{ passphrase: string }>(`/api/backup-destinations/${id}/passphrase`),
   listDatabaseRestores: (id: number) => request<DatabaseRestore[]>(`/api/databases/${id}/restores`),
+  /** Gives a Database whose volume is gone a new one, and restores the picked Backups into it. */
+  recreateDatabase: (id: number, confirm: string, backupIds: number[]) =>
+    request<void>(`/api/databases/${id}/recreate`, jsonInit('POST', { backupIds, confirm })),
   /** asBackedUp creates a new target the way the Backup's state says: its owner, or its character set. */
   restoreDatabase: (id: number, backupId: number, target: string, confirm: string, asBackedUp = false) =>
     request<DatabaseRestore>(`/api/databases/${id}/restores`, jsonInit('POST', { asBackedUp, backupId, confirm, target })),

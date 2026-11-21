@@ -63,6 +63,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/databases/{id}/restores", a.listRestores)
 	mux.HandleFunc("POST /api/databases/{id}/restores", a.startRestore)
 	mux.HandleFunc("POST /api/databases/{id}/restores/upload", a.uploadRestore)
+	mux.HandleFunc("POST /api/databases/{id}/recreate", a.recreate)
 	mux.HandleFunc("POST /api/databases/{id}/query", a.query)
 	mux.HandleFunc("GET /api/databases/{id}/query/schema", a.querySchema)
 	mux.HandleFunc("POST /api/databases/{id}/redis/command", a.redisCommand)
@@ -397,6 +398,7 @@ func writeError(w http.ResponseWriter, err error) {
 	var unknownUser ErrUnknownUser
 	var admin adminError
 	var unsplittable ErrUnsplittableSetting
+	var twice ErrSameDatabaseTwice
 	switch {
 	case errors.As(err, &invalid), errors.As(err, &fullOnSuper), errors.As(err, &reserved), errors.As(err, &ownerAccess),
 		errors.As(err, &protected), errors.Is(err, ErrBadUserName),
@@ -420,7 +422,10 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, "Database not found")
-	case errors.Is(err, ErrDuplicateName), errors.Is(err, ErrLocked), errors.Is(err, ErrStarting), errors.Is(err, ErrBusy), errors.Is(err, ErrNotRunning), errors.Is(err, ErrChangedFile), errors.Is(err, ErrRemoteOnly), errors.Is(err, ErrNotScheduled), errors.Is(err, ErrNoFailedUpload):
+	case errors.As(err, &twice):
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrDuplicateName), errors.Is(err, ErrLocked), errors.Is(err, ErrStarting), errors.Is(err, ErrBusy), errors.Is(err, ErrNotRunning), errors.Is(err, ErrChangedFile), errors.Is(err, ErrRemoteOnly), errors.Is(err, ErrNotScheduled), errors.Is(err, ErrNoFailedUpload),
+		errors.Is(err, ErrVolumeNotMissing):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrRemoteDelete):
 		writeJSONError(w, http.StatusBadGateway, err.Error())

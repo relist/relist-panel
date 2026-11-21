@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { DATABASE_JOBS } from '../data/types';
+
 import {
   backupsPollInterval,
   canBackUp,
@@ -111,6 +113,15 @@ describe('canBackUp', () => {
     expect(canBackUp({ status: 'stopped', engine: 'postgres', deleted: false })).toBe(false);
     expect(canBackUp({ status: 'running', engine: 'redis', deleted: false })).toBe(false);
     expect(canBackUp({ status: 'deleted', engine: 'postgres', deleted: true })).toBe(false);
+  });
+});
+
+describe('every job kind', () => {
+  it('has a notice and a label', () => {
+    for (const job of DATABASE_JOBS) {
+      expect(jobNotice(job), job).not.toBe('');
+      expect(jobLabel(job), job).not.toBe(job);
+    }
   });
 });
 

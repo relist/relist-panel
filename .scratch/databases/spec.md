@@ -118,7 +118,18 @@ Registry (ADR-0033) and Builders (ADR-0028):
 - **A missing volume is never silently recreated.** Reconcile sets the status
   to `volume_missing` and stops. An empty new volume would look like data loss
   that happened silently. The Admin either restores from a backup into a fresh
-  volume (an explicit action) or deletes the Database.
+  volume (an explicit action) or deletes the Database. That action is
+  **Recreate and restore** (review decision 2026-11-20, ADR-0050), on the
+  "The data volume is gone" alert, for every engine with Backups: the Admin
+  ticks which databases come back and picks a Backup of each (newest by
+  default, only those still on disk), then types the name. The panel makes
+  an empty volume and starts the server with the Database's password, so
+  hosts and credentials stay the same; creates again, with their stored
+  passwords, the users it made; restores each Backup as it was backed up;
+  then gives each of those users the access the Backup recorded. Users made
+  outside the panel cannot come back (the panel has no password for them).
+  A failed step is kept on its Restore and in the last error; nothing is
+  rolled back. Redis keeps no Backups, so it can only be deleted.
 - **Reserved names.** The Compose policy refuses a Service that answers on
   `relist-network` to `relist-db-<n>` or to any `*.db.internal` name. Such a
   Service would receive connections, and passwords, meant for a Database. The
@@ -574,7 +585,7 @@ numbers are picked at implementation time.
 | Image pull fails | Status `error` with the pull error; **Repair** retries |
 | Healthcheck never passes | Status `error`; logs available |
 | Container gone | Reconcile recreates it on the same volume |
-| Volume gone | Status `volume_missing`; no automatic action |
+| Volume gone | Status `volume_missing`; no automatic action; Recreate and restore on request |
 | Disk full during backup | Run fails, partial file deleted, error shown |
 | Selected logical database missing | Run fails, naming the database |
 | Upload fails | Local Backup succeeds, upload marked failed, **Retry upload** |

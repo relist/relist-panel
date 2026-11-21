@@ -1194,8 +1194,21 @@ export type DatabaseStatus =
   /** A tombstone: deleted, with its Backups kept. */
   | 'deleted';
 
+/** Every job a Database can run: the server's JobKind values, in one place. */
+export const DATABASE_JOBS = [
+  'backup',
+  'restore',
+  'update_image',
+  'rotate',
+  'drop_database',
+  'reset_password',
+  'change_version',
+  'upload',
+  'recreate',
+] as const;
+
 /** The job running on a Database; while one runs, lifecycle actions answer 409. */
-export type DatabaseJob = '' | 'backup' | 'restore' | 'update_image' | 'rotate' | 'drop_database' | 'reset_password' | 'change_version';
+export type DatabaseJob = '' | (typeof DATABASE_JOBS)[number];
 
 export interface Database {
   id: number;

@@ -255,6 +255,12 @@ func (s *Service) SetUserAccess(ctx context.Context, id int64, name string, acce
 	if err != nil {
 		return err
 	}
+	return s.setUserAccess(ctx, d, t, a, name, access)
+}
+
+// setUserAccess is SetUserAccess on a Database the caller checked, for a job
+// that holds the slot itself (Recreate).
+func (s *Service) setUserAccess(ctx context.Context, d Database, t dbquery.Target, a accountSQL, name string, access map[string]Access) error {
 	if err := s.requireUser(ctx, d, t, a, name); err != nil {
 		return err
 	}

@@ -34,6 +34,8 @@ const (
 	JobKindResetPassword = "reset_password"
 	// JobKindChangeVersion is a Change version to a higher major version.
 	JobKindChangeVersion = "change_version"
+	// JobKindRecreate is a Recreate after the volume was lost (ADR-0050).
+	JobKindRecreate = "recreate"
 )
 
 // interrupted is the error of a job the panel lost by stopping.

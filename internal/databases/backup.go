@@ -301,12 +301,26 @@ func (s *Service) executeBackup(ctx context.Context, d Database, dp Dumper, b Ba
 // readBackupState reads what the dump of logical leaves out (ADR-0050). It
 // is best effort: a Backup never fails for it, and a restore of a Backup
 // without it creates the database the plain way.
+//
+// One admin session reads both: the inspect prints one line while the
+// database exists, then each user with access prints "<user>\t<level>".
 func (s *Service) readBackupState(ctx context.Context, d Database, dp Dumper, logical string) BackupState {
-	prev, _, err := s.admin(ctx, d, dp, dp.InspectSQL(logical))
+	out, _, err := s.admin(ctx, d, dp, dp.InspectSQL(logical)+"\n"+dp.AccessSQL(logical))
 	if err != nil {
 		return BackupState{}
 	}
-	return BackupState{Prev: strings.TrimSpace(prev)}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	st := BackupState{Prev: strings.TrimSpace(lines[0])}
+	for _, line := range lines[1:] {
+		user, level, ok := strings.Cut(line, "\t")
+		if lvl := Access(strings.TrimSpace(level)); ok && user != "" && (lvl == AccessRead || lvl == AccessFull) {
+			if st.Access == nil {
+				st.Access = map[string]Access{}
+			}
+			st.Access[user] = lvl
+		}
+	}
+	return st
 }
 
 // dumpTo writes the dump of one logical database as one gzip stream to dir/name, through a

@@ -239,6 +239,32 @@ func (a *API) startRestore(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, restoreJSON(rs))
 }
 
+// recreate gives a Database whose volume is gone a new one, and restores
+// the picked Backups into it (ADR-0050).
+func (a *API) recreate(w http.ResponseWriter, r *http.Request) {
+	n, ok := id(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Confirm   string  `json:"confirm"`
+		BackupIDs []int64 `json:"backupIds"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	a.target(r, n)
+	if in.BackupIDs == nil {
+		in.BackupIDs = []int64{}
+	}
+	audit.Detail(r.Context(), "backups", in.BackupIDs)
+	if err := a.s.Recreate(r.Context(), n, in.Confirm, in.BackupIDs); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
 // uploadRestore restores the raw request body, which is a .sql or .sql.gz
 // file; target, confirm and name come in the query.
 func (a *API) uploadRestore(w http.ResponseWriter, r *http.Request) {

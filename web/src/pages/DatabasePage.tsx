@@ -7,6 +7,7 @@ import useSWR, { useSWRConfig } from 'swr';
 import { paths } from '../app/paths';
 import { ChangeVersionModal } from '../components/ChangeVersionModal';
 import { DangerModal } from '../components/DangerModal';
+import { DatabaseRecreateModal } from '../components/DatabaseRecreateModal';
 import { DatabaseVersionChangesCard } from '../components/DatabaseVersionChangesCard';
 import { PageHeader } from '../components/primitives';
 import { api } from '../data/api';
@@ -43,6 +44,7 @@ export function DatabasePage() {
   const [updating, setUpdating] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [changing, setChanging] = useState(false);
+  const [recreating, setRecreating] = useState(false);
 
   const act = async (action: DatabaseAction, done: string) => {
     setBusy(action);
@@ -175,11 +177,32 @@ export function DatabasePage() {
       {data && jobRunning && <Alert showIcon style={{ marginBottom: 16 }} title={jobNotice(data.job)} type="info" />}
       {data?.status === 'volume_missing' && (
         <Alert
-          description="Nothing was recreated, because an empty new volume would look like the data had never been lost. Delete this Database, or restore its data into a new one."
+          action={
+            data.engine !== 'redis' && (
+              <Button danger onClick={() => setRecreating(true)}>
+                Recreate and restore…
+              </Button>
+            )
+          }
+          description={
+            data.engine === 'redis'
+              ? 'Nothing was recreated, because an empty new volume would look like the data had never been lost. Redis keeps no Backups: delete this Database and create it again.'
+              : 'Nothing was recreated, because an empty new volume would look like the data had never been lost. Recreate it from its Backups, with the same hosts and password, or delete it.'
+          }
           showIcon
           style={{ marginBottom: 16 }}
           title="The data volume is gone"
           type="error"
+        />
+      )}
+      {data && data.engine !== 'redis' && (
+        <DatabaseRecreateModal
+          db={data}
+          onClose={() => {
+            setRecreating(false);
+            void mutate();
+          }}
+          open={recreating}
         />
       )}
       {data?.settingsOutdated && (

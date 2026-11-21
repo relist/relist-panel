@@ -118,6 +118,10 @@ export function jobNotice(job: Database['job']): string {
       return 'Old scheduled backups are being deleted. Other changes wait until it ends.';
     case 'change_version':
       return 'The version is being changed. The Database is unavailable until it ends; other changes wait.';
+    case 'upload':
+      return 'A Backup is being copied to its Backup destination again. Other changes wait until it ends.';
+    case 'recreate':
+      return 'The Database is being recreated on a new volume and its Backups restored. Other changes wait until it ends.';
     default:
       return '';
   }
@@ -131,6 +135,8 @@ const JOBS: Record<string, string> = {
   drop_database: 'Dropping a database',
   reset_password: 'Resetting the password',
   change_version: 'Changing the version',
+  upload: 'Copying a Backup',
+  recreate: 'Recreating',
 };
 
 const ENGINES: Record<string, string> = { mariadb: 'MariaDB', mysql: 'MySQL', postgres: 'PostgreSQL', redis: 'Redis' };

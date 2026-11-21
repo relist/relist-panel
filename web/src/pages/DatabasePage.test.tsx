@@ -31,6 +31,7 @@ const api = vi.hoisted(() => ({
   databaseLogicalDetails: vi.fn(),
   getDatabaseSchedule: vi.fn(),
   resetSuperuserPassword: vi.fn(),
+  recreateDatabase: vi.fn(),
 }));
 
 vi.mock('../data/api', async (importOriginal) => ({
@@ -197,6 +198,44 @@ describe('DatabasePage', () => {
     renderPage();
     expect(await screen.findByText('The data volume is gone')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Repair' })).toBeNull();
+  });
+
+  it('recreates a lost volume from the Backups the Admin picks, newest of each database first', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, status: 'volume_missing' });
+    const backup = (id: number, database: string, startedAt: string, over = {}) => ({
+      asBackedUp: '', database, error: '', finishedAt: startedAt, id, localRemoved: false, log: '', pinned: false,
+      sha256: 'x', size: 1024, startedAt, status: 'succeeded', trigger: 'manual', upload: null, ...over,
+    });
+    api.listDatabaseBackups.mockResolvedValue([
+      backup(4, 'app', '2026-11-20T10:00:00Z'),
+      backup(3, 'app', '2026-11-19T10:00:00Z'),
+      backup(2, 'shop', '2026-11-18T10:00:00Z'),
+      backup(5, 'gone', '2026-11-20T11:00:00Z', { localRemoved: true }),
+      backup(6, 'shop', '2026-11-21T10:00:00Z', { status: 'failed' }),
+    ]);
+    api.recreateDatabase.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Recreate and restore…' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByLabelText('Restore app')).toBeTruthy();
+    expect(within(dialog).getByLabelText('Restore shop')).toBeTruthy();
+    // Only a Backup on disk can be restored: a Remote only one is left out.
+    expect(within(dialog).queryByLabelText('Restore gone')).toBeNull();
+    await user.click(within(dialog).getByLabelText('Restore shop'));
+    const ok = within(dialog).getByRole('button', { name: 'Recreate' }) as HTMLButtonElement;
+    expect(ok.disabled).toBe(true);
+    await user.type(within(dialog).getByLabelText('Type Shop to confirm'), 'Shop');
+    await waitFor(() => expect(ok.disabled).toBe(false));
+    await user.click(ok);
+    await waitFor(() => expect(api.recreateDatabase).toHaveBeenCalledWith(1, 'Shop', [4]));
+  });
+
+  it('offers no Recreate for Redis, which keeps no Backups', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, engine: 'redis', status: 'volume_missing' });
+    renderPage();
+    expect(await screen.findByText('The data volume is gone')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Recreate and restore…' })).toBeNull();
   });
 
   it('applies new settings only when the Admin asks', async () => {

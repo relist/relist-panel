@@ -34,6 +34,9 @@ type Dumper interface {
 	// ReplaceSQL drops and recreates target. prev is InspectSQL's output
 	// ("" = the target is new).
 	ReplaceSQL(target, prev string) string
+	// AccessSQL prints one line "<user>\t<level>" for each login user with
+	// access to target: the Users tab's rows for that database.
+	AccessSQL(target string) string
 	// NewSQL creates target as a new database the way a Backup's state says
 	// (ADR-0050): from is the owner (Postgres, restricted like Create
 	// database) or "<charset>\t<collation>" (MySQL, MariaDB).
@@ -176,6 +179,11 @@ func (pgDumper) ReplaceSQL(target, prev string) string {
 	return out
 }
 
+// AccessSQL wraps the Users tab's access query, for one database.
+func (pgDumper) AccessSQL(target string) string {
+	return "SELECT x.u || E'\\t' || x.l FROM (" + pgAccounts{}.AccessQuery() + ") AS x(u, d, l) WHERE x.d = " + pgLit(target) + ";"
+}
+
 // NewSQL creates target owned by owner ("" = postgres), restricted like
 // Create database: only the owner and those granted CONNECT may connect.
 func (pgDumper) NewSQL(target, owner string) string {
@@ -310,6 +318,12 @@ func (mysqlDumper) ReplaceSQL(target, prev string) string {
 		out += " CHARACTER SET " + cs + " COLLATE " + coll
 	}
 	return out + ";\n"
+}
+
+// AccessSQL wraps the Users tab's access query, for one database; mysql -N
+// prints its two columns with a tab between them.
+func (mysqlDumper) AccessSQL(target string) string {
+	return "SELECT y.u, y.lvl FROM (" + myAccounts{}.AccessQuery() + ") AS y WHERE y.db = " + myLit(target) + ";"
 }
 
 // NewSQL creates target with the character set and collation of from.
