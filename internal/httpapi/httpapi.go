@@ -362,6 +362,11 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 		defer worker.Done()
 		auditLog.RunRetention(ctx)
 	}()
+	worker.Add(1)
+	go func() {
+		defer worker.Done()
+		authService.RunSessionCleanup(ctx)
+	}()
 	if traefikApply != nil {
 		traefikconfig.NewService(traefikApply).RegisterRoutes(mux)
 		if err := traefikApply.Resume(ctx); err != nil {

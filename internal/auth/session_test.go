@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"testing"
 	"time"
@@ -181,5 +182,57 @@ func TestSessionCookieLifetime(t *testing.T) {
 	}
 	if cookie.Expires.Unix() != expires {
 		t.Fatalf("cookie Expires = %d, row expires_at = %d", cookie.Expires.Unix(), expires)
+	}
+}
+
+func (f *userFixture) seedSession(t *testing.T, hash string, expiresAt, lastSeen time.Time) {
+	t.Helper()
+	if _, err := f.db.Exec(
+		"INSERT INTO sessions (token_hash, user_id, expires_at, created_at, last_seen_at) VALUES (?, 1, ?, ?, ?)",
+		hash, expiresAt.Unix(), f.now.Add(-time.Hour).Unix(), lastSeen.Unix(),
+	); err != nil {
+		t.Fatalf("seed session %s: %v", hash, err)
+	}
+}
+
+func TestPruneSessionsDeletesOnlyDeadRows(t *testing.T) {
+	f := newUserFixture(t)
+	now := f.now
+	f.seedSession(t, "live", now.Add(time.Hour), now)
+	f.seedSession(t, "idle-dead", now.Add(time.Hour), now.Add(-24*time.Hour))
+	f.seedSession(t, "capped-dead", now, now)
+	f.seedSession(t, "edge-live", now.Add(time.Second), now.Add(-24*time.Hour+time.Second))
+
+	n, err := f.service.PruneSessions(context.Background())
+	if err != nil || n != 2 {
+		t.Fatalf("PruneSessions = %d, %v; want 2", n, err)
+	}
+	if got := f.count(t, "SELECT COUNT(*) FROM sessions WHERE token_hash IN ('live', 'edge-live')"); got != 2 {
+		t.Fatalf("live rows left = %d, want 2", got)
+	}
+	if got := f.count(t, "SELECT COUNT(*) FROM sessions"); got != 2 {
+		t.Fatalf("rows left = %d, want 2", got)
+	}
+}
+
+func TestRunSessionCleanupPrunesOnStart(t *testing.T) {
+	f := newUserFixture(t)
+	f.seedSession(t, "idle-dead", f.now.Add(time.Hour), f.now.Add(-25*time.Hour))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		f.service.RunSessionCleanup(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for f.count(t, "SELECT COUNT(*) FROM sessions") != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the dead session was not pruned on start")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

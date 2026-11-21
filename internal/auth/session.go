@@ -150,3 +150,36 @@ func revokeOtherSessions(ctx context.Context, tx *sql.Tx, adminID int64, keepHas
 	)
 	return err
 }
+
+// PruneSessions deletes every dead session, capped or idle, and answers how
+// many it deleted.
+func (s *Service) PruneSessions(ctx context.Context) (int64, error) {
+	now := s.now().UTC()
+	result, err := s.db.ExecContext(ctx,
+		"DELETE FROM sessions WHERE expires_at <= ? OR last_seen_at <= ?",
+		now.Unix(), now.Add(-sessionIdleTimeout).Unix(),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// RunSessionCleanup prunes dead sessions at once, then every
+// sessionCleanupInterval, until ctx is done.
+func (s *Service) RunSessionCleanup(ctx context.Context) {
+	ticker := time.NewTicker(sessionCleanupInterval)
+	defer ticker.Stop()
+	for {
+		if n, err := s.PruneSessions(ctx); err != nil {
+			log.Printf("auth: prune sessions: %v", err)
+		} else if n > 0 {
+			log.Printf("auth: pruned %d dead sessions", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}

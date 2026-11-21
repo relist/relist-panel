@@ -34,6 +34,9 @@ const (
 	// sessionTouchInterval is the most often a session's last_seen_at is
 	// written, so busy pages do not write the database on every request.
 	sessionTouchInterval = 10 * time.Minute
+	// sessionCleanupInterval is how often RunSessionCleanup deletes dead
+	// sessions.
+	sessionCleanupInterval = time.Hour
 )
 
 var (
