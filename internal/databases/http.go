@@ -38,6 +38,16 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/databases/{id}/update-image", a.updateImage)
 	mux.HandleFunc("POST /api/databases/{id}/apply-settings", a.action(a.s.ApplySettings))
 	mux.HandleFunc("GET /api/databases/{id}/logical-databases", a.logicalDatabases)
+	mux.HandleFunc("GET /api/databases/{id}/logical-databases/details", a.logicalDetails)
+	mux.HandleFunc("POST /api/databases/{id}/logical-databases", a.createLogical)
+	mux.HandleFunc("POST /api/databases/{id}/logical-databases/{name}/restrict", a.restrictLogical)
+	mux.HandleFunc("DELETE /api/databases/{id}/logical-databases/{name}", a.dropLogical)
+	mux.HandleFunc("GET /api/databases/{id}/users", a.listUsers)
+	mux.HandleFunc("POST /api/databases/{id}/users", a.createUser)
+	mux.HandleFunc("PUT /api/databases/{id}/users/{name}/access", a.setUserAccess)
+	mux.HandleFunc("POST /api/databases/{id}/users/{name}/reset-password", a.resetUserPassword)
+	mux.HandleFunc("DELETE /api/databases/{id}/users/{name}", a.deleteUser)
+	mux.HandleFunc("POST /api/databases/{id}/reset-password", a.resetSuperuser)
 	mux.HandleFunc("GET /api/databases/{id}/backups", a.listBackups)
 	mux.HandleFunc("POST /api/databases/{id}/backups", a.startBackup)
 	mux.HandleFunc("GET /api/databases/{id}/backups/{backupID}/download", a.downloadBackup)
@@ -276,6 +286,9 @@ func (a *API) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// credentials answers with the superuser's password, or with a managed user's
+// when ?user= names one; ?database= picks the database in the URL (the
+// engine's default otherwise). Either read is audited as a secret read.
 func (a *API) credentials(w http.ResponseWriter, r *http.Request) {
 	n, ok := id(w, r)
 	if !ok {
@@ -294,15 +307,32 @@ func (a *API) credentials(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	user, password, database := eng.User(), d.Password, eng.DefaultDatabase()
+	if want := r.URL.Query().Get("user"); want != "" && want != eng.User() {
+		if db := r.URL.Query().Get("database"); db != "" {
+			if !targetPattern.MatchString(db) {
+				writeJSONError(w, http.StatusUnprocessableEntity, ErrBadTarget.Error())
+				return
+			}
+			database = db
+		}
+		pw, err := a.s.UserCredentials(r.Context(), n, want)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		user, password = want, pw
+	}
 	audit.Target(r.Context(), d.Name)
-	audit.SecretRead(r.Context(), []string{"password"})
-	url := eng.URL(ContainerName(d.ID), d.Password, eng.DefaultDatabase())
+	audit.Detail(r.Context(), "user", user)
+	audit.Emit(r.Context(), "secret.read", map[string]any{"keys": []string{"password"}, "user": user})
+	url := eng.UserURL(ContainerName(d.ID), user, password, database)
 	readable := ""
 	if alias := Alias(d.Slug); alias != "" {
-		readable = eng.URL(alias, d.Password, eng.DefaultDatabase())
+		readable = eng.UserURL(alias, user, password, database)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
-		"password": d.Password, "url": url, "urlReadable": readable, "env": "DATABASE_URL=" + url,
+		"user": user, "password": password, "url": url, "urlReadable": readable, "env": "DATABASE_URL=" + url,
 	})
 }
 
@@ -341,9 +371,28 @@ func writeError(w http.ResponseWriter, err error) {
 	var unknownLogical ErrUnknownLogical
 	var forbidden ErrForbiddenStatement
 	var invalid ErrInvalidSchedule
+	var fullOnSuper ErrFullOnSuperuserDB
+	var reserved ErrReservedUser
+	var ownerAccess ErrOwnerAccess
+	var protected ErrProtectedDatabase
+	var userOwns ErrUserOwns
+	var userOwnsIn ErrUserOwnsIn
+	var userExists ErrUserExists
+	var dbExists ErrDatabaseExists
+	var unknownUser ErrUnknownUser
+	var admin adminError
 	switch {
-	case errors.As(err, &invalid):
+	case errors.As(err, &invalid), errors.As(err, &fullOnSuper), errors.As(err, &reserved), errors.As(err, &ownerAccess),
+		errors.As(err, &protected), errors.Is(err, ErrBadUserName):
 		writeJSONError(w, http.StatusUnprocessableEntity, err.Error())
+	case errors.As(err, &userOwns), errors.As(err, &userOwnsIn), errors.As(err, &userExists), errors.As(err, &dbExists), errors.Is(err, ErrPendingPassword), errors.Is(err, ErrUserNotManaged):
+		writeJSONError(w, http.StatusConflict, err.Error())
+	case errors.As(err, &unknownUser):
+		writeJSONError(w, http.StatusNotFound, err.Error())
+	case errors.As(err, &admin):
+		writeJSONError(w, http.StatusBadGateway, err.Error())
+	case errors.Is(err, ErrBadAccess):
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrInvalidName), errors.Is(err, ErrUnknownEngine), errors.Is(err, ErrUnknownVersion), errors.Is(err, ErrConfirm), errors.Is(err, ErrInvalidLimits),
 		errors.Is(err, ErrNoBackups), errors.Is(err, ErrNoScope), errors.As(err, &unknownLogical),
 		errors.Is(err, ErrUnsafeName), errors.Is(err, ErrBadTarget), errors.Is(err, ErrNothingToBackUp), errors.Is(err, ErrNotRestorable),

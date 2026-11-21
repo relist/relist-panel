@@ -58,8 +58,14 @@ A Postgres, MySQL, MariaDB or Redis server the panel runs host-wide in its own c
 **Engine**:
 The kind of server a Database runs (postgres, mysql, mariadb, redis), with the versions, settings and tools the panel offers for it. _Avoid_: Type, Driver (the driver is the code).
 
+**Managed user**:
+A login user of a Database whose password the panel stores, because it created or reset the user (ADR-0044). A user made outside the panel is not managed until its password is reset. _Avoid_: Panel user (that is a person who signs in to the panel).
+
+**Access**:
+What a user may do in one logical database: None, Read-only or Full, set per user per logical database on the Users tab (ADR-0044). _Avoid_: Permission, Role (a Postgres role is the engine's word for a user or group).
+
 **Backup**:
-One gzipped plain-SQL dump of one logical database of a Database; never users or roles. It is a file kept on the panel under `.databases/<id>/backups/` with its sha256, made by `docker exec` in the Database's own container. Its trigger is manual, scheduled, `pre_restore` or `pre_update`. Redis has none. _Avoid_: Snapshot, Export (a Backup is a file the panel keeps, not a volume copy).
+One gzipped plain-SQL dump of one logical database of a Database; never users or roles. It is a file kept on the panel under `.databases/<id>/backups/` with its sha256, made by `docker exec` in the Database's own container. Its trigger is manual, scheduled, `pre_restore`, `pre_update` or `pre_drop`. Redis has none. _Avoid_: Snapshot, Export (a Backup is a file the panel keeps, not a volume copy).
 
 **All databases / selected databases**:
 What a backup run covers; a run makes one Backup per logical database.
@@ -68,7 +74,7 @@ What a backup run covers; a run makes one Backup per logical database.
 A named, host-wide off-site store that a Database's schedule copies its scheduled Backups to, managed on Data → Backup destinations: an S3-compatible bucket (AWS S3, Cloudflare R2, Backblaze B2, MinIO) or an SFTP server. Its secret (S3 secret access key, SFTP password) stays in the panel database and is never returned (ADR-0040); an SFTP destination trusts the server's host key on its first successful Test (ADR-0042). _Avoid_: Remote storage, Bucket (the bucket is only part of a destination).
 
 **Rotation**:
-The rule that deletes a Database's old scheduled Backups, locally and in its Backup destination, keeping the last N or those from the last X days per logical database; the newest successful Backup of each is always kept. Manual and `pre_restore` Backups are never rotated.
+The rule that deletes a Database's old scheduled Backups, locally and in its Backup destination, keeping the last N or those from the last X days per logical database; the newest successful Backup of each is always kept. Manual, `pre_restore`, `pre_update` and `pre_drop` Backups are never rotated.
 
 **Pin**:
 A mark on one scheduled Backup that keeps Rotation from deleting it.

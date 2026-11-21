@@ -180,3 +180,38 @@ func (s *Store) DeleteSchedule(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM database_backup_schedules WHERE database_id = ?`, id)
 	return err
 }
+
+// RemoveScheduledDatabase takes a dropped logical database out of the named
+// list of Database id's schedule, so a later run does not fail with "no such
+// database". A schedule that covers all databases, or no schedule, is left
+// alone.
+func (s *Store) RemoveScheduledDatabase(ctx context.Context, databaseID int64, name string) error {
+	var all bool
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT all_databases, databases FROM database_backup_schedules WHERE database_id = ?`, databaseID).Scan(&all, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if all {
+		return nil
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(raw), &names); err != nil {
+		return err
+	}
+	kept := make([]string, 0, len(names))
+	for _, n := range names {
+		if n != name {
+			kept = append(kept, n)
+		}
+	}
+	if len(kept) == len(names) {
+		return nil
+	}
+	out, _ := json.Marshal(kept)
+	_, err = s.db.ExecContext(ctx, `UPDATE database_backup_schedules SET databases = ? WHERE database_id = ?`, string(out), databaseID)
+	return err
+}

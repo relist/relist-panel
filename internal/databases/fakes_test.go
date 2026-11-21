@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"relist-panel/internal/dbquery"
 )
 
 // fakeHost is an in-memory Host. It records every call as a string, keeps
@@ -21,6 +23,9 @@ type fakeHost struct {
 	images     map[string]string // ref -> image ID after a pull
 	failOn     map[string]error  // call prefix -> error
 	logs       string
+	// onCreate, when set, runs before each Create (outside the lock), so a
+	// test can hold a recreate half-way.
+	onCreate func()
 
 	// Exec scripts: the first script whose prefix starts the joined command
 	// answers; an unscripted command exits 0 with no output.
@@ -137,6 +142,12 @@ func (f *fakeHost) VolumeExists(_ context.Context, name string) (bool, error) {
 }
 
 func (f *fakeHost) Create(_ context.Context, spec ContainerSpec) error {
+	f.mu.Lock()
+	hook := f.onCreate
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.record("create " + spec.Name); err != nil {
@@ -270,4 +281,100 @@ func (f *fakeHost) Exec(_ context.Context, name string, req ExecRequest) (int, e
 		return 0, nil
 	}
 	return fn(req)
+}
+
+// adminCall is one Exec on the fake Admin.
+type adminCall struct {
+	Database string
+	Stmts    []string
+}
+
+// fakeAdmin is an in-memory Admin. It records every Exec, answers Rows from a
+// map (keyed "<database>\x00<query>", then "<query>"), and answers Ping by
+// the password it was given.
+type fakeAdmin struct {
+	mu    sync.Mutex
+	execs []adminCall
+	rows  map[string][][]string
+	// execErr, when set, decides each Exec's error before it is recorded as
+	// done; the call is recorded either way.
+	execErr func(database string, stmts []string) error
+	// pingOK says which passwords log in; any other gets pingDefault.
+	pingOK      map[string]bool
+	pingDefault bool
+	pings       []string
+	redisSet    []string
+	redisSetErr error
+	targets     []dbquery.Target
+}
+
+func newFakeAdmin() *fakeAdmin {
+	return &fakeAdmin{rows: map[string][][]string{}, pingOK: map[string]bool{}}
+}
+
+func (f *fakeAdmin) Exec(_ context.Context, t dbquery.Target, _, database string, stmts []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.execs = append(f.execs, adminCall{database, slices.Clone(stmts)})
+	f.targets = append(f.targets, t)
+	if f.execErr != nil {
+		return f.execErr(database, stmts)
+	}
+	return nil
+}
+
+func (f *fakeAdmin) Rows(_ context.Context, _ dbquery.Target, _, database, query string) ([][]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r, ok := f.rows[database+"\x00"+query]; ok {
+		return r, nil
+	}
+	return f.rows[query], nil
+}
+
+func (f *fakeAdmin) Ping(_ context.Context, t dbquery.Target, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pings = append(f.pings, t.Password)
+	if ok, known := f.pingOK[t.Password]; (known && !ok) || (!known && !f.pingDefault) {
+		return errors.New("password authentication failed")
+	}
+	return nil
+}
+
+func (f *fakeAdmin) SetRedisPassword(_ context.Context, _ dbquery.Target, password string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.redisSet = append(f.redisSet, password)
+	return f.redisSetErr
+}
+
+// calls returns the recorded Execs.
+func (f *fakeAdmin) calls() []adminCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.execs)
+}
+
+// stmts is every executed statement in order, without the database.
+func (f *fakeAdmin) stmts() []string {
+	var out []string
+	for _, c := range f.calls() {
+		out = append(out, c.Stmts...)
+	}
+	return out
+}
+
+// answer sets the rows a query returns on every database.
+func (f *fakeAdmin) answer(query string, rows [][]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows[query] = rows
+}
+
+// answerOn sets the rows a query returns on one database.
+func (f *fakeAdmin) answerOn(database, query string, rows [][]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows[database+"\x00"+query] = rows
 }

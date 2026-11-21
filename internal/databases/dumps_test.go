@@ -65,7 +65,7 @@ func TestDumperCommands(t *testing.T) {
 
 func TestDumperSQL(t *testing.T) {
 	pg, _ := DumperFor("postgres")
-	if got, want := pg.InspectSQL(`o'b"x`), "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'o''b\"x';"; got != want {
+	if got, want := pg.InspectSQL(`o'b"x`), `SELECT pg_get_userbyid(datdba)::text || E'\t' || coalesce(datacl::text, '') FROM pg_database WHERE datname = 'o''b"x';`; got != want {
 		t.Errorf("pg inspect = %q", got)
 	}
 	if got, want := pg.ReplaceSQL("app", "appuser"),
@@ -73,7 +73,7 @@ func TestDumperSQL(t *testing.T) {
 		t.Errorf("pg replace = %q", got)
 	}
 	if got, want := pg.ReplaceSQL(`a"b`, ""),
-		"DROP DATABASE IF EXISTS \"a\"\"b\" WITH (FORCE);\nCREATE DATABASE \"a\"\"b\" TEMPLATE template0 OWNER \"postgres\";\n"; got != want {
+		"DROP DATABASE IF EXISTS \"a\"\"b\" WITH (FORCE);\nCREATE DATABASE \"a\"\"b\" TEMPLATE template0 OWNER \"postgres\";\nREVOKE CONNECT ON DATABASE \"a\"\"b\" FROM PUBLIC;\n"; got != want {
 		t.Errorf("pg replace new = %q", got)
 	}
 	if got := pg.ReplaceSQL("app", `we"ird`); !strings.Contains(got, `OWNER "we""ird";`) {

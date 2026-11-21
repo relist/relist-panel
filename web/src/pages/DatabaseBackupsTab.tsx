@@ -9,7 +9,7 @@ import { DatabaseScheduleCard } from '../components/DatabaseScheduleCard';
 import { RelativeTime } from '../components/primitives';
 import { api } from '../data/api';
 import type { BackupRequest, Database, DatabaseBackup, DatabaseRestore, JobStatus } from '../data/types';
-import { backupsPollInterval, canBackUp, formatBytes, restoreWarning, triggerLabel, validTargetName } from './databases-view';
+import { backupsPollInterval, canBackUp, formatBytes, missingRole, restoreWarning, triggerLabel, validTargetName } from './databases-view';
 
 const { Text } = Typography;
 
@@ -41,12 +41,35 @@ const monospace = {
 } as const;
 
 /** The error and the log of a failed Backup or restore. */
-function FailureDetail({ error, log }: { error: string; log: string }) {
+function FailureDetail({ error, log, onOpenUsers }: { error: string; log: string; onOpenUsers?: () => void }) {
+  // A restore whose objects belong to a user the target lacks: Backups carry no users.
+  const role = missingRole(`${error}\n${log}`);
   return (
-    <pre style={monospace}>
-      {error}
-      {log ? `\n\n${log}` : ''}
-    </pre>
+    <>
+      {role && (
+        <Alert
+          showIcon
+          style={{ marginBottom: 8 }}
+          title={
+            <a
+              href="?tab=users"
+              onClick={(event) => {
+                event.preventDefault();
+                onOpenUsers?.();
+              }}
+            >
+              Create the user {role} on the Users tab
+            </a>
+          }
+          description="Backups carry no users. Create it, then restore again."
+          type="warning"
+        />
+      )}
+      <pre style={monospace}>
+        {error}
+        {log ? `\n\n${log}` : ''}
+      </pre>
+    </>
   );
 }
 
@@ -83,7 +106,7 @@ type RestoreSource = { backup: DatabaseBackup; kind: 'backup' } | { file: File; 
  * uploaded file) and delete. SQL engines only. A deleted Database (a
  * tombstone) keeps only this tab, for downloading and deleting its files.
  */
-export function DatabaseBackupsTab({ db }: { db: Database }) {
+export function DatabaseBackupsTab({ db, onOpenUsers }: { db: Database; onOpenUsers?: () => void }) {
   const { message } = App.useApp();
   const key = `/api/databases/${db.id}/backups`;
   const { data, error, mutate } = useSWR(
@@ -386,7 +409,7 @@ export function DatabaseBackupsTab({ db }: { db: Database }) {
             columns={restoreColumns}
             dataSource={data?.restores ?? []}
             expandable={{
-              expandedRowRender: (row) => <FailureDetail error={row.error} log={row.log} />,
+              expandedRowRender: (row) => <FailureDetail error={row.error} log={row.log} onOpenUsers={onOpenUsers} />,
               rowExpandable: (row) => row.status === 'failed',
             }}
             locale={{ emptyText: 'No restores yet.' }}

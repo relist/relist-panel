@@ -33,6 +33,9 @@ type Engine interface {
 	Cmd() []string                // nil = image default
 	Healthcheck() []string        // Docker Test array
 	URL(host, password, database string) string
+	// UserURL is URL for another login user. Redis has no users, so it keeps
+	// the empty user.
+	UserURL(host, user, password, database string) string
 }
 
 // Engines are the drivers, keyed by Name().
@@ -101,6 +104,10 @@ func (s spec) Cmd() []string                { return append([]string(nil), s.cmd
 func (s spec) Healthcheck() []string        { return []string{"CMD-SHELL", s.healthcheck} }
 
 func (s spec) URL(host, password, database string) string {
+	return s.UserURL(host, s.user, password, database)
+}
+
+func (s spec) UserURL(host, user, password, database string) string {
 	u := url.URL{
 		Scheme: s.scheme,
 		Host:   net.JoinHostPort(host, strconv.Itoa(s.port)),
@@ -108,7 +115,7 @@ func (s spec) URL(host, password, database string) string {
 	if s.name == "redis" {
 		u.User = url.UserPassword("", password)
 	} else {
-		u.User = url.UserPassword(s.user, password)
+		u.User = url.UserPassword(user, password)
 	}
 	if database != "" {
 		u.Path = "/" + database

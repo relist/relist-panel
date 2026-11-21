@@ -115,17 +115,145 @@ func (pgDumper) AdminCmd() []string {
 
 func (pgDumper) Env(password string) []string { return []string{"PGPASSWORD=" + password} }
 
+// InspectSQL prints one line "<owner>\t<datacl>": the ACL is empty while the
+// database has the default one. coalesce keeps a NULL ACL from turning the
+// whole line into NULL, which would read as "no such database".
 func (pgDumper) InspectSQL(target string) string {
-	return "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = " + pgLit(target) + ";"
+	return `SELECT pg_get_userbyid(datdba)::text || E'\t' || coalesce(datacl::text, '') FROM pg_database WHERE datname = ` + pgLit(target) + ";"
 }
 
+// ReplaceSQL drops and recreates target with its owner, and gives the new
+// database its ACL back: a one-database pg_dump carries none, so without it a
+// restore would reopen a restricted database to every user and drop the
+// Read-only users' CONNECT. A new target (prev "") is restricted like Create
+// database. prev is the trimmed InspectSQL line, so "app" and "app\t" both
+// mean the default ACL.
 func (pgDumper) ReplaceSQL(target, prev string) string {
-	owner := strings.TrimSpace(prev)
+	ownerPart, acl, _ := strings.Cut(prev, "\t")
+	owner := strings.TrimSpace(ownerPart)
 	if owner == "" {
 		owner = "postgres"
 	}
-	return "DROP DATABASE IF EXISTS " + pgIdent(target) + " WITH (FORCE);\n" +
-		"CREATE DATABASE " + pgIdent(target) + " TEMPLATE template0 OWNER " + pgIdent(owner) + ";\n"
+	t := pgIdent(target)
+	out := "DROP DATABASE IF EXISTS " + t + " WITH (FORCE);\n" +
+		"CREATE DATABASE " + t + " TEMPLATE template0 OWNER " + pgIdent(owner) + ";\n"
+	if strings.TrimSpace(prev) == "" {
+		return out + "REVOKE CONNECT ON DATABASE " + t + " FROM PUBLIC;\n"
+	}
+	entries := parseDatACL(strings.TrimSpace(acl))
+	if len(entries) == 0 {
+		return out
+	}
+	out += "REVOKE ALL ON DATABASE " + t + " FROM PUBLIC;\n"
+	for _, e := range entries {
+		if e.Grantee == owner {
+			continue
+		}
+		var privs []string
+		for _, c := range e.Privs {
+			switch c {
+			case 'c':
+				privs = append(privs, "CONNECT")
+			case 'C':
+				privs = append(privs, "CREATE")
+			case 'T':
+				privs = append(privs, "TEMPORARY")
+			}
+		}
+		if len(privs) == 0 {
+			continue
+		}
+		to := "PUBLIC"
+		if e.Grantee != "" {
+			to = pgIdent(e.Grantee)
+		}
+		out += "GRANT " + strings.Join(privs, ", ") + " ON DATABASE " + t + " TO " + to + ";\n"
+	}
+	return out
+}
+
+// aclEntry is one grant of a database ACL; an empty Grantee is PUBLIC.
+type aclEntry struct{ Grantee, Privs string }
+
+// parseDatACL reads the text of a datacl (aclitem[]): {=Tc/o,"\"a-b\"=c/o"}.
+// It undoes two layers: the array quotes an element that holds a quote with
+// backslashes, and an aclitem quotes a role name that is not plain with "" for
+// a quote. An element that is not array-quoted is read as the aclitem it is.
+func parseDatACL(acl string) []aclEntry {
+	acl = strings.TrimSpace(acl)
+	acl = strings.TrimPrefix(acl, "{")
+	acl = strings.TrimSuffix(acl, "}")
+	var elems []string
+	var cur strings.Builder
+	inQuote := false
+	for i := 0; i < len(acl); i++ {
+		c := acl[i]
+		switch {
+		case c == '\\' && inQuote && i+1 < len(acl):
+			cur.WriteByte(c)
+			i++
+			cur.WriteByte(acl[i])
+		case c == '"':
+			inQuote = !inQuote
+			cur.WriteByte(c)
+		case c == ',' && !inQuote:
+			elems = append(elems, cur.String())
+			cur.Reset()
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	if cur.Len() > 0 {
+		elems = append(elems, cur.String())
+	}
+	var out []aclEntry
+	for _, el := range elems {
+		if len(el) >= 2 && el[0] == '"' && el[len(el)-1] == '"' {
+			var b strings.Builder
+			inner := el[1 : len(el)-1]
+			for i := 0; i < len(inner); i++ {
+				if inner[i] == '\\' && i+1 < len(inner) {
+					i++
+				}
+				b.WriteByte(inner[i])
+			}
+			el = b.String()
+		}
+		if e, ok := parseACLItem(el); ok {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// parseACLItem reads grantee=privs/grantor.
+func parseACLItem(item string) (aclEntry, bool) {
+	var grantee strings.Builder
+	i := 0
+	if strings.HasPrefix(item, `"`) {
+		i = 1
+		for ; i < len(item); i++ {
+			if item[i] == '"' {
+				if i+1 < len(item) && item[i+1] == '"' {
+					grantee.WriteByte('"')
+					i++
+					continue
+				}
+				i++
+				break
+			}
+			grantee.WriteByte(item[i])
+		}
+	} else {
+		for ; i < len(item) && item[i] != '='; i++ {
+			grantee.WriteByte(item[i])
+		}
+	}
+	if i >= len(item) || item[i] != '=' {
+		return aclEntry{}, false
+	}
+	privs, _, _ := strings.Cut(item[i+1:], "/")
+	return aclEntry{Grantee: grantee.String(), Privs: privs}, true
 }
 
 type mysqlDumper struct{ client, dump string }

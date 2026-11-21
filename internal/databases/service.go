@@ -61,6 +61,9 @@ type Deps struct {
 	// DirectAccess closes a Database's Direct accesses before it is deleted
 	// (nil = it has none).
 	DirectAccess DirectAccessCloser
+	// Admin runs the Databases and Users tabs' statements and the superuser
+	// reset as the superuser (nil = the real drivers).
+	Admin Admin
 }
 
 type CreateInput struct {
@@ -102,6 +105,10 @@ type Service struct {
 	// that stops answering would otherwise hold the job slot, and the
 	// host-wide scheduler with it, for ever.
 	uploadStall, remoteTimeout time.Duration
+	// pendingRetry is the wait between two tries to settle a pending
+	// superuser password, pendingTries how many tries there are.
+	pendingRetry time.Duration
+	pendingTries int
 }
 
 func New(d Deps) *Service {
@@ -111,8 +118,12 @@ func New(d Deps) *Service {
 	if d.Querier == nil {
 		d.Querier = engineQuerier{}
 	}
+	if d.Admin == nil {
+		d.Admin = engineAdmin{}
+	}
 	return &Service{d: d, locks: map[int64]*sync.Mutex{}, inflight: map[int64]bool{}, jobs: map[int64]string{}, jobsChanged: make(chan struct{}),
-		uploadStall: 5 * time.Minute, remoteTimeout: time.Minute}
+		uploadStall: 5 * time.Minute, remoteTimeout: time.Minute,
+		pendingRetry: 5 * time.Second, pendingTries: 24}
 }
 
 func (s *Service) locked(ctx context.Context) bool {
@@ -420,7 +431,7 @@ func (s *Service) opIdle(ctx context.Context, id int64, fn func(d Database) erro
 }
 
 func (s *Service) Start(ctx context.Context, id int64) error {
-	return s.opIdle(ctx, id, func(d Database) error {
+	err := s.opIdle(ctx, id, func(d Database) error {
 		if err := s.d.Store.SetDesired(ctx, id, DesiredRunning); err != nil {
 			return err
 		}
@@ -428,6 +439,14 @@ func (s *Service) Start(ctx context.Context, id int64) error {
 		_, err := s.reconcile(ctx, d)
 		return err
 	})
+	// An unsettled superuser password is settled once the container is up;
+	// that waits for it, so it runs after the lock is released.
+	if err == nil {
+		if d, gerr := s.d.Store.Get(ctx, id); gerr == nil && d.PendingPassword != "" {
+			s.goResolve(context.WithoutCancel(ctx), id)
+		}
+	}
+	return err
 }
 
 func (s *Service) Stop(ctx context.Context, id int64) error {
@@ -690,6 +709,9 @@ func (s *Service) view(ctx context.Context, d Database) View {
 	}
 	if Alias(d.Slug) == "" {
 		v.Warnings = append(v.Warnings, "No readable hostname: the name has no usable letters or digits, or is too long. Use the stable host.")
+	}
+	if d.PendingPassword != "" && v.Job != JobKindResetPassword {
+		v.Warnings = append(v.Warnings, pendingWarning)
 	}
 	spec, err := appliedSpec(d)
 	if err != nil {

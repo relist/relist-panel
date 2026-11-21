@@ -5,7 +5,10 @@ import {
   canBackUp,
   canRepair,
   formatBytes,
+  credentialsDatabase,
+  jobLabel,
   jobNotice,
+  missingRole,
   pollInterval,
   restoreWarning,
   validTargetName,
@@ -63,6 +66,7 @@ describe('backup labels', () => {
     expect(triggerLabel('manual')).toBe('Manual');
     expect(triggerLabel('pre_restore')).toBe('Before restore');
     expect(triggerLabel('pre_update')).toBe('Before update');
+    expect(triggerLabel('pre_drop')).toBe('Before drop');
   });
 });
 
@@ -116,5 +120,25 @@ describe('jobNotice', () => {
     expect(jobNotice('restore')).toContain('restore is running');
     expect(jobNotice('update_image')).toContain('image update');
     expect(jobNotice('')).toBe('');
+  });
+});
+
+describe('phase 7 helpers', () => {
+  it('names the new jobs', () => {
+    expect(jobLabel('drop_database')).toBe('Dropping a database');
+    expect(jobLabel('reset_password')).toBe('Resetting the password');
+    expect(jobNotice('reset_password')).toContain('restarted');
+    expect(jobNotice('drop_database')).toContain('backs up first');
+  });
+
+  it('finds the role a restore needs', () => {
+    expect(missingRole('ERROR:  role "app" does not exist')).toBe('app');
+    expect(missingRole('something else')).toBeUndefined();
+  });
+
+  it('picks the database a user connects to', () => {
+    expect(credentialsDatabase({ name: 'app', access: { app: 'full', web: 'read' } }, 'postgres')).toBe('app');
+    expect(credentialsDatabase({ name: 'reader', access: { web: 'read', api: 'none', abc: 'read' } }, 'postgres')).toBe('abc');
+    expect(credentialsDatabase({ name: 'x', access: { web: 'none' } }, 'postgres')).toBe('postgres');
   });
 });
