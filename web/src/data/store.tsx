@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
-import { api } from './api';
+import { api, onSessionLost } from './api';
 import type { AccessView, LoginResult, ProjectInput, SignedInUser } from './api';
 import type { Compose, ComposeDomains, DeploymentRequest, ComposeVariable, ComposePreview, EffectiveVariable, ServiceBindings, VariableSet, ComposeService, ComposeVolumes, Domain, DomainInput, EnvironmentVariable, HostMetrics, MetricWindow, OrphanVolume, Project, ServiceMetrics, VolumeListing, VolumeAccess, ZeroDowntimeService } from './types';
 import { findComposeLocation, findEnvironmentLocation, serviceFromFacts } from './types';
@@ -258,6 +258,24 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   // → the shell), so the provider settles it once on mount.
   useEffect(() => {
     void loadAuthStatus();
+  }, [loadAuthStatus]);
+
+  // A 401 from any request may mean the server ended the session (24 idle
+  // hours, the 7-day cap, an update). Re-read the status once, and RequireAuth
+  // sends the tab to sign-in if it is signed out. A 401 that is only a wrong
+  // password leaves the status signed in and changes nothing.
+  const recheckingAuth = useRef(false);
+  useEffect(() => {
+    onSessionLost(() => {
+      if (recheckingAuth.current) return;
+      recheckingAuth.current = true;
+      void loadAuthStatus()
+        .catch(() => undefined)
+        .finally(() => {
+          recheckingAuth.current = false;
+        });
+    });
+    return () => onSessionLost(undefined);
   }, [loadAuthStatus]);
 
   // ---- Projects and Environments ---------------------------------------------

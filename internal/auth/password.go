@@ -63,7 +63,7 @@ func (s *Service) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	adminID, token, err := s.currentSession(r)
+	adminID, keepHash, err := s.currentSession(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
@@ -139,7 +139,7 @@ func (s *Service) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
 	}
-	if err := revokeOtherSessions(r.Context(), tx, adminID, token); err != nil {
+	if err := revokeOtherSessions(r.Context(), tx, adminID, keepHash); err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
 	}

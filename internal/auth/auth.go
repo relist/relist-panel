@@ -25,8 +25,18 @@ import (
 
 const (
 	SessionCookieName = "relist_session"
-	sessionLifetime   = 30 * 24 * time.Hour
 	maxRequestBody    = 1 << 20
+
+	// A session ends sessionIdleTimeout after its last request or
+	// sessionMaxLifetime after sign-in, whichever comes first (ADR-0051).
+	sessionMaxLifetime = 7 * 24 * time.Hour
+	sessionIdleTimeout = 24 * time.Hour
+	// sessionTouchInterval is the most often a session's last_seen_at is
+	// written, so busy pages do not write the database on every request.
+	sessionTouchInterval = 10 * time.Minute
+	// sessionCleanupInterval is how often RunSessionCleanup deletes dead
+	// sessions.
+	sessionCleanupInterval = time.Hour
 )
 
 var (
@@ -425,24 +435,6 @@ func (s *Service) recordAudit(ctx context.Context, e audit.Event) {
 	}
 }
 
-// startSession creates a session for userID in the caller's transaction. The
-// caller sets the cookie once the transaction commits.
-func (s *Service) startSession(ctx context.Context, tx *sql.Tx, userID int64) (string, time.Time, error) {
-	now := s.now().UTC()
-	expiresAt := now.Add(sessionLifetime)
-	token, err := newSessionToken()
-	if err != nil {
-		return "", time.Time{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO sessions (token, user_id, expires_at, created_at)
-		VALUES (?, ?, ?, ?)
-	`, token, userID, expiresAt.Unix(), now.Unix()); err != nil {
-		return "", time.Time{}, err
-	}
-	return token, expiresAt, nil
-}
-
 func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 	if err := s.requireDatabase(); err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
@@ -450,7 +442,7 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if cookie, err := r.Cookie(SessionCookieName); err == nil && cookie.Value != "" {
-		if _, err := s.db.ExecContext(r.Context(), "DELETE FROM sessions WHERE token = ?", cookie.Value); err != nil {
+		if _, err := s.db.ExecContext(r.Context(), "DELETE FROM sessions WHERE token_hash = ?", HashSessionToken(cookie.Value)); err != nil {
 			writeError(w, http.StatusInternalServerError, "could not end the session")
 			return
 		}
@@ -478,23 +470,11 @@ func (s *Service) authenticated(r *http.Request) (User, bool, error) {
 	if err != nil || cookie.Value == "" {
 		return User{}, false, nil
 	}
-
-	var user User
-	var isAdmin bool
-	err = s.db.QueryRowContext(r.Context(), `
-		SELECT users.id, users.email, users.is_admin
-		FROM sessions
-		JOIN users ON users.id = sessions.user_id
-		WHERE sessions.token = ? AND sessions.expires_at > ? AND users.disabled_at IS NULL
-	`, cookie.Value, s.now().UTC().Unix()).Scan(&user.ID, &user.Email, &isAdmin)
-	if errors.Is(err, sql.ErrNoRows) {
-		return User{}, false, nil
-	}
-	if err != nil {
+	session, live, err := s.liveSession(r.Context(), cookie.Value)
+	if err != nil || !live {
 		return User{}, false, err
 	}
-	user.IsAdmin = isAdmin || user.ID == OwnerID
-	return user, true, nil
+	return session.user, true, nil
 }
 
 // insertAdmin adds the Owner (id 1) as the first User, or returns
@@ -634,14 +614,6 @@ func GeneratePassword() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
-func newSessionToken() (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", fmt.Errorf("generate session token: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(bytes), nil
-}
-
 func publicPath(path string) bool {
 	switch path {
 	case "/healthz", "/api/auth/status", "/api/auth/login", "/api/auth/logout":
@@ -657,38 +629,6 @@ func publicPath(path string) bool {
 	// any non-API path. The API namespace itself stays authenticated — `/api`
 	// included, so the bare form cannot hand back the public shell.
 	return path != "/api" && !strings.HasPrefix(path, "/api/")
-}
-
-func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expiresAt time.Time) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookieName,
-		Value:    token,
-		Path:     "/",
-		Expires:  expiresAt,
-		MaxAge:   int(sessionLifetime / time.Second),
-		HttpOnly: true,
-		Secure:   requestIsSecure(r),
-		SameSite: http.SameSiteLaxMode,
-	})
-}
-
-func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookieName,
-		Value:    "",
-		Path:     "/",
-		Expires:  time.Unix(1, 0).UTC(),
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   requestIsSecure(r),
-		SameSite: http.SameSiteLaxMode,
-	})
-}
-
-func clearSessionCookieIfPresent(w http.ResponseWriter, r *http.Request) {
-	if _, err := r.Cookie(SessionCookieName); err == nil {
-		clearSessionCookie(w, r)
-	}
 }
 
 func requestIsSecure(r *http.Request) bool {

@@ -35,8 +35,8 @@ func seedCLIAdmin(t *testing.T) {
 		t.Fatalf("seed admin: %v", err)
 	}
 	if _, err := db.Exec(`
-		INSERT INTO sessions (token, user_id, expires_at, created_at)
-		VALUES ('session-one', 1, 9999999999, 1), ('session-two', 1, 9999999999, 1)
+		INSERT INTO sessions (token_hash, user_id, expires_at, created_at, last_seen_at)
+		VALUES ('session-one', 1, 9999999999, 1, unixepoch()), ('session-two', 1, 9999999999, 1, unixepoch())
 	`); err != nil {
 		t.Fatalf("seed sessions: %v", err)
 	}

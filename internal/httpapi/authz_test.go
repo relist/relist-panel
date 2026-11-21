@@ -20,8 +20,8 @@ func signInAsUser(t *testing.T, server *testServer, id int64, email string, isAd
 	}
 	token := "session-" + email
 	if _, err := server.db.Exec(
-		"INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, 1)",
-		token, id, time.Now().Add(time.Hour).Unix(),
+		"INSERT INTO sessions (token_hash, user_id, expires_at, created_at, last_seen_at) VALUES (?, ?, ?, 1, ?)",
+		auth.HashSessionToken(token), id, time.Now().Add(time.Hour).Unix(), time.Now().Unix(),
 	); err != nil {
 		t.Fatalf("add session: %v", err)
 	}

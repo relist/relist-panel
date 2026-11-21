@@ -39,9 +39,9 @@ func seedResetAdmin(t *testing.T, db *sql.DB, totpSecret sql.NullString) {
 func seedResetSession(t *testing.T, db *sql.DB, token string) {
 	t.Helper()
 	if _, err := db.Exec(`
-		INSERT INTO sessions (token, user_id, expires_at, created_at)
-		VALUES (?, 1, ?, 1)
-	`, token, time.Now().Add(24*time.Hour).Unix()); err != nil {
+		INSERT INTO sessions (token_hash, user_id, expires_at, created_at, last_seen_at)
+		VALUES (?, 1, ?, 1, ?)
+	`, HashSessionToken(token), time.Now().Add(24*time.Hour).Unix(), time.Now().Unix()); err != nil {
 		t.Fatalf("seed session %q: %v", token, err)
 	}
 }

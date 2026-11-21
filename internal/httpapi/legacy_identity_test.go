@@ -61,6 +61,11 @@ func TestLegacyUpgradeKeepsDeploymentAndReusedParentNameGetsIndependentIdentity(
 	if err := composes.BackfillLegacyIdentities(context.Background(), server.db); err != nil {
 		t.Fatal(err)
 	}
+	// Re-running the session-hardening migration ends every session, as an
+	// upgrade does, so sign in again.
+	if code := loginAs(t, server, "correct horse battery staple"); code != http.StatusOK {
+		t.Fatalf("login after the upgrade = %d", code)
+	}
 	if oldContent, err := os.ReadFile(oldPath); err != nil || string(oldContent) != "services:\n  web:\n    image: legacy-image\n" {
 		t.Fatalf("upgrade altered legacy deployed files: %q, %v", oldContent, err)
 	}

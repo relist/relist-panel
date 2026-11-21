@@ -27,8 +27,8 @@ func TestOpenAndMigrateCreatesDatabaseAndRunsEmbeddedMigrations(t *testing.T) {
 	if err := db.QueryRow("SELECT version_id FROM goose_db_version WHERE is_applied = 1 ORDER BY id DESC LIMIT 1").Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 55 {
-		t.Fatalf("migration version = %d, want 55", version)
+	if version != 56 {
+		t.Fatalf("migration version = %d, want 56", version)
 	}
 
 	var one int
@@ -623,9 +623,9 @@ func TestUsersMigrationKeepsAdminAndSessions(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil || count != 1 {
 		t.Fatalf("users count = %d, %v", count, err)
 	}
-	var userID int64
-	if err := db.QueryRow("SELECT user_id FROM sessions WHERE token = 'tok'").Scan(&userID); err != nil || userID != 1 {
-		t.Fatalf("session user_id = %d, %v", userID, err)
+	// 00056 ends every session (session hardening), so none survive to latest.
+	if err := db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("sessions = %d, %v; want 0", count, err)
 	}
 	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name = 'admin_credentials'").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("admin_credentials still present: %d, %v", count, err)
@@ -734,5 +734,53 @@ func TestDatabaseGrantsTableIsDropped(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("database_grants still has %d schema objects", n)
+	}
+}
+
+func TestSessionHardeningMigrationEndsSessions(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "panel.db")+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	goose.SetBaseFS(migrations.FS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(db, ".", 55); err != nil {
+		t.Fatalf("migrate to 55: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO users (id, email, password_hash, is_admin, created_at) VALUES (1, 'admin@example.com', 'hash', 1, 100)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES ('raw', 1, 9999999999, 100)"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate 55 -> latest: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("sessions after migration = %d, %v; want 0", count, err)
+	}
+	columns := map[string]bool{}
+	rows, err := db.Query("SELECT name FROM pragma_table_info('sessions')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		columns[name] = true
+	}
+	if !columns["token_hash"] || !columns["last_seen_at"] || columns["token"] {
+		t.Fatalf("sessions columns = %v, want token_hash and last_seen_at without token", columns)
 	}
 }

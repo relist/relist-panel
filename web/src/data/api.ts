@@ -341,8 +341,22 @@ async function responseError(response: Response): Promise<string> {
   return errorMessage(response.status, await response.text().catch(() => ''));
 }
 
+let sessionLostListener: (() => void) | undefined;
+
+/**
+ * Sets what runs when a request answers 401. The store re-reads the auth
+ * status, so a session the server ended (24 idle hours, the 7-day cap, an
+ * update) sends the open tab to sign-in on its next request.
+ */
+export function onSessionLost(listener: (() => void) | undefined): void {
+  sessionLostListener = listener;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { credentials: 'same-origin', ...init });
+  if (response.status === 401) {
+    sessionLostListener?.();
+  }
   if (!response.ok) {
     const { message, field, body } = errorBody(response.status, await response.text().catch(() => ''));
     throw new ApiError(response.status, message, field, body);

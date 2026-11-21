@@ -391,8 +391,8 @@ func TestTwoFactorEnableAndDisableRevokeOtherSessions(t *testing.T) {
 	otherToken := "other-session-token"
 	now := time.Now()
 	if _, err := server.db.Exec(
-		"INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, 1, ?, ?)",
-		otherToken, now.Add(time.Hour).Unix(), now.Unix(),
+		"INSERT INTO sessions (token_hash, user_id, expires_at, created_at, last_seen_at) VALUES (?, 1, ?, ?, ?)",
+		auth.HashSessionToken(otherToken), now.Add(time.Hour).Unix(), now.Unix(), now.Unix(),
 	); err != nil {
 		t.Fatalf("insert other session: %v", err)
 	}

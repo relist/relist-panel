@@ -80,8 +80,8 @@ func (f *userFixture) addUser(t *testing.T, id int64, email string, isAdmin, inv
 func (f *userFixture) addSession(t *testing.T, userID int64, token string) string {
 	t.Helper()
 	if _, err := f.db.Exec(
-		"INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
-		token, userID, f.now.Add(time.Hour).Unix(), f.now.Unix(),
+		"INSERT INTO sessions (token_hash, user_id, expires_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
+		HashSessionToken(token), userID, f.now.Add(time.Hour).Unix(), f.now.Unix(), f.now.Unix(),
 	); err != nil {
 		t.Fatalf("add session: %v", err)
 	}

@@ -122,7 +122,7 @@ func TestResetTurnsTwoFactorOffAndEndsOtherSessions(t *testing.T) {
 	if n := f.count(t, "SELECT COUNT(*) FROM sessions WHERE user_id = 2"); n != 1 {
 		t.Fatalf("sessions = %d, want only the new one", n)
 	}
-	if n := f.count(t, "SELECT COUNT(*) FROM sessions WHERE token = ?", sessionCookie(t, response)); n != 1 {
+	if n := f.count(t, "SELECT COUNT(*) FROM sessions WHERE token_hash = ?", HashSessionToken(sessionCookie(t, response))); n != 1 {
 		t.Fatal("the remaining session is not the new one")
 	}
 }

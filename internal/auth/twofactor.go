@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"crypto/subtle"
 	"database/sql"
 	"errors"
@@ -61,40 +60,6 @@ func verifyCode(secret, code string, now time.Time, lastStep sql.NullInt64) (int
 		return step, true
 	}
 	return 0, false
-}
-
-// currentSession resolves the request's session cookie to the User it belongs
-// to and returns the token that must be kept when other sessions are revoked.
-func (s *Service) currentSession(r *http.Request) (int64, string, error) {
-	cookie, err := r.Cookie(SessionCookieName)
-	if err != nil || cookie.Value == "" {
-		return 0, "", errAuthenticationRequired
-	}
-
-	var adminID int64
-	err = s.db.QueryRowContext(r.Context(), `
-		SELECT user_id
-		FROM sessions
-		WHERE token = ? AND expires_at > ?
-	`, cookie.Value, s.now().UTC().Unix()).Scan(&adminID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, "", errAuthenticationRequired
-	}
-	if err != nil {
-		return 0, "", err
-	}
-	return adminID, cookie.Value, nil
-}
-
-// revokeOtherSessions deletes every session of adminID except keepToken. It
-// runs in the caller's transaction so the revocation commits with the
-// two-factor change it accompanies.
-func revokeOtherSessions(ctx context.Context, tx *sql.Tx, adminID int64, keepToken string) error {
-	_, err := tx.ExecContext(ctx,
-		"DELETE FROM sessions WHERE user_id = ? AND token <> ?",
-		adminID, keepToken,
-	)
-	return err
 }
 
 func (s *Service) account(w http.ResponseWriter, r *http.Request) {
@@ -236,7 +201,7 @@ func (s *Service) twoFactorEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	adminID, token, err := s.currentSession(r)
+	adminID, keepHash, err := s.currentSession(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
@@ -300,7 +265,7 @@ func (s *Service) twoFactorEnable(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
 	}
-	if err := revokeOtherSessions(r.Context(), tx, adminID, token); err != nil {
+	if err := revokeOtherSessions(r.Context(), tx, adminID, keepHash); err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
 	}
@@ -324,7 +289,7 @@ func (s *Service) twoFactorDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	adminID, token, err := s.currentSession(r)
+	adminID, keepHash, err := s.currentSession(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
@@ -400,7 +365,7 @@ func (s *Service) twoFactorDisable(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
 	}
-	if err := revokeOtherSessions(r.Context(), tx, adminID, token); err != nil {
+	if err := revokeOtherSessions(r.Context(), tx, adminID, keepHash); err != nil {
 		writeError(w, http.StatusInternalServerError, "authentication is temporarily unavailable")
 		return
 	}
