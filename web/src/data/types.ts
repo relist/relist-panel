@@ -1188,7 +1188,12 @@ export type DatabaseStatus =
   | 'stopped'
   | 'drift'
   | 'error'
-  | 'volume_missing';
+  | 'volume_missing'
+  /** A tombstone: deleted, with its Backups kept. */
+  | 'deleted';
+
+/** The job running on a Database; while one runs, lifecycle actions answer 409. */
+export type DatabaseJob = '' | 'backup' | 'restore' | 'update_image';
 
 export interface Database {
   id: number;
@@ -1214,6 +1219,9 @@ export interface Database {
   user: string;
   defaultDatabase: string;
   createdAt: string;
+  job: DatabaseJob;
+  /** A tombstone: only its Backups remain. */
+  deleted: boolean;
 }
 
 export interface DatabaseEngine {
@@ -1231,7 +1239,7 @@ export interface DatabaseInput {
   cpus?: number;
 }
 
-export type DatabaseAction = 'start' | 'stop' | 'restart' | 'repair' | 'update-image' | 'apply-settings';
+export type DatabaseAction = 'start' | 'stop' | 'restart' | 'repair' | 'apply-settings';
 
 export interface DatabaseCredentials {
   password: string;
@@ -1241,4 +1249,42 @@ export interface DatabaseCredentials {
   urlReadable: string;
   /** `DATABASE_URL=<url>` */
   env: string;
+}
+
+/** What a backup run covers: every logical database, or the named ones. One Backup is made for each. */
+export interface BackupRequest {
+  all?: boolean;
+  databases?: string[];
+}
+
+export type BackupTrigger = 'manual' | 'pre_restore' | 'pre_update';
+export type JobStatus = 'running' | 'succeeded' | 'failed';
+
+export interface DatabaseBackup {
+  id: number;
+  trigger: BackupTrigger;
+  /** The logical database it holds; empty for the earlier, several-databases format. */
+  database: string;
+  status: JobStatus;
+  error: string;
+  log: string;
+  size: number;
+  sha256: string;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface DatabaseRestore {
+  id: number;
+  source: 'backup' | 'upload';
+  backupId: number | null;
+  preBackupId: number | null;
+  uploadName: string;
+  /** The logical database it restored into. */
+  target: string;
+  status: JobStatus;
+  error: string;
+  log: string;
+  startedAt: string;
+  finishedAt: string | null;
 }

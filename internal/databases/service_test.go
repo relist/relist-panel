@@ -14,12 +14,17 @@ type rig struct {
 	host   *fakeHost
 	store  *Store
 	locked bool
+	// updateLocked is the Panel update lock; dataDir holds the Backups.
+	updateLocked bool
+	dataDir      string
 }
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
-	r := &rig{host: newFakeHost(), store: newStore(t)}
-	r.svc = New(Deps{Store: r.store, Host: r.host, Locked: func(context.Context) bool { return r.locked }})
+	r := &rig{host: newFakeHost(), store: newStore(t), dataDir: t.TempDir()}
+	r.svc = New(Deps{Store: r.store, Host: r.host, DataDir: r.dataDir,
+		Locked:       func(context.Context) bool { return r.locked },
+		UpdateLocked: func() bool { return r.updateLocked }})
 	return r
 }
 
@@ -296,7 +301,7 @@ func TestUpdateImageRecreatesOnlyWhenChanged(t *testing.T) {
 	r := newRig(t)
 	d := r.create(t, "Shop", "postgres", "18")
 	r.host.reset()
-	if err := r.svc.UpdateImage(context.Background(), d.ID); err != nil {
+	if err := r.svc.UpdateImage(context.Background(), d.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	if !r.host.saw("pull postgres:18") || r.host.count("create") != 0 {
@@ -304,7 +309,7 @@ func TestUpdateImageRecreatesOnlyWhenChanged(t *testing.T) {
 	}
 	r.host.images["postgres:18"] = "sha256:newer"
 	r.host.reset()
-	if err := r.svc.UpdateImage(context.Background(), d.ID); err != nil {
+	if err := r.svc.UpdateImage(context.Background(), d.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	if r.host.count("create relist-db-1") != 1 {
@@ -317,13 +322,13 @@ func TestDeleteNeedsConfirm(t *testing.T) {
 	d := r.create(t, "Shop", "postgres", "18")
 	ctx := context.Background()
 	r.host.reset()
-	if err := r.svc.Delete(ctx, d.ID, "nope"); !errors.Is(err, ErrConfirm) {
+	if err := r.svc.Delete(ctx, d.ID, "nope", false); !errors.Is(err, ErrConfirm) {
 		t.Fatalf("err = %v", err)
 	}
 	if len(r.host.all()) != 0 {
 		t.Fatalf("calls = %v", r.host.all())
 	}
-	if err := r.svc.Delete(ctx, d.ID, "Shop"); err != nil {
+	if err := r.svc.Delete(ctx, d.ID, "Shop", false); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(r.host.all(), []string{"remove relist-db-1", "remove-volume relist-db-1"}) {

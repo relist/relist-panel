@@ -31,10 +31,11 @@ setup.
   ready-to-paste connection URL plus a Compose snippet. A Service in any Compose
   that joins `relist-network` can connect with them unchanged.
 - **Backup and restore** are for the SQL engines only; Redis has none (see
-  Decisions). One click backs up either the whole instance or the
-  selected logical databases. The file can be downloaded, restored, or
-  uploaded and restored. A restore never runs without first taking a backup of
-  the current state.
+  Decisions). One click backs up every logical database, or the selected ones,
+  as one file per logical database. A file can be downloaded, or restored
+  (from the list or uploaded) into a logical database the Admin picks. A
+  restore that replaces a database never runs without first backing that
+  database up.
 - **Schedule and rotation.** Each Database can back up on a schedule, copy each
   scheduled backup to a **Backup destination** (S3-compatible first), and rotate
   scheduled backups locally and remotely by count and/or age. Manual backups are
@@ -154,9 +155,10 @@ implements:
 - allowed versions (image + tag list shown in the create form);
 - container env, data path, port and healthcheck;
 - connection URL and env snippet;
-- list logical databases (for Backup scope and the Query panel's selector);
-- dump command for a given scope, and restore command (SQL engines only;
-  the Redis driver reports that it has no backup support);
+- list logical databases (for choosing what to back up, the restore target and the Query panel's selector);
+- dump command for one logical database, and restore command into one
+  logical database (SQL engines only; the Redis driver reports that it has no
+  backup support);
 - open a query session.
 
 Phase 1 ships `postgres`, `mysql`, `mariadb` and `redis`. The version lists are
@@ -190,7 +192,7 @@ data under `/var/lib/postgresql`, while 17 and below use
 - **Update image** pulls the same tag again, applies the panel's current
   container settings, and recreates the container on the same volume only if
   the image or the settings changed. A stopped Database is not started: its
-  old container is removed, and the next Start creates the new one. From phase 2 on, a "Back up first" checkbox is on by default.
+  old container is removed, and the next Start creates the new one. From phase 2 on, a "Back up first" checkbox is on by default; it is unticked and disabled while the Database is not running, since a Backup needs it running. With it ticked, Update image is a job (phase 2 decision): the route answers 202, it takes a `pre_update` Backup first, and a failed Backup stops it before the pull.
   Changing the major version is not offered.
 - **Rename** changes the display name and the readable alias. The alias is
   swapped by disconnecting and reconnecting `relist-network`, and the Database
@@ -205,6 +207,7 @@ data under `/var/lib/postgresql`, while 17 and below use
     Backups tab, for downloading or deleting files. Remote copies stay listed
     too.
   - When the last backup is deleted, the record disappears.
+  - The tombstone's `deleted_at` is set, its container and volume are removed, and its name becomes `<name> (deleted #<id>)` with slug `deleted-<id>`, so the name is free again (phase 2 decision).
 
 ### Backups
 
@@ -216,71 +219,115 @@ data under `/var/lib/postgresql`, while 17 and below use
     its volume), so its data survives restarts and Update image.
   - Redis backup is listed under Out of scope and can be added later as a
     driver capability.
-- **One Backup is one file.** It is gzipped by the panel while streaming, and
-  its sha256 is computed at the same time.
+- **One Backup is one logical database in one file** (phase 2 decision,
+  replacing whole-instance Backups). It is gzipped by the panel while
+  streaming, and its sha256 is computed at the same time.
   - Local path: `<data dir>/.databases/<id>/backups/<UTC timestamp>-<backup id>.sql.gz`.
   - Directory mode `0700`, file mode `0600`.
   - A run that fails deletes its partial file.
-- **Backup scope** is either the whole instance (the default) or selected
-  logical databases. It is chosen per manual run and per schedule, and recorded
-  on each Backup.
+  - The file is plain SQL with no `CREATE DATABASE`, `\connect` or `USE`, so
+    it restores into any database, under any name, with the standard tools.
+- **Users and roles are never backed up.** No Postgres role and no MySQL user
+  is in any Backup, so a restore can never change a password or drop a role
+  another database uses. An app on the panel's `postgres` / `root` credentials
+  is unaffected. A restore into an instance that lacks a role the dump's
+  objects are owned by fails with `role "x" does not exist`; the Admin
+  creates the role and restores again.
+- **What to back up** is chosen per manual run and per schedule:
+  - **All databases** (the default): every logical database that exists when
+    the run starts, so one created later is included;
+  - **Selected databases**: a fixed list. A selected database that no longer
+    exists fails its Backup and names it. It is never skipped silently.
 
-  | Engine | Whole instance | Selected databases |
-  |---|---|---|
-  | postgres | `pg_dumpall --clean --if-exists` | `pg_dumpall --globals-only`, then `pg_dump --create --clean` per database, concatenated into one `.sql.gz` |
-  | mysql / mariadb | `--all-databases --single-transaction --routines --events` | `--databases a b --add-drop-database --single-transaction --routines --events` |
+  A run makes one Backup per logical database, one after another. One that
+  fails does not stop the others.
 
-  A selected database that no longer exists fails the run and names it. It is
-  never skipped silently.
-- **Trigger** is one of `manual`, `scheduled` or `pre_restore`.
-- **Concurrency.** Only one backup or restore runs per Database at a time.
+  | Engine | Dump of one logical database `db` |
+  |---|---|
+  | postgres | `pg_dump -U postgres`, with `PGDATABASE=db` in the env |
+  | mysql / mariadb | `mysqldump` / `mariadb-dump -uroot --single-transaction --routines --events --triggers db` |
+
+  The logical databases listed are every non-template database for Postgres,
+  **including `postgres`**, the database the panel's connection URL points at.
+  MySQL and MariaDB hide `information_schema`, `performance_schema`, `mysql`
+  and `sys`. A name that starts with `-` is refused, so it can never reach a
+  tool as an option.
+- **Trigger** is one of `manual`, `scheduled`, `pre_restore` or `pre_update`
+  (phase 2 adds `pre_update`, the Backups "Back up first" takes of every
+  logical database before Update image; a Database with none updates
+  straight away).
+- **Concurrency.** Only one job runs per Database at a time. A job is a Backup, a restore, or an Update image with "Back up first". While one runs, Start, Stop, Restart, Update image, Apply settings, Repair and Delete answer 409; Rename and reads still work (phase 2 decision).
   Scheduled runs queue host-wide and run one at a time. They do not use the
   Deployment queue.
+- **Panel restart.** A graceful shutdown waits for a running job, until Docker's stop timeout kills the panel. Either way a `running` row is made `failed` ("the panel stopped during this run") at the next start, and its `.partial` and upload files are removed (phase 2).
 - **Panel update and Migration.** Backups and restores behave like Registry
   cleanup. A run that has not started waits. A Panel update's quiesce, and the
   Migration lock, wait for a run already in progress.
 - **Download** streams the file to the browser. Every download is audited.
-- **Pin** marks a scheduled Backup so Rotation never deletes it.
+- **Pin** marks a scheduled Backup so Rotation never deletes it. Pin moves to phase 3: with no Rotation, nothing could delete a Backup that Pin protects.
 
 ### Restore
 
 - **Source:** a Backup from the list (its sha256 is checked first), or an
-  uploaded `.sql` or `.sql.gz` file.
-- **Confirmation.**
-  - The Admin types the Database name.
-  - For a selected-scope Backup, the dialog lists the logical databases that
-    will be dropped and recreated. Others in the instance are untouched.
-  - For a whole-instance Backup or an upload, the dialog says the whole
-    instance is affected.
-- **A `pre_restore` Backup of the whole instance always runs first.** If it
-  fails, the restore does not start.
-- **SQL engines** stream the file into `psql` / `mysql` / `mariadb` inside the
-  container. The Database keeps running.
-  - The client stops at the first error (`ON_ERROR_STOP=1` for `psql`).
-  - **Postgres** first terminates other sessions on the affected databases
-    (`pg_terminate_backend`), so `DROP DATABASE` can proceed. It runs connected
-    to `postgres`, or to `template1` when `postgres` is itself in scope. For
-    this reason a whole-instance dump uses `pg_dumpall --clean --if-exists`.
-  - Apps connected to an affected database lose their connections during the
-    restore. The confirmation dialog says so.
-- A failed restore shows its log and links to the `pre_restore` Backup.
+  uploaded `.sql` or `.sql.gz` file (gzip is told by its content).
+- **Target:** every restore goes into one logical database the Admin picks
+  (phase 2 decision). Nothing in the file decides where it goes.
+  - **Replace an existing database:** the default for a Backup whose database
+    still exists. A `pre_restore` Backup of that database runs first; if it
+    fails, nothing changes.
+  - **Restore into a new database:** the Admin types a name (letters, digits,
+    `_` and `-`, at most 63 characters, not starting with `-`). The default
+    for a Backup whose database is gone. No `pre_restore` Backup is needed.
+  - A Backup can be restored under another name, which copies a database.
+  - System and template databases (`template0`, `template1`, and the MySQL
+    ones above) are never a target.
+- **Replacing** drops and recreates the target, then streams the file into
+  it. The Database keeps running.
+  - **Postgres:** `DROP DATABASE … WITH (FORCE)`, which ends the sessions on
+    it in the same step, then `CREATE DATABASE … TEMPLATE template0 OWNER
+    <its owner before>`. A new database is owned by `postgres`.
+  - **MySQL / MariaDB:** `DROP DATABASE`, then `CREATE DATABASE` with its
+    default character set and collation from before.
+  - The file then runs connected to the target: `psql -v ON_ERROR_STOP=1`, or
+    `mysql` / `mariadb --database=<target>`. Every engine stops at the first
+    error, and that fails the restore.
+  - Apps connected to the target lose their connections. The confirmation
+    dialog says so.
+- **Uploads are checked before anything runs.** A file is refused, naming the
+  line, when a line (outside Postgres `COPY` data, and after a MySQL `/*!NNNNN`
+  prefix) starts with:
+  - a psql meta-command other than `\restrict` / `\unrestrict` (so
+    `\connect`, `\c`, `\!` are refused);
+  - `CREATE`, `ALTER` or `DROP` followed by `DATABASE`, `ROLE` or `USER`, or
+    `SET PASSWORD`;
+  - for MySQL and MariaDB also `USE`, and `CREATE` / `DROP SCHEMA`.
+
+  Such a file (`pg_dumpall`, `mysqldump --all-databases` or `--databases`)
+  would leave the target or change users. The error says to dump one database
+  with `pg_dump db` or `mysqldump db`.
+- **Confirmation.** The Admin types the Database name. The dialog names the
+  target and whether it is replaced or created.
+- A failed restore shows its log and links to the `pre_restore` Backup. Restores are recorded in `database_restores` (phase 2 decision), with their target, so the log has a home.
 
 ### Backup schedule and Rotation
 
 - **Schedule per Database:** enabled, days (`daily` or weekdays), time of day in
-  the host's timezone, Backup scope, and optionally one Backup destination.
+  the host's timezone, all or selected databases, and optionally one Backup
+  destination.
   - The schedule rules (`dayMoment`, `listed`, `Due`) move out of
     `internal/registry/schedule.go` into a shared package, which both the
     Registry and Databases use.
   - A run the panel missed while it was down is made up once.
   - A schedule that has never run is armed, not fired.
 - **Rotation** applies only to `scheduled` Backups that are not pinned. It is
-  configured separately for **Local** and for **Destination**, each with:
+  configured separately for **Local** and for **Destination**, and counted
+  **per logical database**, each with:
   - **keep last N** (blank = no limit);
   - **keep at most X days** (blank = no limit).
 
   A Backup is deleted when it breaks either rule. **The newest successful
-  Backup is always kept**, so a long run of failures can never empty the set.
+  Backup of each logical database is always kept**, so a long run of failures
+  can never empty its set.
   The defaults are Local: keep last 7, and Destination: keep last 30.
 - **`manual` and `pre_restore` Backups are never deleted automatically.** The
   Admin deletes them by hand.
@@ -407,11 +454,14 @@ numbers are picked at implementation time.
   - `password`, `memory_limit`, `cpu_limit`;
   - `status`, `status_error`, `created_at`, `deleted_at`.
 - `database_backups`:
-  - `id`, `database_id`, `trigger`, `scope` (JSON: `all` or a list of names);
-  - `status`, `error`, `log`, `file_name`, `size`, `sha256`, `pinned`;
+  - `id`, `database_id`, `trigger`, `logical_name` (the one database in the
+    file; `scope` is left from the first phase 2 draft and no longer read);
+  - `status`, `error`, `log`, `file_name`, `size`, `sha256` (`pinned` comes in phase 3);
   - `started_at`, `finished_at`.
+- `database_restores` (phase 2): `id`, `database_id`, `source` (`backup` or `upload`), `backup_id`, `pre_backup_id`, `upload_name`, `target`, `status`, `error`, `log`, `started_at`, `finished_at`.
 - `database_backup_schedules` (one per Database):
-  - `enabled`, `days`, `minute`, `scope`, `destination_id`;
+  - `enabled`, `days`, `minute`, `databases` (JSON: all, or a list of names),
+    `destination_id`;
   - `local_keep_count`, `local_keep_days`, `remote_keep_count`,
     `remote_keep_days`;
   - `last_run_at`.
@@ -441,7 +491,7 @@ numbers are picked at implementation time.
 ## Testing
 
 - **Unit.**
-  - Each driver's dump and restore command for each scope.
+  - Each driver's dump and restore command for one logical database, and the upload check.
   - Connection URL encoding (passwords with `@ : / ? # %`).
   - Rotation as a table test: count, age, both, newest-successful kept, pinned,
     manual, pre_restore.
@@ -451,7 +501,7 @@ numbers are picked at implementation time.
 - **Integration in the dind sandbox** (`task e2e:serve`), for each SQL engine:
   1. create;
   2. write data;
-  3. back up the whole instance and a selected scope;
+  3. back up all databases and a selected one;
   4. delete data;
   5. restore;
   6. check the data is back;
@@ -481,10 +531,10 @@ numbers are picked at implementation time.
    - The **Data** group in the sider.
    - Server migration handling.
 2. **Manual backup and restore.**
-   - Backup scope.
-   - Download and upload.
-   - Pin.
-   - `pre_restore` Backups.
+   - Per-database Backups (all or selected).
+   - Download and upload, with the upload check.
+   - Restore into a picked target.
+   - `pre_restore` and `pre_update` Backups.
    - The deleted-Database Backups view.
 3. **Schedule, Rotation and Backup destinations (S3).**
    - Moving the schedule rules into a shared package.

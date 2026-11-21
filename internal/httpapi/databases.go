@@ -11,14 +11,17 @@ import (
 
 // newDatabaseService builds the panel's Databases (ADR-0039). Nil without a
 // Docker host for them. locked is the Migration lock; a lock it cannot read
-// counts as held, as the Registry's gate does.
-func newDatabaseService(db *sql.DB, d Deps, locked func(ctx context.Context) (bool, error)) *databases.Service {
+// counts as held, as the Registry's gate does. updateLocked is the Panel
+// update lock, read when a Backup or restore starts.
+func newDatabaseService(db *sql.DB, d Deps, dataDir string, locked func(ctx context.Context) (bool, error), updateLocked func() bool) *databases.Service {
 	if d.DatabaseHost == nil {
 		return nil
 	}
 	return databases.New(databases.Deps{
-		Store: databases.NewStore(db),
-		Host:  d.DatabaseHost,
+		Store:        databases.NewStore(db),
+		Host:         d.DatabaseHost,
+		DataDir:      dataDir,
+		UpdateLocked: updateLocked,
 		Locked: func(ctx context.Context) bool {
 			l, err := locked(ctx)
 			return l || err != nil
@@ -34,6 +37,9 @@ func ownDatabases(ctx context.Context, svc *databases.Service, images, volumes m
 		return err
 	}
 	for _, v := range views {
+		if v.Deleted { // a tombstone has no volume, and its image is the Admin's to clean
+			continue
+		}
 		volumes[databases.VolumeName(v.ID)] = databases.OwnerName
 		if e, ok := databases.Engines[v.Engine]; ok {
 			for _, ref := range imageref.Pinned(e.Image(v.Version)) {

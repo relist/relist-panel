@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -34,8 +35,16 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/databases/{id}/stop", a.action(a.s.Stop))
 	mux.HandleFunc("POST /api/databases/{id}/restart", a.action(a.s.Restart))
 	mux.HandleFunc("POST /api/databases/{id}/repair", a.action(a.s.Repair))
-	mux.HandleFunc("POST /api/databases/{id}/update-image", a.action(a.s.UpdateImage))
+	mux.HandleFunc("POST /api/databases/{id}/update-image", a.updateImage)
 	mux.HandleFunc("POST /api/databases/{id}/apply-settings", a.action(a.s.ApplySettings))
+	mux.HandleFunc("GET /api/databases/{id}/logical-databases", a.logicalDatabases)
+	mux.HandleFunc("GET /api/databases/{id}/backups", a.listBackups)
+	mux.HandleFunc("POST /api/databases/{id}/backups", a.startBackup)
+	mux.HandleFunc("GET /api/databases/{id}/backups/{backupID}/download", a.downloadBackup)
+	mux.HandleFunc("DELETE /api/databases/{id}/backups/{backupID}", a.deleteBackup)
+	mux.HandleFunc("GET /api/databases/{id}/restores", a.listRestores)
+	mux.HandleFunc("POST /api/databases/{id}/restores", a.startRestore)
+	mux.HandleFunc("POST /api/databases/{id}/restores/upload", a.uploadRestore)
 }
 
 // DatabaseJSON is a Database as the browser sees it. It never carries the
@@ -62,6 +71,10 @@ type DatabaseJSON struct {
 	User             string    `json:"user"`
 	DefaultDatabase  string    `json:"defaultDatabase"`
 	CreatedAt        time.Time `json:"createdAt"`
+	// Job is the job running on it ("backup", "restore", "update_image" or
+	// ""); Deleted marks a tombstone that only keeps its Backups.
+	Job     string `json:"job"`
+	Deleted bool   `json:"deleted"`
 }
 
 func toJSON(v View) DatabaseJSON {
@@ -69,7 +82,7 @@ func toJSON(v View) DatabaseJSON {
 		ID: v.ID, Name: v.Name, Slug: v.Slug, Engine: v.Engine, Version: v.Version,
 		Desired: v.Desired, Status: v.Status, SettingsOutdated: v.SettingsOutdated, LastError: v.LastError, Warnings: v.Warnings,
 		MemoryMB: v.MemoryMB, CPUs: v.CPUs, Host: ContainerName(v.ID), HostReadable: Alias(v.Slug),
-		CreatedAt: v.CreatedAt,
+		CreatedAt: v.CreatedAt, Job: v.Job, Deleted: v.Deleted,
 	}
 	if out.Warnings == nil {
 		out.Warnings = []string{}
@@ -206,19 +219,48 @@ func (a *API) action(run func(ctx context.Context, id int64) error) http.Handler
 	}
 }
 
+// updateImage takes an optional {backupFirst}. With it true the update is a
+// job: 202 at once, and 409 when the Database is not running. Otherwise 204.
+func (a *API) updateImage(w http.ResponseWriter, r *http.Request) {
+	n, ok := id(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		BackupFirst bool `json:"backupFirst"`
+	}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+			writeJSONError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	a.target(r, n)
+	if err := a.s.UpdateImage(r.Context(), n, in.BackupFirst); err != nil {
+		writeError(w, err)
+		return
+	}
+	if in.BackupFirst {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *API) delete(w http.ResponseWriter, r *http.Request) {
 	n, ok := id(w, r)
 	if !ok {
 		return
 	}
 	var in struct {
-		Confirm string `json:"confirm"`
+		Confirm       string `json:"confirm"`
+		DeleteBackups bool   `json:"deleteBackups"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
 	a.target(r, n)
-	if err := a.s.Delete(r.Context(), n, in.Confirm); err != nil {
+	if err := a.s.Delete(r.Context(), n, in.Confirm, in.DeleteBackups); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -231,6 +273,9 @@ func (a *API) credentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := a.s.d.Store.Get(r.Context(), n)
+	if err == nil && d.DeletedAt != nil {
+		err = ErrNotFound
+	}
 	if err != nil {
 		writeError(w, err)
 		return
@@ -284,12 +329,17 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 
 // writeError maps a service error to its status.
 func writeError(w http.ResponseWriter, err error) {
+	var unknownLogical ErrUnknownLogical
+	var forbidden ErrForbiddenStatement
 	switch {
-	case errors.Is(err, ErrInvalidName), errors.Is(err, ErrUnknownEngine), errors.Is(err, ErrUnknownVersion), errors.Is(err, ErrConfirm), errors.Is(err, ErrInvalidLimits):
+	case errors.Is(err, ErrInvalidName), errors.Is(err, ErrUnknownEngine), errors.Is(err, ErrUnknownVersion), errors.Is(err, ErrConfirm), errors.Is(err, ErrInvalidLimits),
+		errors.Is(err, ErrNoBackups), errors.Is(err, ErrNoScope), errors.As(err, &unknownLogical),
+		errors.Is(err, ErrUnsafeName), errors.Is(err, ErrBadTarget), errors.Is(err, ErrNothingToBackUp), errors.Is(err, ErrNotRestorable),
+		errors.Is(err, ErrBadUpload), errors.As(err, &forbidden):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, "Database not found")
-	case errors.Is(err, ErrDuplicateName), errors.Is(err, ErrLocked):
+	case errors.Is(err, ErrDuplicateName), errors.Is(err, ErrLocked), errors.Is(err, ErrBusy), errors.Is(err, ErrNotRunning), errors.Is(err, ErrChangedFile):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case strings.HasPrefix(err.Error(), "docker"):
 		writeJSONError(w, http.StatusBadGateway, err.Error())

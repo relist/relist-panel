@@ -12,6 +12,7 @@ Every Compose that needed Postgres, MySQL, MariaDB or Redis carried its own data
 - **Reserved names.** The Compose policy refuses a Service that answers on `relist-network` to `relist-db-<n>` or `*.db.internal`.
 - **Tools, in later phases.** Backups run `pg_dump` / `mysqldump` through `docker exec` in the Database's own container; the Query panel connects with Go drivers over `relist-network`.
 - **Applied settings.** Each Database stores the spec its container was last created with (`applied_spec`, migration `00043`). Reconcile compares with and recreates from that spec, never from what the running panel's driver would choose today. A Panel update that changes a driver default therefore restarts no Database. The page offers **Apply settings**, and Update image applies them too. This is ADR-0017's frozen inputs, applied to Databases.
+- **Backups are per logical database** and never carry roles or users; a restore goes into a target the Admin picks (phase 2 review: whole-instance dumps let an upload land in `template1` and replace the panel's passwords).
 - **Migration.** Database volumes always move with a server Migration, and the old host stops every Database after the Composes.
 
 ## Considered options

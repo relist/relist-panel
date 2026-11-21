@@ -71,6 +71,9 @@ type Deps struct {
 	// RegistryCleanup is waited for too: a run may hold the Registry
 	// read-only for GC (ADR-0033). Its Gate keeps new runs from starting.
 	RegistryCleanup ScanWaiter
+	// DatabaseJobs is waited for too: a Database Backup or restore must not
+	// be cut off by the restart. Its gate keeps new ones from starting.
+	DatabaseJobs ScanWaiter
 	// WaitingOn says what the update lock waits for: "Deployment api #3", a
 	// vulnerability scan, or "" when nothing.
 	WaitingOn func() string

@@ -149,7 +149,7 @@ func TestUpdateImageAppliesSettings(t *testing.T) {
 	d := r.create(t, "Shop", "postgres", "18")
 	simulateOlderPanel(t, r, d.ID)
 	r.host.reset()
-	if err := r.svc.UpdateImage(context.Background(), d.ID); err != nil {
+	if err := r.svc.UpdateImage(context.Background(), d.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	if r.host.count("create ") != 1 {
@@ -169,7 +169,7 @@ func TestUpdateImageWhileStoppedDoesNotStart(t *testing.T) {
 	}
 	r.host.images["postgres:18"] = "sha256:newer"
 	r.host.reset()
-	if err := r.svc.UpdateImage(ctx, d.ID); err != nil {
+	if err := r.svc.UpdateImage(ctx, d.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	if r.host.count("create ") != 0 || r.host.count("start ") != 0 {

@@ -24,13 +24,23 @@ func TestOwnRegistryClaimsImageAndVolume(t *testing.T) {
 
 func TestUpdateWaitingOnNamesRegistryCleanup(t *testing.T) {
 	queue := deployments.NewQueue(deployments.Deps{})
-	if got := updateWaitingOn(context.Background(), nil, queue, func() bool { return true }); got != "a Registry cleanup" {
+	if got := updateWaitingOn(context.Background(), nil, queue, func() bool { return true }, nil); got != "a Registry cleanup" {
 		t.Fatalf("cleaning: waiting on %q", got)
 	}
-	if got := updateWaitingOn(context.Background(), nil, queue, func() bool { return false }); got != "a vulnerability scan" {
+	if got := updateWaitingOn(context.Background(), nil, queue, func() bool { return false }, nil); got != "a vulnerability scan" {
 		t.Fatalf("not cleaning: waiting on %q", got)
 	}
-	if got := updateWaitingOn(context.Background(), nil, queue, nil); got != "a vulnerability scan" {
+	if got := updateWaitingOn(context.Background(), nil, queue, nil, nil); got != "a vulnerability scan" {
 		t.Fatalf("no cleaner: waiting on %q", got)
+	}
+}
+
+func TestUpdateWaitingOnNamesDatabaseJobs(t *testing.T) {
+	queue := deployments.NewQueue(deployments.Deps{})
+	if got := updateWaitingOn(context.Background(), nil, queue, nil, func() bool { return true }); got != "a Database backup or restore" {
+		t.Fatalf("busy: waiting on %q", got)
+	}
+	if got := updateWaitingOn(context.Background(), nil, queue, nil, func() bool { return false }); got != "a vulnerability scan" {
+		t.Fatalf("idle: waiting on %q", got)
 	}
 }

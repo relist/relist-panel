@@ -40,6 +40,9 @@ type Database struct {
 	// with; "" until the first reconcile fills it.
 	AppliedSpec          string
 	CreatedAt, UpdatedAt time.Time
+	// DeletedAt is set on a tombstone: a Database deleted while keeping its
+	// Backups. It has no container or volume; only its Backups remain.
+	DeletedAt *time.Time
 }
 
 type Store struct {
@@ -51,13 +54,14 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db, now: time.Now}
 }
 
-const columns = `id, name, slug, engine, version, password, memory_mb, cpus, desired, initialized, last_error, applied_spec, created_at, updated_at`
+const columns = `id, name, slug, engine, version, password, memory_mb, cpus, desired, initialized, last_error, applied_spec, created_at, updated_at, deleted_at`
 
 func scan(row interface{ Scan(...any) error }) (Database, error) {
 	var d Database
 	var created, updated int64
+	var deleted sql.NullInt64
 	err := row.Scan(&d.ID, &d.Name, &d.Slug, &d.Engine, &d.Version, &d.Password, &d.MemoryMB, &d.CPUs,
-		&d.Desired, &d.Initialized, &d.LastError, &d.AppliedSpec, &created, &updated)
+		&d.Desired, &d.Initialized, &d.LastError, &d.AppliedSpec, &created, &updated, &deleted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Database{}, ErrNotFound
 	}
@@ -66,6 +70,10 @@ func scan(row interface{ Scan(...any) error }) (Database, error) {
 	}
 	d.CreatedAt = time.UnixMilli(created)
 	d.UpdatedAt = time.UnixMilli(updated)
+	if deleted.Valid {
+		t := time.UnixMilli(deleted.Int64)
+		d.DeletedAt = &t
+	}
 	return d, nil
 }
 
@@ -162,4 +170,10 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// Tombstone marks a Database deleted but keeps its row, and so its Backups.
+// The name and slug are rewritten so the name is free for a new Database.
+func (s *Store) Tombstone(ctx context.Context, id int64) error {
+	return s.update(ctx, id, `deleted_at = ?, name = name || ' (deleted #' || id || ')', slug = 'deleted-' || id`, s.now().UnixMilli())
 }

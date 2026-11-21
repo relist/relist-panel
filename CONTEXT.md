@@ -58,6 +58,15 @@ A Postgres, MySQL, MariaDB or Redis server the panel runs host-wide in its own c
 **Engine**:
 The kind of server a Database runs (postgres, mysql, mariadb, redis), with the versions, settings and tools the panel offers for it. _Avoid_: Type, Driver (the driver is the code).
 
+**Backup**:
+One gzipped plain-SQL dump of one logical database of a Database; never users or roles. It is a file kept on the panel under `.databases/<id>/backups/` with its sha256, made by `docker exec` in the Database's own container. Its trigger is manual, `pre_restore` or `pre_update`. Redis has none. _Avoid_: Snapshot, Export (a Backup is a file the panel keeps, not a volume copy).
+
+**All databases / selected databases**:
+What a backup run covers; a run makes one Backup per logical database.
+
+**Restore**:
+Replaying a Backup, or an uploaded `.sql`/`.sql.gz` of one database, into a target logical database the Admin picks, replacing it (after a `pre_restore` Backup of it) or creating it. _Avoid_: Rollback.
+
 **Container**:
 One running instance of a Service, created by a deploy. Its identity is not stable: every deploy mints a new one, so anything that outlives a single deploy — metric history, for one — is keyed by Service, never by Container.
 _Avoid_: Instance

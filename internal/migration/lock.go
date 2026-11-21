@@ -93,6 +93,9 @@ type OldHostDeps struct {
 	// started again on Resume (ADR-0039). Both calls ignore the Migration
 	// lock they run under.
 	Databases interface {
+		// WaitIdle waits for a running Backup or restore, which the
+		// Migration lock keeps new ones from starting.
+		WaitIdle(ctx context.Context) error
 		StopAll(ctx context.Context) error
 		StartWanted(ctx context.Context) error
 	}
@@ -232,6 +235,11 @@ func (s *OldHost) start(ctx context.Context, hostPaths []string, includeRegistry
 		}
 		if s.d.RegistryCleanup != nil {
 			if err := s.d.RegistryCleanup.WaitIdle(ctx); err != nil {
+				return Manifest{}, err
+			}
+		}
+		if s.d.Databases != nil {
+			if err := s.d.Databases.WaitIdle(ctx); err != nil {
 				return Manifest{}, err
 			}
 		}

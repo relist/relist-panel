@@ -22,3 +22,4 @@ func NewPanelUpdaterHostWith(run func(ctx context.Context, args []string) ([]byt
 }
 
 var ExecComposeForTest = execCompose
+var DemuxStream = demuxStream

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,8 @@ const (
 	StatusDrift         = "drift"
 	StatusError         = "error"
 	StatusVolumeMissing = "volume_missing"
+	// StatusDeleted is a tombstone: deleted, with its Backups kept.
+	StatusDeleted = "deleted"
 )
 
 var (
@@ -42,7 +45,12 @@ type Deps struct {
 	Store  *Store
 	Host   Host
 	Locked func(ctx context.Context) bool
-	Now    func() time.Time
+	// UpdateLocked reports the Panel update lock (nil = never locked). While
+	// it is held, no Backup or restore starts.
+	UpdateLocked func() bool
+	// DataDir is the panel's data dir; Backups live under .databases/<id>/.
+	DataDir string
+	Now     func() time.Time
 }
 
 type CreateInput struct {
@@ -60,6 +68,10 @@ type View struct {
 	// other settings than the applied ones. ApplySettings or UpdateImage
 	// applies them; nothing else does.
 	SettingsOutdated bool
+	// Job is the job running on the Database: "", "backup", "restore" or
+	// "update_image". Deleted is a tombstone.
+	Job     string
+	Deleted bool
 }
 
 // Service runs the panel's Databases. The database is the source of truth;
@@ -71,13 +83,17 @@ type Service struct {
 	locks    map[int64]*sync.Mutex
 	inflight map[int64]bool
 	wg       sync.WaitGroup
+	// jobs is the one running job per Database ("backup", "restore",
+	// "update_image"); jobsChanged is closed and replaced whenever one ends.
+	jobs        map[int64]string
+	jobsChanged chan struct{}
 }
 
 func New(d Deps) *Service {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	return &Service{d: d, locks: map[int64]*sync.Mutex{}, inflight: map[int64]bool{}}
+	return &Service{d: d, locks: map[int64]*sync.Mutex{}, inflight: map[int64]bool{}, jobs: map[int64]string{}, jobsChanged: make(chan struct{})}
 }
 
 func (s *Service) locked(ctx context.Context) bool {
@@ -262,7 +278,7 @@ func (s *Service) saveApplied(ctx context.Context, d *Database, spec ContainerSp
 func (s *Service) record(ctx context.Context, d Database, err error) {
 	ctx = context.WithoutCancel(ctx)
 	switch {
-	case err != nil && !errors.Is(err, ErrLocked):
+	case err != nil && !errors.Is(err, ErrLocked) && !errors.Is(err, ErrBusy) && !errors.Is(err, ErrNotRunning):
 		_ = s.d.Store.SetLastError(ctx, d.ID, err.Error())
 	case err == nil && d.LastError != "":
 		_ = s.d.Store.SetLastError(ctx, d.ID, "")
@@ -365,11 +381,27 @@ func (s *Service) op(ctx context.Context, id int64, fn func(d Database) error) e
 	if err != nil {
 		return err
 	}
+	if d.DeletedAt != nil {
+		return ErrNotFound
+	}
 	return fn(d)
 }
 
-func (s *Service) Start(ctx context.Context, id int64) error {
+// opIdle is op for the actions a running job must not interleave with: it
+// answers ErrBusy while a Backup, restore or update runs. The check is under
+// the Database's lock, so a Stop either finishes before a job takes its slot
+// or sees it.
+func (s *Service) opIdle(ctx context.Context, id int64, fn func(d Database) error) error {
 	return s.op(ctx, id, func(d Database) error {
+		if s.Jobs(id) != "" {
+			return ErrBusy
+		}
+		return fn(d)
+	})
+}
+
+func (s *Service) Start(ctx context.Context, id int64) error {
+	return s.opIdle(ctx, id, func(d Database) error {
 		if err := s.d.Store.SetDesired(ctx, id, DesiredRunning); err != nil {
 			return err
 		}
@@ -380,7 +412,7 @@ func (s *Service) Start(ctx context.Context, id int64) error {
 }
 
 func (s *Service) Stop(ctx context.Context, id int64) error {
-	return s.op(ctx, id, func(d Database) error {
+	return s.opIdle(ctx, id, func(d Database) error {
 		if err := s.d.Store.SetDesired(ctx, id, DesiredStopped); err != nil {
 			return err
 		}
@@ -391,7 +423,7 @@ func (s *Service) Stop(ctx context.Context, id int64) error {
 }
 
 func (s *Service) Restart(ctx context.Context, id int64) error {
-	return s.op(ctx, id, func(d Database) (err error) {
+	return s.opIdle(ctx, id, func(d Database) (err error) {
 		if err := s.d.Store.SetDesired(ctx, id, DesiredRunning); err != nil {
 			return err
 		}
@@ -443,8 +475,40 @@ func (s *Service) Rename(ctx context.Context, id int64, name string) error {
 // and recreates the container on the same volume when either changed. A
 // stopped Database is not started: its container is removed, and the next
 // Start creates the new one.
-func (s *Service) UpdateImage(ctx context.Context, id int64) error {
-	return s.op(ctx, id, func(d Database) (err error) {
+//
+// With backupFirst it is a job: it checks the Database is running, answers at
+// once, and in the background takes a pre_update Backup, then updates. A
+// failed Backup stops it before the pull.
+func (s *Service) UpdateImage(ctx context.Context, id int64, backupFirst bool) error {
+	if !backupFirst {
+		return s.opIdle(ctx, id, s.updateImage(ctx))
+	}
+	d, dp, err := s.acquire(ctx, id, JobKindUpdateImage)
+	if err != nil {
+		return err
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer s.endJob(id)
+		ctx := context.WithoutCancel(ctx)
+		if ok, firstErr := s.backupAll(ctx, d, dp, TriggerPreUpdate); !ok {
+			_ = s.d.Store.SetLastError(ctx, id, "the pre-update backup failed, so the image was not updated: "+firstErr)
+			return
+		}
+		unlock := s.lock(id)
+		defer unlock()
+		fresh, err := s.d.Store.Get(ctx, id)
+		if err != nil {
+			return
+		}
+		_ = s.updateImage(ctx)(fresh)
+	}()
+	return nil
+}
+
+func (s *Service) updateImage(ctx context.Context) func(d Database) error {
+	return func(d Database) (err error) {
 		defer func() { s.record(ctx, d, err) }()
 		spec, _, err := specFor(d)
 		if err != nil {
@@ -471,14 +535,14 @@ func (s *Service) UpdateImage(ctx context.Context, id int64) error {
 			return s.d.Host.Remove(ctx, spec.Name)
 		}
 		return s.create(ctx, d, spec)
-	})
+	}
 }
 
 // ApplySettings makes this panel's driver settings the applied ones and
 // recreates the container with them. A stopped Database gets them on its
 // next Start.
 func (s *Service) ApplySettings(ctx context.Context, id int64) error {
-	return s.op(ctx, id, func(d Database) error {
+	return s.opIdle(ctx, id, func(d Database) error {
 		spec, _, err := specFor(d)
 		if err != nil {
 			return err
@@ -493,7 +557,7 @@ func (s *Service) ApplySettings(ctx context.Context, id int64) error {
 
 // Repair clears the last error and reconciles.
 func (s *Service) Repair(ctx context.Context, id int64) error {
-	return s.op(ctx, id, func(d Database) error {
+	return s.opIdle(ctx, id, func(d Database) error {
 		if d.LastError != "" {
 			if err := s.d.Store.SetLastError(ctx, id, ""); err != nil {
 				return err
@@ -505,10 +569,12 @@ func (s *Service) Repair(ctx context.Context, id int64) error {
 	})
 }
 
-// Delete removes the container, the volume and the record. confirm must equal
-// the Database's name.
-func (s *Service) Delete(ctx context.Context, id int64, confirm string) error {
-	return s.op(ctx, id, func(d Database) error {
+// Delete removes the container and the volume. confirm must equal the
+// Database's name. With deleteBackups, or when it has no Backups, the record
+// and its files go too; otherwise it stays as a tombstone that shows only its
+// Backups.
+func (s *Service) Delete(ctx context.Context, id int64, confirm string, deleteBackups bool) error {
+	return s.opIdle(ctx, id, func(d Database) error {
 		if confirm != d.Name {
 			return ErrConfirm
 		}
@@ -518,13 +584,36 @@ func (s *Service) Delete(ctx context.Context, id int64, confirm string) error {
 		if err := s.d.Host.RemoveVolume(ctx, VolumeName(id)); err != nil {
 			return err
 		}
-		return s.d.Store.Delete(ctx, id)
+		if !deleteBackups {
+			kept, err := s.d.Store.ListBackups(ctx, id)
+			if err != nil {
+				return err
+			}
+			if len(kept) > 0 {
+				return s.d.Store.Tombstone(ctx, id)
+			}
+		}
+		return s.removeRecord(ctx, id)
 	})
 }
 
+// removeRecord deletes a Database's row and its files.
+func (s *Service) removeRecord(ctx context.Context, id int64) error {
+	if s.d.DataDir != "" {
+		if err := os.RemoveAll(s.dbDir(id)); err != nil {
+			return err
+		}
+	}
+	return s.d.Store.Delete(ctx, id)
+}
+
 func (s *Service) Logs(ctx context.Context, id int64, tail int) (string, error) {
-	if _, err := s.d.Store.Get(ctx, id); err != nil {
+	d, err := s.d.Store.Get(ctx, id)
+	if err != nil {
 		return "", err
+	}
+	if d.DeletedAt != nil {
+		return "", ErrNotFound
 	}
 	return s.d.Host.Logs(ctx, ContainerName(id), tail)
 }
@@ -551,7 +640,11 @@ func (s *Service) List(ctx context.Context) ([]View, error) {
 }
 
 func (s *Service) view(ctx context.Context, d Database) View {
-	v := View{Database: d, Warnings: []string{}}
+	v := View{Database: d, Warnings: []string{}, Job: s.Jobs(d.ID)}
+	if d.DeletedAt != nil {
+		v.Status, v.Deleted = StatusDeleted, true
+		return v
+	}
 	if Alias(d.Slug) == "" {
 		v.Warnings = append(v.Warnings, "No readable hostname: the name has no usable letters or digits, or is too long. Use the stable host.")
 	}
@@ -611,6 +704,9 @@ func (s *Service) ReconcileAll(ctx context.Context) error {
 	}
 	var first error
 	for _, d := range all {
+		if d.DeletedAt != nil {
+			continue
+		}
 		err := func() error {
 			unlock := s.lock(d.ID)
 			defer unlock()
@@ -637,6 +733,9 @@ func (s *Service) StopAll(ctx context.Context) error {
 	}
 	var errs []error
 	for _, d := range all {
+		if d.DeletedAt != nil {
+			continue
+		}
 		func() {
 			unlock := s.lock(d.ID)
 			defer unlock()
@@ -661,7 +760,7 @@ func (s *Service) StartWanted(ctx context.Context) error {
 	}
 	var errs []error
 	for _, d := range all {
-		if d.Desired != DesiredRunning {
+		if d.Desired != DesiredRunning || d.DeletedAt != nil {
 			continue
 		}
 		func() {
@@ -684,7 +783,7 @@ func (s *Service) Volumes(ctx context.Context) ([]string, error) {
 	}
 	out := []string{}
 	for _, d := range all {
-		if d.Initialized {
+		if d.Initialized && d.DeletedAt == nil {
 			out = append(out, VolumeName(d.ID))
 		}
 	}

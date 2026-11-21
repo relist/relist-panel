@@ -121,6 +121,27 @@ func TestQuiesceWaitsForRegistryCleanup(t *testing.T) {
 	})
 }
 
+// A Database Backup or restore reads the Database's container, which the
+// update restarts the panel around; the quiesce waits for it.
+func TestQuiesceWaitsForDatabaseJobs(t *testing.T) {
+	r := newLockRig(t)
+	jobs := blockingWaiter{release: make(chan struct{})}
+	r.s.d.DatabaseJobs = jobs
+	r.writeRun(t, watchRun, StateQuiescing)
+	r.updater.state[UpdaterName(watchRun)] = UpdaterState{Exists: true, Running: true}
+	r.s.watchOnce(t.Context())
+	time.Sleep(20 * time.Millisecond)
+	r.s.watchOnce(t.Context())
+	if got := r.ack(t).State; got != AckWaiting {
+		t.Fatalf("ack = %s while a Database job runs", got)
+	}
+	close(jobs.release)
+	waitFor(t, func() bool {
+		r.s.watchOnce(t.Context())
+		return r.ack(t).State == AckReady
+	})
+}
+
 func TestWatcherRefusesUnderMigrationLock(t *testing.T) {
 	r := newLockRig(t)
 	r.migr = true
