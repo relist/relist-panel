@@ -31,8 +31,8 @@ const composeConfig = `{"services":{
 	"api":{"build":{"context":"./src"}}},
 	"volumes":{"pgdata":{"name":"relist-c1_pgdata"}}}`
 
-// statusRunner is a ComposeRunner whose Status reads the FakeDocker and
-// whose lifecycle calls succeed without doing anything.
+// statusRunner is a ComposeRunner whose lifecycle calls succeed without doing
+// anything.
 type statusRunner struct{ d *migration.FakeDocker }
 
 func (r statusRunner) Up(context.Context, composes.RunRequest, composes.UpOptions) error { return nil }
@@ -49,12 +49,22 @@ func (r statusRunner) Scale(context.Context, composes.RunRequest, composes.Scale
 	return nil
 }
 func (r statusRunner) Logs(context.Context, composes.RunRequest) (string, error) { return "", nil }
-func (r statusRunner) Status(_ context.Context, req composes.RunRequest) (composes.ComposeStatus, error) {
-	if r.d.Running[req.ProjectName] {
-		return composes.ComposeStatus{Running: 1, Total: 1}, nil
-	}
-	return composes.ComposeStatus{Total: 1}, nil
+
+// statusEngine is a composes.ContainerEngine that reads the FakeDocker: one
+// container per Compose, running when the FakeDocker says so.
+type statusEngine struct{ d *migration.FakeDocker }
+
+func (e statusEngine) ProjectContainers(_ context.Context, project string) ([]composes.EngineContainer, error) {
+	return []composes.EngineContainer{{ID: project, Project: project, Running: e.d.Running[project]}}, nil
 }
+func (statusEngine) ComposeContainers(context.Context) ([]composes.EngineContainer, error) {
+	return nil, nil
+}
+func (statusEngine) Inspect(context.Context, string) (composes.EngineState, error) {
+	return composes.EngineState{}, nil
+}
+func (statusEngine) Stop(context.Context, string) error               { return nil }
+func (statusEngine) Remove(context.Context, string, bool, bool) error { return nil }
 
 // configCLI answers `docker compose config` for relist-c1 only.
 type configCLI struct{}
@@ -119,7 +129,7 @@ func (p *panel) boot() {
 	opts.Restart = func() { p.exited <- struct{}{} }
 	p.control = http.NewServeMux()
 	opts.Control = p.control
-	handler, wait := httpapi.NewHandler(ctx, httpapi.Deps{DB: p.db, Runner: statusRunner{p.docker}, DataDir: p.dataDir,
+	handler, wait := httpapi.NewHandler(ctx, httpapi.Deps{DB: p.db, Runner: statusRunner{p.docker}, Engine: statusEngine{p.docker}, DataDir: p.dataDir,
 		VolumeResolver: volumes.NewResolver(configCLI{}, p.dataDir), Migration: &opts})
 	var once sync.Once
 	db := p.db

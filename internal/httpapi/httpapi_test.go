@@ -2007,7 +2007,6 @@ func TestComposeActionsKeepOriginalIdentityAfterProjectRename(t *testing.T) {
 	if lastCall.method != "status" {
 		t.Fatalf("last runner call after rename = %q, want %q", lastCall.method, "status")
 	}
-	assertRunIdentity(t, "status after rename", lastCall.request, server.dataDir, compose.ID)
 
 	stopResponse := server.request(t, http.MethodPost, composeStopPath(project.ID, production.ID, compose.ID), nil)
 	defer stopResponse.Body.Close()
@@ -2538,7 +2537,7 @@ func newTestServer(t *testing.T) *testServer {
 func startHandler(t *testing.T, db *sql.DB, runner composes.ComposeRunner, dataDir string, history metrics.HostHistory, facts metrics.ServiceFacts, volumeRunner volumes.Runner, resolver *volumes.Resolver, options *terminal.Options, imageStore images.Images) (http.Handler, func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	handler, wait := httpapi.NewHandler(ctx, httpapi.Deps{DB: db, Runner: runner, DataDir: dataDir, History: history, Services: facts,
+	handler, wait := httpapi.NewHandler(ctx, httpapi.Deps{DB: db, Runner: runner, Engine: engineFor(runner, db), DataDir: dataDir, History: history, Services: facts,
 		VolumeRunner: volumeRunner, VolumeResolver: resolver, Terminal: options, Images: imageStore})
 	var once sync.Once
 	stop := func() { once.Do(func() { cancel(); wait() }) }
@@ -2693,14 +2692,15 @@ func (f *fakeComposeRunner) Restart(_ context.Context, req composes.RunRequest) 
 	return f.restartErr
 }
 
-func (f *fakeComposeRunner) Status(_ context.Context, req composes.RunRequest) (composes.ComposeStatus, error) {
+// statusFor is what the fake Engine reports for a project: the status a test
+// set, else one running container.
+func (f *fakeComposeRunner) statusFor(project string) composes.ComposeStatus {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, fakeComposeRun{method: "status", request: req})
-	if status, ok := f.statuses[req.ProjectName]; ok {
-		return status, nil
+	if status, ok := f.statuses[project]; ok {
+		return status
 	}
-	return composes.ComposeStatus{Running: 1, Total: 1}, nil
+	return composes.ComposeStatus{Running: 1, Total: 1}
 }
 
 func (f *fakeComposeRunner) Config(context.Context, composes.RunRequest) ([]byte, error) {

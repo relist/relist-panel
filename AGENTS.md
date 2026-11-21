@@ -21,7 +21,7 @@ Conventional Commits, no scope (`feat: ...`, `fix: ...`, `chore: ...`). See `doc
 To run this checkout for real (browser, curl through Traefik, deploys), use `task e2e:serve`. Then read ports and credentials from `.data/e2e/env`, and never guess them. Run the Playwright specs with `task e2e`.
 
 - Every checkout gets its own `docker:dind` sandbox, so worktrees never collide.
-- The host's default Docker runs the user's live install: reach Docker only through the sandbox's `DOCKER_HOST`.
+- The host's default Docker runs the user's live install: reach Docker only through `source .data/e2e/env`.
 - Ask before `task e2e:down`.
 
 For a manual check, by yourself or through another agent, follow "Running a manual check" in `docs/agents/live-checks.md`. When it passes, add its important checks to `e2e/`.

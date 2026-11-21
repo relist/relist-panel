@@ -8,7 +8,11 @@ How an agent runs this checkout for real: browser checks, curl through Traefik, 
 2. **Read ports and credentials from `.data/e2e/env`, or `.data/e2e/env.json`.** Never guess a port or write that file yourself.
    - The script writes it from `docker port` on every `serve` and `reload`, and `down` deletes it.
    - Docker picks both host ports itself, so two sandboxes never ask for the same one.
-3. **Use Docker only through the sandbox.** Either `source .data/e2e/env`, which sets `DOCKER_HOST` to the sandbox's unix socket and `DOCKER_CONFIG` to an empty config, or `docker exec` on the sandbox container.
+3. **Use Docker only through the sandbox.** Either `source .data/e2e/env`, or `docker exec` on the sandbox container.
+   - The sandbox's Docker API is TLS on a loopback port. `source .data/e2e/env` sets `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`, `DOCKER_CONFIG` (an empty config) and `NO_PROXY`. Setting `DOCKER_HOST` alone fails with a TLS error.
+   - The cert files are in `.data/e2e/certs`. Anyone who can read them controls that sandbox's dind, so never copy them out of `.data/`.
+   - A sandbox made before this change has no TLS port, and `serve` and `reload` refuse it. Ask the user, then `task e2e:down` and `task e2e:serve` (rule 4 still holds).
+   - It is designed to work on Docker Desktop (macOS, and Windows from a WSL shell), but that has not been tested yet. Plain Windows shells are not supported, because the script is bash.
    - The host's default Docker runs the user's live install (`relist-panel-panel-1`, `relist-panel-traefik-1`) and other projects.
    - Never run `docker compose` in a checkout directory.
    - Never run the `relist-panel` binary inside the live container: old builds start a second server on any argument, `--help` included.
@@ -20,7 +24,7 @@ How an agent runs this checkout for real: browser checks, curl through Traefik, 
 |---|---|
 | `PANEL_URL` | `https://panel.localhost:<port>`. The panel is served through Traefik with a self-signed certificate (`curl -k`, Playwright `ignoreHTTPSErrors`). |
 | `E2E_HTTP_PORT`, `E2E_HTTPS_PORT` | Traefik's entrypoints. Deployed Domains use `*.localhost` hosts: `curl http://app.localhost:$E2E_HTTP_PORT/`. Browsers and curl resolve `*.localhost` to 127.0.0.1; Node does not, so `e2e/lib/sandbox.ts` does it in its HTTP client. |
-| `DOCKER_HOST`, `DOCKER_CONFIG` | The sandbox's Docker API. Containers inside it: `relist-panel` (data dir `/var/lib/relist-panel`) and `relist-traefik`. |
+| `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`, `DOCKER_CONFIG`, `NO_PROXY` | The sandbox's Docker API (TLS). Containers inside it: `relist-panel` (data dir `/var/lib/relist-panel`) and `relist-traefik`. |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | The sandbox's admin account. |
 
 Commands:
@@ -65,7 +69,7 @@ Use this for anything no spec covers yet. Run it yourself with whatever browser 
 7. Turn the checks that matter into `e2e/tests/<feature>.spec.ts`, as in "e2e specs" above. Run `task e2e -- <feature>` twice on the same sandbox: the second run proves the spec can run again.
 
 **When another agent runs the checklist,** give it everything it cannot find out on its own:
-- Tell it to `source <repo>/.data/e2e/env` in every shell, and never to unset `DOCKER_HOST` or use the default Docker host.
+- Tell it to `source <repo>/.data/e2e/env` in every shell, and never to unset `DOCKER_HOST` or `DOCKER_TLS_VERIFY` or use the default Docker host.
 - Tell it not to edit source files, commit, push or remove the sandbox.
 - API writes need the header `Origin: $PANEL_URL`.
 - An HTTP→HTTPS redirect's Location has no port, so check only its status and scheme.

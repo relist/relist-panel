@@ -5,8 +5,8 @@ import "context"
 // EngineContainer is one Container of a Compose's project, as the Docker
 // Engine lists it.
 type EngineContainer struct {
-	ID, Name, Service string
-	Running           bool
+	ID, Name, Service, Project string
+	Running                    bool
 }
 
 // EngineMount is one volume mount of a Container. Anonymous is Docker's own
@@ -32,6 +32,9 @@ type ContainerEngine interface {
 	// ProjectContainers lists the project's Containers in every state, one-off
 	// ones (compose run) left out.
 	ProjectContainers(ctx context.Context, project string) ([]EngineContainer, error)
+	// ComposeContainers lists every Compose-managed container in every state,
+	// one-off ones (compose run) left out, each with its project.
+	ComposeContainers(ctx context.Context) ([]EngineContainer, error)
 	Inspect(ctx context.Context, id string) (EngineState, error)
 	// Stop stops a Container within its own StopTimeout (stop_grace_period).
 	Stop(ctx context.Context, id string) error

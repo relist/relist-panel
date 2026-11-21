@@ -3,7 +3,9 @@ package dockerexec_test
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -38,8 +40,8 @@ func TestEngineProjectContainers(t *testing.T) {
 		}
 		filters = req.URL.Query().Get("filters")
 		_, _ = w.Write([]byte(`[
-			{"Id":"a","Names":["/p-web-1"],"State":"running","Labels":{"com.docker.compose.service":"web"}},
-			{"Id":"b","Names":["/p-old-1"],"State":"exited","Labels":{"com.docker.compose.service":"old"}}
+			{"Id":"a","Names":["/p-web-1"],"State":"running","Labels":{"com.docker.compose.service":"web","com.docker.compose.project":"p"}},
+			{"Id":"b","Names":["/p-old-1"],"State":"exited","Labels":{"com.docker.compose.service":"old","com.docker.compose.project":"p"}}
 		]`))
 	}))
 	got, err := dockerexec.NewEngine(socket).ProjectContainers(context.Background(), "p")
@@ -47,14 +49,66 @@ func TestEngineProjectContainers(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []composes.EngineContainer{
-		{ID: "a", Name: "p-web-1", Service: "web", Running: true},
-		{ID: "b", Name: "p-old-1", Service: "old", Running: false},
+		{ID: "a", Name: "p-web-1", Service: "web", Project: "p", Running: true},
+		{ID: "b", Name: "p-old-1", Service: "old", Project: "p", Running: false},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("containers = %+v, want %+v", got, want)
 	}
 	if want := `{"label":["com.docker.compose.project=p","com.docker.compose.oneoff=False"]}`; filters != want {
 		t.Fatalf("filters = %s, want %s", filters, want)
+	}
+}
+
+func composeContainersDaemon(t *testing.T, filters *string, query *url.Values) string {
+	return newFakeDaemon(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/containers/json" || req.Method != http.MethodGet {
+			http.Error(w, "unexpected "+req.URL.String(), http.StatusBadRequest)
+			return
+		}
+		*query = req.URL.Query()
+		*filters = req.URL.Query().Get("filters")
+		_, _ = w.Write([]byte(`[
+			{"Id":"a","Names":["/relist-c1-web-1"],"State":"running","Labels":{"com.docker.compose.service":"web","com.docker.compose.project":"relist-c1"}},
+			{"Id":"b","Names":["/relist-c19-web-1"],"State":"exited","Labels":{"com.docker.compose.service":"web","com.docker.compose.project":"relist-c19"}},
+			{"Id":"c","Names":["/relist-c19-db-1"],"State":"running","Labels":{"com.docker.compose.service":"db","com.docker.compose.project":"relist-c19"}}
+		]`))
+	}))
+}
+
+func TestComposeContainers(t *testing.T) {
+	var filters string
+	var query url.Values
+	socket := composeContainersDaemon(t, &filters, &query)
+	got, err := dockerexec.NewEngine(socket).ComposeContainers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []composes.EngineContainer{
+		{ID: "a", Name: "relist-c1-web-1", Service: "web", Project: "relist-c1", Running: true},
+		{ID: "b", Name: "relist-c19-web-1", Service: "web", Project: "relist-c19", Running: false},
+		{ID: "c", Name: "relist-c19-db-1", Service: "db", Project: "relist-c19", Running: true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("containers = %+v, want %+v", got, want)
+	}
+	if query.Get("all") != "1" {
+		t.Fatalf("all = %q, want 1", query.Get("all"))
+	}
+	if want := `{"label":["com.docker.compose.project","com.docker.compose.oneoff=False"]}`; filters != want {
+		t.Fatalf("filters = %s, want %s", filters, want)
+	}
+}
+
+func TestComposeContainersSkipsOneOff(t *testing.T) {
+	var filters string
+	var query url.Values
+	socket := composeContainersDaemon(t, &filters, &query)
+	if _, err := dockerexec.NewEngine(socket).ComposeContainers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(filters, "com.docker.compose.oneoff=False") {
+		t.Fatalf("filters = %s, want the oneoff=False label", filters)
 	}
 }
 

@@ -13,6 +13,8 @@ export type Sandbox = {
   httpsPort: number;
   dockerHost: string;
   dockerConfig: string;
+  dockerTlsVerify: string;
+  dockerCertPath: string;
   adminEmail: string;
   adminPassword: string;
 };
@@ -29,6 +31,18 @@ export function sandbox(): Sandbox {
     cached = JSON.parse(fs.readFileSync(envFile, 'utf8')) as Sandbox;
   }
   return cached;
+}
+
+/** The env a docker CLI child process needs to reach this sandbox. */
+export function dockerEnv(): Record<string, string> {
+  const env = sandbox();
+  return {
+    DOCKER_HOST: env.dockerHost,
+    DOCKER_TLS_VERIFY: env.dockerTlsVerify,
+    DOCKER_CERT_PATH: env.dockerCertPath,
+    DOCKER_CONFIG: env.dockerConfig,
+    NO_PROXY: `${process.env.NO_PROXY ? `${process.env.NO_PROXY},` : ''}127.0.0.1,localhost`,
+  };
 }
 
 export type Reply = { status: number; headers: http.IncomingHttpHeaders; body: string };

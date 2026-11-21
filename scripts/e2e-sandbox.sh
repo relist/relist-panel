@@ -8,8 +8,11 @@
 # Only Traefik's two entrypoints reach the host, on ports Docker picks when the
 # container starts, so two sandboxes can never ask for the same port. The panel
 # is served through Traefik like on a real host, at panel.localhost; deployed
-# Domains use other *.localhost hosts. The dind Docker API is a unix socket
-# under $XDG_RUNTIME_DIR, owned by your group, so no port is needed for it.
+# Domains use other *.localhost hosts. The dind Docker API is TLS-only
+# (--tlsverify) on a third loopback port Docker picks, 127.0.0.1 only. dind makes
+# its own certs; `serve` and `reload` copy the client ones to .data/e2e/certs
+# (anyone who can read them controls this sandbox's dind). A TCP port, not a
+# bind-mounted unix socket, so this also works on Docker Desktop.
 #
 # Never guess a port: read .data/e2e/env (shell) or .data/e2e/env.json, which
 # `serve` and `reload` rewrite from `docker port` every time and `down` removes.
@@ -34,7 +37,6 @@ NAME=${SANDBOX_NAME:-relist-e2e-$SLUG}
 PROJECT=relist-e2e
 IMAGE=relist-panel:e2e
 OUT=$ROOT/.data/e2e
-SOCK_DIR=${XDG_RUNTIME_DIR:-/tmp/relist-e2e-$(id -u)}/relist-e2e/$NAME
 EMAIL=admin@e2e.local
 SEED_DB=${SEED_DB:-}
 SEED_EMAIL=${SEED_EMAIL:-}
@@ -48,8 +50,10 @@ chmod 700 "$OUT"
 # A broken ~/.docker/config.json must not matter, and nothing here may reach
 # another Docker host by accident.
 export DOCKER_CONFIG="$OUT/dockercfg"
-host() { env -u DOCKER_HOST docker "$@"; }
-dind() { DOCKER_HOST="unix://$SOCK_DIR/docker.sock" docker "$@"; }
+# A proxy in the user's shell must not catch the loopback Docker API or curl.
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}127.0.0.1,localhost"
+host() { env -u DOCKER_HOST -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH docker "$@"; }
+dind() { DOCKER_HOST="tcp://127.0.0.1:$(host_port 2376)" DOCKER_TLS_VERIFY=1 DOCKER_CERT_PATH="$OUT/certs" docker "$@"; }
 
 wait_for() { # wait_for <seconds> <command...>
 	local n=$1; shift
@@ -59,6 +63,27 @@ wait_for() { # wait_for <seconds> <command...>
 
 host_port() { # host_port <container port>: the host port Docker picked
 	host port "$NAME" "$1/tcp" | head -1 | sed 's/.*://'
+}
+
+require_tls_port() { # an older sandbox has no 2376 binding: stop before touching it
+	host inspect -f '{{json .HostConfig.PortBindings}}' "$NAME" 2>/dev/null | grep -q '"2376/tcp"' \
+		|| fail "this sandbox was made by an older e2e-sandbox.sh (no TLS port). Run: task e2e:down, then task e2e:serve"
+}
+
+copy_certs() { # dind makes new public certs on every start: copy them out again
+	local f ok
+	rm -rf "$OUT/certs"
+	for _ in $(seq 1 60); do
+		ok=1
+		host cp "$NAME:/certs/client/." "$OUT/certs" >/dev/null 2>&1 || ok=0
+		for f in ca cert key; do [ -s "$OUT/certs/$f.pem" ] || ok=0; done
+		[ "$ok" = 1 ] && break
+		sleep 1
+	done
+	[ "$ok" = 1 ] || fail "dind client certs did not appear (docker logs $NAME)"
+	chmod 700 "$OUT/certs"
+	chmod 644 "$OUT/certs/ca.pem" "$OUT/certs/cert.pem"
+	chmod 600 "$OUT/certs/key.pem"
 }
 
 healthy() {
@@ -74,7 +99,7 @@ write_env() {
 	local http https
 	http=$(host_port 80)
 	https=$(host_port 443)
-	wait_for 90 healthy "$https" || fail "panel not healthy through Traefik (docker logs: DOCKER_HOST=unix://$SOCK_DIR/docker.sock docker logs relist-panel)"
+	wait_for 90 healthy "$https" || fail "panel not healthy through Traefik (docker logs: source $OUT/env && docker logs relist-panel)"
 	umask 077
 	cat >"$OUT/env" <<EOF
 # Written by scripts/e2e-sandbox.sh for $ROOT. Do not edit; rerun task e2e:serve.
@@ -82,8 +107,11 @@ export E2E_SANDBOX=$NAME
 export PANEL_URL=https://panel.localhost:$https
 export E2E_HTTP_PORT=$http
 export E2E_HTTPS_PORT=$https
-export DOCKER_HOST=unix://$SOCK_DIR/docker.sock
+export DOCKER_HOST=tcp://127.0.0.1:$(host_port 2376)
+export DOCKER_TLS_VERIFY=1
+export DOCKER_CERT_PATH=$OUT/certs
 export DOCKER_CONFIG=$OUT/dockercfg
+export NO_PROXY="\${NO_PROXY:+\$NO_PROXY,}127.0.0.1,localhost"
 export ADMIN_EMAIL=$(cat "$OUT/admin-email.txt")
 export ADMIN_PASSWORD=$(cat "$OUT/admin-pw.txt")
 EOF
@@ -93,7 +121,9 @@ EOF
   "panelUrl": "https://panel.localhost:$https",
   "httpPort": $http,
   "httpsPort": $https,
-  "dockerHost": "unix://$SOCK_DIR/docker.sock",
+  "dockerHost": "tcp://127.0.0.1:$(host_port 2376)",
+  "dockerTlsVerify": "1",
+  "dockerCertPath": "$OUT/certs",
   "dockerConfig": "$OUT/dockercfg",
   "adminEmail": "$(cat "$OUT/admin-email.txt")",
   "adminPassword": "$(cat "$OUT/admin-pw.txt")"
@@ -101,7 +131,7 @@ EOF
 EOF
 	say "panel    https://panel.localhost:$https  (self-signed; $(cat "$OUT/admin-email.txt"))"
 	say "traefik  http 127.0.0.1:$http  https 127.0.0.1:$https  (Host: <name>.localhost)"
-	say "docker   source $OUT/env   # sets DOCKER_HOST to this sandbox only"
+	say "docker   source $OUT/env   # sets DOCKER_HOST, TLS and NO_PROXY for this sandbox only"
 }
 
 case "${1:-serve}" in
@@ -117,13 +147,16 @@ env)
 	;;
 down)
 	host rm -f -v "$NAME" >/dev/null 2>&1 || true
-	rm -rf "$SOCK_DIR" "$OUT/env" "$OUT/env.json" "$OUT/admin-pw.txt" "$OUT/admin-email.txt"
+	rm -rf "$OUT/certs" "$OUT/env" "$OUT/env.json" "$OUT/admin-pw.txt" "$OUT/admin-email.txt"
 	say "removed $NAME"
 	exit 0
 	;;
 reload)
+	host info >/dev/null 2>&1 || fail "cannot reach the host's Docker (is it running? a sourced DOCKER_* env?)"
 	host inspect "$NAME" >/dev/null 2>&1 || fail "no sandbox: run task e2e:serve"
+	require_tls_port
 	host start "$NAME" >/dev/null
+	copy_certs
 	wait_for 60 dind info || fail "dind did not come up"
 	build
 	(cd "$OUT/install" && dind compose -p "$PROJECT" up -d panel >/dev/null 2>&1) || fail "compose up failed"
@@ -135,6 +168,7 @@ serve) ;;
 *) fail "unknown command $1 (serve, reload, env, ls, down)" ;;
 esac
 
+host info >/dev/null 2>&1 || fail "cannot reach the host's Docker (is it running? a sourced DOCKER_* env?)"
 if [ -n "$SEED_DB" ]; then
 	[ -s "$SEED_DB" ] || fail "SEED_DB $SEED_DB is missing or empty"
 	host inspect "$NAME" >/dev/null 2>&1 && fail "SEED_DB needs a new sandbox: run task e2e:down first"
@@ -143,17 +177,16 @@ fi
 if ! host inspect "$NAME" >/dev/null 2>&1; then
 	say "starting $NAME"
 	rm -f "$OUT/admin-pw.txt" "$OUT/admin-email.txt" # a new dind has a new panel.db
-	rm -rf "$SOCK_DIR" && mkdir -p "$SOCK_DIR"
 	host run -d --privileged --name "$NAME" \
 		--label "relist.e2e.root=$ROOT" \
-		-v "$SOCK_DIR:/e2e-sock" \
-		-p 127.0.0.1::80 -p 127.0.0.1::443 \
-		docker:29-dind \
-		--host=unix:///var/run/docker.sock --host=unix:///e2e-sock/docker.sock --group="$(id -g)" >/dev/null
+		-p 127.0.0.1::80 -p 127.0.0.1::443 -p 127.0.0.1::2376 \
+		docker:29-dind >/dev/null
 else
+	require_tls_port
 	host start "$NAME" >/dev/null
 fi
-wait_for 60 dind info || fail "dind did not come up on $SOCK_DIR/docker.sock"
+copy_certs
+wait_for 60 dind info || fail "dind did not come up (docker logs $NAME)"
 
 build
 cp "$ROOT/docker-compose.yml" "$OUT/install/docker-compose.yml"
@@ -168,7 +201,7 @@ if [ -n "$SEED_DB" ]; then
 fi
 (cd "$OUT/install" && dind compose -p "$PROJECT" up -d >/dev/null 2>&1) || fail "compose up failed"
 wait_for 90 dind exec relist-panel wget -qO- http://127.0.0.1:8080/healthz \
-	|| fail "panel not healthy (DOCKER_HOST=unix://$SOCK_DIR/docker.sock docker logs relist-panel)"
+	|| fail "panel not healthy (source $OUT/env && docker logs relist-panel)"
 
 if [ ! -s "$OUT/admin-pw.txt" ]; then
 	head -c 32 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 24 >"$OUT/admin-pw.txt"
