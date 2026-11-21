@@ -32,14 +32,20 @@ database).
   Users tab's rows for that database), read in the same admin session.
   A one-database dump carries no `CONNECT`, no membership in the owner role,
   and on MySQL and MariaDB no schema grant at all, so without it a
-  recreated app user would exist but reach nothing.
+  recreated app user would exist but reach nothing. The access query prints
+  one JSON line, user names hex-encoded, and only the last line is read as
+  access: psql prints a role name as it is, so a name with a newline and a
+  tab in it could otherwise print another user's line.
 - **Recreate and restore** is the explicit action ADR-0039 left for a
   `volume_missing` Database. Reconcile still never recreates a volume on
   its own. The Admin picks one Backup per database (only Backups still on
   disk), types the name, and a `recreate` job:
   1. makes the container on an empty volume with the Database's password,
      so its hosts and credentials stay the same, and waits for it to be
-     healthy;
+     healthy. It reads the Database again for this, under its lock: a
+     Rename since the checks gives the container its new alias, and a
+     password reset the panel stopped in the middle of gives the new server
+     the password every admin step uses;
   2. creates again, with their stored passwords, the users the panel made
      (`database_users`);
   3. restores each Backup as it was backed up, with its owner when that

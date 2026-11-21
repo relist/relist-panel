@@ -181,7 +181,8 @@ func (pgDumper) ReplaceSQL(target, prev string) string {
 
 // AccessSQL wraps the Users tab's access query, for one database.
 func (pgDumper) AccessSQL(target string) string {
-	return "SELECT x.u || E'\\t' || x.l FROM (" + pgAccounts{}.AccessQuery() + ") AS x(u, d, l) WHERE x.d = " + pgLit(target) + ";"
+	return "SELECT coalesce(json_object_agg(encode(convert_to(x.u, 'UTF8'), 'hex'), x.l), '{}') FROM (" +
+		pgAccounts{}.AccessQuery() + ") AS x(u, d, l) WHERE x.d = " + pgLit(target) + ";"
 }
 
 // NewSQL creates target owned by owner ("" = postgres), restricted like
@@ -323,7 +324,7 @@ func (mysqlDumper) ReplaceSQL(target, prev string) string {
 // AccessSQL wraps the Users tab's access query, for one database; mysql -N
 // prints its two columns with a tab between them.
 func (mysqlDumper) AccessSQL(target string) string {
-	return "SELECT y.u, y.lvl FROM (" + myAccounts{}.AccessQuery() + ") AS y WHERE y.db = " + myLit(target) + ";"
+	return "SELECT COALESCE(JSON_OBJECTAGG(HEX(y.u), y.lvl), '{}') FROM (" + myAccounts{}.AccessQuery() + ") AS y WHERE y.db = " + myLit(target) + ";"
 }
 
 // NewSQL creates target with the character set and collation of from.

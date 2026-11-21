@@ -184,7 +184,7 @@ export function DatabasePage() {
         <Alert
           action={
             data.engine !== 'redis' && (
-              <Button danger onClick={() => setRecreating(true)}>
+              <Button danger disabled={jobRunning} onClick={() => setRecreating(true)}>
                 Recreate and restore…
               </Button>
             )

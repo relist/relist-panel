@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"relist-panel/internal/safely"
@@ -162,7 +163,7 @@ func (s *Service) Startup(ctx context.Context) error {
 		return nil
 	}
 	// Before ReconcileAll, which would start a half-made Recreate.
-	errs := []error{s.finishInterruptedRecreates(ctx)}
+	errs := []error{s.finishInterruptedRecreates(ctx), s.removeTombstoneRolesDumps(ctx)}
 	for _, pattern := range []string{"backups/*.partial", "backups/*.age.tmp", "uploads/*"} {
 		files, err := filepath.Glob(filepath.Join(s.d.DataDir, ".databases", "*", pattern))
 		if err != nil {
@@ -172,6 +173,34 @@ func (s *Service) Startup(ctx context.Context) error {
 			if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
 				errs = append(errs, err)
 			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// removeTombstoneRolesDumps removes the version change roles dumps, which
+// hold every role's password hash, that a build before the Delete removed
+// them left on a deleted Database's kept Backups.
+func (s *Service) removeTombstoneRolesDumps(ctx context.Context) error {
+	dumps, err := filepath.Glob(filepath.Join(s.d.DataDir, ".databases", "*", "backups", "version-change-*-roles.sql"))
+	if err != nil {
+		return err
+	}
+	seen := map[int64]bool{}
+	var errs []error
+	for _, p := range dumps {
+		id, err := strconv.ParseInt(filepath.Base(filepath.Dir(filepath.Dir(p))), 10, 64)
+		if err != nil || seen[id] {
+			continue
+		}
+		seen[id] = true
+		d, err := s.d.Store.Get(ctx, id)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			errs = append(errs, err)
+			continue
+		}
+		if errors.Is(err, ErrNotFound) || d.DeletedAt != nil {
+			errs = append(errs, s.removeRolesDumps(id))
 		}
 	}
 	return errors.Join(errs...)

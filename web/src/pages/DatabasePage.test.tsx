@@ -266,6 +266,13 @@ describe('DatabasePage', () => {
     expect(repair.className).not.toContain('ant-btn-primary');
   });
 
+  it('lets no second Recreate start while one runs', async () => {
+    api.getDatabase.mockResolvedValue({ ...shop, job: 'recreate', status: 'volume_missing' });
+    renderPage();
+    const button = (await screen.findByRole('button', { name: 'Recreate and restore…' })) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
   it('offers no Recreate for Redis, which keeps no Backups', async () => {
     api.getDatabase.mockResolvedValue({ ...shop, engine: 'redis', status: 'volume_missing' });
     renderPage();

@@ -38,14 +38,22 @@ export function DatabaseRecreateModal({ db, onClose, open }: { db: Database; onC
   const [picked, setPicked] = useState<Record<string, number | undefined>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // Picks start as the newest of each database once per opening: a reload
+  // of the Backups list while the dialog is open keeps the Admin's picks.
+  const [seeded, setSeeded] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setSeeded(false);
+      return;
+    }
+    if (seeded || backups.data === undefined) return;
     const next: Record<string, number> = {};
     for (const [name, list] of byDatabase) next[name] = list[0].id;
     setPicked(next);
     setError(undefined);
-  }, [open, byDatabase]);
+    setSeeded(true);
+  }, [open, seeded, backups.data, byDatabase]);
 
   const ids = Object.values(picked).filter((id): id is number => id !== undefined);
 

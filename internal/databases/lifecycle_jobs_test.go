@@ -3,6 +3,7 @@ package databases
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,6 +214,42 @@ func TestTombstoneDropsTheRolesDumps(t *testing.T) {
 	}
 	if _, _, err := r.svc.BackupPath(ctx, d.ID, b.ID); err != nil {
 		t.Fatalf("the kept Backup went too: %v", err)
+	}
+}
+
+// A tombstone an earlier build left still holds the roles dump of a version
+// change, with every role's password hash: Startup removes it. A live
+// Database keeps its own.
+func TestStartupRemovesRolesDumpsLeftOnTombstones(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	gone := r.create(t, "Gone", "postgres", "18")
+	live := r.create(t, "Live", "postgres", "18")
+	r.dumps("pg_dump -U postgres", "X;\n")
+	r.manualBackup(t, gone.ID)
+	if err := r.svc.Delete(ctx, gone.ID, "Gone", false); err != nil {
+		t.Fatal(err)
+	}
+	dump := func(id int64) string {
+		dir := filepath.Join(r.dataDir, ".databases", fmt.Sprint(id), "backups")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(dir, "version-change-3-roles.sql")
+		if err := os.WriteFile(p, []byte("CREATE ROLE app;\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	old, kept := dump(gone.ID), dump(live.ID)
+	if err := r.svc.Startup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("the tombstone's roles dump survived: %v", err)
+	}
+	if _, err := os.Stat(kept); err != nil {
+		t.Fatalf("the live Database's roles dump went: %v", err)
 	}
 }
 

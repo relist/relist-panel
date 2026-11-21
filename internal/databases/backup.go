@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -303,22 +304,31 @@ func (s *Service) executeBackup(ctx context.Context, d Database, dp Dumper, b Ba
 // without it creates the database the plain way.
 //
 // One admin session reads both: the inspect prints one line while the
-// database exists, then each user with access prints "<user>\t<level>".
+// database exists, then the access query prints one JSON line of hex user
+// names to levels. psql prints a name as it is, newlines and tabs too, so
+// only that last line, which no name can break, is read as access.
 func (s *Service) readBackupState(ctx context.Context, d Database, dp Dumper, logical string) BackupState {
 	out, _, err := s.admin(ctx, d, dp, dp.InspectSQL(logical)+"\n"+dp.AccessSQL(logical))
 	if err != nil {
 		return BackupState{}
 	}
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	st := BackupState{Prev: strings.TrimSpace(lines[0])}
-	for _, line := range lines[1:] {
-		user, level, ok := strings.Cut(line, "\t")
-		if lvl := Access(strings.TrimSpace(level)); ok && user != "" && (lvl == AccessRead || lvl == AccessFull) {
-			if st.Access == nil {
-				st.Access = map[string]Access{}
+	var st BackupState
+	var levels map[string]string
+	if json.Unmarshal([]byte(strings.TrimSpace(lines[len(lines)-1])), &levels) == nil {
+		lines = lines[:len(lines)-1]
+		for key, level := range levels {
+			user, err := hex.DecodeString(key)
+			if lvl := Access(level); err == nil && len(user) > 0 && (lvl == AccessRead || lvl == AccessFull) {
+				if st.Access == nil {
+					st.Access = map[string]Access{}
+				}
+				st.Access[string(user)] = lvl
 			}
-			st.Access[user] = lvl
 		}
+	}
+	if len(lines) > 0 {
+		st.Prev = strings.TrimSpace(lines[0])
 	}
 	return st
 }

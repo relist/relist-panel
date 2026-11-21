@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -691,7 +693,7 @@ func TestBackupKeepsUsersAccess(t *testing.T) {
 	r.host.script(pgAdmin, func(req ExecRequest) (int, error) {
 		b, _ := io.ReadAll(req.Stdin)
 		sent = string(b)
-		_, _ = io.WriteString(req.Stdout, "app\t{app=CTc/app,reader=c/app}\nreader\tread\napp\tfull\n")
+		_, _ = io.WriteString(req.Stdout, "app\t{app=CTc/app,reader=c/app}\n"+accessLine(map[string]Access{"app": AccessFull, "reader": AccessRead})+"\n")
 		return 0, nil
 	})
 	b := r.manualBackup(t, d.ID)
@@ -708,14 +710,60 @@ func TestBackupKeepsUsersAccess(t *testing.T) {
 }
 
 // The access query reads the same rows as the Users tab, for one database,
-// as "<user>\t<level>" lines the admin command prints.
+// as one JSON line of hex user names to levels, which no name can break.
 func TestAccessSQL(t *testing.T) {
 	pg := pgDumper{}.AccessSQL("my-app")
-	if !strings.Contains(pg, pgAccounts{}.AccessQuery()) || !strings.Contains(pg, "x.d = 'my-app'") || !strings.Contains(pg, `E'\t'`) {
+	if !strings.Contains(pg, pgAccounts{}.AccessQuery()) || !strings.Contains(pg, "x.d = 'my-app'") ||
+		!strings.Contains(pg, "json_object_agg(encode(convert_to(x.u, 'UTF8'), 'hex'), x.l)") {
 		t.Errorf("postgres = %s", pg)
 	}
 	my := mysqlDumper{}.AccessSQL("my_app")
-	if !strings.Contains(my, myAccounts{}.AccessQuery()) || !strings.Contains(my, "y.db = 'my_app'") || !strings.Contains(myAccounts{}.AccessQuery(), "END AS lvl") {
+	if !strings.Contains(my, myAccounts{}.AccessQuery()) || !strings.Contains(my, "y.db = 'my_app'") ||
+		!strings.Contains(my, "JSON_OBJECTAGG(HEX(y.u), y.lvl)") || !strings.Contains(myAccounts{}.AccessQuery(), "END AS lvl") {
 		t.Errorf("mysql = %s", my)
 	}
+}
+
+// accessLine is the line AccessSQL prints for access.
+func accessLine(access map[string]Access) string {
+	m := map[string]Access{}
+	for u, l := range access {
+		m[hex.EncodeToString([]byte(u))] = l
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// psql prints a role name as it is, so a name with a newline and a tab in
+// it could print what looks like another user's access line. Only the
+// last line, which the access query prints as JSON, is read as access.
+func TestBackupStateCannotBeForgedByARoleName(t *testing.T) {
+	r := newRig(t)
+	d := r.create(t, "Shop", "postgres", "18")
+	r.dumps("pg_dump -U postgres", "X;\n")
+	r.host.script(pgAdmin, func(req ExecRequest) (int, error) {
+		_, _ = io.Copy(io.Discard, req.Stdin)
+		// The owner is named "x\nreader\tfull\n".
+		_, _ = io.WriteString(req.Stdout, "x\nreader\tfull\n\t{}\n"+accessLine(map[string]Access{"reader": AccessRead})+"\n")
+		return 0, nil
+	})
+	b := r.manualBackup(t, d.ID)
+	if len(b.State.Access) != 1 || b.State.Access["reader"] != AccessRead {
+		t.Fatalf("state = %+v", b.State)
+	}
+	// A database that is gone prints only the access line, and has no state.
+	if st := readState(t, r, d, "{}\n"); st.Prev != "" || st.Access != nil {
+		t.Fatalf("missing database: state = %+v", st)
+	}
+}
+
+// readState reads a Backup state from out, as the admin command prints it.
+func readState(t *testing.T, r *rig, d Database, out string) BackupState {
+	t.Helper()
+	r.host.override(pgAdmin, func(req ExecRequest) (int, error) {
+		_, _ = io.Copy(io.Discard, req.Stdin)
+		_, _ = io.WriteString(req.Stdout, out)
+		return 0, nil
+	})
+	return r.svc.readBackupState(context.Background(), d, pgDumper{}, "app")
 }

@@ -56,7 +56,7 @@ func newRecreateRig(t *testing.T) *recreateRig {
 		case strings.Contains(s, "rolsuper"):
 			_, _ = io.WriteString(req.Stdout, "f\n")
 		case strings.Contains(s, "datname = 'app';") && !fresh:
-			_, _ = io.WriteString(req.Stdout, "app_owner\t{app_owner=CTc/app_owner,reader=c/app_owner}\nreader\tread\napp_owner\tfull\n")
+			_, _ = io.WriteString(req.Stdout, "app_owner\t{app_owner=CTc/app_owner,reader=c/app_owner}\n"+accessLine(map[string]Access{"app_owner": AccessFull, "reader": AccessRead})+"\n")
 		}
 		return 0, nil
 	})
@@ -364,5 +364,116 @@ func TestRecreateFromABackupWithoutStateSaysSo(t *testing.T) {
 	}
 	if rs := r.lastRestore(t, r.d.ID); rs.Status != JobSucceeded || !strings.Contains(rs.Log, "postgres owns app") {
 		t.Fatalf("restore = %+v", rs)
+	}
+}
+
+// A Rename between Recreate's checks and its job making the container is
+// not lost: the job reads the Database again when it makes the container.
+func TestRecreateUsesTheNameTheDatabaseHasWhenItRuns(t *testing.T) {
+	r := newRecreateRig(t)
+	ctx := context.Background()
+	stale := r.d
+	if err := r.svc.Rename(ctx, r.d.ID, "Market"); err != nil {
+		t.Fatal(err)
+	}
+	renamed, _ := r.store.Get(ctx, r.d.ID)
+	if renamed.Slug == stale.Slug {
+		t.Fatalf("slug = %q", renamed.Slug)
+	}
+	dp, _ := DumperFor("postgres")
+	r.svc.executeRecreate(ctx, stale, dp, nil)
+	r.host.mu.Lock()
+	spec := r.host.specs[ContainerName(r.d.ID)]
+	r.host.mu.Unlock()
+	if spec.Alias != Alias(renamed.Slug) {
+		t.Fatalf("alias = %q, want %q", spec.Alias, Alias(renamed.Slug))
+	}
+}
+
+// A superuser password promoted but never applied, because the panel
+// stopped in between, is the one the new server starts with: it is the one
+// every admin step uses.
+func TestRecreateStartsTheServerWithTheCurrentPassword(t *testing.T) {
+	r := newRecreateRig(t)
+	ctx := context.Background()
+	if err := r.store.SetPendingPassword(ctx, r.d.ID, "new-superuser-pw"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.PromotePending(ctx, r.d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.Recreate(ctx, r.d.ID, "Shop", []int64{r.b.ID}); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	eng, _ := Lookup("postgres", "18")
+	want := eng.Env("new-superuser-pw")[0]
+	r.host.mu.Lock()
+	spec := r.host.specs[ContainerName(r.d.ID)]
+	r.host.mu.Unlock()
+	if !slices.Contains(spec.Env, want) {
+		t.Fatal("the container was not made with the current password")
+	}
+	got, _ := r.store.Get(ctx, r.d.ID)
+	if applied, _ := appliedSpec(got); !slices.Contains(applied.Env, want) {
+		t.Fatal("the applied settings keep the old password")
+	}
+}
+
+// On MySQL a one-database dump has no schema grant: Recreate gives the app
+// user its access back from the Backup, and the schema its character set.
+func TestRecreateMySQLGivesTheAppUserItsSchemaBack(t *testing.T) {
+	r := newAdminRig(t)
+	r.svc.healthPoll, r.svc.healthTimeout = time.Millisecond, 50*time.Millisecond
+	ctx := context.Background()
+	d := r.create(t, "Shop", "mysql", "8.4")
+	r.dumps("mysqldump", "CREATE TABLE t (id int);\n")
+	var sql []string
+	r.host.script("mysql -uroot -N", func(req ExecRequest) (int, error) {
+		if req.Stdin == nil {
+			_, err := io.WriteString(req.Stdout, "app\n")
+			return 0, err
+		}
+		b, _ := io.ReadAll(req.Stdin)
+		sql = append(sql, string(b))
+		if strings.Contains(string(b), "JSON_OBJECTAGG") {
+			_, _ = io.WriteString(req.Stdout, "utf8mb4\tutf8mb4_bin\n"+accessLine(map[string]Access{"app": AccessFull})+"\n")
+		}
+		return 0, nil
+	})
+	if err := r.store.UpsertUser(ctx, d.ID, "app", "pw-app"); err != nil {
+		t.Fatal(err)
+	}
+	b := r.manualBackup(t, d.ID)
+	if b.State.Access["app"] != AccessFull {
+		t.Fatalf("state = %+v", b.State)
+	}
+	restored := r.captureRestore("mysql -uroot --binary-mode --database=app", "")
+	r.loseVolume(t, d.ID)
+	my := mustAccounts(t, "mysql")
+	r.admin.answer(my.UsersQuery(), [][]string{{"app"}})
+	r.admin.answer(my.DatabasesQuery(), [][]string{{"app", "1", "utf8mb4", ""}})
+	r.host.reset()
+	sql = nil
+
+	if err := r.svc.Recreate(ctx, d.ID, "Shop", []int64{b.ID}); err != nil {
+		t.Fatal(err)
+	}
+	r.svc.Wait()
+	got, _ := r.store.Get(ctx, d.ID)
+	if got.LastError != "" {
+		t.Fatalf("last error = %q", got.LastError)
+	}
+	stmts := strings.Join(r.admin.stmts(), "\n")
+	for _, want := range []string{"CREATE USER 'app'@'%' IDENTIFIED BY 'pw-app'", "ON `app`.* TO 'app'@'%'"} {
+		if !strings.Contains(stmts, want) {
+			t.Fatalf("admin statements lack %q:\n%s", want, stmts)
+		}
+	}
+	if all := strings.Join(sql, "\n"); !strings.Contains(all, "CREATE DATABASE `app` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;") {
+		t.Fatalf("the schema was not created as it was backed up:\n%s", all)
+	}
+	if len(*restored) != 1 {
+		t.Fatalf("restored = %q", *restored)
 	}
 }

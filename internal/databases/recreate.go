@@ -200,7 +200,12 @@ func (s *Service) executeRecreate(ctx context.Context, d Database, dp Dumper, pi
 	}
 	if err == nil {
 		unlock := s.lock(d.ID)
-		err = s.create(ctx, d, spec)
+		var now Database
+		var nowSpec ContainerSpec
+		if now, nowSpec, err = s.recreateSpec(ctx, d.ID); err == nil {
+			d, spec = now, nowSpec
+			err = s.create(ctx, d, spec)
+		}
 		unlock()
 	}
 	if err == nil {
@@ -260,6 +265,34 @@ func (s *Service) executeRecreate(ctx context.Context, d Database, dp Dumper, pi
 		msg = "Recreated, but: " + strings.Join(problems, "; ")
 	}
 	_ = s.d.Store.SetLastError(context.WithoutCancel(ctx), d.ID, msg)
+}
+
+// recreateSpec reads d again, under its lock, for the container: a Rename
+// since Recreate's checks changes its alias. The applied settings' env gets
+// d's password, which a reset the panel stopped in the middle of may not
+// have written there: the new server is initialized with it, and every
+// admin step uses it.
+func (s *Service) recreateSpec(ctx context.Context, id int64) (Database, ContainerSpec, error) {
+	d, err := s.d.Store.Get(ctx, id)
+	if err != nil {
+		return d, ContainerSpec{}, err
+	}
+	eng, err := Lookup(d.Engine, d.Version)
+	if err != nil {
+		return d, ContainerSpec{}, err
+	}
+	spec, err := appliedSpec(d)
+	if err != nil {
+		return d, spec, err
+	}
+	if env := swapEnv(spec.Env, eng.Env(d.Password)); !slices.Equal(env, spec.Env) {
+		spec.Env = env
+		if err := s.saveApplied(ctx, &d, spec); err != nil {
+			return d, spec, err
+		}
+		spec, err = appliedSpec(d)
+	}
+	return d, spec, err
 }
 
 // statelessNote and statelessFix say what a Backup taken before Backups
