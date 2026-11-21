@@ -25,8 +25,15 @@ import (
 
 const (
 	SessionCookieName = "relist_session"
-	sessionLifetime   = 30 * 24 * time.Hour
 	maxRequestBody    = 1 << 20
+
+	// A session ends sessionIdleTimeout after its last request or
+	// sessionMaxLifetime after sign-in, whichever comes first (ADR-0051).
+	sessionMaxLifetime = 7 * 24 * time.Hour
+	sessionIdleTimeout = 24 * time.Hour
+	// sessionTouchInterval is the most often a session's last_seen_at is
+	// written, so busy pages do not write the database on every request.
+	sessionTouchInterval = 10 * time.Minute
 )
 
 var (
@@ -460,23 +467,11 @@ func (s *Service) authenticated(r *http.Request) (User, bool, error) {
 	if err != nil || cookie.Value == "" {
 		return User{}, false, nil
 	}
-
-	var user User
-	var isAdmin bool
-	err = s.db.QueryRowContext(r.Context(), `
-		SELECT users.id, users.email, users.is_admin
-		FROM sessions
-		JOIN users ON users.id = sessions.user_id
-		WHERE sessions.token_hash = ? AND sessions.expires_at > ? AND users.disabled_at IS NULL
-	`, HashSessionToken(cookie.Value), s.now().UTC().Unix()).Scan(&user.ID, &user.Email, &isAdmin)
-	if errors.Is(err, sql.ErrNoRows) {
-		return User{}, false, nil
-	}
-	if err != nil {
+	session, live, err := s.liveSession(r.Context(), cookie.Value)
+	if err != nil || !live {
 		return User{}, false, err
 	}
-	user.IsAdmin = isAdmin || user.ID == OwnerID
-	return user, true, nil
+	return session.user, true, nil
 }
 
 // insertAdmin adds the Owner (id 1) as the first User, or returns
