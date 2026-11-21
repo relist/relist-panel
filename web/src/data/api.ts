@@ -41,6 +41,10 @@ import type {
   DatabaseEngine,
   DatabaseInput,
   QueryRequest,
+  RedisCommandRequest,
+  RedisKeyInfo,
+  RedisKeyValue,
+  RedisResponse,
   QueryResponse,
   QuerySchemaNode,
   ExternalRegistry,
@@ -625,6 +629,14 @@ export const api = {
     request<QueryResponse>(`/api/databases/${id}/query`, { ...jsonInit('POST', body), signal }),
   databaseQuerySchema: (id: number, database: string) =>
     request<QuerySchemaNode[]>(`/api/databases/${id}/query/schema?database=${encodeURIComponent(database)}`),
+  runRedisCommand: (id: number, body: RedisCommandRequest, signal?: AbortSignal) =>
+    request<RedisResponse>(`/api/databases/${id}/redis/command`, { ...jsonInit('POST', body), signal }),
+  redisKeys: (id: number, db: number, pattern: string, cursor: string) =>
+    request<{ cursor: string; keys: RedisKeyInfo[] }>(
+      `/api/databases/${id}/redis/keys?db=${db}&pattern=${encodeURIComponent(pattern)}&cursor=${encodeURIComponent(cursor)}`,
+    ),
+  redisKey: (id: number, db: number, key: string) =>
+    request<RedisKeyValue>(`/api/databases/${id}/redis/key?db=${db}&key=${encodeURIComponent(key)}`),
   listDatabaseBackups: (id: number) => request<DatabaseBackup[]>(`/api/databases/${id}/backups`),
   startDatabaseBackup: (id: number, body: BackupRequest) =>
     request<DatabaseBackup[]>(`/api/databases/${id}/backups`, jsonInit('POST', body)),
