@@ -12,6 +12,7 @@ import type { Database, DatabaseAction, DatabaseCredentials } from '../data/type
 import { DatabaseBackupsTab } from './DatabaseBackupsTab';
 import { DatabaseQueryTab } from './DatabaseQueryTab';
 import { DatabaseRedisTab } from './DatabaseRedisTab';
+import { DirectAccessCard } from './DirectAccessCard';
 import { canBackUp, canRepair, jobNotice, pollInterval, snippet, statusMeta } from './databases-view';
 
 const { Text } = Typography;
@@ -347,6 +348,7 @@ function ConnectionTab({ db }: { db: Database }) {
           hidden
         )}
       </Card>
+      <DirectAccessCard db={db} />
     </Flex>
   );
 }

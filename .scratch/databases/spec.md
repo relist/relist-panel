@@ -45,30 +45,17 @@ setup.
   pgAdmin and phpMyAdmin are no longer needed.
 - No host port is opened for any Database.
 
-## Out of scope (later, in this order of likely value)
+## Out of scope
 
-- **Temporary access.** A short-lived TCP proxy container (built from the panel's
-  own image) that forwards a host port to a Database, binds to `127.0.0.1` by
-  default, expires after a set time, and never restarts the Database. This is
-  for DBeaver/TablePlus over an SSH tunnel.
-- **Redis backup and restore** (RDB via `redis-cli --rdb`). Possibly with a
-  Cache / Persistent choice at create, so only persistent Redis offers it.
-- **SFTP and WebDAV** Backup destinations. SFTP will reuse the SSH key library.
-- **Attach.** Pointing the same tools at a database Service that already runs
-  inside a Compose.
-- **Logical database and user management** (create a database and user per app
-  from the UI). Until then, run `CREATE DATABASE` / `CREATE USER` in the Query
-  panel.
-- **Password rotation.** Changing the superuser password would break every
-  consumer.
-- **GFS rotation** (daily / weekly / monthly tiers), **backup encryption**,
-  **failure notifications**, point-in-time recovery.
-- **Editing data in a grid** and schema-editing UI (phpMyAdmin style).
-- **Per-Database grants for non-Admin roles.**
-- **Major version upgrades in place.** The path is backup, then create a new
-  Database on the new major, then restore.
-- More engines (MongoDB, ClickHouse, …). The Engine driver interface is designed
-  so that each one is a new driver.
+Planned in `.scratch/databases/spec-2.md` (2026-11-15): Direct access, SFTP
+and WebDAV Backup destinations, logical database and user management,
+superuser password reset, per-Database access for non-Admins, GFS Rotation,
+backup encryption and changing the major version.
+
+Dropped: Redis backup and restore, and Attach.
+
+Still out of scope: failure notifications, point-in-time recovery, editing data
+in a grid and schema-editing UI, more engines.
 
 ## Decisions
 
@@ -219,8 +206,7 @@ data under `/var/lib/postgresql`, while 17 and below use
   the least value.
   - A Redis Database keeps the image's default persistence (RDB snapshots in
     its volume), so its data survives restarts and Update image.
-  - Redis backup is listed under Out of scope and can be added later as a
-    driver capability.
+  - Redis backup was dropped for good on 2026-11-15 (`spec-2.md`).
 - **One Backup is one logical database in one file** (phase 2 decision,
   replacing whole-instance Backups). It is gzipped by the panel while
   streaming, and its sha256 is computed at the same time.

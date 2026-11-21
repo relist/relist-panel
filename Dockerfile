@@ -29,6 +29,9 @@ RUN ldflags="-X main.version=${VERSION}"; \
 # (the spec's weight measurement). /usr/local/bin/relist-volhelper is the
 # path dockerexec.volume_runner.go invokes as the container entrypoint.
 RUN CGO_ENABLED=0 go build -o /out/relist-volhelper ./cmd/relist-volhelper
+# The Direct access proxy (ADR-0041) is likewise its own binary: a container
+# running it needs only the standard library.
+RUN CGO_ENABLED=0 go build -o /out/relist-proxy ./cmd/relist-proxy
 
 # docker:*-cli already bundles the docker CLI and the docker compose plugin,
 # which the panel shells out to over the mounted host socket (ADR-0002).
@@ -37,5 +40,6 @@ FROM docker:29-cli
 RUN apk upgrade --no-cache
 COPY --from=go-builder /out/relist-panel /usr/local/bin/relist-panel
 COPY --from=go-builder /out/relist-volhelper /usr/local/bin/relist-volhelper
+COPY --from=go-builder /out/relist-proxy /usr/local/bin/relist-proxy
 EXPOSE 8080
 ENTRYPOINT ["relist-panel"]

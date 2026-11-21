@@ -56,6 +56,9 @@ func TestKeyActions(t *testing.T) {
 		"POST /api/users":                                  "user.create",
 		"POST /api/users/{id}/reset":                       "user.reset",
 		"PUT /api/audit/settings":                          "audit_settings.update",
+		"POST /api/direct-accesses":                        "direct_access.open",
+		"POST /api/direct-accesses/{id}/extend":            "direct_access.extend",
+		"DELETE /api/direct-accesses/{id}":                 "direct_access.close",
 	} {
 		if got := Actions[pattern]; got != want {
 			t.Errorf("Actions[%q] = %q, want %q", pattern, got, want)

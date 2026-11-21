@@ -23,6 +23,7 @@ const api = vi.hoisted(() => ({
   listDatabaseBackups: vi.fn(),
   listDatabaseRestores: vi.fn(),
   databaseLogicalDatabases: vi.fn(),
+  listDirectAccesses: vi.fn(),
 }));
 
 vi.mock('../data/api', async (importOriginal) => ({
@@ -76,6 +77,7 @@ describe('DatabasePage', () => {
     api.databaseLogs.mockResolvedValue({ logs: 'ready' });
     api.listDatabaseBackups.mockResolvedValue([]);
     api.listDatabaseRestores.mockResolvedValue([]);
+    api.listDirectAccesses.mockResolvedValue({ accesses: [] });
     api.updateDatabaseImage.mockResolvedValue(undefined);
   });
 
@@ -95,6 +97,12 @@ describe('DatabasePage', () => {
     expect(await screen.findByText('s3cret')).toBeTruthy();
     expect(api.databaseCredentials).toHaveBeenCalledWith(1);
     expect(screen.getByText(/networks: \[relist-network\]/)).toBeTruthy();
+  });
+
+  it('ends the Connection tab with the Direct access card', async () => {
+    renderPage();
+    expect(await screen.findByText('Direct access')).toBeTruthy();
+    expect(api.listDirectAccesses).toHaveBeenCalledWith('database', 1);
   });
 
   it('keeps Delete disabled until the typed name matches', async () => {
