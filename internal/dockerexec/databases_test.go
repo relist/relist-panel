@@ -178,6 +178,20 @@ func TestDatabaseHostInspect(t *testing.T) {
 	}
 }
 
+func TestDatabaseHostInspectReadsVolumeMounts(t *testing.T) {
+	h, f := newDBHost(t)
+	f.inspect = `{"State":{"Running":true},"Mounts":[
+		{"Type":"volume","Name":"relist-db-1-v3","Destination":"/var/lib/postgresql"},
+		{"Type":"bind","Source":"/srv/x","Destination":"/x"}]}`
+	st, err := h.Inspect(context.Background(), "relist-db-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Mounts) != 1 || st.Mounts["/var/lib/postgresql"] != "relist-db-1-v3" {
+		t.Fatalf("mounts = %v", st.Mounts)
+	}
+}
+
 func TestDatabaseHostRealias(t *testing.T) {
 	h, f := newDBHost(t)
 	if err := h.Realias(context.Background(), "relist-db-1", "blog.db.internal"); err != nil {

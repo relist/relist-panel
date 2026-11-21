@@ -405,6 +405,19 @@ func (s *Service) reconcile(ctx context.Context, d Database) (changed bool, err 
 			return false, err
 		}
 	}
+	if !onOwnVolume(st, spec) {
+		// An older panel build, which reads the volume from the ID, made it
+		// after a version change. The recorded volume holds the data; the
+		// other one is kept for whatever was written to it meanwhile.
+		ok, err := s.d.Host.VolumeExists(ctx, spec.Volume)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, fmt.Errorf("the container runs on volume %s, but this Database's data is on volume %s, which is missing", st.Mounts[spec.DataPath], spec.Volume)
+		}
+		return true, s.create(ctx, d, spec)
+	}
 	if st.Hash != spec.Labels[HashLabel] {
 		return true, s.create(ctx, d, spec)
 	}
@@ -418,6 +431,13 @@ func (s *Service) reconcile(ctx context.Context, d Database) (changed bool, err 
 		return changed, s.d.Host.Realias(ctx, spec.Name, spec.Alias)
 	}
 	return changed, nil
+}
+
+// onOwnVolume reports whether an existing container has the Database's
+// recorded volume at its data path. The label hash leaves the volume out,
+// or every Database would restart on the Panel update that added it.
+func onOwnVolume(st ContainerState, spec ContainerSpec) bool {
+	return st.Mounts[spec.DataPath] == spec.Volume
 }
 
 func containsString(list []string, v string) bool {
@@ -823,7 +843,7 @@ func (s *Service) view(ctx context.Context, d Database) View {
 		v.Status = StatusError
 	case d.Desired == DesiredStopped:
 		v.Status = StatusStopped
-	case !st.Exists || st.Hash != spec.Labels[HashLabel]:
+	case !st.Exists || st.Hash != spec.Labels[HashLabel] || !onOwnVolume(st, spec):
 		v.Status = StatusDrift
 	case !st.Running:
 		v.Status = StatusStopped

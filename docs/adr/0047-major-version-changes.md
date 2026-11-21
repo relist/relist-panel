@@ -93,3 +93,16 @@ Downgrades are never offered or accepted.
 the previous version data is deleted; clients see the Database go away from
 the first backup to the switch; a failed in-place change needs the
 pre-update Backups or a manual fix, not the panel's rollback.
+
+**A container on another volume is drift.** A panel build older than this
+change reads a Database's volume from its ID (`relist-db-<id>`), so after a
+Postgres change it can recreate the container on the volume the change left
+behind: on the previous version data, or on a new empty volume if that was
+deleted. The volume stays out of the label hash, or every Database would
+restart on the Panel update that added it. Instead, reconcile compares the
+volume mounted at the data path with the recorded one and recreates the
+container on the recorded volume, so starting a current build again, or
+Repair, puts the Database back on its data. The other volume is left as it
+is, holding whatever apps wrote there meanwhile. When the recorded volume is
+missing, reconcile changes nothing and the last error names both volumes:
+recreating would start an empty server.

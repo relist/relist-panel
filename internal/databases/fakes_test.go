@@ -181,6 +181,7 @@ func (f *fakeHost) Create(_ context.Context, spec ContainerSpec) error {
 	if id, ok := f.images[spec.Image]; ok {
 		st.ImageID = id
 	}
+	st.Mounts = map[string]string{spec.DataPath: spec.Volume}
 	if spec.Alias != "" {
 		st.Aliases = []string{spec.Alias}
 	}

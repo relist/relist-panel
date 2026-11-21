@@ -116,6 +116,11 @@ func (h *DatabaseHost) Inspect(ctx context.Context, name string) (databases.Cont
 			} `json:"Health"`
 		} `json:"State"`
 		Image  string `json:"Image"`
+		Mounts []struct {
+			Type        string `json:"Type"`
+			Name        string `json:"Name"`
+			Destination string `json:"Destination"`
+		} `json:"Mounts"`
 		Config struct {
 			Labels map[string]string `json:"Labels"`
 		} `json:"Config"`
@@ -138,6 +143,14 @@ func (h *DatabaseHost) Inspect(ctx context.Context, name string) (databases.Cont
 		Aliases: out.NetworkSettings.Networks[databases.Network].Aliases,
 	}
 	_, st.OnNetwork = out.NetworkSettings.Networks[databases.Network]
+	for _, m := range out.Mounts {
+		if m.Type == "volume" {
+			if st.Mounts == nil {
+				st.Mounts = map[string]string{}
+			}
+			st.Mounts[m.Destination] = m.Name
+		}
+	}
 	if out.State.Health != nil {
 		st.Health = out.State.Health.Status
 	}

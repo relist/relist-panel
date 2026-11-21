@@ -140,6 +140,55 @@ func TestReconcileRecreatesOnHashChange(t *testing.T) {
 	}
 }
 
+// An older panel build reads the volume from the Database's ID, so after a
+// version change it can recreate the container on the volume the change
+// left behind. The recorded volume holds the data: reconcile moves it back.
+func TestReconcileMovesAContainerOnAnotherVolumeBackToItsOwn(t *testing.T) {
+	r := newRig(t)
+	d := r.create(t, "Shop", "postgres", "18")
+	spec := r.host.specs["relist-db-1"]
+	r.host.volumes["relist-db-1-old"] = true
+	r.host.containers["relist-db-1"].Mounts = map[string]string{spec.DataPath: "relist-db-1-old"}
+	if v := r.view(t, d.ID); v.Status != StatusDrift {
+		t.Fatalf("status = %s", v.Status)
+	}
+	r.host.reset()
+	if err := r.svc.ReconcileAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.host.count("create relist-db-1") != 1 || r.host.count("remove-volume") != 0 {
+		t.Fatalf("calls = %v", r.host.all())
+	}
+	if got := r.host.containers["relist-db-1"].Mounts[spec.DataPath]; got != spec.Volume {
+		t.Fatalf("mounted %q, want %q", got, spec.Volume)
+	}
+	if v := r.view(t, d.ID); v.Status != StatusRunning {
+		t.Fatalf("status after = %s", v.Status)
+	}
+}
+
+// Recreating onto a missing recorded volume would start an empty server
+// there, so reconcile leaves the container alone and says why.
+func TestReconcileLeavesAContainerOnAnotherVolumeWhenItsOwnIsGone(t *testing.T) {
+	r := newRig(t)
+	d := r.create(t, "Shop", "postgres", "18")
+	spec := r.host.specs["relist-db-1"]
+	r.host.volumes["relist-db-1-old"] = true
+	delete(r.host.volumes, spec.Volume)
+	r.host.containers["relist-db-1"].Mounts = map[string]string{spec.DataPath: "relist-db-1-old"}
+	r.host.reset()
+	if err := r.svc.ReconcileAll(context.Background()); err == nil {
+		t.Fatal("no error")
+	}
+	if m := r.host.mutating(); len(m) != 0 {
+		t.Fatalf("calls = %v", m)
+	}
+	v := r.view(t, d.ID)
+	if v.Status != StatusError || !strings.Contains(v.LastError, "relist-db-1-old") || !strings.Contains(v.LastError, spec.Volume) {
+		t.Fatalf("status = %s, last error = %q", v.Status, v.LastError)
+	}
+}
+
 func TestReconcileStartsStopped(t *testing.T) {
 	r := newRig(t)
 	r.create(t, "Shop", "postgres", "18")

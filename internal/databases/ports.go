@@ -53,6 +53,8 @@ type ContainerState struct {
 	// OnNetwork: connected to relist-network. A version change disconnects
 	// a Postgres container to cut its clients off before the dumps.
 	OnNetwork bool
+	// Mounts: the named volume at each mount path inside the container.
+	Mounts map[string]string
 }
 
 // ExecRequest is one non-interactive command run inside a Database's
