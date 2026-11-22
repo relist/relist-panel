@@ -185,6 +185,8 @@ func (f *finalizer) Complete(ctx context.Context, m Manifest) (Summary, error) {
 	if err != nil {
 		return summary, err
 	}
+	// Every host, including those of Domains that are off: they belong to the
+	// install and come back when turned on (ADR-0052).
 	for _, d := range ds {
 		if !slices.Contains(summary.DNS, d.Host) {
 			summary.DNS = append(summary.DNS, d.Host)
