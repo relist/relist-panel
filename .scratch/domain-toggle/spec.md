@@ -128,11 +128,19 @@ consumers that want only the Domains that are on.
 | `migration` `ensureMaintenance` / `MaintenanceLabels` | on only | A host that served `404` before the move must not show the maintenance page during it. If none are on, no maintenance container starts. |
 | `migration` finalize `summary.DNS` | all | The host still belongs to the install and will come back. The operator should point its DNS at the new host too. |
 | `requestmetrics` host check | all | History of an off host stays viewable. |
+| `httpapi` `domainHosts` (Registry hostname must not be a Domain host) | all | The host is still taken. Raw SQL, unchanged. |
+| `authgroups` `usedBy` and the in-use count | all | An off Domain keeps its group, so the group stays in use and cannot be deleted. Raw SQL, unchanged. |
 
-`resolveCompose` currently passes one `ds` to both `sharedNetworkJoins` and
-`Inject`. It keeps taking all Domains and passes `domains.Enabled(ds)` to
-`Inject` itself, so the split lives in one place and `resolveForDeploy` stays
-unchanged.
+No other code reads or copies `domains` rows outside `internal/domains`
+(checked by grepping `internal/` for `FROM domains`, `JOIN domains` and
+`INTO domains`).
+
+`resolveForDeploy` loads all Domains once. It passes `domains.Enabled(composeDomains)`
+to `zeroDowntimeServices`, and all of them to `resolveCompose`. `resolveCompose`
+passes all Domains to `sharedNetworkJoins` and `domains.Enabled(ds)` to `Inject`.
+`policyTraefik` and `servicesWithDomain` filter after their own
+`ListForCompose`. The policy check on hosts a Compose may request is the
+labels `policyTraefik` returns, so it follows `Inject` with no change of its own.
 
 ## UI
 
@@ -195,6 +203,9 @@ see the switch. No extra role check is needed in the component.
 - An off Domain on a missing Service does not fail the resolve.
 - `zeroDowntimeServices` and `servicesWithDomain` skip a Service whose Domains
   are all off.
+- `resolveForDeploy` with the zero-downtime switch on and the Service's only
+  Domain off returns no zero-downtime Services and writes no Rollout labels,
+  so the deploy recreates the Container instead of rolling it out.
 - The policy's allowed Traefik labels match the injected ones with an off
   Domain present.
 
@@ -219,8 +230,11 @@ see the switch. No extra role check is needed in the component.
    `200`.
 2. Turn the Domain off. The tab shows the redeploy banner. Deploy. The host
    answers `404`.
-3. From a second Compose's container on `relist-network`, the whoami
-   Service's `.internal` alias still answers.
+3. A second Compose runs `busybox` (`sleep infinity`) with `networks: [relist-network]`.
+   `docker exec` (through `dockerEnv()`, as the database specs already do)
+   `wget -qO- http://whoami.<compose>.<environment>.<project>.internal`
+   still gets whoami's reply. `traefik/whoami` has no shell, so the request is
+   made from the busybox container.
 4. Turn it on, deploy, and the host answers `200` again.
 5. While it is off, creating a Domain with the same host in another Project
    is refused (`409`).
