@@ -35,7 +35,7 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db, now: time.Now}
 }
 
-const domainColumns = `d.id, d.compose_id, d.host, d.path, d.internal_path, d.strip_path, d.service, d.port, d.entrypoint, d.https, d.cert_provider, d.cert_resolver, d.middlewares, d.created_at, d.updated_at, d.auth_group_id, COALESCE(g.name, '')`
+const domainColumns = `d.id, d.compose_id, d.host, d.path, d.internal_path, d.strip_path, d.service, d.port, d.entrypoint, d.https, d.cert_provider, d.cert_resolver, d.middlewares, d.created_at, d.updated_at, d.auth_group_id, COALESCE(g.name, ''), d.enabled`
 
 // fromDomains reads domains with the name of their Basic auth group.
 const fromDomains = ` FROM domains d LEFT JOIN auth_groups g ON g.id = d.auth_group_id`
@@ -43,12 +43,12 @@ const fromDomains = ` FROM domains d LEFT JOIN auth_groups g ON g.id = d.auth_gr
 func scanDomain(scan func(...any) error) (Domain, error) {
 	var (
 		d                   Domain
-		strip, https        int
+		strip, https, on    int
 		middlewares         string
 		authGroup           sql.NullInt64
 		createdAt, updateAt int64
 	)
-	if err := scan(&d.ID, &d.ComposeID, &d.Host, &d.Path, &d.InternalPath, &strip, &d.Service, &d.Port, &d.Entrypoint, &https, &d.CertProvider, &d.CertResolver, &middlewares, &createdAt, &updateAt, &authGroup, &d.AuthGroupName); err != nil {
+	if err := scan(&d.ID, &d.ComposeID, &d.Host, &d.Path, &d.InternalPath, &strip, &d.Service, &d.Port, &d.Entrypoint, &https, &d.CertProvider, &d.CertResolver, &middlewares, &createdAt, &updateAt, &authGroup, &d.AuthGroupName, &on); err != nil {
 		return Domain{}, err
 	}
 	if authGroup.Valid {
@@ -56,6 +56,7 @@ func scanDomain(scan func(...any) error) (Domain, error) {
 	}
 	d.StripPath = strip == 1
 	d.HTTPS = https == 1
+	d.Enabled = on == 1
 	d.Middlewares = []string{}
 	if err := json.Unmarshal([]byte(middlewares), &d.Middlewares); err != nil {
 		return Domain{}, fmt.Errorf("decode middlewares of domain %d: %w", d.ID, err)

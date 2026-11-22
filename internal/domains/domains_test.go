@@ -108,3 +108,18 @@ func TestDeclaredServices(t *testing.T) {
 		}
 	}
 }
+
+func TestEnabledKeepsOrderAndDropsOff(t *testing.T) {
+	ds := []domains.Domain{{ID: 1, Enabled: true}, {ID: 2}, {ID: 3, Enabled: true}}
+	var ids []int64
+	for _, d := range domains.Enabled(ds) {
+		ids = append(ids, d.ID)
+	}
+	if !reflect.DeepEqual(ids, []int64{1, 3}) {
+		t.Fatalf("Enabled IDs = %v, want [1 3]", ids)
+	}
+	none := domains.Enabled([]domains.Domain{{ID: 4}})
+	if none == nil || len(none) != 0 {
+		t.Fatalf("Enabled(all off) = %#v, want empty non-nil", none)
+	}
+}
