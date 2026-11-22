@@ -48,11 +48,15 @@ func sharedNetworkJoins(services map[string]any, networkName string, ds []domain
 		if _, hasMode := service["network_mode"]; hasMode {
 			continue
 		}
+		// Hand-written Traefik labels come first: they need Traefik pinned to
+		// the network even when the Service's Domain is off and Inject
+		// writes nothing for it (ADR-0052). With a Domain on, Inject has
+		// already pinned it.
 		switch {
-		case targets[name]:
-			joins[name] = joinDomain
 		case domains.HasTraefikLabels(service):
 			joins[name] = joinLabels
+		case targets[name]:
+			joins[name] = joinDomain
 		case listsNetwork(service["networks"], networkName):
 			joins[name] = joinExplicit
 		}

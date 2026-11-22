@@ -139,3 +139,17 @@ func TestPolicyRefusesLabelsOfAnOffDomain(t *testing.T) {
 		t.Fatal("policy allowed the Traefik labels of a domain that is off")
 	}
 }
+
+// A Service with hand-written Traefik routers keeps Traefik pinned to
+// relist-network when its panel Domain is off: Inject no longer runs for it,
+// so the join has to pin it, as it does for a Service with no Domain.
+func TestOffDomainKeepsHandWrittenRoutersOnTheSharedNetwork(t *testing.T) {
+	yamlContent := "services:\n  web:\n    image: nginx\n    labels: {traefik.enable: \"true\", traefik.http.routers.mine.rule: \"Host(`mine.example.com`)\"}\n"
+	off := webDomain()
+	off.Enabled = false
+	services, _ := resolveServices(t, yamlContent, []domains.Domain{off}, testIdentity)
+	labels := services["web"]["labels"].(map[string]any)
+	if labels["traefik.docker.network"] != testNetwork {
+		t.Fatalf("labels = %v, want traefik.docker.network=%s", labels, testNetwork)
+	}
+}
