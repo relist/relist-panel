@@ -250,10 +250,12 @@ The "changes apply on the next deploy" banner, shared with Domains, shows when a
 binding, or an entry of a bound Variable Set changed since the last deploy (a set rename does not count). Every write
 in the Variable Sets and bindings cards reloads the tab, so the banner shows without a page reload.
 
-**Domains tab**: a table of the Compose's domains (host + path as a link, `service:port`, an HTTPS tag, Edit and
-Delete) with an **Add domain** button in the header and an `EmptyState` when there are none. Add and Edit share one
-modal form. Delete is a `Popconfirm` naming the Address, not a `DangerModal`: nothing on the host changes until the next
-deploy. An `info` `Alert` with a **Deploy** button, "Domain changes apply on the next deploy.", shows when the Compose
+**Domains tab**: a table of the Compose's domains (an **On** switch, host + path as a link, `service:port`, an HTTPS
+tag, Edit and Delete) with an **Add domain** button in the header and an `EmptyState` when there are none. Add and Edit
+share one modal form. Delete is a `Popconfirm` naming the Address, not a `DangerModal`: nothing on the host changes until
+the next deploy. For the same reason the On switch saves at once with no confirm, labelled `Turn off <address>` /
+`Turn on <address>` (ADR-0052). A row that is off shows its Address as secondary text, not a link, followed by an `Off`
+tag. A failed switch or Delete shows a closable `error` `Alert` above the table. An `info` `Alert` with a **Deploy** button, "Domain changes apply on the next deploy.", shows when the Compose
 has deployed before and `domainsChangedAt >= lastDeployedAt`. Above the tabs, a deploy's `warnings` show in a closable
 `warning` `Alert` until it is closed or the next deploy replaces it.
 

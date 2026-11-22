@@ -886,6 +886,9 @@ export const api = {
     ),
   effectiveVariables: (location: ComposePath, service: string) =>
     request<EffectiveVariable[]>(`${composePath(location)}/services/${encodeURIComponent(service)}/effective-variables`),
+  /** Turns a Domain on or off; it applies on the next deploy (ADR-0052). */
+  setDomainEnabled: (location: ComposePath, domainId: number, enabled: boolean) =>
+    request<Domain>(`${domainsPath(location)}/${domainId}/enabled`, jsonInit('PUT', { enabled })),
   /** Success is 204. */
   deleteDomain: (location: ComposePath, domainId: number) =>
     request<void>(`${domainsPath(location)}/${domainId}`, { method: 'DELETE' }),

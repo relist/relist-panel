@@ -215,6 +215,8 @@ export type Domain = DomainInput & {
   id: number;
   /** The name of `authGroupId`'s group; empty when there is none. */
   authGroupName: string;
+  /** False for a Domain that is turned off: deploys write no route for it (ADR-0052). */
+  enabled: boolean;
   createdAt: string;
   updatedAt: string;
 };
