@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 
+	"relist-panel/internal/domains"
 	"relist-panel/internal/zerodowntime"
 )
 
@@ -45,14 +46,15 @@ func (s *Service) ZeroDowntimeServices(ctx context.Context, t DeployTarget) ([]Z
 	return statuses, nil
 }
 
-// servicesWithDomain is the YAML's Services that have a Domain, in YAML order.
+// servicesWithDomain is the YAML's Services that have a Domain that is on,
+// in YAML order.
 func (s *Service) servicesWithDomain(ctx context.Context, compose Compose) ([]string, error) {
 	ds, err := s.domains.ListForCompose(ctx, compose.ID)
 	if err != nil {
 		return nil, err
 	}
 	hasDomain := map[string]bool{}
-	for _, d := range ds {
+	for _, d := range domains.Enabled(ds) {
 		hasDomain[d.Service] = true
 	}
 	names, err := serviceNames(compose.YAMLContent)

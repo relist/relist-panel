@@ -200,7 +200,8 @@ func (s *Service) resolveForDeploy(ctx context.Context, projectID int64, compose
 	if err != nil {
 		return "", nil, nil, nil, failure(FailureInternal, "could not load compose", err)
 	}
-	zeroDowntime, err := zeroDowntimeServices(yamlContent, composeDomains, enabled)
+	// A Rollout needs a router, so only Domains that are on count.
+	zeroDowntime, err := zeroDowntimeServices(yamlContent, domains.Enabled(composeDomains), enabled)
 	if err != nil {
 		return "", nil, nil, nil, failure(FailureInvalid, "compose yaml is invalid: "+err.Error(), err)
 	}

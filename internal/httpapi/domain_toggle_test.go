@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -190,5 +191,28 @@ func TestAuthGroupInUseByOffDomain(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusConflict {
 		t.Fatalf("delete group used by an off domain = %d, want 409", response.StatusCode)
+	}
+}
+
+func TestDeploySkipsOffDomain(t *testing.T) {
+	f := newDeployDomainsFixture(t)
+	domain := f.createDomain(t, "api.example.com", "/")
+	router := "relist-c" + idString(f.composeID) + "-d" + idString(domain.ID)
+	if response, raw := f.setEnabled(t, domain.ID, false); response.StatusCode != http.StatusOK {
+		t.Fatalf("off: %d %s", response.StatusCode, raw)
+	}
+	f.deployOK(t, nil)
+	resolved := f.resolvedFile(t)
+	if strings.Contains(resolved, router) {
+		t.Fatalf("resolved compose routes an off domain:\n%s", resolved)
+	}
+	if !strings.Contains(resolved, "relist-network") {
+		t.Fatalf("resolved compose lost relist-network:\n%s", resolved)
+	}
+
+	f.setEnabled(t, domain.ID, true)
+	f.deployOK(t, nil)
+	if resolved := f.resolvedFile(t); !strings.Contains(resolved, router) {
+		t.Fatalf("resolved compose lacks the domain turned back on:\n%s", resolved)
 	}
 }

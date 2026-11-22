@@ -123,7 +123,7 @@ func (s *Service) policyTraefik(ctx context.Context, t DeployTarget) (map[string
 	for _, name := range t.Snapshot.ZeroDowntime {
 		zeroDowntime[name] = true
 	}
-	return domains.Generated(t.Compose.ID, ds, dockernet.NetworkName, zeroDowntime), nil
+	return domains.Generated(t.Compose.ID, domains.Enabled(ds), dockernet.NetworkName, zeroDowntime), nil
 }
 
 // normalizePolicyPaths rewrites every string in the config that starts with

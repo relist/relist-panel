@@ -15,7 +15,7 @@ const testNetwork = "relist-network"
 var testIdentity = networkIdentity{DeployName: "relist-c12", Compose: "test", Environment: "Production", Project: "Hello"}
 
 func webDomain() domains.Domain {
-	return domains.Domain{ID: 3, Host: "api.example.com", Path: "/", InternalPath: "/", Service: "web", Port: 80, CertProvider: "none"}
+	return domains.Domain{ID: 3, Host: "api.example.com", Path: "/", InternalPath: "/", Service: "web", Port: 80, CertProvider: "none", Enabled: true}
 }
 
 // resolveServices resolves yamlContent and returns its services and warnings.

@@ -1316,8 +1316,10 @@ func resolveCompose(yamlContent, networkName, envFilePath string, composeID int6
 	// Who joins is read from the YAML as written, before the domains add
 	// their own Traefik labels.
 	joins := sharedNetworkJoins(services, networkName, ds)
-	// With no services at all, a domain still has to be refused.
-	warnings, err := domains.Inject(services, composeID, ds, networkName, zeroDowntime)
+	// With no services at all, a domain still has to be refused. A Domain
+	// that is off writes no labels and cannot fail the deploy, but its
+	// Service still joins above (ADR-0052).
+	warnings, err := domains.Inject(services, composeID, domains.Enabled(ds), networkName, zeroDowntime)
 	if err != nil {
 		return "", nil, nil, err
 	}
