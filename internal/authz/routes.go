@@ -89,6 +89,7 @@ var Routes = map[string]Rule{
 	"POST " + compose + "/domains":                                   {Level: LevelEditor},
 	"PUT " + compose + "/domains/{domainID}":                         {Level: LevelEditor},
 	"DELETE " + compose + "/domains/{domainID}":                      {Level: LevelEditor},
+	"PUT " + compose + "/domains/{domainID}/enabled":                 {Level: LevelEditor},
 	"PUT " + compose + "/source":                                     {Level: LevelEditor},
 	"DELETE " + compose + "/source":                                  {Level: LevelEditor},
 	"POST " + compose + "/source/test":                               {Level: LevelEditor},

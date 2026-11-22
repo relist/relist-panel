@@ -49,6 +49,7 @@ var Actions = map[string]string{
 	"POST " + compose + "/domains":                                   "domain.create",
 	"PUT " + compose + "/domains/{domainID}":                         "domain.update",
 	"DELETE " + compose + "/domains/{domainID}":                      "domain.delete",
+	"PUT " + compose + "/domains/{domainID}/enabled":                 "domain.toggle",
 	"PUT " + compose + "/source":                                     "source.update",
 	"DELETE " + compose + "/source":                                  "source.delete",
 	"POST " + compose + "/source/test":                               "source.test",

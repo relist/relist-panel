@@ -190,6 +190,23 @@ func (s *Store) delete(ctx context.Context, composeID, id int64) error {
 	}, s.now().Unix())
 }
 
+// setEnabled turns a Domain on or off. Like every Domain write it stamps
+// domains_changed_at, even when the value does not change.
+func (s *Store) setEnabled(ctx context.Context, composeID, id int64, enabled bool) (Domain, error) {
+	at := s.now().Unix()
+	err := s.inTx(ctx, composeID, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, `UPDATE domains SET enabled = ?, updated_at = ? WHERE id = ? AND compose_id = ?`, boolInt(enabled), at, id, composeID)
+		if err != nil {
+			return err
+		}
+		return requireAffected(result)
+	}, at)
+	if err != nil {
+		return Domain{}, err
+	}
+	return s.get(ctx, composeID, id)
+}
+
 func (s *Store) get(ctx context.Context, composeID, id int64) (Domain, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+domainColumns+fromDomains+` WHERE d.id = ? AND d.compose_id = ?`, id, composeID)
 	d, err := scanDomain(row.Scan)
@@ -314,6 +331,7 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+base, s.create)
 	mux.HandleFunc("PUT "+base+"/{domainID}", s.update)
 	mux.HandleFunc("DELETE "+base+"/{domainID}", s.delete)
+	mux.HandleFunc("PUT "+base+"/{domainID}/enabled", s.toggle)
 }
 
 // route holds the IDs a request's path names.
@@ -409,6 +427,48 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// toggle turns a Domain on or off (ADR-0052). Turning one on checks its
+// Service can still be routed to, so the next deploy cannot fail on it;
+// turning one off never does, so a Domain can be parked while its Service is
+// out of the YAML.
+func (s *Service) toggle(w http.ResponseWriter, r *http.Request) {
+	rt, ok := parseRoute(w, r, true)
+	if !ok {
+		return
+	}
+	yamlContent, err := s.store.composeYAML(r.Context(), rt.projectID, rt.environmentID, rt.composeID)
+	if err != nil {
+		writeStoreError(w, err, "could not load compose")
+		return
+	}
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil || body.Enabled == nil {
+		writeError(w, http.StatusBadRequest, `request must contain {"enabled": true|false}`)
+		return
+	}
+	existing, err := s.store.get(r.Context(), rt.composeID, rt.domainID)
+	if err != nil {
+		writeStoreError(w, err, "could not load domain")
+		return
+	}
+	audit.Detail(r.Context(), "host", existing.Host)
+	audit.Detail(r.Context(), "enabled", *body.Enabled)
+	if *body.Enabled && !contains(DeclaredServices(yamlContent), existing.Service) {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("service %q is not a service of this compose that can be routed to; edit the domain first", existing.Service))
+		return
+	}
+	d, err := s.store.setEnabled(r.Context(), rt.composeID, rt.domainID, *body.Enabled)
+	if err != nil {
+		writeStoreError(w, err, "could not save domain")
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
 }
 
 // readInput checks the Compose exists, decodes the body and validates it
