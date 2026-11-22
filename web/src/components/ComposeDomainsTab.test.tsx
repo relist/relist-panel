@@ -256,4 +256,22 @@ describe('ComposeDomainsTab', () => {
     expect(await screen.findByText(message)).toBeTruthy();
     expect(screen.getByRole('switch', { name: 'Turn on api.example.com/v1' }).getAttribute('aria-checked')).toBe('false');
   });
+  it('keeps the switch loading until the list shows the new state', async () => {
+    const refetch = deferred<ComposeDomains>();
+    panel.loadDomains.mockResolvedValueOnce(withDomain).mockReturnValueOnce(refetch.promise);
+    panel.setDomainEnabled.mockResolvedValue({ ...domain, enabled: false });
+    const user = userEvent.setup();
+    renderTab();
+
+    const toggle = await screen.findByRole('switch', { name: 'Turn off api.example.com/v1' });
+    await user.click(toggle);
+    await waitFor(() => expect(panel.loadDomains).toHaveBeenCalledTimes(2));
+
+    // The saved state is not on screen yet: the switch must not fall back to the stale "on".
+    expect(screen.getByRole('switch', { name: 'Turn off api.example.com/v1' }).className).toContain('ant-switch-loading');
+
+    refetch.resolve({ domains: [{ ...domain, enabled: false }], services: ['db', 'web'] });
+    const off = await screen.findByRole('switch', { name: 'Turn on api.example.com/v1' });
+    expect(off.className).not.toContain('ant-switch-loading');
+  });
 });

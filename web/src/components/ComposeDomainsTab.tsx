@@ -127,7 +127,9 @@ export function ComposeDomainsTab({
     setRowError(undefined);
     try {
       await setDomainEnabled(composeId, domain.id, enabled);
-      void fetchDomains();
+      // Stay loading until the list shows the saved state, so the switch
+      // never falls back to the stale value in between.
+      await fetchDomains();
     } catch (reason: unknown) {
       setRowError(reason instanceof Error ? reason.message : 'Could not change the domain');
     } finally {
