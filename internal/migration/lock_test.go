@@ -103,7 +103,7 @@ func newSourceFixture(t *testing.T, ds ...domains.Domain) *sourceFixture {
 	return f
 }
 
-var httpsDomain = domains.Domain{ID: 3, ComposeID: 1, Host: "shop.example.com", Path: "/api", Port: 80, HTTPS: true, CertProvider: "letsencrypt"}
+var httpsDomain = domains.Domain{ID: 3, ComposeID: 1, Host: "shop.example.com", Path: "/api", Port: 80, HTTPS: true, CertProvider: "letsencrypt", Enabled: true}
 
 func TestStartRecordsRunningThenStops(t *testing.T) {
 	f := newSourceFixture(t, httpsDomain)

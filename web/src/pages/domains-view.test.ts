@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Compose, Domain } from '../data/types';
-import { domainFormValues, domainInput, domainUrl, domainsPendingRedeploy, httpsTag, redeployNotice, variablesPendingRedeploy } from './domains-view';
+import { domainFormValues, domainInput, domainLinked, domainSwitchLabel, domainUrl, domainsPendingRedeploy, httpsTag, redeployNotice, variablesPendingRedeploy } from './domains-view';
 
 const domain: Domain = {
   id: 3,
@@ -18,6 +18,7 @@ const domain: Domain = {
   middlewares: ['rate-limit@file'],
   authGroupId: 4,
   authGroupName: 'Staging',
+  enabled: true,
   createdAt: '2026-10-01T00:00:00Z',
   updatedAt: '2026-10-01T00:00:00Z',
 };
@@ -190,5 +191,17 @@ describe('redeployNotice', () => {
     expect(redeployNotice({ domainsChangedAt: after, variablesChangedAt: after, lastDeployedAt: deployed })).toBe(
       'Domain and variable changes apply on the next deploy.',
     );
+  });
+});
+
+describe('domain switch', () => {
+  it('names the address and what a click does', () => {
+    expect(domainSwitchLabel(domain)).toBe('Turn off api.example.com/v1');
+    expect(domainSwitchLabel({ ...domain, enabled: false })).toBe('Turn on api.example.com/v1');
+  });
+
+  it('links only a domain that is on', () => {
+    expect(domainLinked(domain)).toBe(true);
+    expect(domainLinked({ ...domain, enabled: false })).toBe(false);
   });
 });

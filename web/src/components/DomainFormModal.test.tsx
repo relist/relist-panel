@@ -37,6 +37,7 @@ const domain: Domain = {
   certProvider: 'custom',
   certResolver: 'corp-dns',
   createdAt: '2026-10-09T10:00:00Z',
+  enabled: true,
   entrypoint: 'web-internal',
   host: 'api.example.com',
   https: true,

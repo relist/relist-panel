@@ -27,10 +27,24 @@ type Domain struct {
 	CertResolver string   `json:"certResolver"`
 	Middlewares  []string `json:"middlewares"` // never nil on the wire
 	// AuthGroupID is the Basic auth group the Domain requires; nil is None.
-	AuthGroupID   *int64    `json:"authGroupId"`
-	AuthGroupName string    `json:"authGroupName"` // empty when there is none
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	AuthGroupID   *int64 `json:"authGroupId"`
+	AuthGroupName string `json:"authGroupName"` // empty when there is none
+	// Enabled is false for a Domain that is turned off: it keeps its fields
+	// and its host, and deploys write no Traefik labels for it (ADR-0052).
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// Enabled is the Domains of ds that are on, in order; never nil.
+func Enabled(ds []Domain) []Domain {
+	on := make([]Domain, 0, len(ds))
+	for _, d := range ds {
+		if d.Enabled {
+			on = append(on, d)
+		}
+	}
+	return on
 }
 
 // RouterName is the name of the Traefik router, service and middleware

@@ -330,6 +330,9 @@ func (s *OldHost) ensureMaintenance(ctx context.Context, force bool) error {
 	if err != nil {
 		return fmt.Errorf("list domains: %w", err)
 	}
+	// A host whose Domain is off answered 404 before the move and keeps
+	// doing so (ADR-0052).
+	ds = domains.Enabled(ds)
 	if len(ds) == 0 {
 		return nil
 	}

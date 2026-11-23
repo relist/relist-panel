@@ -87,6 +87,7 @@ type PanelValue = {
   createDomain: (composeId: number, input: DomainInput) => Promise<Domain>;
   updateDomain: (composeId: number, domainId: number, input: DomainInput) => Promise<Domain>;
   deleteDomain: (composeId: number, domainId: number) => Promise<void>;
+  setDomainEnabled: (composeId: number, domainId: number, enabled: boolean) => Promise<Domain>;
   /** The Compose's own variables. Each write refreshes the Compose, so `variablesChangedAt` reaches the page. */
   loadComposeVariables: (composeId: number) => Promise<ComposeVariable[]>;
   saveComposeVariable: (composeId: number, variable: NewVariable, variableId?: number) => Promise<void>;
@@ -773,6 +774,16 @@ export function PanelProvider({ children }: { children: ReactNode }) {
     [domainLocation, refreshStatus, track],
   );
 
+  const setDomainEnabled = useCallback(
+    (composeId: number, domainId: number, enabled: boolean) =>
+      track(`domain-toggle:${composeId}:${domainId}`, async () => {
+        const updated = await api.setDomainEnabled(domainLocation(composeId), domainId, enabled);
+        await refreshStatus(composeId);
+        return updated;
+      }),
+    [domainLocation, refreshStatus, track],
+  );
+
   const loadComposeVariables = useCallback(
     (composeId: number) =>
       track(`compose-variables:${composeId}`, () => api.listComposeVariables(domainLocation(composeId))),
@@ -1095,6 +1106,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteVolumeEntry,
       createDomain,
       deleteDomain,
+      setDomainEnabled,
       deleteComposeVariable,
       loadComposeVariables,
       replaceComposeVariables,
@@ -1157,6 +1169,7 @@ export function PanelProvider({ children }: { children: ReactNode }) {
       deleteVolumeEntry,
       createDomain,
       deleteDomain,
+      setDomainEnabled,
       deleteComposeVariable,
       loadComposeVariables,
       replaceComposeVariables,

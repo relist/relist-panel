@@ -23,6 +23,7 @@ type domainResponse struct {
 	HTTPS        bool     `json:"https"`
 	CertProvider string   `json:"certProvider"`
 	Middlewares  []string `json:"middlewares"`
+	Enabled      bool     `json:"enabled"`
 }
 
 type domainsListResponse struct {
@@ -155,6 +156,24 @@ func TestDomainsCRUD(t *testing.T) {
 	}
 	if response, _ = f.send(t, http.MethodPut, "/domains/"+idString(created.ID), update); response.StatusCode != http.StatusNotFound {
 		t.Errorf("update of deleted status = %d", response.StatusCode)
+	}
+}
+
+func TestDomainsStartOn(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	f := newDomainsCompose(t, server, "shop", "web")
+	created := f.createDomain(t, "api.example.com", "/")
+	if !created.Enabled {
+		t.Fatal("created domain enabled = false, want true")
+	}
+	_, raw := f.send(t, http.MethodGet, "/domains", nil)
+	var list domainsListResponse
+	if err := json.Unmarshal(raw, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Domains) != 1 || !list.Domains[0].Enabled {
+		t.Fatalf("listed domains = %+v, want one that is on", list.Domains)
 	}
 }
 

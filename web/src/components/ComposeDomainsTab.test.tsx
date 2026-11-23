@@ -5,12 +5,14 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Compose, ComposeDomains, Domain } from '../data/types';
+import { ApiError } from '../data/api';
 import { ComposeDomainsTab } from './ComposeDomainsTab';
 
 const panel = vi.hoisted(() => ({
   createDomain: vi.fn(),
   deleteDomain: vi.fn(),
   loadDomains: vi.fn(),
+  setDomainEnabled: vi.fn(),
   setZeroDowntime: vi.fn(),
   updateDomain: vi.fn(),
 }));
@@ -38,6 +40,7 @@ const domain: Domain = {
   port: 3000,
   service: 'web',
   stripPath: false,
+  enabled: true,
   updatedAt: '2026-10-09T10:00:00Z',
 };
 
@@ -202,5 +205,73 @@ describe('ComposeDomainsTab', () => {
     const open = screen.getByText('open.example.com/v1').closest('tr') as HTMLElement;
     expect(within(open).queryByText('Staging')).toBeNull();
     expect(screen.getAllByText('Staging')).toHaveLength(1);
+  });
+  it('shows a domain that is off as plain text with an Off tag', async () => {
+    panel.loadDomains.mockResolvedValue({ domains: [{ ...domain, enabled: false }], services: ['db', 'web'] });
+    renderTab();
+
+    expect(await screen.findByText('api.example.com/v1')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'api.example.com/v1' })).toBeNull();
+    expect(screen.getByText('Off')).toBeTruthy();
+    expect(screen.getByRole('switch', { name: 'Turn on api.example.com/v1' }).getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('turns a domain off and reloads the list', async () => {
+    panel.loadDomains.mockResolvedValueOnce(withDomain).mockResolvedValueOnce({ domains: [{ ...domain, enabled: false }], services: ['db', 'web'] });
+    panel.setDomainEnabled.mockResolvedValue({ ...domain, enabled: false });
+    const user = userEvent.setup();
+    renderTab();
+
+    await user.click(await screen.findByRole('switch', { name: 'Turn off api.example.com/v1' }));
+
+    expect(panel.setDomainEnabled).toHaveBeenCalledWith(7, 3, false);
+    await waitFor(() => expect(panel.loadDomains).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('switch', { name: 'Turn on api.example.com/v1' })).toBeTruthy();
+  });
+
+  it('sends one request when the switch is clicked twice', async () => {
+    const pending = deferred<Domain>();
+    panel.loadDomains.mockResolvedValue(withDomain);
+    panel.setDomainEnabled.mockReturnValue(pending.promise);
+    const user = userEvent.setup();
+    renderTab();
+
+    const toggle = await screen.findByRole('switch', { name: 'Turn off api.example.com/v1' });
+    await user.click(toggle);
+    await user.click(toggle);
+
+    expect(panel.setDomainEnabled).toHaveBeenCalledTimes(1);
+    pending.resolve({ ...domain, enabled: false });
+  });
+
+  it('keeps the switch and shows the error when turning a domain on fails', async () => {
+    const message = 'service "web" is not a service of this compose that can be routed to; edit the domain first';
+    panel.loadDomains.mockResolvedValue({ domains: [{ ...domain, enabled: false }], services: ['db'] });
+    panel.setDomainEnabled.mockRejectedValue(new ApiError(422, message));
+    const user = userEvent.setup();
+    renderTab();
+
+    await user.click(await screen.findByRole('switch', { name: 'Turn on api.example.com/v1' }));
+
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(screen.getByRole('switch', { name: 'Turn on api.example.com/v1' }).getAttribute('aria-checked')).toBe('false');
+  });
+  it('keeps the switch loading until the list shows the new state', async () => {
+    const refetch = deferred<ComposeDomains>();
+    panel.loadDomains.mockResolvedValueOnce(withDomain).mockReturnValueOnce(refetch.promise);
+    panel.setDomainEnabled.mockResolvedValue({ ...domain, enabled: false });
+    const user = userEvent.setup();
+    renderTab();
+
+    const toggle = await screen.findByRole('switch', { name: 'Turn off api.example.com/v1' });
+    await user.click(toggle);
+    await waitFor(() => expect(panel.loadDomains).toHaveBeenCalledTimes(2));
+
+    // The saved state is not on screen yet: the switch must not fall back to the stale "on".
+    expect(screen.getByRole('switch', { name: 'Turn off api.example.com/v1' }).className).toContain('ant-switch-loading');
+
+    refetch.resolve({ domains: [{ ...domain, enabled: false }], services: ['db', 'web'] });
+    const off = await screen.findByRole('switch', { name: 'Turn on api.example.com/v1' });
+    expect(off.className).not.toContain('ant-switch-loading');
   });
 });

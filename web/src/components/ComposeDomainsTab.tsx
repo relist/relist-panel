@@ -1,22 +1,17 @@
 import { DeleteOutlined, EditOutlined, LockOutlined, PlusOutlined, RocketOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Flex, Popconfirm, Skeleton, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Flex, Popconfirm, Skeleton, Switch, Table, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CODE_FONT_STACK, LAYOUT } from '../app/theme';
 import { ApiError } from '../data/api';
 import { usePanel } from '../data/store';
 import type { Compose, ComposeDomains, Domain, DomainInput, ZeroDowntimeService } from '../data/types';
-import { domainUrl, httpsTag } from '../pages/domains-view';
+import { domainAddress as address, domainLinked, domainSwitchLabel, domainUrl, httpsTag } from '../pages/domains-view';
 import { DomainFormModal } from './DomainFormModal';
 import { EmptyState } from './primitives';
 import { RedeployBanner } from './RedeployBanner';
 import { ZeroDowntimeCard } from './ZeroDowntimeCard';
 
 const { Text } = Typography;
-
-/** A domain's Address: host plus path, e.g. `api.example.com/`. */
-function address(domain: Domain) {
-  return `${domain.host}${domain.path}`;
-}
 
 /**
  * The Compose screen's Domains tab (GUIDELINES §4.6). It loads its own list on
@@ -41,12 +36,16 @@ export function ComposeDomainsTab({
   /** The page's zero-downtime switches; undefined until the first read ends. */
   zeroDowntime?: { services?: ZeroDowntimeService[]; error?: string };
 }) {
-  const { createDomain, deleteDomain, loadDomains, updateDomain } = usePanel();
+  const { createDomain, deleteDomain, loadDomains, setDomainEnabled, updateDomain } = usePanel();
   const [data, setData] = useState<{ composeId: number; payload?: ComposeDomains; error?: string; refreshing?: boolean }>();
   const [modal, setModal] = useState<{ domain?: Domain }>();
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiError>();
-  const [deleteError, setDeleteError] = useState<string>();
+  // A failed Delete or On switch, shown above the table until closed.
+  const [rowError, setRowError] = useState<string>();
+  // The rows whose On switch is saving: a second click waits for the first.
+  const [toggling, setToggling] = useState<ReadonlySet<number>>(new Set());
+  const togglingRef = useRef(new Set<number>());
   const request = useRef(0);
   const composeId = compose.id;
 
@@ -109,13 +108,34 @@ export function ComposeDomainsTab({
   };
 
   const remove = async (domain: Domain) => {
-    setDeleteError(undefined);
+    setRowError(undefined);
     try {
       await deleteDomain(composeId, domain.id);
     } catch (reason: unknown) {
-      setDeleteError(reason instanceof Error ? reason.message : 'Could not delete the domain');
+      setRowError(reason instanceof Error ? reason.message : 'Could not delete the domain');
     }
     void fetchDomains();
+  };
+
+  // Saves at once; the redeploy banner says when it reaches traffic (ADR-0052).
+  const toggle = async (domain: Domain, enabled: boolean) => {
+    if (togglingRef.current.has(domain.id)) {
+      return;
+    }
+    togglingRef.current.add(domain.id);
+    setToggling(new Set(togglingRef.current));
+    setRowError(undefined);
+    try {
+      await setDomainEnabled(composeId, domain.id, enabled);
+      // Stay loading until the list shows the saved state, so the switch
+      // never falls back to the stale value in between.
+      await fetchDomains();
+    } catch (reason: unknown) {
+      setRowError(reason instanceof Error ? reason.message : 'Could not change the domain');
+    } finally {
+      togglingRef.current.delete(domain.id);
+      setToggling(new Set(togglingRef.current));
+    }
   };
 
   if (!current || (!payload && !current.error)) {
@@ -157,10 +177,10 @@ export function ComposeDomainsTab({
           type="error"
         />
       )}
-      {deleteError && (
+      {rowError && (
         <Alert
-          closable={{ afterClose: () => setDeleteError(undefined) }}
-          title={deleteError}
+          closable={{ afterClose: () => setRowError(undefined) }}
+          title={rowError}
           showIcon
           style={{ marginBottom: LAYOUT.gutterSmall }}
           type="error"
@@ -177,12 +197,30 @@ export function ComposeDomainsTab({
           <Table<Domain>
             columns={[
               {
+                key: 'enabled',
+                render: (_, domain) => (
+                  <Switch
+                    aria-label={domainSwitchLabel(domain)}
+                    checked={domain.enabled}
+                    loading={toggling.has(domain.id)}
+                    onChange={(checked) => void toggle(domain, checked)}
+                    size="small"
+                  />
+                ),
+                title: 'On',
+              },
+              {
                 dataIndex: 'host',
                 render: (_, domain) => (
                   <Flex align="center" gap={8} wrap>
-                    <a href={domainUrl(domain)} rel="noreferrer" target="_blank">
-                      {address(domain)}
-                    </a>
+                    {domainLinked(domain) ? (
+                      <a href={domainUrl(domain)} rel="noreferrer" target="_blank">
+                        {address(domain)}
+                      </a>
+                    ) : (
+                      <Text type="secondary">{address(domain)}</Text>
+                    )}
+                    {!domain.enabled && <Tag style={{ marginInlineEnd: 0 }}>Off</Tag>}
                     {domain.authGroupName && (
                       <Tag icon={<LockOutlined />} style={{ marginInlineEnd: 0 }}>
                         {domain.authGroupName}

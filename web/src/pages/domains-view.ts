@@ -122,6 +122,21 @@ export function httpsTag(domain: Domain): string {
   }
 }
 
+/** A domain's Address: host plus path, e.g. `api.example.com/`. */
+export function domainAddress(domain: Domain): string {
+  return `${domain.host}${domain.path}`;
+}
+
+/** The On switch's accessible name: what a click does to which Address. */
+export function domainSwitchLabel(domain: Domain): string {
+  return `${domain.enabled ? 'Turn off' : 'Turn on'} ${domainAddress(domain)}`;
+}
+
+/** Only a domain that is on gets a link: one that is off answers 404. */
+export function domainLinked(domain: Domain): boolean {
+  return domain.enabled;
+}
+
 /** The link the host column opens in a new tab. */
 export function domainUrl(domain: Domain): string {
   return `${domain.https ? 'https' : 'http'}://${domain.host}${domain.path}`;
