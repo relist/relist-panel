@@ -153,3 +153,13 @@ func TestOffDomainKeepsHandWrittenRoutersOnTheSharedNetwork(t *testing.T) {
 		t.Fatalf("labels = %v, want traefik.docker.network=%s", labels, testNetwork)
 	}
 }
+
+// A Service whose Domains are all off is told so, not that it has none.
+func TestZeroDowntimeHTTPSetWhenDomainsAreOff(t *testing.T) {
+	svc, _, _, db := newDeployService(t, zdYAML)
+	seedDomainOff(t, db, "web")
+	rec := serve(t, svc, http.MethodPut, zeroDowntimePath+"/web", `{"enabled":true}`)
+	if rec.Code != http.StatusUnprocessableEntity || strings.TrimSpace(rec.Body.String()) != `{"error":"web has no domain that is on"}` {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+}

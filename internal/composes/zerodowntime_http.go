@@ -46,6 +46,20 @@ func (s *Service) ZeroDowntimeServices(ctx context.Context, t DeployTarget) ([]Z
 	return statuses, nil
 }
 
+// noDomainReason says why service cannot turn zero-downtime on: it has no
+// Domain, or only Domains that are off (ADR-0052).
+func (s *Service) noDomainReason(ctx context.Context, compose Compose, service string) string {
+	ds, err := s.domains.ListForCompose(ctx, compose.ID)
+	if err == nil {
+		for _, d := range ds {
+			if d.Service == service {
+				return service + " has no domain that is on"
+			}
+		}
+	}
+	return service + " has no domain"
+}
+
 // servicesWithDomain is the YAML's Services that have a Domain that is on,
 // in YAML order.
 func (s *Service) servicesWithDomain(ctx context.Context, compose Compose) ([]string, error) {
@@ -183,7 +197,7 @@ func (s *Service) setZeroDowntime(w http.ResponseWriter, r *http.Request) {
 			found = found || name == service
 		}
 		if !found {
-			writeError(w, http.StatusUnprocessableEntity, service+" has no domain")
+			writeError(w, http.StatusUnprocessableEntity, s.noDomainReason(r.Context(), compose, service))
 			return
 		}
 	}
