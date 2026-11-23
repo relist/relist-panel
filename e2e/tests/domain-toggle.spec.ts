@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { Panel, call, runId, sandbox, traefikUrl } from '../lib/sandbox.js';
 
 // Turning a Domain off without deleting it (ADR-0052,
@@ -15,6 +15,7 @@ const projectName = `dt-${id}`;
 
 let panel: Panel;
 let composePath = '';
+let composePage = '';
 let domainId = 0;
 
 function dockerEnv() {
@@ -42,6 +43,21 @@ async function expectStatus(url: string, status: number) {
   await expect.poll(async () => (await call(url)).status, { timeout: 30_000, intervals: [250, 500, 1000] }).toBe(status);
 }
 
+async function signIn(page: Page) {
+  const env = sandbox();
+  await page.goto('/signin');
+  await page.getByLabel(/email/i).fill(env.adminEmail);
+  await page.getByLabel(/password/i).first().fill(env.adminPassword);
+  await page.getByRole('button', { name: /sign in/i }).click();
+  await page.waitForURL((u) => !u.pathname.startsWith('/signin'));
+}
+
+/** The Domains tab's redeploy rule: domains changed at or after the last deploy. */
+async function domainsPendingRedeploy(): Promise<boolean> {
+  const compose = await panel.json('GET', composePath);
+  return compose.lastDeployedAt !== null && compose.domainsChangedAt !== null && Date.parse(compose.domainsChangedAt) >= Date.parse(compose.lastDeployedAt);
+}
+
 async function setEnabled(enabled: boolean) {
   return panel.json('PUT', `${composePath}/domains/${domainId}/enabled`, { enabled });
 }
@@ -54,6 +70,7 @@ test.beforeAll(async () => {
   const base = `/api/projects/${project.id}/environments/${env.id}/composes`;
   const compose = await panel.json('POST', base, { name: 'web', yamlContent: 'services:\n  whoami:\n    image: traefik/whoami\n' });
   composePath = `${base}/${compose.id}`;
+  composePage = `/projects/${project.id}/env/${env.id}/compose/${compose.id}/domains`;
   domainId = (
     await panel.json('POST', `${composePath}/domains`, {
       host,
@@ -77,16 +94,27 @@ test('a Domain that is on routes to its Service', async () => {
   await expectStatus(traefikUrl(host, 'http'), 200);
 });
 
-test('turning it off applies on the next deploy and answers 404', async () => {
-  const off = await setEnabled(false);
-  expect(off.enabled).toBe(false);
-  const compose = await panel.json('GET', composePath);
-  expect(compose.domainsChangedAt).not.toBeNull();
+test('turning it off in the Domains tab applies on the next deploy and answers 404', async ({ page }) => {
+  expect(await domainsPendingRedeploy()).toBe(false);
+
+  await signIn(page);
+  await page.goto(composePage);
+  await page.getByRole('switch', { name: `Turn off ${host}/` }).click();
+  const off = page.getByRole('switch', { name: `Turn on ${host}/` });
+  await expect(off).not.toBeChecked();
+  await expect(page.getByText('Off', { exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: `${host}/` })).toHaveCount(0);
+  await expect(page.getByText('Domain changes apply on the next deploy.')).toBeVisible();
+
+  const { domains } = await panel.json('GET', `${composePath}/domains`);
+  expect(domains.find((d: { id: number }) => d.id === domainId).enabled).toBe(false);
+  expect(await domainsPendingRedeploy()).toBe(true);
   // Nothing changes on the host until the deploy.
   expect((await call(traefikUrl(host, 'http'))).status).toBe(200);
 
   await panel.deploy(composePath);
   await expectStatus(traefikUrl(host, 'http'), 404);
+  expect(await domainsPendingRedeploy()).toBe(false);
 });
 
 test('the Service keeps its .internal alias while its Domain is off', async () => {
@@ -118,6 +146,7 @@ test('another Project cannot take the host while the Domain is off', async () =>
 
 test('turning it on again routes the host after the next deploy', async () => {
   expect((await setEnabled(true)).enabled).toBe(true);
+  expect(await domainsPendingRedeploy()).toBe(true);
   await panel.deploy(composePath);
   await expectStatus(traefikUrl(host, 'http'), 200);
 });
