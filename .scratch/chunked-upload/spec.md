@@ -78,7 +78,7 @@ This reverses the no-staging decision of `.scratch/image-upload/spec.md` for the
 is recorded as ADR-0053. Staging is what makes resume across a panel restart possible. It costs disk
 space equal to the file while the upload is open; see Disk space.
 
-ADR-0010 still holds: the consume step is one `docker run --rm` of the helper, and so is the new
+ADR-0010 still holds: the consume step is one `docker run --rm` of the helper, and so is the
 `free` check at start.
 
 Rejected: **feeding chunks into a consumer process held open across requests.** No staging, but
@@ -139,20 +139,24 @@ It knows nothing about Volumes. A feature package registers a **purpose**:
 type Purpose struct {
     Name string // "volume", later "restore", "image", "source"
     Cap  int64  // largest declared size accepted, 10 << 30 for "volume"
-    // Consume reads the complete staged file. It runs in the background,
-    // after the HTTP request that started it has answered. It must be safe
-    // to call again after a failure or a panel restart.
-    Consume func(ctx context.Context, s Session, staged io.Reader) error
 }
+
+// ConsumeFunc reads the complete staged file. It runs in the background,
+// after the HTTP request that started it has answered. It must be safe to
+// call again after a failure or a panel restart.
+type ConsumeFunc func(ctx context.Context, staged io.Reader) error
 ```
 
 `chunkupload.Service` exposes the operations the feature's handlers call (`Create`, `Append`,
-`Offset`, `Complete`, `Status`, `Cancel`, `ListOpen`) plus `Sweep` for expiry. The feature package
-owns its routes under its own path, so authz stays per-pattern and the URL names the target.
+`Get`, `Complete`, `Cancel`, `ListOpen`) plus `Recover` and `Sweep`. `Complete` takes the
+`ConsumeFunc` as a parameter rather than from `Purpose`: the consume step needs the target resolved
+under the caller's current permissions, which exists only inside the `complete` request. The feature
+package owns its routes under its own path, so authz stays per-pattern and the URL names the target.
 
-`internal/volumeapi` registers the `"volume"` purpose and the routes below. Its `Consume` acquires
-the Project's locks (see Locking), runs the helper's `write --expect <size>` with the staged file as
-stdin, and maps the result the way `writeRunFailure` does today.
+`internal/volumeapi` registers the `"volume"` purpose and the routes below. The `ConsumeFunc` it
+builds in `complete` acquires the Project's locks (see Locking), runs the helper's
+`write --expect <size>` with the staged file as stdin, and maps the result the way
+`writeRunFailure` does today.
 
 ## Data model
 
@@ -178,8 +182,9 @@ CREATE TABLE uploads (
 CREATE INDEX uploads_user_compose ON uploads(user_id, compose_id, state);
 ```
 
-For `"volume"`, `target` is `{"source": "...", "path": "...", "user": "uid:gid"}`: the Volume, the
-file's full path inside it, and the confirmed operation user the upload was started with.
+For `"volume"`, `target` is the raw query string of the `POST B` request: the same `source`, `path`,
+`service`, `user`, `rootConfirmed` and `bindConfirmed` parameters the direct write takes. `complete`
+replays it through the direct write's own checks.
 
 A `CASCADE` delete (User or Compose gone) leaves the staged file behind; `Sweep` removes staged files
 that have no row.
@@ -187,14 +192,15 @@ that have no row.
 ## HTTP protocol
 
 Base: `B = /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/uploads`.
-Every route answers `404` for an upload ID that does not exist **or belongs to another User**.
+Every route answers `404` for an upload ID that does not exist, **belongs to another User, or
+belongs to another Compose** than the one in the URL.
 Errors use the existing `{"error": "…"}` body.
 
 ### `POST B` — start
 
-Body (JSON, ≤ 4 KiB): `{"source", "path", "user", "name", "size", "lastModified"}`.
-`path` is the full target path, `user` the confirmed operation user query value the page already
-sends for writes.
+Query: exactly what `PUT …/volumes/content` takes (`source`, `path` naming the file, and the
+confirmed operation user parameters the page already sends for writes).
+Body (JSON, ≤ 4 KiB): `{"name", "size", "lastModified"}`.
 
 The handler runs the same checks the direct write runs today (availability, Volume resolution,
 Compose policy, path rule), then:
@@ -290,7 +296,7 @@ in `free` already. The margin is a constant.
 and an existing target stays until the rename. On a one-disk host, where `<data>` and
 `/var/lib/docker/volumes` share a filesystem, a file needs about twice its size free. Checking only
 at consume would refuse it after the user waited for every byte. So `POST B` also runs the helper's
-new `free` op (one `docker run`, prints `{"bytes": <Bavail × Bsize>}` from `volfs.FreeBytes`) and
+`free` op (it already exists for the server migration; one `docker run`, prints `{"bytes": <Bavail × Bsize>}` from `volfs.FreeBytes`) and
 refuses with `507` unless:
 
 ```

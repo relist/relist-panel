@@ -1,6 +1,6 @@
 # Chunked Volume Uploads Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan task by task, in order (in Claude Code: the `subagent-driven-development` or `executing-plans` skill). Each task's tests come first. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Volume files up to 10 GiB upload through a Cloudflare proxy as ≤ 64 MiB chunks that resume after any interruption, and are written into the Volume by a background job.
 
@@ -20,18 +20,18 @@
 - Expiry: **24 h** since `updated_at`; **1 h** when `received = 0`. Sweep at start and **hourly**.
 - `complete` waits up to **10 s** for the job before answering `202`.
 - Client: chunk retry backoff **1, 2, 4, 8, 16 s**; status poll every **2 s**.
-- No new Go or web dependency. Never edit a committed migration; the new one is `00058`.
+- No new Go or web dependency. Never edit a committed migration; the new one is `00058` (re-check `main` and open PRs for a newer number before merging).
 - Commits: Conventional Commits, no scope (`feat: …`, `test: …`), each ending with
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Before any `web/` change: read https://ant.design/llms.txt and the docs of each antd component used (`Modal`, `Progress`, `Card`, `Alert`, `Button`), checked against antd `6.5.1`; follow `docs/GUIDELINES.md`.
 
-## Deviations from the spec (decided while planning)
+## Decisions made while planning (already applied to the spec)
 
 1. **No `Consume` in `Purpose`.** `Purpose` is `{Name, Cap}`. The consume step needs a `volumes.Request` resolved under the caller's permissions, which only exists inside the `complete` request, so `Complete` takes the consume closure as a parameter. Behaviour is the spec's.
 2. **`POST B` takes the target in the query string**, exactly the query the direct write takes (`source`, `path`, `service`, `user`, `rootConfirmed`, `bindConfirmed`), and only `{name, size, lastModified}` in the JSON body. The raw query is stored as `target`; `complete` replays it through the same `contentOperation` checks. This reuses the existing validation instead of re-implementing it.
 3. **The helper's `free` op already exists** (`cmd/relist-volhelper/main.go`, used by the migration). Only `volumes.OpFree` and its runner argv are new.
 
-Update the spec's Data model note (`target` JSON) and Package and seam section to match these three, in Task 7's commit.
+4. **Every lookup is scoped to the User and the Compose.** `Get`, `Append`, `Complete` and `Cancel` take `composeID` too, so an upload ID used under another Compose's URL answers `404`. Without it, `complete` under Compose B would replay A's stored query against B's Volumes.
 
 ## Review Focus
 
@@ -75,9 +75,9 @@ Update the spec's Data model note (`target` JSON) and Package and seam section t
 
   func New(ctx context.Context, db *sql.DB, dataDir string, opts Options) (*Service, error) // mkdir <dataDir>/.uploads 0700; ctx is the server lifetime (jobs, Task 3)
   func (s *Service) Create(ctx context.Context, n NewSession) (Session, error)
-  func (s *Service) Get(ctx context.Context, userID int64, id string) (Session, error)       // other user's id → ErrNotFound
+  func (s *Service) Get(ctx context.Context, userID, composeID int64, id string) (Session, error) // another User's or Compose's id → ErrNotFound
   func (s *Service) ListOpen(ctx context.Context, userID, composeID int64, purpose string) ([]Session, error) // every state but done, newest updated first
-  func (s *Service) Cancel(ctx context.Context, userID int64, id string) error              // ErrConsuming while consuming
+  func (s *Service) Cancel(ctx context.Context, userID, composeID int64, id string) error // ErrConsuming while consuming
   func (s *Service) StagedPath(id string) string
   ```
 
@@ -89,13 +89,13 @@ Update the spec's Data model note (`target` JSON) and Package and seam section t
   - `TestCreateRefusesOverCap`: `Purpose{"volume", 10 << 30}`, `Size: 10<<30 + 1` → `ErrTooLarge`; `Size: 0` → error.
   - `TestCreateRefusesFourthOpenUpload`: 3 creates OK (different composes), 4th → `ErrTooManyOpen`; after `Cancel` of one, a create succeeds.
   - `TestCreateReservesSpace`: `FreeBytes` returns `10 GiB`; create `Size: 6 GiB` OK; second `Size: 3 GiB` → `*NoSpaceError` (10 − 6 − 3 < 2 GiB). Received bytes reduce the reservation: set the first row's `received` to 6 GiB via SQL and drop `FreeBytes` to 4 GiB → `Size: 2 GiB` OK.
-  - `TestGetHidesOtherUsers`: user 2 `Get`s user 1's id → `ErrNotFound`.
+  - `TestGetHidesOtherUsersAndComposes`: user 2 `Get`s user 1's id → `ErrNotFound`; user 1 with another `composeID` → `ErrNotFound`.
   - `TestCancelRemovesRowAndFile`; `TestCancelWhileConsumingRefused` (set state via SQL).
   - `TestListOpenExcludesDone`.
 
 - [ ] **Step 3: Run** `go test ./internal/chunkupload/` — expect compile failure / FAIL.
 
-- [ ] **Step 4: Implement.** Reservation formula from the spec's Disk space: `free − Σ(size − received) over this-and-other uploading rows − size ≥ 2 GiB`. Create inserts the row and creates the file with `O_CREATE|O_EXCL`, mode 0600; if the file step fails, delete the row.
+- [ ] **Step 4: Implement.** Reservation formula from the spec's Disk space: `free − Σ(size − received) over the other uploading rows (the new row is not inserted yet) − size ≥ 2 GiB`. The open count, the sum and the insert run under the Service's mutex, so two concurrent starts cannot both pass the cap or the reservation (add `TestCreateConcurrentRespectsCap`: 6 goroutines create at once for a user with 0 open → exactly 3 succeed). Create then creates the file with `O_CREATE|O_EXCL`, mode 0600; if the file step fails, delete the row.
 
 - [ ] **Step 5: Run** `go test ./internal/chunkupload/ ./internal/database/...` — PASS.
 
@@ -115,7 +115,7 @@ Update the spec's Data model note (`target` JSON) and Package and seam section t
   type OffsetError struct { Received int64 } // Error(): "upload is at offset <n>"
   type StateError struct { State State }     // Error(): "upload is <state>"
   var ErrBusy, ErrPastEnd, ErrShortBody error
-  func (s *Service) Append(ctx context.Context, userID int64, id string, offset int64, body io.Reader, length int64) (int64, error)
+  func (s *Service) Append(ctx context.Context, userID, composeID int64, id string, offset int64, body io.Reader, length int64) (int64, error)
   ```
 
 - [ ] **Step 1: Write the failing tests**
@@ -146,7 +146,7 @@ Update the spec's Data model note (`target` JSON) and Package and seam section t
   type ConsumeFunc func(ctx context.Context, staged io.Reader) error
   type KindError struct { Kind ErrorKind; Err error } // Consume wraps refusals in it; Unwrap returns Err
   var ErrIncomplete error // wrap with the received offset via *OffsetError when offset != size
-  func (s *Service) Complete(ctx context.Context, userID int64, id string, consume ConsumeFunc, wait time.Duration) (Session, error)
+  func (s *Service) Complete(ctx context.Context, userID, composeID int64, id string, consume ConsumeFunc, wait time.Duration) (Session, error)
   func (s *Service) Recover(ctx context.Context) error
   func (s *Service) Sweep(ctx context.Context) error
   func (s *Service) RunSweeper(ctx context.Context) // Sweep every hour until ctx is done
@@ -204,13 +204,18 @@ Update the spec's Data model note (`target` JSON) and Package and seam section t
   - `TestUploadPatchErrors`: wrong offset → `409` with header `Upload-Offset`; no `Content-Length` → `411`; `Content-Length` over 64 MiB → `413`.
   - `TestUploadCompleteMapsRefusal`: fake runner `Err = &volumes.RefusalError{Message: "need 5"}` → `complete` answers `200` with `state failed`, `errorKind refused`; `complete` again after clearing `Err` → `done`.
   - `TestUploadCompleteRechecksAccess`: delete the Compose (or downgrade the user to viewer) after the last chunk → `complete` is refused with the existing status and the runner saw no `OpWrite`.
-  - `TestUploadsAreUserScoped`: a second user's `GET B/{id}` → `404`; `GET B` lists only own uploads, not `done` ones.
+  - `TestUploadsAreUserScoped`: a second user's `GET B/{id}` → `404`; the same id under another Compose's URL → `404` for `GET`, `PATCH`, `complete` and `DELETE`; `GET B` lists only own uploads, not `done` ones.
   - `TestUploadRoutesSkipTheProjectGate`: hold the Project's gate the way `volume_gate_test.go` does (a blocked archive or Deployment); `PATCH` still answers; `complete` answers `202` and the runner sees no `OpWrite` until the hold is released, then the upload ends `done`.
   - authz: add the six patterns to `Routes` as `LevelEditor`; `Actions` for `POST B` `volume.upload_start`, `POST B/{uploadID}/complete` `volume.upload`, `DELETE B/{uploadID}` `volume.upload_cancel`; `Unrecorded["PATCH "+B+"/{uploadID}"] = "one entry per chunk would flood the Audit log; start, complete and cancel are recorded"`. In `TestEveryChangeHasAnAction` skip patterns in `Unrecorded`, and add `TestUnrecordedHasNoAction` failing when a pattern is in both maps or in `Unrecorded` but not registered.
   - `skipInDataDir(".uploads")` is true (migration manifest test).
   - runner argv test: `OpFree` → `… -v <src>:/data:ro … free -- .`.
 
 - [ ] **Step 2: Run** `go test ./internal/httpapi/ ./internal/authz/ ./internal/dockerexec/ ./internal/migration/` — FAIL.
+
+  Notes for this task:
+  - The authz route scan (`internal/authz/routescan_test.go`) parses patterns out of source: register the new routes with `mux.HandleFunc("<METHOD> /api/projects/…/volumes/uploads…", …)` string literals exactly like the existing lines in `volumeapi.RegisterRoutes`, and run `go test ./internal/authz/` as soon as they exist.
+  - `faketest.Runner` records stdin, but one `Stdout` answers every call: set it to `{"bytes": 1099511627776}` so the `free` check passes in round-trip tests (the write ignores stdout). Its `Calls` slice is appended from the job goroutine: add a `sync.Mutex` to `faketest.Runner` and a `Snapshot() []Call` method, and read calls through it, or `-race` fails.
+  - The job's lock sequence copies `internal/deployments/queue.go` around line 1023: `Acquire` (host guard + gate), then `AcquireVolumes`, released in reverse.
 
 - [ ] **Step 3: Implement.**
   - `volumeClass`: a new class `volumesStagingOnly` for any method when `parts[7]=="volumes" && len(parts)>=9 && parts[8]=="uploads"`, checked first; `acquireFor` returns only the host guard for it.
@@ -275,7 +280,7 @@ Update the spec's Data model note (`target` JSON) and Package and seam section t
 - Modify: `docs/GUIDELINES.md:388` ("1 GiB per upload" → "10 GiB per upload, sent in resumable 32 MiB chunks; 1 GiB per editor save")
 
 **Interfaces:**
-- Consumes: Task 5.
+- Consumes: Task 5. Progress moves once per chunk with `fetch`; that is accepted (a 32 MiB step), no XHR.
 - Produces (view helpers):
   ```ts
   export const UPLOAD_MAX_BYTES = 10 * (1 << 30);        // was 1 << 30; the editor save keeps its own 1 GiB wording
@@ -292,18 +297,16 @@ Update the spec's Data model note (`target` JSON) and Package and seam section t
 - [ ] **Step 3: Implement** the spec's User interface states 1–5 and the Unfinished uploads `Alert`, `beforeunload` while uploading or writing. The toolbar tooltip: "Uploads a file of up to 10 GiB into this directory, in pieces that resume if the connection drops. The Volume's free space is checked before anything is sent."
 - [ ] **Step 4: Run** `cd web && pnpm test && pnpm typecheck && pnpm build` — PASS. **Step 5: Commit** `feat: resumable uploads in the Volume Explorer`
 
-### Task 7: e2e and spec touch-up
+### Task 7: e2e
 
 **Files:**
 - Create: `e2e/tests/volume-upload.spec.ts`
-- Modify: `.scratch/chunked-upload/spec.md` (the three deviations above)
 
 - [ ] **Step 1: Write the spec file.** Set up a Compose with a named volume the way `editor.spec.ts` sets up its Compose, deploy it, open the Volume Explorer.
   - `uploads 80 MiB in three chunks`: write an 80 MiB random temp file on disk, `setInputFiles(path)`, wait for success, download it back via `volumes/read` and compare size and SHA-256; record the `PATCH` requests and assert there are 3.
-  - `resumes after an interruption`: `page.route` aborts the second `PATCH`; once the UI shows "Upload paused", reload, pick the same file path again, choose **Resume**, and compare the SHA-256. Use a file on disk, never a buffer (a buffer gets a new `lastModified`).
+  - `resumes after an interruption`: `page.route` aborts the second `PATCH` and, right after, the test reloads the page (like a closed tab; do not wait for the 31 s backoff); pick the same file path again, choose **Resume**, check the first new `PATCH` starts at `Upload-Offset: 33554432`, and compare the SHA-256. Use a file on disk, never a buffer (a buffer gets a new `lastModified`).
 - [ ] **Step 2: Run** `task e2e -- volume-upload` (reads ports from `.data/e2e/env`; never guess them) — PASS.
-- [ ] **Step 3: Update the spec** for the three deviations.
-- [ ] **Step 4: Commit** `test: e2e for chunked Volume uploads`
+- [ ] **Step 3: Commit** `test: e2e for chunked Volume uploads`
 
 ### Live check (after merge approval, by the user or with them)
 
