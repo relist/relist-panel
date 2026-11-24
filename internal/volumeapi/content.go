@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"relist-panel/internal/chunkupload"
 	"relist-panel/internal/volumes"
 )
 
@@ -88,4 +89,23 @@ func writeRunFailure(w http.ResponseWriter, op volumes.Op, err error) {
 		return
 	}
 	writeError(w, http.StatusBadGateway, "volume "+string(op)+" failed: "+err.Error())
+}
+
+// consumeError classifies a chunked upload's background write the way
+// writeRunFailure answers a direct one: a helper refusal is KindRefused (the
+// direct write's 507), an existing name KindExists (409), and anything else
+// KindFailed (502), each with the same words.
+func consumeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var exists *volumes.ExistsError
+	if errors.As(err, &exists) {
+		return &chunkupload.KindError{Kind: chunkupload.KindExists, Err: fmt.Errorf("file already exists: %w", err)}
+	}
+	var refusal *volumes.RefusalError
+	if errors.As(err, &refusal) {
+		return &chunkupload.KindError{Kind: chunkupload.KindRefused, Err: fmt.Errorf("volume write refused: %w", err)}
+	}
+	return &chunkupload.KindError{Kind: chunkupload.KindFailed, Err: fmt.Errorf("volume write failed: %w", err)}
 }

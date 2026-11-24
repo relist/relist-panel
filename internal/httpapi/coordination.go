@@ -81,9 +81,10 @@ func (c *coordinator) middleware(next http.Handler) http.Handler {
 type volumeAccess int
 
 const (
-	volumesUntouched volumeAccess = iota // mutation gate only
-	volumesRead                          // shared volume lock only, no gate
-	volumesWrite                         // mutation gate, then exclusive volume lock
+	volumesUntouched   volumeAccess = iota // mutation gate only
+	volumesRead                            // shared volume lock only, no gate
+	volumesWrite                           // mutation gate, then exclusive volume lock
+	volumesStagingOnly                     // host guard only: a chunked upload's request touches only its staged file
 )
 
 // volumeClass sorts by method, not by route list, so a new volume route is
@@ -93,6 +94,12 @@ func volumeClass(r *http.Request) volumeAccess {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	read := r.Method == http.MethodGet || r.Method == http.MethodHead
 	if len(parts) >= 8 && parts[7] == "volumes" && parts[3] == "environments" && parts[5] == "composes" {
+		// A chunked upload's requests write only <data>/.uploads, so they
+		// hold neither the gate nor the volume lock; the write into the
+		// Volume takes both itself, in the background (ADR-0053).
+		if len(parts) >= 9 && parts[8] == "uploads" {
+			return volumesStagingOnly
+		}
 		if read {
 			return volumesRead
 		}
@@ -115,6 +122,9 @@ func (c *coordinator) acquireFor(ctx context.Context, id int64, access volumeAcc
 	releaseHost, err := c.acquireHost(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if access == volumesStagingOnly {
+		return releaseHost, nil
 	}
 	if access == volumesRead {
 		releaseVolumes, err := c.lockVolumes(ctx, id, false)

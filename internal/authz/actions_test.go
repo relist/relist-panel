@@ -14,6 +14,9 @@ func TestEveryChangeHasAnAction(t *testing.T) {
 		if strings.HasPrefix(pattern, "GET ") || !strings.Contains(pattern, " ") || classified && rule.Level == LevelPublic {
 			continue
 		}
+		if _, unrecorded := Unrecorded[pattern]; unrecorded {
+			continue
+		}
 		if _, ok := Actions[pattern]; !ok {
 			t.Errorf("%q changes something but has no audit action: add it to authz.Actions", pattern)
 		}
@@ -59,6 +62,42 @@ func TestKeyActions(t *testing.T) {
 		"POST /api/direct-accesses":                        "direct_access.open",
 		"POST /api/direct-accesses/{id}/extend":            "direct_access.extend",
 		"DELETE /api/direct-accesses/{id}":                 "direct_access.close",
+	} {
+		if got := Actions[pattern]; got != want {
+			t.Errorf("Actions[%q] = %q, want %q", pattern, got, want)
+		}
+	}
+}
+
+// Unrecorded is the short list of changes kept out of the Audit log on
+// purpose: each must be a registered change, carry a reason, and have no
+// action as well.
+func TestUnrecordedHasNoAction(t *testing.T) {
+	registered := map[string]bool{}
+	for _, pattern := range registeredPatterns(t) {
+		registered[pattern] = true
+	}
+	for pattern, reason := range Unrecorded {
+		if !registered[pattern] {
+			t.Errorf("authz.Unrecorded names %q, which no RegisterRoutes registers", pattern)
+		}
+		if _, ok := Actions[pattern]; ok {
+			t.Errorf("%q is both recorded and unrecorded", pattern)
+		}
+		if strings.TrimSpace(reason) == "" {
+			t.Errorf("%q is unrecorded with no reason", pattern)
+		}
+	}
+	if want := "PATCH " + compose + "/volumes/uploads/{uploadID}"; len(Unrecorded) != 1 || Unrecorded[want] == "" {
+		t.Errorf("Unrecorded = %v, want only %q", Unrecorded, want)
+	}
+}
+
+func TestVolumeUploadActions(t *testing.T) {
+	for pattern, want := range map[string]string{
+		"POST " + compose + "/volumes/uploads":                     "volume.upload_start",
+		"POST " + compose + "/volumes/uploads/{uploadID}/complete": "volume.upload",
+		"DELETE " + compose + "/volumes/uploads/{uploadID}":        "volume.upload_cancel",
 	} {
 		if got := Actions[pattern]; got != want {
 			t.Errorf("Actions[%q] = %q, want %q", pattern, got, want)

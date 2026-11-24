@@ -66,14 +66,17 @@ var Actions = map[string]string{
 	"DELETE " + compose + "/variable-sets/{setID}/entries/{entryID}": "variable_set_entry.delete",
 
 	// Volumes: changes, and the two downloads the spec records.
-	"GET " + compose + "/volumes/read":              "volume.read",
-	"GET " + compose + "/volumes/archive":           "volume.archive",
-	"PUT " + compose + "/volumes/content":           "volume.content_update",
-	"DELETE " + compose + "/volumes/content":        "volume.content_delete",
-	"PUT " + compose + "/volumes/directory":         "volume.directory_create",
-	"PUT " + compose + "/volumes/file":              "volume.file_upload",
-	"PUT " + compose + "/volumes/restore":           "volume.restore",
-	"DELETE " + compose + "/volumes/orphans/{name}": "volume.orphan_delete",
+	"GET " + compose + "/volumes/read":                         "volume.read",
+	"GET " + compose + "/volumes/archive":                      "volume.archive",
+	"PUT " + compose + "/volumes/content":                      "volume.content_update",
+	"DELETE " + compose + "/volumes/content":                   "volume.content_delete",
+	"PUT " + compose + "/volumes/directory":                    "volume.directory_create",
+	"PUT " + compose + "/volumes/file":                         "volume.file_upload",
+	"PUT " + compose + "/volumes/restore":                      "volume.restore",
+	"DELETE " + compose + "/volumes/orphans/{name}":            "volume.orphan_delete",
+	"POST " + compose + "/volumes/uploads":                     "volume.upload_start",
+	"POST " + compose + "/volumes/uploads/{uploadID}/complete": "volume.upload",
+	"DELETE " + compose + "/volumes/uploads/{uploadID}":        "volume.upload_cancel",
 
 	// Host-wide (admin).
 	"POST /api/ssh-keys":                                                  "ssh_key.create",
@@ -171,4 +174,11 @@ var Actions = map[string]string{
 	"DELETE /api/vulnerabilities/cache":                                   "vulnerability.cache_delete",
 	"PUT /api/audit/settings":                                             "audit_settings.update",
 	"PUT /api/requests/settings":                                          "request_metrics.settings_update",
+}
+
+// Unrecorded names the changes the Audit log leaves out on purpose, each with
+// its reason. TestEveryChangeHasAnAction skips them, and
+// TestUnrecordedHasNoAction keeps the list short and honest.
+var Unrecorded = map[string]string{
+	"PATCH " + compose + "/volumes/uploads/{uploadID}": "one entry per chunk would flood the Audit log; starting, completing and cancelling an upload are recorded",
 }
