@@ -736,8 +736,9 @@ describe('matchOpenUpload', () => {
     expect(matchOpenUpload([openUpload({ lastModified: 8 })], file, 'dir/big.bin')).toBeUndefined();
   });
 
-  it('ignores a finished upload', () => {
+  it('ignores a finished upload, and one being written', () => {
     expect(matchOpenUpload([openUpload({ state: 'done' })], file, 'dir/big.bin')).toBeUndefined();
+    expect(matchOpenUpload([openUpload({ state: 'consuming' })], file, 'dir/big.bin')).toBeUndefined();
   });
 });
 
@@ -775,5 +776,23 @@ describe('volumeUploadFailure', () => {
     expect(volumeUploadFailure(openUpload({ state: 'failed', errorKind: 'failed', error: 'docker' })).description).toContain(
       'Retry',
     );
+  });
+});
+
+describe('uploadFailure for the chunked upload’s own answers', () => {
+  it('words a 409 about the upload itself as the upload being in use, not a missing source', () => {
+    for (const api of ['upload is busy with another request', 'upload is being written', 'upload is consuming']) {
+      const failure = uploadFailure(new ApiError(409, api));
+      expect(failure.message).toBe('The upload is in use');
+      expect(failure.description).toContain(api);
+    }
+    expect(uploadFailure(new ApiError(409, 'volume source is missing')).message).toBe('This Volume’s source is missing');
+  });
+
+  it('words the panel’s staging disk running out apart from the Volume', () => {
+    const failure = uploadFailure(new ApiError(507, "the panel's disk cannot stage this upload: need 9 bytes, 1 free"));
+    expect(failure.message).toBe('The panel’s disk is too full for this upload');
+    expect(failure.description).toContain('need 9 bytes');
+    expect(uploadFailure(new ApiError(507, 'the Volume needs 10 bytes free')).message).toBe('The Volume is out of space');
   });
 });

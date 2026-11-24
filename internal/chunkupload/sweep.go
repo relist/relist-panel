@@ -83,20 +83,12 @@ func (s *Service) Sweep(ctx context.Context) error {
 		if !expired && !orphanRow {
 			continue
 		}
-		// A request working on it right now wins; the next sweep looks again.
-		unlock, free := s.lockHeld(u.ID)
-		if !free {
-			continue
-		}
-		err := deleteRow(ctx, s.db, u.ID)
-		unlock()
+		removed, err := s.sweepRow(ctx, u)
 		if err != nil {
 			return err
 		}
-		delete(owned, u.ID)
-		delete(s.busy, u.ID)
-		if err := os.Remove(s.StagedPath(u.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove staged %s: %w", u.ID, err)
+		if removed {
+			delete(owned, u.ID)
 		}
 	}
 
@@ -113,6 +105,32 @@ func (s *Service) Sweep(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// sweepRow removes one upload the sweep found expired or orphaned, with its
+// file. The caller holds s.mu. The decision came from a snapshot, so the row
+// goes only if it is still exactly as seen: a request working on it now (its
+// lock is taken) or one that changed it since (completed it, sent a chunk)
+// wins, and the next sweep looks again.
+func (s *Service) sweepRow(ctx context.Context, u Session) (bool, error) {
+	unlock, free := s.lockHeld(u.ID)
+	if !free {
+		return false, nil
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM uploads WHERE id = ? AND state = ? AND received = ? AND updated_at = ?`,
+		u.ID, u.State, u.Received, u.UpdatedAt.Unix())
+	unlock()
+	if err != nil {
+		return false, fmt.Errorf("delete upload: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	delete(s.busy, u.ID)
+	if err := os.Remove(s.StagedPath(u.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return true, fmt.Errorf("remove staged %s: %w", u.ID, err)
+	}
+	return true, nil
 }
 
 // RunSweeper sweeps every hour until ctx is done.

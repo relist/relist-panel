@@ -279,4 +279,20 @@ describe('VolumeExplorerPage chunked upload', () => {
     expect(uploadApi.writeVolumeFile.mock.calls[0][2]).toBe('.gitkeep');
     expect(uploadApi.startVolumeUpload).not.toHaveBeenCalled();
   });
+
+  it('leaving the page stops sending but keeps the upload to resume', async () => {
+    uploadApi.startVolumeUpload.mockResolvedValue({ id: 'new', chunkSize: 33554432, offset: 0 });
+    uploadApi.appendVolumeUploadChunk.mockReturnValue(new Promise(() => {}));
+    await openListing();
+    await screen.findByText('a.txt');
+    pickFile(bigBin());
+    await screen.findByText('Uploading big.bin');
+
+    cleanup();
+
+    const signal = uploadApi.appendVolumeUploadChunk.mock.calls[0][4] as AbortSignal;
+    expect(signal.aborted).toBe(true);
+    await Promise.resolve();
+    expect(uploadApi.cancelVolumeUpload).not.toHaveBeenCalled();
+  });
 });

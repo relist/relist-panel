@@ -57,6 +57,10 @@ export function useVolumeUpload(opts: {
     void refreshOpen();
   }, [refreshOpen]);
 
+  // Leaving the Explorer inside the app stops sending, but keeps the upload on
+  // the panel: coming back and picking the file again resumes it.
+  useEffect(() => () => controller.current?.abort('leave'), []);
+
   // Leaving the page while bytes are moving would strand the upload; ask first.
   useEffect(() => {
     if (!busy) return undefined;
@@ -96,7 +100,10 @@ export function useVolumeUpload(opts: {
         if (error instanceof UploadPausedError) {
           setPaused({ file, target, id, offset: error.offset });
         } else if (error instanceof Error && error.name === 'AbortError') {
-          await api.cancelVolumeUpload(where, id).catch(() => undefined);
+          // Only the Cancel button discards; leaving the page keeps it.
+          if (abort.signal.reason === 'cancel') {
+            await api.cancelVolumeUpload(where, id).catch(() => undefined);
+          }
         } else {
           onError(uploadFailure(error));
         }
@@ -207,7 +214,7 @@ export function useVolumeUpload(opts: {
     resume,
     startOver,
     dismissPrompt: () => setResumePrompt(undefined),
-    cancel: () => controller.current?.abort(),
+    cancel: () => controller.current?.abort('cancel'),
     resumePaused,
     retry,
     discard,

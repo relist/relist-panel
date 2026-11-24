@@ -190,3 +190,24 @@ func TestAppendToADeletedUploadFails(t *testing.T) {
 		t.Fatalf("append to a row deleted mid-chunk: %v, want ErrNotFound", err)
 	}
 }
+
+// Requests for upload IDs that do not exist leave nothing behind: the
+// per-upload lock map would otherwise grow with every made-up ID.
+func TestUnknownIDsLeaveNoLock(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	if _, err := h.svc.Append(ctx, 1, 1, "nope", 0, strings.NewReader("x"), 1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("append: %v", err)
+	}
+	if _, err := h.svc.Complete(ctx, 1, 1, "nope2", nil, 0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("complete: %v", err)
+	}
+	if err := h.svc.Cancel(ctx, 1, 1, "nope3"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cancel: %v", err)
+	}
+	h.svc.mu.Lock()
+	defer h.svc.mu.Unlock()
+	if len(h.svc.busy) != 0 {
+		t.Fatalf("busy map holds %d entries for unknown IDs", len(h.svc.busy))
+	}
+}

@@ -47,6 +47,15 @@ func (s *Service) lock(id string) (func(), bool) {
 	return s.lockHeld(id)
 }
 
+// forget drops an upload's lock entry: for an ID that does not exist, so
+// requests for made-up IDs leave nothing behind. A holder keeps its pointer
+// and unlocks it as usual.
+func (s *Service) forget(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.busy, id)
+}
+
 // lockHeld is lock for a caller that already holds s.mu (the sweep).
 func (s *Service) lockHeld(id string) (func(), bool) {
 	m, ok := s.busy[id]
@@ -73,6 +82,9 @@ func (s *Service) Append(ctx context.Context, userID, composeID int64, id string
 
 	session, err := s.Get(ctx, userID, composeID, id)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			s.forget(id)
+		}
 		return 0, err
 	}
 	if session.State != StateUploading {

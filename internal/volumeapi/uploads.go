@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"relist-panel/internal/audit"
 	"relist-panel/internal/auth"
 	"relist-panel/internal/chunkupload"
 	"relist-panel/internal/volumes"
@@ -271,6 +272,12 @@ func (s *Service) completeUpload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeUploadError(w, err)
 		return
+	}
+	// The Audit log's entry says how the write went by the time this
+	// answers: done, failed (with why), or still consuming.
+	audit.Detail(r.Context(), "write", string(session.State))
+	if session.State == chunkupload.StateFailed {
+		audit.Detail(r.Context(), "error", session.Error)
 	}
 	status := http.StatusOK
 	if session.State == chunkupload.StateConsuming {

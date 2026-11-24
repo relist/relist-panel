@@ -260,6 +260,9 @@ func (s *Service) Cancel(ctx context.Context, userID, composeID int64, id string
 	defer unlock()
 	session, err := s.Get(ctx, userID, composeID, id)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			s.forget(id)
+		}
 		return err
 	}
 	if session.State == StateConsuming {

@@ -42,6 +42,9 @@ func (s *Service) Complete(ctx context.Context, userID, composeID int64, id stri
 	session, err := s.Get(ctx, userID, composeID, id)
 	if err != nil {
 		unlock()
+		if errors.Is(err, ErrNotFound) {
+			s.forget(id)
+		}
 		return Session{}, err
 	}
 	if session.State != StateUploading && session.State != StateFailed {

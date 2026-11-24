@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -452,5 +453,34 @@ func TestUploadWriteSkipsAnUploadRemovedWhileItWaited(t *testing.T) {
 	}
 	if runner.writeCount() != 0 {
 		t.Fatalf("the helper wrote %d time(s) for an upload that was removed", runner.writeCount())
+	}
+}
+
+// The Audit log's volume.upload says how the write went, not only that it
+// was asked for: a write the Volume refused within the wait reads as failed.
+func TestUploadAuditNamesTheWriteResult(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+	server.volumeRunner.Stdout = plentyFree
+	base := uploadsBase(fixture)
+	started := mustStartUpload(t, server, base, "x.bin", 5)
+	patchChunk(t, server, base, started.ID, 0, []byte("hello"), 5)
+	server.volumeRunner.SetErr(&volumes.RefusalError{Message: "need 5 bytes, 1 available"})
+	if status, _ := completeUpload(t, server, base, started.ID); status != http.StatusOK {
+		t.Fatalf("complete = %d", status)
+	}
+	var found bool
+	for _, row := range auditRows(t, server) {
+		if row.Action != "volume.upload" {
+			continue
+		}
+		found = true
+		if row.Detail["write"] != "failed" || !strings.Contains(fmt.Sprint(row.Detail["error"]), "need 5 bytes") {
+			t.Fatalf("volume.upload detail = %v, want write=failed with the error", row.Detail)
+		}
+	}
+	if !found {
+		t.Fatal("no volume.upload event")
 	}
 }

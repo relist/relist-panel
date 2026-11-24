@@ -228,4 +228,64 @@ describe('runChunkedUpload', () => {
     await expect(run(file, transport).promise).resolves.toMatchObject({ state: 'done' });
     expect(transport.complete).toHaveBeenCalledTimes(1);
   });
+
+  it('cancel during a backoff stops at once', async () => {
+    const file = new Blob([new Uint8Array(10)]);
+    const controller = new AbortController();
+    const { transport } = fakeTransport(file.size, {
+      append: vi.fn(async () => {
+        throw new TypeError('network');
+      }),
+    });
+    const promise = runChunkedUpload({
+      file,
+      chunkSize,
+      offset: 0,
+      transport,
+      signal: controller.signal,
+      onProgress: () => {},
+      onPhase: () => {},
+      sleep: () => new Promise(() => {}), // a backoff that would never end
+      isOnline: () => true,
+      waitOnline: async () => {},
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    controller.abort();
+    await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('cancel while offline stops at once', async () => {
+    const file = new Blob([new Uint8Array(10)]);
+    const controller = new AbortController();
+    const { transport } = fakeTransport(file.size);
+    const promise = runChunkedUpload({
+      file,
+      chunkSize,
+      offset: 0,
+      transport,
+      signal: controller.signal,
+      onProgress: () => {},
+      onPhase: () => {},
+      isOnline: () => false,
+      waitOnline: () => new Promise(() => {}), // never back online
+    });
+    controller.abort();
+    await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(transport.append).not.toHaveBeenCalled();
+  });
+
+  it('is writing, with no cancel, from the moment it asks to complete', async () => {
+    const file = new Blob([new Uint8Array(10)]);
+    const phases: string[] = [];
+    let phaseAtComplete: string | undefined;
+    const { transport } = fakeTransport(file.size, {
+      complete: vi.fn(async () => {
+        phaseAtComplete = phases.at(-1);
+        return upload('done', 10);
+      }),
+    });
+    await run(file, transport, { onPhase: (phase) => phases.push(phase) }).promise;
+    expect(phaseAtComplete).toBe('writing');
+  });
 });

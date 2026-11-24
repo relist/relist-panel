@@ -262,12 +262,33 @@ function writeFailure(action: 'upload' | 'delete' | 'edit', error: unknown): Vol
             message: 'The save exceeds the 1 GiB cap',
             description: `The panel caps one write at 1 GiB, so nothing was written. The API said: ${api}`,
           };
+    case 409:
+      // A chunked upload's own refusal ("upload is busy…", "upload is being
+      // written") is about the upload, not the Volume's source.
+      if (action === 'upload' && api.startsWith('upload is')) {
+        return {
+          message: 'The upload is in use',
+          description: `Another tab or request is working on this upload, or the panel is writing it. Try again in a moment. The API said: ${api}`,
+        };
+      }
+      return {
+        message: 'This Volume’s source is missing',
+        description: `${api} — mounting it is what would create it, so the panel refuses.`,
+      };
     case 429:
       return {
         message: 'Too many unfinished uploads',
         description: `Finish or discard one of your unfinished uploads first. The API said: ${api}`,
       };
     case 507:
+      // A chunked upload stages on the panel's own disk first; running out
+      // there is not the Volume's doing.
+      if (api.startsWith("the panel's disk")) {
+        return {
+          message: 'The panel’s disk is too full for this upload',
+          description: `Nothing was sent. Free space on the panel's host, or upload a smaller file. The API said: ${api}`,
+        };
+      }
       return {
         message: 'The Volume is out of space',
         description: `The write was refused rather than left half-done — a refused write removes its partial file. The API said: ${api}`,
@@ -277,11 +298,6 @@ function writeFailure(action: 'upload' | 'delete' | 'edit', error: unknown): Vol
         message:
           action === 'upload' ? 'The upload was refused' : action === 'delete' ? 'The delete was refused' : 'The save was refused',
         description: api,
-      };
-    case 409:
-      return {
-        message: 'This Volume’s source is missing',
-        description: `${api} — mounting it is what would create it, so the panel refuses.`,
       };
     case 422:
       // The restore family's refusal (an archive the helper will not extract);
@@ -317,6 +333,7 @@ export function matchOpenUpload(
   return uploads.find(
     (u) =>
       u.state !== 'done' &&
+      u.state !== 'consuming' &&
       u.path === path &&
       u.name === file.name &&
       u.size === file.size &&

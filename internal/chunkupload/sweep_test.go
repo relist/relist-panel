@@ -143,3 +143,24 @@ func TestSweepSkipsABusyUpload(t *testing.T) {
 		t.Fatalf("busy upload swept: %v", err)
 	}
 }
+
+// The sweep decides from a snapshot. A row that changed since — completed and
+// now being written — is not removed, and neither is its file.
+func TestSweepRowLeavesAChangedRow(t *testing.T) {
+	h := newHarness(t)
+	s := h.fullUpload()
+	snapshot, err := getByID(context.Background(), h.db, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.exec(`UPDATE uploads SET state = 'consuming', updated_at = ? WHERE id = ?`, h.now.Add(time.Minute).Unix(), s.ID)
+	h.svc.mu.Lock()
+	removed, err := h.svc.sweepRow(context.Background(), snapshot)
+	h.svc.mu.Unlock()
+	if err != nil || removed {
+		t.Fatalf("sweepRow = %v, %v; want the changed row kept", removed, err)
+	}
+	if h.staged(s.ID) != "hello" {
+		t.Fatal("staged file removed")
+	}
+}

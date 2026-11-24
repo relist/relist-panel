@@ -46,6 +46,25 @@ function abortError(): Error {
   return new DOMException('The upload was cancelled', 'AbortError');
 }
 
+/** Waits for promise, or rejects with an AbortError the moment signal aborts. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /**
  * Whether a failed request is worth sending again. The network failing, a
  * proxy or a restarting panel answering 5xx (Traefik's 502, Cloudflare's 52x),
@@ -72,8 +91,12 @@ export async function runChunkedUpload(opts: {
   isOnline?: () => boolean;
 }): Promise<VolumeUpload> {
   const { file, chunkSize, transport, signal, onProgress, onPhase } = opts;
-  const sleep = opts.sleep ?? realSleep;
-  const waitOnline = opts.waitOnline ?? realWaitOnline;
+  // Waiting — a backoff, an offline browser, a poll — ends the moment the
+  // upload is cancelled, not when the wait would have.
+  const baseSleep = opts.sleep ?? realSleep;
+  const baseWaitOnline = opts.waitOnline ?? realWaitOnline;
+  const sleep = (ms: number) => untilAborted(baseSleep(ms), signal);
+  const waitOnline = () => untilAborted(baseWaitOnline(), signal);
   const isOnline = opts.isOnline ?? realIsOnline;
 
   let offset = opts.offset;
@@ -103,6 +126,9 @@ export async function runChunkedUpload(opts: {
     onProgress(offset);
   }
 
+  // From here the bytes are all on the panel and the write is the server's:
+  // the page shows it as writing, with nothing left to cancel.
+  onPhase('writing');
   // complete, retried like a chunk; when its answer is lost, the status says
   // whether the write started, so it is never asked for twice.
   let completed: VolumeUpload | { state: 'consuming' } | undefined;
@@ -122,7 +148,6 @@ export async function runChunkedUpload(opts: {
 
   // The write runs on the server whatever happens here: a failed check is
   // looked at again, and only a final answer (the upload is gone) stops it.
-  onPhase('writing');
   for (;;) {
     await sleep(POLL_INTERVAL_MS);
     try {
