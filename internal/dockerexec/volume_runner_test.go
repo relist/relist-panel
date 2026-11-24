@@ -41,6 +41,7 @@ func TestVolumeArgvForEveryOp(t *testing.T) {
 		{name: "mkdir", op: volumes.OpMkdir, wantMount: "demo_pgdata:/data", wantOpArgs: []string{"mkdir"}},
 		{name: "create", op: volumes.OpCreate, wantMount: "demo_pgdata:/data", wantOpArgs: []string{"create"}},
 		{name: "extract", op: volumes.OpExtract, wantMount: "demo_pgdata:/data", wantOpArgs: []string{"extract"}},
+		{name: "free", op: volumes.OpFree, readOnly: true, wantMount: "demo_pgdata:/data:ro", wantOpArgs: []string{"free"}},
 	}
 
 	for _, tt := range tests {

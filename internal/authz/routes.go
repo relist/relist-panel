@@ -118,6 +118,12 @@ var Routes = map[string]Rule{
 	"GET " + compose + "/volumes/read":                               {Level: LevelEditor},
 	"PUT " + compose + "/volumes/restore":                            {Level: LevelEditor},
 	"GET " + compose + "/volumes/stat":                               {Level: LevelEditor},
+	"POST " + compose + "/volumes/uploads":                           {Level: LevelEditor},
+	"GET " + compose + "/volumes/uploads":                            {Level: LevelEditor},
+	"GET " + compose + "/volumes/uploads/{uploadID}":                 {Level: LevelEditor},
+	"PATCH " + compose + "/volumes/uploads/{uploadID}":               {Level: LevelEditor},
+	"POST " + compose + "/volumes/uploads/{uploadID}/complete":       {Level: LevelEditor},
+	"DELETE " + compose + "/volumes/uploads/{uploadID}":              {Level: LevelEditor},
 
 	// Project Editor: the Project's own details and its Environments.
 	"PUT " + project: {Level: LevelProjectEditor},

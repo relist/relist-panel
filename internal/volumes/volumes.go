@@ -31,6 +31,9 @@ const (
 	OpExtract Op = "extract"
 	OpMkdir   Op = "mkdir"
 	OpCreate  Op = "create"
+	// OpFree reports the Volume's free bytes as {"bytes": n}; a chunked
+	// upload asks before it accepts a byte (.scratch/chunked-upload/spec.md).
+	OpFree Op = "free"
 )
 
 // Request is one fully resolved Volume operation: everything a Runner needs

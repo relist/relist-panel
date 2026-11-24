@@ -107,6 +107,7 @@ import type {
   RequestWindow,
   TerminalServices,
   VolumeAccess,
+  VolumeUpload,
   VolumeListing,
   ZeroDowntimeService,
   Builder,
@@ -959,6 +960,67 @@ export const api = {
   writeVolumeFile: (location: ComposePath, source: string, path: string, file: Blob, access?: VolumeAccess) =>
     request<void>(volumeContentUrl(location, source, path, access), { body: file, method: 'PUT' }),
   /**
+   * Starts a chunked upload (ADR-0053): the same query the direct write
+   * takes, and the picked file's identity in the body. The API runs the write's
+   * checks and the Volume's free-space check before it accepts a byte.
+   */
+  startVolumeUpload: (
+    location: ComposePath,
+    source: string,
+    path: string,
+    file: { name: string; size: number; lastModified: number },
+    access?: VolumeAccess,
+  ) =>
+    request<{ id: string; chunkSize: number; offset: number }>(
+      `${volumeUploadsUrl(location)}?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}${volumeAccessQuery(access)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: file.name, size: file.size, lastModified: file.lastModified }),
+      },
+    ),
+  /** This User's unfinished uploads for the Compose. */
+  listVolumeUploads: async (location: ComposePath) =>
+    (await request<{ uploads: VolumeUpload[] }>(volumeUploadsUrl(location))).uploads,
+  volumeUploadStatus: (location: ComposePath, id: string) =>
+    request<VolumeUpload>(`${volumeUploadsUrl(location)}/${encodeURIComponent(id)}`),
+  /**
+   * Sends one chunk at `offset`. A 409 that names the server's offset is an
+   * answer, not a failure: the chunk was already stored (its response was
+   * lost) or another tab moved on, and the caller continues from there.
+   */
+  appendVolumeUploadChunk: async (
+    location: ComposePath,
+    id: string,
+    offset: number,
+    chunk: Blob,
+    signal?: AbortSignal,
+  ): Promise<{ offset: number; conflict: boolean }> => {
+    const response = await fetch(`${volumeUploadsUrl(location)}/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      credentials: 'same-origin',
+      headers: { 'Upload-Offset': String(offset) },
+      body: chunk,
+      signal,
+    });
+    const stored = response.headers.get('Upload-Offset');
+    if (response.ok) {
+      return { offset: Number(stored), conflict: false };
+    }
+    if (response.status === 409 && stored !== null) {
+      return { offset: Number(stored), conflict: true };
+    }
+    if (response.status === 401) {
+      sessionLostListener?.();
+    }
+    throw new ApiError(response.status, await responseError(response));
+  },
+  /** Starts the write into the Volume: `done`/`failed` at once for a quick one, else `consuming` to poll. */
+  completeVolumeUpload: (location: ComposePath, id: string) =>
+    request<VolumeUpload>(`${volumeUploadsUrl(location)}/${encodeURIComponent(id)}/complete`, { method: 'POST' }),
+  cancelVolumeUpload: (location: ComposePath, id: string) =>
+    request<void>(`${volumeUploadsUrl(location)}/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  /**
    * Deletes one entry, or a whole directory tree: permanent, no trash, and
    * the API's own refusal when the path is the Volume root. Success is 204.
    */
@@ -1079,6 +1141,11 @@ export function volumeReadUrl(location: ComposePath, source: string, path: strin
  * DELETE share it, with the same `source` + `path` grammar as the read URLs.
  * The body of a PUT is the file's bytes, so the URL never carries content.
  */
+/** The chunked Volume uploads of one Compose. */
+export function volumeUploadsUrl(location: ComposePath): string {
+  return `${composePath(location)}/volumes/uploads`;
+}
+
 export function volumeContentUrl(location: ComposePath, source: string, path: string, access?: VolumeAccess): string {
   return `${composePath(location)}/volumes/content?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}${volumeAccessQuery(access)}`;
 }

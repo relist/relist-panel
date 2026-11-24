@@ -360,6 +360,9 @@ func TestSkipInDataDirScanWork(t *testing.T) {
 	if !skipInDataDir(".scan-work") {
 		t.Fatal(".scan-work would be copied by a Migration")
 	}
+	if !skipInDataDir(".uploads") {
+		t.Fatal(".uploads (staged chunked uploads) would be copied by a Migration")
+	}
 	if !skipInDataDir(datadirlock.FileName) {
 		t.Fatal("the lock file would be copied, and finalize would replace it under the running panel")
 	}

@@ -569,6 +569,28 @@ export type VolumeEntry = {
 export type VolumeListing = { entries: VolumeEntry[]; truncated: boolean; next?: string };
 
 /** Identity and acknowledged mount risks for every Volume operation. */
+/** Where a chunked Volume upload is (.scratch/chunked-upload/spec.md). */
+export type VolumeUploadState = 'uploading' | 'consuming' | 'done' | 'failed';
+
+/**
+ * One chunked Volume upload as the API shows it: the target (`source` and
+ * `path`), the picked file's identity (`name`, `size`, `lastModified`) that a
+ * resume is matched on, and `offset`, the bytes the panel holds.
+ */
+export type VolumeUpload = {
+  id: string;
+  source: string;
+  path: string;
+  name: string;
+  size: number;
+  lastModified: number;
+  offset: number;
+  state: VolumeUploadState;
+  errorKind: '' | 'refused' | 'exists' | 'failed' | 'interrupted';
+  error: string;
+  updatedAt: string;
+};
+
 export type VolumeAccess = {
   service?: string;
   user?: string;

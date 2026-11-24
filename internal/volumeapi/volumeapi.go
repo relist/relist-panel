@@ -18,6 +18,7 @@ import (
 	"os"
 	"strconv"
 
+	"relist-panel/internal/chunkupload"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/volumes"
 )
@@ -27,14 +28,17 @@ type Service struct {
 	composes *composes.Service
 	resolver *volumes.Resolver
 	runner   volumes.Runner
+	uploads  *chunkupload.Service
+	locks    VolumeLocker
 }
 
 // New constructs the Volume Explorer's service. composeService loads a
 // Compose's deploy identity; resolver is the read side (resolution and
 // pre-flight); runner is the operation seam whose Available probe gates the
-// feature.
-func New(composeService *composes.Service, resolver *volumes.Resolver, runner volumes.Runner) *Service {
-	return &Service{composes: composeService, resolver: resolver, runner: runner}
+// feature; uploads stages chunked uploads (ADR-0053) and locks is the Project
+// coordination their background write takes.
+func New(composeService *composes.Service, resolver *volumes.Resolver, runner volumes.Runner, uploads *chunkupload.Service, locks VolumeLocker) *Service {
+	return &Service{composes: composeService, resolver: resolver, runner: runner, uploads: uploads, locks: locks}
 }
 
 // RegisterRoutes adds the authenticated Volume Explorer endpoints to mux: the
@@ -55,6 +59,12 @@ func (s *Service) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/directory", s.mkdir)
 	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/file", s.createFile)
 	mux.HandleFunc("PUT /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/restore", s.restore)
+	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/uploads", s.startUpload)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/uploads", s.listUploads)
+	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/uploads/{uploadID}", s.uploadStatus)
+	mux.HandleFunc("PATCH /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/uploads/{uploadID}", s.appendChunk)
+	mux.HandleFunc("POST /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/uploads/{uploadID}/complete", s.completeUpload)
+	mux.HandleFunc("DELETE /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/uploads/{uploadID}", s.cancelUpload)
 	mux.HandleFunc("GET /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/orphans", s.listOrphans)
 	mux.HandleFunc("DELETE /api/projects/{projectID}/environments/{environmentID}/composes/{composeID}/volumes/orphans/{name}", s.deleteOrphan)
 }

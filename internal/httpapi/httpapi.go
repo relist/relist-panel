@@ -21,6 +21,7 @@ import (
 	"relist-panel/internal/backupdest"
 	"relist-panel/internal/builders"
 	"relist-panel/internal/certificates"
+	"relist-panel/internal/chunkupload"
 	"relist-panel/internal/clientip"
 	"relist-panel/internal/composes"
 	"relist-panel/internal/composevariables"
@@ -428,7 +429,8 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	}
 	composevariables.New(db).RegisterRoutes(mux)
 	variablesets.New(db).RegisterRoutes(mux)
-	volumeapi.New(composesService, d.VolumeResolver, d.VolumeRunner).RegisterRoutes(mux)
+	uploads := startUploads(ctx, db, dataDir, &worker)
+	volumeapi.New(composesService, d.VolumeResolver, d.VolumeRunner, uploads, gate).RegisterRoutes(mux)
 	var terminals migration.TerminalCloser
 	if d.Terminal != nil {
 		terminalService := terminal.New(composesService, *d.Terminal)
@@ -544,6 +546,9 @@ func NewHandler(ctx context.Context, d Deps) (http.Handler, func()) {
 	h := http.NewCrossOriginProtection().Handler(authService.Middleware(authz.New(db, authService.CurrentUser).Middleware(mux, inner)))
 	wait := func() {
 		worker.Wait()
+		if uploads != nil {
+			uploads.Wait() // a chunked upload being written finishes or is marked interrupted
+		}
 		if databaseService != nil {
 			databaseService.Wait() // a Database being created finishes first
 		}
@@ -615,4 +620,28 @@ func registryBeforeDeploy(d Deps, svc *registry.Service) func(context.Context) e
 		_, err := svc.Reconcile(ctx)
 		return err
 	}
+}
+
+// startUploads opens the chunked upload store (ADR-0053): an upload the last
+// run left half-written is recovered and expired ones are swept before any
+// request, then the sweep repeats hourly under worker. A store that cannot
+// open leaves the upload routes answering 503; the rest of the panel runs.
+func startUploads(ctx context.Context, db *sql.DB, dataDir string, worker *sync.WaitGroup) *chunkupload.Service {
+	uploads, err := chunkupload.New(ctx, db, dataDir, chunkupload.Options{Purposes: []chunkupload.Purpose{volumeapi.UploadPurpose}})
+	if err != nil {
+		log.Printf("chunkupload: %v", err)
+		return nil
+	}
+	if err := uploads.Recover(ctx); err != nil {
+		log.Printf("chunkupload: recover: %v", err)
+	}
+	if err := uploads.Sweep(ctx); err != nil {
+		log.Printf("chunkupload: sweep: %v", err)
+	}
+	worker.Add(1)
+	go func() {
+		defer worker.Done()
+		uploads.RunSweeper(ctx)
+	}()
+	return uploads
 }

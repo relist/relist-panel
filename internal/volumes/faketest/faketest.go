@@ -8,6 +8,7 @@ package faketest
 import (
 	"context"
 	"io"
+	"sync"
 	"time"
 
 	"relist-panel/internal/volumes"
@@ -26,6 +27,10 @@ type Call struct {
 // Runner is a scripted volumes.Runner. Its zero value records calls and
 // answers with an empty stdout, no error and the feature available.
 type Runner struct {
+	// mu guards Calls, Stdout and Err while Run executes: a chunked upload's
+	// write runs on a background goroutine. Tests that race such a run read
+	// through Snapshot and script through SetErr.
+	mu sync.Mutex
 	// Calls records every Run, in order.
 	Calls []Call
 	// Stdout is written to the caller's writer on every Run, and Err
@@ -58,14 +63,31 @@ func (f *Runner) Run(ctx context.Context, req volumes.Request, stdin io.Reader, 
 		}
 		call.Stdin = data
 	}
+	f.mu.Lock()
 	f.Calls = append(f.Calls, call)
+	out, runErr := f.Stdout, f.Err
+	f.mu.Unlock()
 
-	if f.Stdout != "" && stdout != nil {
-		if _, err := io.WriteString(stdout, f.Stdout); err != nil {
+	if out != "" && stdout != nil {
+		if _, err := io.WriteString(stdout, out); err != nil {
 			return err
 		}
 	}
-	return f.Err
+	return runErr
+}
+
+// Snapshot copies the recorded calls under the lock.
+func (f *Runner) Snapshot() []Call {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Call(nil), f.Calls...)
+}
+
+// SetErr scripts the error every later Run returns, under the lock.
+func (f *Runner) SetErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Err = err
 }
 
 var _ volumes.Runner = (*Runner)(nil)

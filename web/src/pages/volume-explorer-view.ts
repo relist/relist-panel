@@ -1,7 +1,7 @@
 import { formatBytes } from '../components/MetricChart';
 import { cliMessage, isNotDeployed } from '../components/volumes-view';
 import { ApiError } from '../data/api';
-import type { ComposeStatus, ComposeVolume, ComposeVolumes, VolumeEntry } from '../data/types';
+import type { ComposeStatus, ComposeVolume, ComposeVolumes, VolumeEntry, VolumeUpload } from '../data/types';
 
 /**
  * The Volume Explorer's pure decisions: how the URL's source resolves against
@@ -194,13 +194,17 @@ export function openFailure(entry: VolumeEntry, error: string): { message: strin
 
 // ---- Writes (ticket 08) -------------------------------------------------------
 //
-// The write actions' pure decisions: the 1 GiB upload cap as a client-side fast
-// path, the alert copy for a refused upload or delete — the API's own words
+// The write actions' pure decisions: the 10 GiB chunked upload cap as a
+// client-side fast path, the alert copy for a refused upload or delete — the API's own words
 // with the limit that was hit named — and the running-stack warning's condition
 // and Service list.
 
-/** The API's hard-coded `uploadCap`, repeated here only for the fast path; the server stays the enforcer. */
-export const UPLOAD_MAX_BYTES = 1 << 30;
+/**
+ * The API's chunked upload cap (`UploadCapChunked`), repeated here only for the
+ * fast path; the server stays the enforcer. The editor's save goes through the
+ * direct write and keeps its own 1 GiB.
+ */
+export const UPLOAD_MAX_BYTES = 10 * (1 << 30);
 
 /** One failed write's alert copy, ready for an `Alert`'s `message` and `description`. */
 export type VolumeFailure = {
@@ -209,7 +213,7 @@ export type VolumeFailure = {
 };
 
 /**
- * The client-side half of the upload cap: a file already over 1 GiB is refused
+ * The client-side half of the upload cap: a file already over 10 GiB is refused
  * before a request is made, because sending it would only earn the API's own
  * 413. The API's check is the one that counts — the browser is not the limit.
  */
@@ -218,14 +222,15 @@ export function uploadTooLarge(file: { name: string; size: number }): VolumeFail
     return undefined;
   }
   return {
-    message: 'Upload exceeds the 1 GiB cap',
-    description: `${file.name} is ${formatBytes(file.size)} — larger than the 1 GiB cap on one upload, so it was never sent.`,
+    message: 'Upload exceeds the 10 GiB cap',
+    description: `${file.name} is ${formatBytes(file.size)} — larger than the 10 GiB cap on one upload, so it was never sent.`,
   };
 }
 
 /**
  * The alert copy for a failed upload. The API's status picks the limit that was
- * hit — 413 the 1 GiB cap, 507 the Volume's free space — and the API's own
+ * hit — 413 the 10 GiB cap, 507 the Volume's free space, 429 the open uploads
+ * a User may hold — and the API's own
  * message is kept in the description, because it carries the helper's
  * need-vs-available numbers and the operator can act on those.
  */
@@ -248,11 +253,42 @@ function writeFailure(action: 'upload' | 'delete' | 'edit', error: unknown): Vol
   const api = error instanceof Error ? error.message : String(error);
   switch (status) {
     case 413:
+      return action === 'upload'
+        ? {
+            message: 'Upload exceeds the 10 GiB cap',
+            description: `The panel caps one upload at 10 GiB, so nothing was sent. The API said: ${api}`,
+          }
+        : {
+            message: 'The save exceeds the 1 GiB cap',
+            description: `The panel caps one write at 1 GiB, so nothing was written. The API said: ${api}`,
+          };
+    case 409:
+      // A chunked upload's own refusal ("upload is busy…", "upload is being
+      // written") is about the upload, not the Volume's source.
+      if (action === 'upload' && api.startsWith('upload is')) {
+        return {
+          message: 'The upload is in use',
+          description: `Another tab or request is working on this upload, or the panel is writing it. Try again in a moment. The API said: ${api}`,
+        };
+      }
       return {
-        message: action === 'upload' ? 'Upload exceeds the 1 GiB cap' : 'The save exceeds the 1 GiB cap',
-        description: `The panel caps one write at 1 GiB, so nothing was written. The API said: ${api}`,
+        message: 'This Volume’s source is missing',
+        description: `${api} — mounting it is what would create it, so the panel refuses.`,
+      };
+    case 429:
+      return {
+        message: 'Too many unfinished uploads',
+        description: `Finish or discard one of your unfinished uploads first. The API said: ${api}`,
       };
     case 507:
+      // A chunked upload stages on the panel's own disk first; running out
+      // there is not the Volume's doing.
+      if (api.startsWith("the panel's disk")) {
+        return {
+          message: 'The panel’s disk is too full for this upload',
+          description: `Nothing was sent. Free space on the panel's host, or upload a smaller file. The API said: ${api}`,
+        };
+      }
       return {
         message: 'The Volume is out of space',
         description: `The write was refused rather than left half-done — a refused write removes its partial file. The API said: ${api}`,
@@ -262,11 +298,6 @@ function writeFailure(action: 'upload' | 'delete' | 'edit', error: unknown): Vol
         message:
           action === 'upload' ? 'The upload was refused' : action === 'delete' ? 'The delete was refused' : 'The save was refused',
         description: api,
-      };
-    case 409:
-      return {
-        message: 'This Volume’s source is missing',
-        description: `${api} — mounting it is what would create it, so the panel refuses.`,
       };
     case 422:
       // The restore family's refusal (an archive the helper will not extract);
@@ -280,6 +311,67 @@ function writeFailure(action: 'upload' | 'delete' | 'edit', error: unknown): Vol
         message: action === 'upload' ? 'Upload failed' : action === 'delete' ? 'Delete failed' : 'Save failed',
         description: api,
       };
+  }
+}
+
+// ---- Chunked uploads ----------------------------------------------------------
+//
+// A picked file is sent in chunks and can resume (ADR-0053). These are the
+// pure decisions around it: which unfinished upload a picked file continues,
+// the progress copy, and the alert copy for a write that failed after every
+// byte arrived.
+
+/**
+ * The unfinished upload a picked file continues: the same target path and the
+ * same file, as far as a browser can tell (name, size and lastModified).
+ */
+export function matchOpenUpload(
+  uploads: VolumeUpload[],
+  file: { name: string; size: number; lastModified: number },
+  path: string,
+): VolumeUpload | undefined {
+  return uploads.find(
+    (u) =>
+      u.state !== 'done' &&
+      u.state !== 'consuming' &&
+      u.path === path &&
+      u.name === file.name &&
+      u.size === file.size &&
+      u.lastModified === file.lastModified,
+  );
+}
+
+/** "4.2 GB of 10.0 GB". */
+export function uploadProgressText(sent: number, total: number): string {
+  return `${formatBytes(sent)} of ${formatBytes(total)}`;
+}
+
+/** Bytes per second since this run of the upload started, once a second has passed. */
+export function uploadRate(sentBytes: number, elapsedMs: number): string | undefined {
+  if (sentBytes <= 0 || elapsedMs < 1000) return undefined;
+  return `${formatBytes(sentBytes / (elapsedMs / 1000))}/s`;
+}
+
+/** The time left at this run's average speed, once a second has passed. */
+export function uploadEta(sentBytes: number, elapsedMs: number, remainingTotal: number): string | undefined {
+  if (sentBytes <= 0 || elapsedMs < 1000) return undefined;
+  const perSecond = sentBytes / (elapsedMs / 1000);
+  const seconds = (remainingTotal - sentBytes) / perSecond;
+  if (seconds < 60) return `about ${Math.round(seconds)} s left`;
+  if (seconds < 3600) return `about ${Math.round(seconds / 60)} min left`;
+  return `about ${Math.floor(seconds / 3600)} h ${Math.floor((seconds % 3600) / 60)} min left`;
+}
+
+/** The alert copy for an upload whose bytes all arrived but whose write failed. */
+export function volumeUploadFailure(upload: VolumeUpload): VolumeFailure {
+  const retry = 'Retry writes the stored file again; nothing is sent again.';
+  switch (upload.errorKind) {
+    case 'refused':
+      return { message: 'Not enough space in the Volume', description: `${upload.error} ${retry}` };
+    case 'interrupted':
+      return { message: 'The panel restarted while writing', description: `${upload.error} ${retry}` };
+    default:
+      return { message: 'The upload could not be written', description: `${upload.error} ${retry}` };
   }
 }
 

@@ -372,11 +372,13 @@ func (b ManifestBuilder) dataDirSizes() (dbSize, dirSize int64, err error) {
 
 // skipInDataDir reports the data directory paths the data-dir item leaves
 // out: the database, which is its own item, the Migration's scratch, the
-// images exported for a vulnerability scan, and the server's lock file, which
+// images exported for a vulnerability scan, staged chunked uploads
+// (ADR-0053: open uploads start again on the new host), and the server's
+// lock file, which
 // finalize must never replace under the running panel.
 func skipInDataDir(rel string) bool {
 	switch rel {
-	case "panel.db", "panel.db-journal", "panel.db-wal", "panel.db-shm", ".migration", ".migration-out", ".scan-work",
+	case "panel.db", "panel.db-journal", "panel.db-wal", "panel.db-shm", ".migration", ".migration-out", ".scan-work", ".uploads",
 		datadirlock.FileName:
 		return true
 	}
