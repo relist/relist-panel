@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { ApiError } from '../data/api';
-import type { ComposeStatus, ComposeVolume, ComposeVolumes, VolumeEntry } from '../data/types';
+import type { ComposeStatus, ComposeVolume, ComposeVolumes, VolumeEntry, VolumeUpload } from '../data/types';
 import {
   deleteFailure,
+  matchOpenUpload,
+  uploadEta,
+  uploadProgressText,
+  uploadRate,
+  volumeUploadFailure,
   EDITOR_MAX_BYTES,
   EDITOR_SNIFF_BYTES,
   editFailure,
@@ -277,18 +282,29 @@ describe('uploadTooLarge', () => {
   it('lets a file that exactly fills the cap through, and refuses one byte more', () => {
     expect(uploadTooLarge({ name: 'at-cap.bin', size: UPLOAD_MAX_BYTES })).toBeUndefined();
     const refused = uploadTooLarge({ name: 'over-cap.bin', size: UPLOAD_MAX_BYTES + 1 });
-    expect(refused?.message).toBe('Upload exceeds the 1 GiB cap');
+    expect(refused?.message).toBe('Upload exceeds the 10 GiB cap');
     expect(refused?.description).toContain('over-cap.bin');
-    expect(refused?.description).toContain('1 GiB');
+    expect(refused?.description).toContain('10 GiB');
+  });
+
+  it('caps a chunked upload at 10 GiB, not the direct write’s 1 GiB', () => {
+    expect(UPLOAD_MAX_BYTES).toBe(10 * (1 << 30));
+    expect(uploadTooLarge({ name: 'two-gib.bin', size: 2 * (1 << 30) })).toBeUndefined();
   });
 });
 
 describe('uploadFailure / deleteFailure', () => {
-  it('names the 1 GiB cap the API refused the upload for', () => {
-    const failure = uploadFailure(new ApiError(413, 'upload exceeds the 1 GiB cap'));
-    expect(failure.message).toBe('Upload exceeds the 1 GiB cap');
-    expect(failure.description).toContain('1 GiB');
-    expect(failure.description).toContain('upload exceeds the 1 GiB cap');
+  it('names the 10 GiB cap the API refused the upload for', () => {
+    const failure = uploadFailure(new ApiError(413, 'upload exceeds the 10 GiB cap'));
+    expect(failure.message).toBe('Upload exceeds the 10 GiB cap');
+    expect(failure.description).toContain('10 GiB');
+    expect(failure.description).toContain('upload exceeds the 10 GiB cap');
+  });
+
+  it('asks to finish an open upload when the API refuses a fourth', () => {
+    const failure = uploadFailure(new ApiError(429, 'finish or discard an open upload first'));
+    expect(failure.message).toBe('Too many unfinished uploads');
+    expect(failure.description).toContain('finish or discard an open upload first');
   });
 
   it('names the Volume’s free space the helper refused the write for', () => {
@@ -688,5 +704,76 @@ describe('newEntryFailure', () => {
       description: 'volume mkdir failed: permission denied',
     });
     expect(newEntryFailure('file', new Error('boom')).message).toBe('New file failed');
+  });
+});
+
+const openUpload = (over: Partial<VolumeUpload> = {}): VolumeUpload => ({
+  id: 'u1',
+  source: 'demo_pgdata',
+  path: 'dir/big.bin',
+  name: 'big.bin',
+  size: 100,
+  lastModified: 7,
+  offset: 63,
+  state: 'uploading',
+  errorKind: '',
+  error: '',
+  updatedAt: '2026-11-24T00:00:00Z',
+  ...over,
+});
+
+describe('matchOpenUpload', () => {
+  const file = { name: 'big.bin', size: 100, lastModified: 7 };
+
+  it('matches the same file picked again for the same target', () => {
+    expect(matchOpenUpload([openUpload()], file, 'dir/big.bin')?.id).toBe('u1');
+  });
+
+  it('needs path, name, size and lastModified all to match', () => {
+    expect(matchOpenUpload([openUpload({ path: 'other/big.bin' })], file, 'dir/big.bin')).toBeUndefined();
+    expect(matchOpenUpload([openUpload({ name: 'b.bin' })], file, 'dir/big.bin')).toBeUndefined();
+    expect(matchOpenUpload([openUpload({ size: 101 })], file, 'dir/big.bin')).toBeUndefined();
+    expect(matchOpenUpload([openUpload({ lastModified: 8 })], file, 'dir/big.bin')).toBeUndefined();
+  });
+
+  it('ignores a finished upload', () => {
+    expect(matchOpenUpload([openUpload({ state: 'done' })], file, 'dir/big.bin')).toBeUndefined();
+  });
+});
+
+describe('upload progress copy', () => {
+  it('shows bytes sent of the total', () => {
+    expect(uploadProgressText(4.2 * (1 << 30), 10 * (1 << 30))).toBe('4.2 GB of 10.0 GB');
+  });
+
+  it('estimates the time left once a second has passed', () => {
+    expect(uploadEta(0, 5000, 100)).toBeUndefined();
+    expect(uploadEta(10, 500, 100)).toBeUndefined();
+    expect(uploadEta(50, 10_000, 100)).toBe('about 10 s left');
+    expect(uploadEta(10, 10_000, 100)).toBe('about 2 min left');
+    expect(uploadEta(1, 10_000, 1000)).toBe('about 2 h 46 min left');
+  });
+
+  it('shows the speed once a second has passed', () => {
+    expect(uploadRate(0, 500)).toBeUndefined();
+    expect(uploadRate(2 * (1 << 20), 2000)).toBe('1.0 MB/s');
+  });
+});
+
+describe('volumeUploadFailure', () => {
+  it('words each kind of failed write and keeps the API’s message', () => {
+    expect(volumeUploadFailure(openUpload({ state: 'failed', errorKind: 'refused', error: 'need 20' }))).toEqual({
+      message: 'Not enough space in the Volume',
+      description: expect.stringContaining('need 20'),
+    });
+    expect(volumeUploadFailure(openUpload({ state: 'failed', errorKind: 'interrupted', error: 'restarted' })).message).toBe(
+      'The panel restarted while writing',
+    );
+    expect(volumeUploadFailure(openUpload({ state: 'failed', errorKind: 'failed', error: 'docker' })).message).toBe(
+      'The upload could not be written',
+    );
+    expect(volumeUploadFailure(openUpload({ state: 'failed', errorKind: 'failed', error: 'docker' })).description).toContain(
+      'Retry',
+    );
   });
 });

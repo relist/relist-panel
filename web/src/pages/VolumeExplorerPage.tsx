@@ -76,9 +76,10 @@ import {
   restoreIntent,
   restoreTarget,
   runningWriteWarning,
-  uploadFailure,
   uploadTooLarge,
 } from './volume-explorer-view';
+import { useVolumeUpload } from './useVolumeUpload';
+import { VolumeUploadStatus } from './VolumeUploadStatus';
 
 const { Paragraph, Text } = Typography;
 
@@ -323,7 +324,6 @@ export function VolumeExplorerPage() {
     setEditorRefusal(undefined);
     setSaveError(undefined);
   }, [editorContext]);
-  const [uploading, setUploading] = useState(false);
   // The restore: the picked archive waits behind a confirmation carrying the
   // whole disclosure, and only a confirm runs it. Cancelling drops the file
   // and sends nothing.
@@ -450,29 +450,34 @@ export function VolumeExplorerPage() {
   // words. The editor's save is the third: it patches its one row instead,
   // because a save re-reads nothing.
 
+  // An upload is chunked and resumable (ADR-0053): useVolumeUpload starts or
+  // resumes it, sends it, and keeps the states VolumeUploadStatus shows. The
+  // 10 GiB cap is checked here first, so an oversize file is never sent.
+  const onUploadDone = useCallback(
+    (target: string) => {
+      message.success(`Uploaded ${target}`);
+      void loadList();
+    },
+    [loadList, message],
+  );
+  const uploads = useVolumeUpload({
+    location: composePath,
+    source,
+    access,
+    onDone: onUploadDone,
+    onError: setWriteError,
+  });
   const upload = useCallback(
-    async (file: File) => {
+    (file: File) => {
       setWriteError(undefined);
-      // The 1 GiB cap's client-side fast path: refusing an oversize file here
-      // saves a request, but the API's 413 is the check that counts.
       const refused = uploadTooLarge(file);
       if (refused) {
         setWriteError(refused);
         return;
       }
-      const target = joinPath(path, file.name);
-      setUploading(true);
-      try {
-        await writeVolumeFile(composeId, source, target, file, access);
-        message.success(`Uploaded ${target}`);
-        await loadList();
-      } catch (reason: unknown) {
-        setWriteError(uploadFailure(reason));
-      } finally {
-        setUploading(false);
-      }
+      uploads.pick(file, joinPath(path, file.name));
     },
-    [access, composeId, loadList, message, path, source, writeVolumeFile],
+    [path, uploads],
   );
 
   // ---- The restore actions -----------------------------------------------------
@@ -722,13 +727,12 @@ export function VolumeExplorerPage() {
       <Tooltip
         title={
           refusal ??
-          'Uploads a file into this directory. The 1 GiB cap is checked in the browser; the Volume’s free space is checked before anything is written.'
+          "Uploads a file of up to 10 GiB into this directory, in pieces that resume if the connection drops. The Volume's free space is checked before anything is sent."
         }
       >
         <Button
-          disabled={refusal !== undefined}
+          disabled={refusal !== undefined || uploads.active !== undefined}
           icon={<UploadOutlined />}
-          loading={uploading}
           onClick={() => fileInput.current?.click()}
         >
           Upload
@@ -1059,6 +1063,7 @@ export function VolumeExplorerPage() {
             type="info"
           />
         )}
+        <VolumeUploadStatus {...uploads} />
         {writeError && (
           <Alert
             closable={{ afterClose: () => setWriteError(undefined) }}

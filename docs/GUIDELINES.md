@@ -385,10 +385,12 @@ UI — is the enforcer.
 - **Restore discloses partial extraction.** Every entry is validated before it is written, but there is no
   transaction across a stream: entries written before a failure stay written, and the confirmation says so before
   the operator starts.
-- **The caps are hard-coded.** 1 GiB per upload, 1 MB for the editor, a 10-minute archive timeout; a restore is
-  capped at 1 GiB compressed, 4 GiB uncompressed and 10,000 entries. An upload beyond the Volume's free space is
-  refused before anything is read — the helper checks `statfs` — and a stream that still overruns loses its partial
-  file.
+- **The caps are hard-coded.** 10 GiB per upload, sent in resumable 32 MiB chunks (ADR-0053); 1 GiB per editor
+  save; 1 MB for the editor, a 10-minute archive timeout; a restore is capped at 1 GiB compressed, 4 GiB uncompressed
+  and 10,000 entries. An upload the Volume cannot hold twice over (the staged copy and the written file) is refused
+  before a byte is sent — the helper checks `statfs` — and a write that still overruns loses its partial file.
+- **An upload resumes.** Picking the same file for the same path offers Resume or Start over; unfinished uploads are
+  listed above the files with Discard, and expire after 24 hours without activity.
 - **A symlink is shown, described, and followed only when it stays inside the Volume.** Listed with its target, and
   marked when it leaves. Hiding one would misrepresent the data: an operator who cannot see it cannot understand why
   a path exists. Only the traversal into it is refused, and `os.Root` refuses it too — the Explorer is not stricter
