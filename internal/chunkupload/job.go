@@ -52,10 +52,15 @@ func (s *Service) Complete(ctx context.Context, userID, composeID int64, id stri
 		unlock()
 		return Session{}, &OffsetError{Received: session.Received}
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE uploads SET state = 'consuming', error_kind = '', error = '',
-		updated_at = ? WHERE id = ?`, s.now().Unix(), id); err != nil {
+	result, err := s.db.ExecContext(ctx, `UPDATE uploads SET state = 'consuming', error_kind = '', error = '',
+		updated_at = ? WHERE id = ? AND state IN ('uploading', 'failed') AND received = size`, s.now().Unix(), id)
+	if err != nil {
 		unlock()
 		return Session{}, fmt.Errorf("start upload job: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		unlock()
+		return Session{}, ErrNotFound // deleted since the Get: a Compose delete's cascade
 	}
 	done := make(chan struct{})
 	s.jobs.Add(1)

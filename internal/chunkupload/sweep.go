@@ -23,8 +23,10 @@ const (
 // uploading file is cut back to the bytes its row counts, dropping whatever a
 // crash left half-written past them.
 func (s *Service) Recover(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE uploads SET state = 'failed', error_kind = ?, error = ?
-		WHERE state = 'consuming'`, KindInterrupted, interruptedMessage); err != nil {
+	// The interruption counts as activity, so a panel that was down longer
+	// than the expiry still offers the retry instead of sweeping it at once.
+	if _, err := s.db.ExecContext(ctx, `UPDATE uploads SET state = 'failed', error_kind = ?, error = ?, updated_at = ?
+		WHERE state = 'consuming'`, KindInterrupted, interruptedMessage, s.now().Unix()); err != nil {
 		return fmt.Errorf("recover interrupted uploads: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id, received FROM uploads WHERE state = 'uploading'`)
@@ -81,7 +83,14 @@ func (s *Service) Sweep(ctx context.Context) error {
 		if !expired && !orphanRow {
 			continue
 		}
-		if err := deleteRow(ctx, s.db, u.ID); err != nil {
+		// A request working on it right now wins; the next sweep looks again.
+		unlock, free := s.lockHeld(u.ID)
+		if !free {
+			continue
+		}
+		err := deleteRow(ctx, s.db, u.ID)
+		unlock()
+		if err != nil {
 			return err
 		}
 		delete(owned, u.ID)

@@ -249,9 +249,15 @@ func (s *Service) ListOpen(ctx context.Context, userID, composeID int64, purpose
 	return listOpen(ctx, s.db, userID, composeID, purpose)
 }
 
-// Cancel discards an upload and its staged bytes. One being written is not
-// cancelled: its job holds the file.
+// Cancel discards an upload and its staged bytes. One that a request is
+// working on is refused (ErrBusy), and one being written is not cancelled: its
+// job holds the file.
 func (s *Service) Cancel(ctx context.Context, userID, composeID int64, id string) error {
+	unlock, ok := s.lock(id)
+	if !ok {
+		return ErrBusy
+	}
+	defer unlock()
 	session, err := s.Get(ctx, userID, composeID, id)
 	if err != nil {
 		return err
@@ -259,8 +265,12 @@ func (s *Service) Cancel(ctx context.Context, userID, composeID int64, id string
 	if session.State == StateConsuming {
 		return ErrConsuming
 	}
-	if err := deleteRow(ctx, s.db, id); err != nil {
-		return err
+	result, err := s.db.ExecContext(ctx, `DELETE FROM uploads WHERE id = ? AND state != 'consuming'`, id)
+	if err != nil {
+		return fmt.Errorf("delete upload: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return ErrConsuming
 	}
 	s.mu.Lock()
 	delete(s.busy, id)

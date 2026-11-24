@@ -46,9 +46,17 @@ function abortError(): Error {
   return new DOMException('The upload was cancelled', 'AbortError');
 }
 
-/** A failure the API answered (an ApiError) is final; anything else is the network. */
-function isApiRefusal(error: unknown): boolean {
-  return error instanceof Error && error.name === 'ApiError';
+/**
+ * Whether a failed request is worth sending again. The network failing, a
+ * proxy or a restarting panel answering 5xx (Traefik's 502, Cloudflare's 52x),
+ * and a 409 (another request holds the upload, or the server already moved
+ * past this offset) all pass with time; any other answer from the API — 400,
+ * 401, 404, 413 — is final.
+ */
+export function isRetryable(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== 'ApiError') return true;
+  const status = (error as Error & { status?: number }).status ?? 0;
+  return status >= 500 || status === 409;
 }
 
 export async function runChunkedUpload(opts: {
@@ -86,7 +94,7 @@ export async function runChunkedUpload(opts: {
         break;
       } catch (error) {
         if (signal.aborted) throw abortError();
-        if (isApiRefusal(error)) throw error;
+        if (!isRetryable(error)) throw error;
         if (attempt >= RETRY_DELAYS_MS.length) throw new UploadPausedError(offset, error);
         await sleep(RETRY_DELAYS_MS[attempt]);
         attempt += 1;
@@ -95,13 +103,33 @@ export async function runChunkedUpload(opts: {
     onProgress(offset);
   }
 
-  if (signal.aborted) throw abortError();
-  const completed = await transport.complete();
-  if (completed.state !== 'consuming') return completed;
+  // complete, retried like a chunk; when its answer is lost, the status says
+  // whether the write started, so it is never asked for twice.
+  let completed: VolumeUpload | { state: 'consuming' } | undefined;
+  for (let attempt = 0; completed === undefined; attempt += 1) {
+    if (signal.aborted) throw abortError();
+    try {
+      completed = await transport.complete();
+    } catch (error) {
+      if (!isRetryable(error)) throw error;
+      if (attempt >= RETRY_DELAYS_MS.length) throw new UploadPausedError(offset, error);
+      await sleep(RETRY_DELAYS_MS[attempt]);
+      const current = await transport.status().catch(() => undefined);
+      if (current && current.state !== 'uploading') completed = current;
+    }
+  }
+  if (completed.state !== 'consuming') return completed as VolumeUpload;
+
+  // The write runs on the server whatever happens here: a failed check is
+  // looked at again, and only a final answer (the upload is gone) stops it.
   onPhase('writing');
   for (;;) {
     await sleep(POLL_INTERVAL_MS);
-    const current = await transport.status();
-    if (current.state !== 'consuming') return current;
+    try {
+      const current = await transport.status();
+      if (current.state !== 'consuming') return current;
+    } catch (error) {
+      if (!isRetryable(error)) throw error;
+    }
   }
 }

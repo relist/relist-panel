@@ -104,3 +104,42 @@ func TestSweep(t *testing.T) {
 		t.Errorf("kept upload lost its file: %v", err)
 	}
 }
+
+// A panel that was down longer than the expiry still offers the retry: Recover
+// counts as activity, so the Sweep right after it keeps the upload.
+func TestRecoverKeepsLongInterruptedUploads(t *testing.T) {
+	h := newHarness(t)
+	s := h.fullUpload()
+	h.exec(`UPDATE uploads SET state = 'consuming', updated_at = ? WHERE id = ?`, h.now.Add(-48*time.Hour).Unix(), s.ID)
+	if err := h.svc.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.svc.Get(context.Background(), 1, 1, s.ID)
+	if err != nil || got.ErrorKind != KindInterrupted {
+		t.Fatalf("after recover and sweep = %+v, %v", got, err)
+	}
+	if h.staged(s.ID) != "hello" {
+		t.Fatal("staged file lost")
+	}
+}
+
+// The sweep leaves an upload alone while a request is working on it.
+func TestSweepSkipsABusyUpload(t *testing.T) {
+	h := newHarness(t)
+	s := h.mustCreate(1, 1, 5)
+	h.exec(`UPDATE uploads SET updated_at = ? WHERE id = ?`, h.now.Add(-2*time.Hour).Unix(), s.ID)
+	unlock, ok := h.svc.lock(s.ID)
+	if !ok {
+		t.Fatal("lock")
+	}
+	if err := h.svc.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	if _, err := h.svc.Get(context.Background(), 1, 1, s.ID); err != nil {
+		t.Fatalf("busy upload swept: %v", err)
+	}
+}

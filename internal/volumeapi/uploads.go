@@ -259,6 +259,12 @@ func (s *Service) completeUpload(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		defer releaseVolumes()
+		// A Compose delete may have held the locks while this waited: its
+		// cascade removed the upload, and `docker run -v` would recreate the
+		// deleted volume just to write into it. Only a live upload is written.
+		if _, err := s.uploads.Get(ctx, userID, composeID, id); err != nil {
+			return &chunkupload.KindError{Kind: chunkupload.KindFailed, Err: fmt.Errorf("the upload was removed while it waited to be written: %w", err)}
+		}
 		return consumeError(s.runner.Run(ctx, req, staged, io.Discard))
 	}
 	session, err = s.uploads.Complete(r.Context(), userID, composeID, id, consume, completeWait)

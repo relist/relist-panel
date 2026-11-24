@@ -20,6 +20,6 @@ For chunked uploads, this replaces the no-staging rule. ADR-0010 still holds: co
 
 - An open upload holds disk space equal to the file on the data directory's disk, which SQLite shares. Starting an upload is refused unless 2 GiB stays free after the space every open upload still needs.
 - On a one-disk host, writing the staged file into a Volume briefly needs twice the file's size: the staged copy and the helper's temp file. Starting an upload therefore asks the helper for the Volume's free space and refuses below twice the size, so a file that cannot fit is refused before any byte is sent, not after.
-- Requests under `…/volumes/uploads` take neither the Project's mutation gate nor its volume lock. The consume job takes both itself, for as long as the helper runs.
+- Requests under `…/volumes/uploads` take neither the Project's mutation gate nor its volume lock. The consume job takes both itself, for as long as the helper runs. Once it holds them it checks that its upload still exists: a Compose delete that held the locks first has removed it, and `docker run -v` would otherwise recreate the deleted volume to write into it.
 - Chunk requests are not written to the Audit log. `authz.Unrecorded` lists them, and starting, completing and cancelling an upload are recorded.
 - `.uploads` is left out of a server migration. Uploads that were open when the server moved must be started again on the new host.

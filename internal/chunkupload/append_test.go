@@ -154,3 +154,39 @@ func TestAppendHidesOtherUsers(t *testing.T) {
 		t.Fatalf("other user: %v", err)
 	}
 }
+
+func TestCancelWhileAppendIsBusy(t *testing.T) {
+	h := newHarness(t)
+	s := h.mustCreate(1, 1, 5)
+	body := &blockingReader{started: make(chan struct{}), release: make(chan struct{}), r: strings.NewReader("hel")}
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.svc.Append(context.Background(), 1, 1, s.ID, 0, body, 3)
+		done <- err
+	}()
+	<-body.started
+	if err := h.svc.Cancel(context.Background(), 1, 1, s.ID); !errors.Is(err, ErrBusy) {
+		t.Fatalf("cancel during append: %v, want ErrBusy", err)
+	}
+	close(body.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAppendToADeletedUploadFails(t *testing.T) {
+	h := newHarness(t)
+	s := h.mustCreate(1, 1, 5)
+	body := &blockingReader{started: make(chan struct{}), release: make(chan struct{}), r: strings.NewReader("hel")}
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.svc.Append(context.Background(), 1, 1, s.ID, 0, body, 3)
+		done <- err
+	}()
+	<-body.started
+	h.exec(`DELETE FROM uploads WHERE id = ?`, s.ID) // a Compose delete's cascade
+	close(body.release)
+	if err := <-done; !errors.Is(err, ErrNotFound) {
+		t.Fatalf("append to a row deleted mid-chunk: %v, want ErrNotFound", err)
+	}
+}

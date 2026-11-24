@@ -7,6 +7,8 @@ import { matchOpenUpload, uploadFailure, type VolumeFailure } from './volume-exp
 
 /** The upload being sent or written right now. */
 export type ActiveUpload = {
+  /** The upload's id, so the unfinished list leaves it out while it is sent. */
+  id: string;
   name: string;
   total: number;
   sent: number;
@@ -70,7 +72,7 @@ export function useVolumeUpload(opts: {
       controller.current = abort;
       setPaused(undefined);
       setFailed(undefined);
-      setActive({ name: file.name, total: file.size, sent: offset, phase: 'uploading', startedAt: Date.now(), startSent: offset });
+      setActive({ id, name: file.name, total: file.size, sent: offset, phase: 'uploading', startedAt: Date.now(), startSent: offset });
       try {
         const result = await runChunkedUpload({
           file,
@@ -125,9 +127,19 @@ export function useVolumeUpload(opts: {
     [projectId, environmentId, composeId, source, access, drive, onError],
   );
 
-  /** A picked file: continue the matching unfinished upload, or start one. */
+  /**
+   * A picked file: continue the matching unfinished upload, or start one. An
+   * empty file has no chunk to send, so it is one direct write.
+   */
   const pick = useCallback(
     (file: File, target: string) => {
+      if (file.size === 0) {
+        api
+          .writeVolumeFile({ projectId, environmentId, composeId }, source, target, file, access)
+          .then(() => onDone(target))
+          .catch((error: unknown) => onError(uploadFailure(error)));
+        return;
+      }
       const match = matchOpenUpload(openUploads, file, target);
       if (match) {
         setResumePrompt({ file, target, match });
@@ -135,7 +147,7 @@ export function useVolumeUpload(opts: {
       }
       void startFresh({ file, target });
     },
-    [openUploads, startFresh],
+    [openUploads, startFresh, projectId, environmentId, composeId, source, access, onDone, onError],
   );
 
   const resume = useCallback(async () => {

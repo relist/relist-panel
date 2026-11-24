@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"relist-panel/internal/volumes"
 	"relist-panel/internal/volumes/faketest"
@@ -406,3 +407,50 @@ func TestUploadRoutesSkipTheProjectLocks(t *testing.T) {
 	}
 }
 
+// A Compose delete can hold the Project's locks while a completed upload's
+// write waits for them. Once the write gets them, the upload (removed with its
+// Compose) is gone, and the helper must not run: `docker run -v` would
+// recreate the deleted volume just to write into it.
+func TestUploadWriteSkipsAnUploadRemovedWhileItWaited(t *testing.T) {
+	server := newTestServer(t)
+	setupAndLogin(t, server)
+	fixture := setupExplorerCompose(t, server)
+	runner := &gatedRunner{started: make(chan struct{}), release: make(chan struct{})}
+	server.stopWorker()
+	server.handler, server.stopWorker = startHandler(t, server.db, newHoldRunner(), server.dataDir, nil, nil, runner, volumes.NewResolver(server.volumeCLI, server.dataDir), nil, nil)
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(runner.release)
+		}
+	})
+
+	q := url.Values{"source": {"demoapp_pgdata"}, "service": {"db"}, "rootConfirmed": {"1"}, "bindConfirmed": {"1"}}
+	archive := httptest.NewRequest(http.MethodGet, "http://relist-panel.test"+composeVolumesPath(fixture.project.ID, fixture.production.ID, fixture.compose.ID)+"/archive?"+q.Encode(), nil)
+	for _, c := range server.cookies {
+		archive.AddCookie(c)
+	}
+	go server.handler.ServeHTTP(httptest.NewRecorder(), archive)
+	waitSignal(t, runner.started, "archive stream")
+
+	base := uploadsBase(fixture)
+	started := mustStartUpload(t, server, base, "x.bin", 5)
+	patchChunk(t, server, base, started.ID, 0, []byte("hello"), 5)
+	if status, _ := completeUpload(t, server, base, started.ID); status != http.StatusAccepted {
+		t.Fatalf("complete = %d", status)
+	}
+	if _, err := server.db.Exec(`DELETE FROM uploads WHERE id = ?`, started.ID); err != nil { // the Compose delete's cascade
+		t.Fatal(err)
+	}
+	close(runner.release)
+	released = true
+	// The job now gets the locks; give it time to (wrongly) write before the
+	// shutdown would cancel it.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && runner.writeCount() == 0 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if runner.writeCount() != 0 {
+		t.Fatalf("the helper wrote %d time(s) for an upload that was removed", runner.writeCount())
+	}
+}

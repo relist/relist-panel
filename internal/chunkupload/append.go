@@ -43,12 +43,17 @@ func (e *StateError) Error() string {
 // for the same upload is refused, not queued.
 func (s *Service) lock(id string) (func(), bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lockHeld(id)
+}
+
+// lockHeld is lock for a caller that already holds s.mu (the sweep).
+func (s *Service) lockHeld(id string) (func(), bool) {
 	m, ok := s.busy[id]
 	if !ok {
 		m = &sync.Mutex{}
 		s.busy[id] = m
 	}
-	s.mu.Unlock()
 	if !m.TryLock() {
 		return nil, false
 	}
@@ -104,10 +109,16 @@ func (s *Service) Append(ctx context.Context, userID, composeID int64, id string
 		return 0, fmt.Errorf("sync staged file: %w", err)
 	}
 	received := offset + length
-	if _, err := s.db.ExecContext(ctx, `UPDATE uploads SET received = ?, updated_at = ? WHERE id = ?`,
-		received, s.now().Unix(), id); err != nil {
+	result, err := s.db.ExecContext(ctx, `UPDATE uploads SET received = ?, updated_at = ? WHERE id = ? AND state = 'uploading'`,
+		received, s.now().Unix(), id)
+	if err != nil {
 		_ = f.Truncate(offset)
 		return 0, fmt.Errorf("record chunk: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		// The row went while the chunk was written: a Compose delete's
+		// cascade. The bytes went to a file nothing owns any more.
+		return 0, ErrNotFound
 	}
 	return received, nil
 }

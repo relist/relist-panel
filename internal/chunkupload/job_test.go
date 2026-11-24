@@ -170,3 +170,17 @@ func TestJobCancelledByShutdownIsInterrupted(t *testing.T) {
 		t.Fatal("staged file not kept")
 	}
 }
+
+func TestCompleteOfADeletedUploadDoesNotRun(t *testing.T) {
+	h := newHarness(t)
+	s := h.fullUpload()
+	rec := &recorder{}
+	h.exec(`DELETE FROM uploads WHERE id = ?`, s.ID)
+	if _, err := h.complete(s.ID, rec.consume, time.Second); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("complete of a deleted upload: %v", err)
+	}
+	h.svc.Wait()
+	if rec.calls != 0 {
+		t.Fatal("consume ran for a deleted upload")
+	}
+}

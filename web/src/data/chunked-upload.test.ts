@@ -6,6 +6,10 @@ import type { VolumeUpload } from './types';
 const MiB = 1 << 20;
 const chunkSize = 32 * MiB;
 
+function apiError(status: number): Error {
+  return Object.assign(new Error(`HTTP ${status}`), { name: 'ApiError', status });
+}
+
 function upload(state: VolumeUpload['state'], size: number): VolumeUpload {
   return {
     id: 'u1',
@@ -181,5 +185,47 @@ describe('runChunkedUpload', () => {
     expect((error as Error).name).toBe('AbortError');
     expect(transport.append).toHaveBeenCalledTimes(1);
     expect(transport.complete).not.toHaveBeenCalled();
+  });
+
+  it('retries a proxy 5xx and a busy 409 like a network error', async () => {
+    const file = new Blob([new Uint8Array(10)]);
+    const answers = [apiError(502), apiError(409)];
+    const { transport } = fakeTransport(file.size, {
+      append: vi.fn(async (offset: number, chunk: Blob) => {
+        const next = answers.shift();
+        if (next) throw next;
+        return { offset: offset + chunk.size, conflict: false };
+      }),
+    });
+    const { promise, sleeps } = run(file, transport);
+    await expect(promise).resolves.toMatchObject({ state: 'done' });
+    expect(sleeps).toEqual([1000, 2000]);
+  });
+
+  it('keeps polling through a failed status check', async () => {
+    const file = new Blob([new Uint8Array(10)]);
+    const statuses: Array<VolumeUpload | Error> = [new TypeError('network'), apiError(524), upload('done', 10)];
+    const { transport } = fakeTransport(file.size, {
+      complete: vi.fn(async () => ({ state: 'consuming' as const })),
+      status: vi.fn(async () => {
+        const next = statuses.shift()!;
+        if (next instanceof Error) throw next;
+        return next;
+      }),
+    });
+    await expect(run(file, transport).promise).resolves.toMatchObject({ state: 'done' });
+  });
+
+  it('finds a write whose complete answer was lost', async () => {
+    const file = new Blob([new Uint8Array(10)]);
+    const statuses = [upload('consuming', 10), upload('done', 10)];
+    const { transport } = fakeTransport(file.size, {
+      complete: vi.fn(async () => {
+        throw apiError(524);
+      }),
+      status: vi.fn(async () => statuses.shift()!),
+    });
+    await expect(run(file, transport).promise).resolves.toMatchObject({ state: 'done' });
+    expect(transport.complete).toHaveBeenCalledTimes(1);
   });
 });

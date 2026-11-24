@@ -41,7 +41,10 @@ export function VolumeUploadStatus(props: Controls) {
   const { active, resumePrompt, paused, failed, openUploads } = props;
   const now = Date.now();
   const unfinished = openUploads.filter(
-    (u) => u.state !== 'consuming' && u.id !== paused?.id && u.id !== failed?.upload.id && u.id !== resumePrompt?.match.id,
+    (u) =>
+      u.state !== 'consuming' &&
+      u.id !== active?.id &&
+      u.id !== paused?.id && u.id !== failed?.upload.id && u.id !== resumePrompt?.match.id,
   );
 
   return (

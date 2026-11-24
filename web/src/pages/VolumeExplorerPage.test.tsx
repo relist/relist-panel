@@ -20,6 +20,7 @@ const uploadApi = vi.hoisted(() => ({
   completeVolumeUpload: vi.fn(),
   volumeUploadStatus: vi.fn(),
   cancelVolumeUpload: vi.fn(),
+  writeVolumeFile: vi.fn(),
 }));
 vi.mock('../data/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../data/api')>();
@@ -252,5 +253,30 @@ describe('VolumeExplorerPage chunked upload', () => {
 
     await waitFor(() => expect(uploadApi.completeVolumeUpload).toHaveBeenCalledTimes(2));
     expect(uploadApi.appendVolumeUploadChunk).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not list the upload being sent as unfinished', async () => {
+    uploadApi.listVolumeUploads.mockResolvedValue([openUpload()]);
+    uploadApi.appendVolumeUploadChunk.mockReturnValue(new Promise(() => {}));
+    await openListing();
+    expect(await screen.findByText('Unfinished uploads')).toBeTruthy();
+
+    pickFile(bigBin());
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume' }));
+
+    expect(await screen.findByText('Uploading big.bin')).toBeTruthy();
+    expect(screen.queryByText('Unfinished uploads')).toBeNull();
+  });
+
+  it('writes an empty file directly: a chunked upload needs at least one byte', async () => {
+    uploadApi.writeVolumeFile.mockResolvedValue(undefined);
+    await openListing();
+    await screen.findByText('a.txt');
+
+    pickFile(new File([], '.gitkeep', { lastModified: 1 }));
+
+    await waitFor(() => expect(uploadApi.writeVolumeFile).toHaveBeenCalled());
+    expect(uploadApi.writeVolumeFile.mock.calls[0][2]).toBe('.gitkeep');
+    expect(uploadApi.startVolumeUpload).not.toHaveBeenCalled();
   });
 });
