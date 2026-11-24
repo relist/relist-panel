@@ -1,0 +1,106 @@
+package chunkupload
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestRecoverInterruptsConsumingAndTruncates(t *testing.T) {
+	h := newHarness(t)
+	consuming := h.fullUpload()
+	h.exec(`UPDATE uploads SET state = 'consuming' WHERE id = ?`, consuming.ID)
+	uploading := h.mustCreate(1, 2, 5)
+	h.exec(`UPDATE uploads SET received = 2 WHERE id = ?`, uploading.ID)
+	if err := os.WriteFile(h.svc.StagedPath(uploading.ID), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.svc.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := h.svc.Get(context.Background(), 1, 1, consuming.ID)
+	if got.State != StateFailed || got.ErrorKind != KindInterrupted || got.Error == "" {
+		t.Fatalf("consuming after recover = %+v", got)
+	}
+	if h.staged(uploading.ID) != "he" {
+		t.Fatalf("uploading staged %q, want truncated to 2 bytes", h.staged(uploading.ID))
+	}
+}
+
+func TestSweep(t *testing.T) {
+	h := newHarness(t)
+	old := h.now
+	exists := func(id string) bool {
+		_, err := getByID(context.Background(), h.db, id)
+		return !errors.Is(err, ErrNotFound)
+	}
+	at := func(id string, ago time.Duration) {
+		h.exec(`UPDATE uploads SET updated_at = ? WHERE id = ?`, old.Add(-ago).Unix(), id)
+	}
+
+	failedOld := h.fullUpload()
+	h.exec(`UPDATE uploads SET state = 'failed' WHERE id = ?`, failedOld.ID)
+	at(failedOld.ID, 25*time.Hour)
+
+	emptyStale := h.mustCreate(1, 2, 5)
+	at(emptyStale.ID, 2*time.Hour)
+
+	startedStale := h.mustCreate(1, 3, 5)
+	h.exec(`UPDATE uploads SET received = 1 WHERE id = ?`, startedStale.ID)
+	at(startedStale.ID, 2*time.Hour)
+
+	consumingOld := h.mustCreate(2, 1, 5)
+	h.exec(`UPDATE uploads SET state = 'consuming' WHERE id = ?`, consumingOld.ID)
+	at(consumingOld.ID, 48*time.Hour)
+
+	missingFile := h.mustCreate(2, 2, 5)
+	if err := os.Remove(h.svc.StagedPath(missingFile.ID)); err != nil {
+		t.Fatal(err)
+	}
+
+	doneOld := h.mustCreate(2, 3, 5)
+	h.exec(`UPDATE uploads SET state = 'done' WHERE id = ?`, doneOld.ID)
+	_ = os.Remove(h.svc.StagedPath(doneOld.ID))
+	at(doneOld.ID, 25*time.Hour)
+
+	stray := filepath.Join(h.dataDir, ".uploads", "abc")
+	if err := os.WriteFile(stray, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.svc.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, tc := range map[string]struct {
+		id   string
+		kept bool
+	}{
+		"failed 25h old":          {failedOld.ID, false},
+		"empty 2h old":            {emptyStale.ID, false},
+		"started 2h old":          {startedStale.ID, true},
+		"consuming 48h old":       {consumingOld.ID, true},
+		"uploading, file missing": {missingFile.ID, false},
+		"done 25h old":            {doneOld.ID, false},
+	} {
+		if exists(tc.id) != tc.kept {
+			t.Errorf("%s: row kept = %v, want %v", name, !tc.kept, tc.kept)
+		}
+		if !tc.kept {
+			if _, err := os.Stat(h.svc.StagedPath(tc.id)); !os.IsNotExist(err) {
+				t.Errorf("%s: staged file kept", name)
+			}
+		}
+	}
+	if _, err := os.Stat(stray); !os.IsNotExist(err) {
+		t.Error("stray staged file kept")
+	}
+	if _, err := os.Stat(h.svc.StagedPath(startedStale.ID)); err != nil {
+		t.Errorf("kept upload lost its file: %v", err)
+	}
+}

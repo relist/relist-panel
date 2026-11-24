@@ -126,10 +126,9 @@ type Service struct {
 	free     func(dir string) (uint64, error)
 	now      func() time.Time
 
-	mu    sync.Mutex             // serialises Create's checks with its insert, and guards busy
-	busy  map[string]*sync.Mutex // one append or complete at a time per upload
-	jobs  sync.WaitGroup
-	doneC map[string]chan struct{} // the running job of each upload
+	mu   sync.Mutex             // serialises Create's checks with its insert, and guards busy
+	busy map[string]*sync.Mutex // one append or complete at a time per upload
+	jobs sync.WaitGroup
 }
 
 // New opens the staging directory under dataDir. ctx is the server's
@@ -147,7 +146,6 @@ func New(ctx context.Context, db *sql.DB, dataDir string, opts Options) (*Servic
 		free:     opts.FreeBytes,
 		now:      opts.Now,
 		busy:     make(map[string]*sync.Mutex),
-		doneC:    make(map[string]chan struct{}),
 	}
 	for _, p := range opts.Purposes {
 		s.purposes[p.Name] = p
@@ -264,6 +262,9 @@ func (s *Service) Cancel(ctx context.Context, userID, composeID int64, id string
 	if err := deleteRow(ctx, s.db, id); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	delete(s.busy, id)
+	s.mu.Unlock()
 	if err := os.Remove(s.StagedPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove staged file: %w", err)
 	}
