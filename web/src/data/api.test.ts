@@ -737,3 +737,63 @@ describe('session lost', () => {
     expect(listener).not.toHaveBeenCalled();
   });
 });
+
+describe('chunked Volume uploads', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('starts with the write query and a JSON body', async () => {
+    const fetch = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ id: 'u1', chunkSize: 33554432, offset: 0 }), { status: 201 }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    await expect(
+      api.startVolumeUpload(location, 'demo_pgdata', 'dir/big.bin', { name: 'big.bin', size: 5, lastModified: 7 }, { service: 'db' }),
+    ).resolves.toEqual({ id: 'u1', chunkSize: 33554432, offset: 0 });
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/projects/1/environments/2/composes/3/volumes/uploads?source=demo_pgdata&path=dir%2Fbig.bin&service=db');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({ name: 'big.bin', size: 5, lastModified: 7 });
+  });
+
+  it('appends a chunk with Upload-Offset and reads the new offset', async () => {
+    const fetch = vi.fn(
+      async (_url: string, _init?: RequestInit) => new Response(null, { status: 204, headers: { 'Upload-Offset': '3' } }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    await expect(api.appendVolumeUploadChunk(location, 'u1', 0, new Blob(['hel']))).resolves.toEqual({
+      offset: 3,
+      conflict: false,
+    });
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('/api/projects/1/environments/2/composes/3/volumes/uploads/u1');
+    expect(init?.method).toBe('PATCH');
+    expect(new Headers(init?.headers).get('Upload-Offset')).toBe('0');
+  });
+
+  it('answers a 409 with the server offset as a conflict', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: 'upload is at offset 32' }), {
+            status: 409,
+            headers: { 'Upload-Offset': '32' },
+          }),
+      ),
+    );
+    await expect(api.appendVolumeUploadChunk(location, 'u1', 0, new Blob(['x']))).resolves.toEqual({
+      offset: 32,
+      conflict: true,
+    });
+  });
+
+  it('throws other failures as ApiError', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'upload not found' }), { status: 404 })));
+    await expect(api.appendVolumeUploadChunk(location, 'u1', 0, new Blob(['x']))).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 404,
+      message: 'upload not found',
+    });
+  });
+});
